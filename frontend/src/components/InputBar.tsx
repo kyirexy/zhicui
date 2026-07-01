@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { Link2, Loader2, AlertCircle, X } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Link2, Loader2, AlertCircle, X, LogIn } from 'lucide-react';
 
 interface InputBarProps {
   onSubmit: (url: string) => void;
@@ -15,10 +16,18 @@ interface InputBarProps {
 export default function InputBar({ onSubmit, isLoading = false, error, fillUrl, onFillComplete }: InputBarProps) {
   const [url, setUrl] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+  const router = useRouter();
 
-  // Auto-focus on mount
+  // Auto-focus on mount + restore pending URL after login
   useEffect(() => {
     inputRef.current?.focus();
+    try {
+      const pending = localStorage.getItem('zhicui_pending_url');
+      if (pending) {
+        setUrl(pending);
+        localStorage.removeItem('zhicui_pending_url');
+      }
+    } catch {}
   }, []);
 
   // Fill from external source (e.g. sample link click)
@@ -148,9 +157,26 @@ export default function InputBar({ onSubmit, isLoading = false, error, fillUrl, 
             size={16}
             className="text-accent-rose flex-shrink-0 mt-0.5"
           />
-          <p className="text-sm text-foreground-secondary leading-relaxed text-pretty">
-            {error}
-          </p>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm text-foreground-secondary leading-relaxed text-pretty">
+              {error}
+            </p>
+            {error === '请先登录' && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (url.trim()) {
+                    localStorage.setItem('zhicui_pending_url', url.trim());
+                  }
+                  router.push(`/login?redirect=${encodeURIComponent(window.location.pathname)}`);
+                }}
+                className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-accent-emerald hover:underline"
+              >
+                <LogIn size={12} />
+                登录 / 注册
+              </button>
+            )}
+          </div>
         </div>
       )}
 

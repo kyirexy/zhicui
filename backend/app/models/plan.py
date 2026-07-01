@@ -26,6 +26,10 @@ class Plan(Base):
         String(36), primary_key=True, default=_uuid
     )
 
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
     note_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("notes.id", ondelete="SET NULL"), nullable=True
     )

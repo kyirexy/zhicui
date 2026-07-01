@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Monitor, Zap, Settings, Smartphone } from 'lucide-react';
 import { useSettings } from '@/lib/hooks/SettingsContext';
 import { CARD_STYLE_CONFIG, DENSITY_CONFIG, type CardStyle, type DensityLevel } from '@/lib/types';
+import { STYLE_ICONS } from '@/lib/style-icons';
 import BottomSheet from './BottomSheet';
 
 /**
@@ -53,7 +54,7 @@ export default function GlobalSheetManager() {
                   className={`flex items-start gap-3 p-3 rounded-2xl text-left transition-all duration-200 min-h-[64px] ${
                     isActive ? 'bg-accent-emerald/15 border-2 border-accent-emerald/60 text-foreground' : 'bg-card-bg border-2 border-card-border text-foreground-secondary hover:border-foreground-muted/30'
                   }`}>
-                  <span className="text-2xl leading-none flex-shrink-0">{meta.icon}</span>
+                  <span className="text-2xl leading-none flex-shrink-0 text-accent-emerald">{STYLE_ICONS[meta.key]}</span>
                   <span className="flex-1 min-w-0">
                     <span className="block text-sm font-semibold text-foreground">{meta.label}</span>
                     <span className="block text-[11px] text-foreground-muted mt-0.5 leading-snug line-clamp-2">{meta.description}</span>

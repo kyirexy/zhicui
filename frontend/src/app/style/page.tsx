@@ -3,6 +3,7 @@
 import { useSettings } from '@/lib/hooks/SettingsContext';
 import { CARD_STYLE_CONFIG, DENSITY_CONFIG, type CardStyle, type DensityLevel } from '@/lib/types';
 import { Monitor, Zap } from 'lucide-react';
+import { STYLE_ICONS } from '@/lib/style-icons';
 
 export default function StylePage() {
   const { settings, updateStyle, updateDensity } = useSettings();
@@ -29,7 +30,7 @@ export default function StylePage() {
                     ? 'bg-accent-emerald/10 border-2 border-accent-emerald/40'
                     : 'bg-card-bg border-2 border-card-border hover:border-foreground-muted/20'
                 }`}>
-                <span className="text-3xl flex-shrink-0">{meta.icon}</span>
+                <span className="text-accent-emerald flex-shrink-0">{STYLE_ICONS[meta.key]}</span>
                 <span className="flex-1 min-w-0">
                   <span className="block text-base font-semibold text-foreground">
                     {meta.label}

@@ -1,9 +1,9 @@
 import type { Metadata, Viewport } from 'next';
 import localFont from 'next/font/local';
-import ThemeToggle from '@/components/ThemeToggle';
-import QRModal from '@/components/QRModal';
+import AppHeader from '@/components/AppHeader';
 import BottomTabBar from '@/components/BottomTabBar';
 import GlobalSheetManager from '@/components/GlobalSheetManager';
+import AuthGuard from '@/components/AuthGuard';
 import Providers from './Providers';
 import './globals.css';
 
@@ -89,64 +89,19 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className="min-h-[100dvh] flex flex-col">
-        {/* Floating glass nav pill — hidden inside Capacitor app (native shell has its own chrome).
-            The .capacitor-hide class is set by the inline script in <head>. */}
-        <div className="capacitor-hide fixed top-4 left-1/2 -translate-x-1/2 z-50 w-[calc(100%-2rem)] max-w-4xl">
-          <header
-            className="glass rounded-2xl px-2 py-1.5 md:px-3 md:py-2"
-            style={{
-              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.04)',
-            }}
-          >
-            <div className="mx-auto max-w-6xl flex items-center justify-between px-3 py-1.5 md:px-4 md:py-2">
-              <a
-                href="/"
-                className="flex items-center gap-2.5 text-foreground no-underline group"
-              >
-                <span className="text-xl md:text-2xl transition-transform duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] group-hover:scale-110 group-hover:rotate-6">
-                  🫒
-                </span>
-                <span className="text-base md:text-lg font-bold tracking-tight text-balance">
-                  知萃
-                </span>
-              </a>
-              <nav className="flex items-center gap-1 md:gap-1.5">
-                {/* Desktop-only: "知识库" link. On mobile, this nav item lives
-                    in the BottomTabBar so the top bar stays minimal. */}
-                <a
-                  href="/notes"
-                  className="relative text-foreground-secondary hover:text-foreground transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] text-sm font-medium px-3.5 py-2 rounded-xl hover:bg-white/[0.06] min-h-[40px] hidden md:flex items-center group/nav"
-                >
-                  知识库
-                  <span className="absolute bottom-1 left-3.5 right-3.5 h-px bg-accent-emerald scale-x-0 group-hover/nav:scale-x-100 transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] origin-left" />
-                </a>
-                {/* Desktop-only: "计划" link. Mobile equivalent in TabBar. */}
-                <a
-                  href="/plans"
-                  className="relative text-foreground-secondary hover:text-foreground transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] text-sm font-medium px-3.5 py-2 rounded-xl hover:bg-white/[0.06] min-h-[40px] hidden md:flex items-center group/nav"
-                >
-                  计划
-                  <span className="absolute bottom-1 left-3.5 right-3.5 h-px bg-accent-emerald scale-x-0 group-hover/nav:scale-x-100 transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] origin-left" />
-                </a>
-                <div className="hidden md:block">
-                  <QRModal />
-                </div>
-                <ThemeToggle />
-              </nav>
-            </div>
-          </header>
-        </div>
-
-        {/* Spacer for floating nav */}
-        <div className="h-16 md:h-[4.5rem]" />
+      <body className="min-h-[100dvh] flex flex-col bg-background">
+        {/* Desktop-only inline header — not fixed, scrolls with content.
+            Hidden on mobile where BottomTabBar handles all navigation. */}
+        <AppHeader />
 
         {/* Main content — extra bottom padding on mobile so content clears
             the fixed BottomTabBar (60px tabbar + safe-area + breathing room). */}
         <main className="mx-auto max-w-6xl px-5 pt-6 pb-24 md:px-8 md:py-8 lg:px-12 flex-1 w-full">
           <Providers>
-            <GlobalSheetManager />
-            {children}
+            <AuthGuard>
+              <GlobalSheetManager />
+              {children}
+            </AuthGuard>
           </Providers>
         </main>
 
@@ -154,7 +109,7 @@ export default function RootLayout({
         <footer className="relative border-t border-card-border/50 py-8 md:py-10 hidden md:block">
           <div className="mx-auto max-w-6xl px-4 md:px-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-foreground-muted text-xs">
             <p className="flex items-center gap-2">
-              <span className="text-base">🫒</span>
+              <img src="/logo.png" alt="知萃 Logo" className="h-5 w-5 object-contain" />
               <span>知萃 · 萃取视频里的全部干货</span>
             </p>
             <p className="text-foreground-muted/60">知识卡片提取工具</p>

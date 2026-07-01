@@ -3,11 +3,11 @@
 import { useEffect, useState, Suspense } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { ArrowLeft, Calendar, CheckSquare, Target, CalendarDays, Trash2 } from 'lucide-react';
-import { listPlans, getPlan, deletePlan } from '@/lib/api';
+import { ArrowLeft, Calendar, CheckSquare, Target, CalendarDays, Trash2, Check, Loader2, Sun } from 'lucide-react';
+import { listPlans, getPlan, deletePlan, togglePlanTask } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 import type { PlanData, PlanDay } from '@/lib/types';
-import { getPlanCurrentDay, getPlanProgress, getTodayTasks } from '@/lib/types';
+import { getPlanCurrentDay, getPlanProgress, getTodayTasks, getTodayDayTasks, getTodayDay } from '@/lib/types';
 import PlanCard from '@/components/PlanCard';
 import PlanTaskList from '@/components/PlanTaskList';
 import PlanDynamicField from '@/components/PlanDynamicField';
@@ -27,6 +27,7 @@ function PlanList() {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [filter, setFilter] = useState<'all' | 'today'>('all');
 
   const load = (p: number) => {
     setLoading(true);
@@ -52,6 +53,9 @@ function PlanList() {
     );
   }
 
+  const todayCount = plans.filter(p => getTodayDayTasks(p).length > 0).length;
+  const visiblePlans = filter === 'today' ? plans.filter(p => getTodayDayTasks(p).length > 0) : plans;
+
   return (
     <div className="max-w-4xl mx-auto">
       <div className="mb-6 md:mb-8">
@@ -62,6 +66,14 @@ function PlanList() {
           AI 从计划类视频中自动提取的任务清单
         </p>
       </div>
+
+      {/* Filter tabs */}
+      {plans.length > 0 && (
+        <div className="flex items-center gap-2 mb-5">
+          <FilterTab active={filter === 'all'} onClick={() => setFilter('all')} label="全部" count={plans.length} />
+          <FilterTab active={filter === 'today'} onClick={() => setFilter('today')} label="今日到期" count={todayCount} highlight />
+        </div>
+      )}
 
       {plans.length === 0 ? (
         <div className="min-h-[40vh] flex flex-col items-center justify-center text-center px-4">
@@ -74,9 +86,15 @@ function PlanList() {
             ← 返回首页提取视频
           </Link>
         </div>
+      ) : visiblePlans.length === 0 ? (
+        <div className="min-h-[30vh] flex flex-col items-center justify-center text-center px-4">
+          <p className="text-3xl mb-3">🎉</p>
+          <p className="text-foreground-secondary text-sm">今天没有到期的任务</p>
+          <button onClick={() => setFilter('all')} className="text-accent-emerald hover:underline text-sm mt-3">查看全部计划</button>
+        </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
-          {plans.map((plan) => (
+          {visiblePlans.map((plan) => (
             <PlanCard key={plan.id} plan={plan} />
           ))}
         </div>
@@ -116,6 +134,7 @@ function PlanDetail({ id }: { id: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [deleting, setDeleting] = useState(false);
+  const [todayMutating, setTodayMutating] = useState<Set<string>>(new Set());
   const router = useRouter();
 
   useEffect(() => {
@@ -131,6 +150,22 @@ function PlanDetail({ id }: { id: string }) {
 
   const handleMutate = (days: PlanDay[]) => {
     if (plan) setPlan({ ...plan, days });
+  };
+
+  // Quick-toggle from the "today" pinned card. Shares plan state with PlanTaskList.
+  const handleTodayToggle = async (taskId: string) => {
+    if (!plan) return;
+    const prev = plan.days;
+    const newDays = prev.map(d => ({ ...d, tasks: d.tasks.map(t => t.id === taskId ? { ...t, done: !t.done } : t) }));
+    setPlan({ ...plan, days: newDays });
+    setTodayMutating(s => new Set(s).add(taskId));
+    const res = await togglePlanTask(plan.id, taskId);
+    if (res.success && res.data) {
+      setPlan({ ...plan, days: res.data.days || newDays });
+    } else {
+      setPlan({ ...plan, days: prev });
+    }
+    setTodayMutating(s => { const n = new Set(s); n.delete(taskId); return n; });
   };
 
   const handleDelete = async () => {
@@ -210,6 +245,8 @@ function PlanDetail({ id }: { id: string }) {
       {/* 2-column layout (desktop) */}
       <div className="flex flex-col lg:flex-row gap-6 lg:gap-8">
         <section className="flex-1 lg:flex-[2] min-w-0">
+          {/* Today pinned card — surfaces the current day's todos at the top. */}
+          <TodayCard plan={plan} onToggle={handleTodayToggle} mutatingIds={todayMutating} />
           <PlanTaskList planId={plan.id} days={days} currentDay={currentDay} onMutate={handleMutate} />
         </section>
 
@@ -268,5 +305,85 @@ export default function PlansPage() {
     >
       <PlansContent />
     </Suspense>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Filter tab                                                         */
+/* ------------------------------------------------------------------ */
+
+function FilterTab({ active, onClick, label, count, highlight }: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  count: number;
+  highlight?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium transition-colors min-h-[36px] ${
+        active
+          ? 'bg-accent-emerald/15 text-accent-emerald border border-accent-emerald/30'
+          : 'bg-card-bg text-foreground-muted border border-card-border hover:text-foreground-secondary'
+      }`}
+    >
+      {label}
+      {count > 0 && (
+        <span className={`text-[11px] px-1.5 rounded-full ${highlight && !active ? 'bg-accent-rose/15 text-accent-rose' : 'bg-foreground-muted/15 text-foreground-muted'}`}>
+          {count}
+        </span>
+      )}
+    </button>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Today pinned card                                                  */
+/* ------------------------------------------------------------------ */
+
+function TodayCard({ plan, onToggle, mutatingIds }: {
+  plan: PlanData;
+  onToggle: (taskId: string) => void;
+  mutatingIds: Set<string>;
+}) {
+  const currentDay = getPlanCurrentDay(plan);
+  const todayDay = getTodayDay(plan);
+  const tasks = getTodayDayTasks(plan);
+
+  return (
+    <div className="mb-4 rounded-2xl border border-accent-emerald/25 bg-accent-emerald/[0.04] p-4">
+      <div className="flex items-center gap-2 mb-3">
+        <Sun size={15} className="text-accent-emerald" />
+        <h3 className="text-sm font-semibold text-foreground">今日任务 · 第 {currentDay} 天</h3>
+        {todayDay && (
+          <span className="text-xs text-foreground-muted truncate">{todayDay.label}</span>
+        )}
+        <span className="ml-auto text-xs text-foreground-muted">{tasks.length} 项待办</span>
+      </div>
+      {!todayDay ? (
+        <p className="text-sm text-foreground-muted py-1">当前天数暂无对应日程，去下方任务列表继续推进。</p>
+      ) : tasks.length === 0 ? (
+        <p className="text-sm text-foreground-muted py-1">今天没有待办，继续加油 🎉</p>
+      ) : (
+        <div className="space-y-1">
+          {tasks.map(t => {
+            const busy = mutatingIds.has(t.id);
+            return (
+              <button key={t.id} type="button" onClick={() => onToggle(t.id)} disabled={busy}
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl bg-card-bg/50 hover:bg-card-bg transition-colors text-left min-h-[48px] disabled:opacity-60">
+                <span className={`flex-shrink-0 w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all ${
+                  t.done ? 'bg-accent-emerald border-accent-emerald' : 'border-card-border'
+                }`}>
+                  {busy ? <Loader2 size={12} className="animate-spin text-accent-emerald" /> : t.done ? <Check size={12} className="text-white" strokeWidth={3} /> : null}
+                </span>
+                <span className={`flex-1 min-w-0 text-sm ${t.done ? 'line-through text-foreground-muted' : 'text-foreground'}`}>{t.title}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }

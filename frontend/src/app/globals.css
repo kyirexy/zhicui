@@ -154,6 +154,17 @@ body::before {
   box-shadow: var(--glass-shadow);
 }
 
+/* Floating nav: solidify on scroll so page content doesn't bleed through
+   the (near-transparent) glass. Toggled on .nav-pill by FloatingHeader. */
+.nav-scrolled {
+  --glass-bg: rgba(10, 12, 18, 0.78);
+  --glass-border: rgba(255, 255, 255, 0.1);
+}
+[data-theme="light"] .nav-scrolled {
+  --glass-bg: rgba(255, 255, 255, 0.85);
+  --glass-border: rgba(15, 23, 42, 0.08);
+}
+
 .glass-card {
   background: var(--card-bg);
   backdrop-filter: blur(40px) saturate(1.2);

@@ -1,102 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ChevronDown, Play, ExternalLink } from 'lucide-react';
-
-interface SampleLink {
-  title: string;
-  desc: string;
-  url: string;
-}
-
-interface SampleGroup {
-  label: string;
-  emoji: string;
-  links: SampleLink[];
-}
-
-const SAMPLE_GROUPS: SampleGroup[] = [
-  {
-    label: '认知与商业洞察',
-    emoji: '💡',
-    links: [
-      {
-        title: '厌蠢是赚钱的敌人',
-        desc: '李守洲谈个人 IP / 自媒体创业的核心心法（默认示例）',
-        url: 'https://v.douyin.com/FOBMUnEEE8A/',
-      },
-    ],
-  },
-  {
-    label: 'VibeCoding 基础入门',
-    emoji: '🚀',
-    links: [
-      {
-        title: '什么是 Vibe Coding？',
-        desc: '用最通俗的语言解释氛围编程的核心原理与三步操作流程',
-        url: 'https://www.iesdouyin.com/share/video/7628696225475214811',
-      },
-      {
-        title: '一套 Vibe Coding 工作流吃干抹净 AI',
-        desc: '"让AI做主力，你做总导演"——12字原则深度讲解',
-        url: 'https://www.iesdouyin.com/share/video/7589968106043362586',
-      },
-    ],
-  },
-  {
-    label: 'VibeCoding 实战案例',
-    emoji: '💻',
-    links: [
-      {
-        title: '单词背诵工具开发实操',
-        desc: '从0到1用VibeCoding开发可上线的单词背诵网站',
-        url: 'https://www.iesdouyin.com/share/video/7644499130202492211',
-      },
-      {
-        title: '用代码还原鱼群形态',
-        desc: 'Boids鱼群算法——AI将数学公式转化为3D视觉效果',
-        url: 'https://www.iesdouyin.com/share/video/7642345931534322985',
-      },
-      {
-        title: '给女朋友做的梦幻AI相册',
-        desc: '42轮对话开发个性化AI相册，Gemini+DeepSeek',
-        url: 'https://www.iesdouyin.com/share/video/7642254289469073777',
-      },
-    ],
-  },
-  {
-    label: 'VibeCoding 避坑进阶',
-    emoji: '⚠️',
-    links: [
-      {
-        title: 'AI编程代码越改越烂？5招拿捏',
-        desc: '破解"死亡螺旋"，5个实用技巧避免越修越烂',
-        url: 'https://www.iesdouyin.com/share/video/7645161416617430278',
-      },
-      {
-        title: '一块好玩的水墨屏',
-        desc: '用VibeCoding快速开发水墨屏应用的创意项目',
-        url: 'https://www.iesdouyin.com/share/video/7644946231135472070',
-      },
-    ],
-  },
-  {
-    label: '权威公开课 & AI工具',
-    emoji: '🎓',
-    links: [
-      {
-        title: '清华大学《Vibe Coding氛围编程》公开课',
-        desc: '清华官方出品，系统讲解氛围编程思想与工具',
-        url: 'https://www.iesdouyin.com/share/video/7543581458393337103',
-      },
-      {
-        title: 'AI创作功能全解析',
-        desc: '一键成片、数字人、文案生成等官方AI工具介绍',
-        url: 'https://www.iesdouyin.com/share/video/7633402358088682758',
-      },
-    ],
-  },
-];
+import { HOME_CATEGORIES } from '@/lib/homeCategories';
 
 interface SampleLinksProps {
   onFill: (url: string) => void;
@@ -104,8 +10,12 @@ interface SampleLinksProps {
 }
 
 export default function SampleLinks({ onFill, isLoading }: SampleLinksProps) {
+  const sampleGroups = useMemo(
+    () => HOME_CATEGORIES.filter((category) => category.samples.length > 0),
+    []
+  );
   const [expanded, setExpanded] = useState(false);
-  const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set([0, 1]));
+  const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set([0]));
 
   const toggleGroup = (i: number) => {
     setExpandedGroups((prev) => {
@@ -126,7 +36,7 @@ export default function SampleLinks({ onFill, isLoading }: SampleLinksProps) {
       >
         <span className="h-px flex-1 bg-card-border max-w-16 group-hover:max-w-24 transition-all duration-300" />
         <span className="flex items-center gap-1.5">
-          🧪 示例视频链接
+          按分类查看示例视频
           <ChevronDown
             size={12}
             className={`transition-transform duration-300 ${expanded ? 'rotate-180' : ''}`}
@@ -138,11 +48,11 @@ export default function SampleLinks({ onFill, isLoading }: SampleLinksProps) {
       {/* Sample links panel */}
       {expanded && (
         <div className="mt-3 space-y-3 animate-fade-in">
-          {SAMPLE_GROUPS.map((group, gi) => {
+          {sampleGroups.map((group, gi) => {
             const isGroupOpen = expandedGroups.has(gi);
             return (
               <div
-                key={gi}
+                key={group.slug}
                 className="rounded-xl bg-card-bg border border-card-border overflow-hidden"
               >
                 {/* Group header */}
@@ -152,12 +62,16 @@ export default function SampleLinks({ onFill, isLoading }: SampleLinksProps) {
                   className="w-full flex items-center gap-2 px-4 py-2.5 text-left
                              hover:bg-white/[0.02] transition-colors duration-200"
                 >
-                  <span className="text-sm">{group.emoji}</span>
+                  <span
+                    className="h-2 w-2 rounded-full flex-shrink-0"
+                    style={{ backgroundColor: group.accent }}
+                    aria-hidden="true"
+                  />
                   <span className="text-xs font-semibold text-foreground flex-1">
-                    {group.label}
+                    {group.title}
                   </span>
                   <span className="text-[10px] text-foreground-muted tabular-nums">
-                    {group.links.length} 个
+                    {group.samples.length} 个
                   </span>
                   <ChevronDown
                     size={12}
@@ -170,9 +84,9 @@ export default function SampleLinks({ onFill, isLoading }: SampleLinksProps) {
                 {/* Group links */}
                 {isGroupOpen && (
                   <div className="border-t border-card-border divide-y divide-card-border">
-                    {group.links.map((link, li) => (
+                    {group.samples.map((link, li) => (
                       <button
-                        key={li}
+                        key={`${group.slug}-${li}`}
                         type="button"
                         disabled={isLoading}
                         onClick={() => onFill(link.url)}

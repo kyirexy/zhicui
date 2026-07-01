@@ -37,5 +37,16 @@ backend/static/uploads/
 *.mp3
 *.wav
 
+# Temp / debug
+*.bak
+.playwright-cli/
+.claude/settings.json.bak
+backend/knowbrew-promo-video/
+backend/xhs_error.txt
+backend/package.json
+backend/package-lock.json
+picture/
+videos/
+
 # OpenSpec (keep changes tracked)
 # openspec/changes/ - tracked for project history

@@ -4,24 +4,45 @@ import { ApiResponse, CardData, Note, NoteDetail, PaginatedResponse, VideoInfo, 
 // (e.g. http://localhost:8000 or http://10.60.10.75:8000).
 // In dev mode it is left empty so requests go through the Next.js rewrite
 // proxy (/api/* → localhost:8000/api/*), avoiding CORS issues.
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
+
+/** Attach JWT to every API call automatically. */
+function authHeaders(extra?: HeadersInit): HeadersInit {
+  const h: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (typeof window !== 'undefined') {
+    try {
+      const t = localStorage.getItem('zhicui_token');
+      if (t) h['Authorization'] = `Bearer ${t}`;
+    } catch {}
+  }
+  if (extra) {
+    const ext = extra as Record<string, string>;
+    Object.assign(h, ext);
+  }
+  return h;
+}
 
 async function request<T>(endpoint: string, options?: RequestInit): Promise<ApiResponse<T>> {
   try {
+    const { headers: _h, ...rest } = options || {};
     const response = await fetch(`${API_BASE}${endpoint}`, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
-      ...options,
+      ...rest,
+      headers: authHeaders(_h),
     });
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      return {
-        success: false,
-        error: errorData.detail || errorData.message || `Request failed with status ${response.status}`,
-      };
+      let msg = `Request failed with status ${response.status}`;
+      if (response.status === 401) {
+        msg = '请先登录';
+      } else if (typeof errorData.detail === 'string') {
+        msg = errorData.detail;
+      } else if (Array.isArray(errorData.detail)) {
+        msg = errorData.detail.map((e: any) => e.msg || JSON.stringify(e)).join('; ');
+      } else if (typeof errorData.message === 'string') {
+        msg = errorData.message;
+      }
+      return { success: false, error: msg };
     }
 
     const json = await response.json();
@@ -66,16 +87,22 @@ export async function extractVideoStream(
   const encoded = encodeURIComponent(url);
 
   try {
-    const response = await fetch(`${API_BASE}/api/extract/stream?url=${encoded}`, {
-      headers: { Accept: 'text/event-stream' },
+    const sseBase = API_BASE || 'http://localhost:8000';
+    const response = await fetch(`${sseBase}/api/extract/stream?url=${encoded}`, {
+      headers: authHeaders({ Accept: 'text/event-stream' }),
     });
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      return {
-        success: false,
-        error: errorData.detail || `Request failed with status ${response.status}`,
-      };
+      let msg = `Request failed with status ${response.status}`;
+      if (response.status === 401) {
+        msg = '请先登录';
+      } else if (typeof errorData.detail === 'string') {
+        msg = errorData.detail;
+      } else if (Array.isArray(errorData.detail)) {
+        msg = errorData.detail.map((e: any) => e.msg || JSON.stringify(e)).join('; ');
+      }
+      return { success: false, error: msg };
     }
 
     const reader = response.body?.getReader();
@@ -166,10 +193,12 @@ export async function togglePlanTask(planId: string, taskId: string): Promise<Ap
   return request<PlanData>(`/api/plans/${planId}/tasks/${taskId}`, { method: 'PATCH' });
 }
 
-export async function addPlanTask(planId: string, title: string): Promise<ApiResponse<PlanData>> {
+export async function addPlanTask(planId: string, title: string, day?: number): Promise<ApiResponse<PlanData>> {
+  const body: Record<string, unknown> = { title };
+  if (day !== undefined) body.day = day;
   return request<PlanData>(`/api/plans/${planId}/tasks`, {
     method: 'POST',
-    body: JSON.stringify({ title }),
+    body: JSON.stringify(body),
   });
 }
 

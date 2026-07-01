@@ -1,10 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Check, Plus, Trash2, Loader2, ChevronDown, CalendarDays } from 'lucide-react';
-import type { PlanDay, PlanTask } from '@/lib/types';
+import type { PlanDay } from '@/lib/types';
 import { togglePlanTask, addPlanTask, deletePlanTask } from '@/lib/api';
 import { useIsMobile } from '@/lib/hooks/useMediaQuery';
+import { celebrateDayDone, celebrateCompletion } from '@/lib/celebrate';
 import BottomSheet from './BottomSheet';
 
 interface PlanTaskListProps {
@@ -22,10 +23,29 @@ export default function PlanTaskList({ planId, days, currentDay, onMutate }: Pla
   const [addSheetOpen, setAddSheetOpen] = useState(false);
   const [addTargetDay, setAddTargetDay] = useState(currentDay);
   const [collapsedDays, setCollapsedDays] = useState<Set<number>>(new Set());
+  const desktopInputRef = useRef<HTMLInputElement>(null);
 
   const withMutating = (id: string, fn: () => Promise<void>) => {
     setMutatingIds((s) => new Set(s).add(id));
     fn().finally(() => setMutatingIds((s) => { const n = new Set(s); n.delete(id); return n; }));
+  };
+
+  // Fire celebrations based on the optimistic next state, not the server echo.
+  const maybeCelebrate = (prev: PlanDay[], next: PlanDay[], taskId: string) => {
+    const dayBefore = prev.find(d => d.tasks.some(t => t.id === taskId));
+    const dayAfter = next.find(d => d.tasks.some(t => t.id === taskId));
+    if (dayBefore && dayAfter) {
+      const wasDone = dayBefore.tasks.length > 0 && dayBefore.tasks.every(t => t.done);
+      const isDone = dayAfter.tasks.length > 0 && dayAfter.tasks.every(t => t.done);
+      if (!wasDone && isDone) celebrateDayDone();
+    }
+    const allAfter = next.flatMap(d => d.tasks);
+    const totalAfter = allAfter.length;
+    const doneAfter = allAfter.filter(t => t.done).length;
+    const doneBefore = prev.flatMap(d => d.tasks).filter(t => t.done).length;
+    if (totalAfter > 0 && doneAfter === totalAfter && doneBefore < totalAfter) {
+      celebrateCompletion();
+    }
   };
 
   const handleToggle = async (dayIdx: number, taskId: string) => {
@@ -35,6 +55,7 @@ export default function PlanTaskList({ planId, days, currentDay, onMutate }: Pla
       tasks: d.tasks.map(t => t.id === taskId ? { ...t, done: !t.done } : t),
     }));
     onMutate(newDays);
+    maybeCelebrate(prev, newDays, taskId);
     withMutating(taskId, async () => {
       const res = await togglePlanTask(planId, taskId);
       if (res.success && res.data) {
@@ -61,7 +82,7 @@ export default function PlanTaskList({ planId, days, currentDay, onMutate }: Pla
 
   const doAdd = async (dayIdx: number, title: string) => {
     setAdding(true);
-    const res = await addPlanTask(planId, title);
+    const res = await addPlanTask(planId, title, addTargetDay);
     if (res.success && res.data) {
       onMutate(res.data.days || days);
       setNewTitle('');
@@ -78,8 +99,31 @@ export default function PlanTaskList({ planId, days, currentDay, onMutate }: Pla
     });
   };
 
+  const expandAll = () => setCollapsedDays(new Set());
+  const collapseAll = () => setCollapsedDays(new Set(days.map(d => d.day)));
+
+  // Global keyboard shortcuts (ignored while typing in a field).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+      const key = e.key.toLowerCase();
+      if (key === 'n') {
+        e.preventDefault();
+        if (isMobile) { setNewTitle(''); setAddTargetDay(currentDay); setAddSheetOpen(true); }
+        else desktopInputRef.current?.focus();
+      } else if (key === 'e') {
+        expandAll();
+      } else if (key === 'c') {
+        collapseAll();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isMobile, currentDay, days]);
+
   const today = new Date().toISOString().slice(0, 10);
-  const rowClass = 'flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200 group/task min-h-[52px] md:min-h-[44px]';
+  const rowClass = 'flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200 group/task min-h-[52px] md:min-h-[44px] outline-none focus-visible:ring-2 focus-visible:ring-accent-emerald/40';
 
   if (!days || days.length === 0) {
     return <p className="text-sm text-foreground-muted text-center py-8">暂无任务</p>;
@@ -87,6 +131,15 @@ export default function PlanTaskList({ planId, days, currentDay, onMutate }: Pla
 
   return (
     <div className="space-y-3">
+      {/* Expand / collapse all */}
+      {days.length > 1 && (
+        <div className="flex items-center justify-end gap-3 text-xs text-foreground-muted">
+          <button type="button" onClick={expandAll} className="hover:text-foreground-secondary transition-colors">全部展开</button>
+          <span className="text-foreground-muted/30">·</span>
+          <button type="button" onClick={collapseAll} className="hover:text-foreground-secondary transition-colors">全部折叠</button>
+        </div>
+      )}
+
       {days.map((planDay, di) => {
         const isCollapsed = collapsedDays.has(planDay.day);
         const dayDone = planDay.tasks.length > 0 && planDay.tasks.every(t => t.done);
@@ -132,7 +185,9 @@ export default function PlanTaskList({ planId, days, currentDay, onMutate }: Pla
                   const isDue = !task.done && !!task.scheduled_at?.startsWith(today);
                   const busy = mutatingIds.has(task.id);
                   return (
-                    <div key={task.id} className={`${rowClass} ${task.done ? 'bg-card-bg/30 text-foreground-muted' : isDue ? 'bg-accent-emerald/[0.05]' : 'hover:bg-card-bg'}`}>
+                    <div key={task.id} tabIndex={0} role="checkbox" aria-checked={task.done}
+                      onKeyDown={(e) => { if ((e.key === ' ' || e.key === 'Enter') && !busy) { e.preventDefault(); handleToggle(di, task.id); } }}
+                      className={`${rowClass} ${task.done ? 'bg-card-bg/30 text-foreground-muted' : isDue ? 'bg-accent-emerald/[0.05]' : 'hover:bg-card-bg'}`}>
                       <button type="button" onClick={() => handleToggle(di, task.id)} disabled={busy}
                         className={`flex-shrink-0 w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all ${
                           task.done ? 'bg-accent-emerald border-accent-emerald' : 'border-card-border hover:border-accent-emerald/50'
@@ -142,7 +197,7 @@ export default function PlanTaskList({ planId, days, currentDay, onMutate }: Pla
                       </button>
                       <span className={`flex-1 min-w-0 text-sm leading-snug ${task.done ? 'line-through decoration-foreground-muted/40' : 'text-foreground'}`}>{task.title}</span>
                       <button type="button" onClick={() => handleDelete(di, task.id)} disabled={busy}
-                        className="flex-shrink-0 p-1 rounded-lg text-foreground-muted/30 hover:text-accent-rose hover:bg-accent-rose/10 opacity-0 group-hover/task:opacity-100 transition-all"
+                        className="flex-shrink-0 p-1 rounded-lg text-foreground-muted/30 hover:text-accent-rose hover:bg-accent-rose/10 opacity-0 group-hover/task:opacity-100 focus-visible:opacity-100 transition-all"
                         aria-label="删除任务">
                         <Trash2 size={13} />
                       </button>
@@ -163,7 +218,7 @@ export default function PlanTaskList({ planId, days, currentDay, onMutate }: Pla
         </button>
       ) : (
         <div className="flex items-center gap-2 pt-2">
-          <input type="text" value={newTitle} onChange={(e) => setNewTitle(e.target.value)}
+          <input ref={desktopInputRef} type="text" value={newTitle} onChange={(e) => setNewTitle(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') doAdd(addTargetDay, newTitle); }}
             placeholder="添加新任务 (N)" style={{ fontSize: '16px' }}
             className="flex-1 bg-card-bg border border-card-border rounded-xl px-3 py-2.5 text-sm text-foreground placeholder:text-foreground-muted outline-none focus:border-accent-emerald/50 min-h-[44px]" />
@@ -198,7 +253,9 @@ export default function PlanTaskList({ planId, days, currentDay, onMutate }: Pla
 
       <p className="hidden md:block text-[11px] text-foreground-muted/50 text-center mt-3">
         <kbd className="px-1 py-0.5 rounded bg-card-bg border border-card-border text-[10px]">Space</kbd> 勾选 ·
-        <kbd className="px-1 py-0.5 rounded bg-card-bg border border-card-border text-[10px] ml-1">N</kbd> 新增
+        <kbd className="px-1 py-0.5 rounded bg-card-bg border border-card-border text-[10px] ml-1">N</kbd> 新增 ·
+        <kbd className="px-1 py-0.5 rounded bg-card-bg border border-card-border text-[10px] ml-1">E</kbd> 展开 ·
+        <kbd className="px-1 py-0.5 rounded bg-card-bg border border-card-border text-[10px] ml-1">C</kbd> 折叠
       </p>
     </div>
   );

@@ -54,11 +54,13 @@ openspec/         OpenSpec change tracking (specs/ + changes/)
 
 ## Core data flow (the "pipeline")
 
-`POST /api/extract` runs a sequential pipeline:
+`POST /api/extract` (and the SSE variant `GET /api/extract/stream`) run a sequential pipeline:
 1. **Parse** — `video_extractor.parse_video_info(url)` resolves the Douyin share link to metadata
 2. **Transcribe** — primary: SiliconFlow ASR API (via douyin-mcp-server); fallback: local FunASR paraformer-large → faster-whisper
-3. **AI generate** — `ai_juicer.detect_content_type()` (keyword heuristic) → `ai_juicer.generate_card()` (LiteLLM call to DeepSeek-V3, returning structured JSON: `{sections, conclusion, pitfall_rating}`)
-4. **Persist** — `note_service.create_note()` writes to SQLite `notes` table; response includes the full `to_dict()` serialization
+3. **AI generate** — `ai_juicer.detect_content_type()` (keyword heuristic) → `ai_juicer.generate_card()` (LiteLLM call to DeepSeek-V3, returning structured JSON: `{sections, conclusion, pitfall_rating}`). For `plan`-type content, `ai_juicer.generate_plan()` produces a structured plan (fields + days + tasks) instead.
+4. **Persist** — `note_service.create_note()` writes to SQLite `notes` table; if a plan was generated, `plan_service.create_plan()` also writes a row to the `plans` table linked by `note_id`. Response includes the full `to_dict()` serialization.
+
+**Streaming variant:** `/api/extract/stream` returns `text/event-stream` with one SSE event per pipeline step (`{"step","message","status"}`). The frontend `ExtractionContext` + `PipelineProgress` component consume these to show live progress on the `process` page.
 
 ## Backend architecture
 
@@ -68,20 +70,26 @@ backend/app/
   core/config.py       Pydantic-settings: DATABASE_URL, LLM_MODEL/API_BASE/API_KEY, ASR config
   core/database.py     SQLAlchemy engine + session factory + get_db() dependency
   models/note.py       Note ORM — single `notes` table, ai_summary is JSON-encoded text, to_dict() deserializes it
+  models/plan.py       Plan ORM — `plans` table, linked to notes via note_id (FK, ondelete SET NULL); JSON-encoded fields/days/tasks, schema_version bump on shape changes
   api/routes.py        All endpoints (see below), standard response envelope {success, data, error}
   services/
     video_extractor.py   Wraps douyin-mcp-server + local ASR fallbacks
-    ai_juicer.py         Content-type detection + LiteLLM prompt + completion
+    ai_juicer.py         Content-type detection + LiteLLM prompt + completion (card + plan generation)
     local_asr.py         FunASR/faster-whisper unified transcribe() interface
     note_service.py      CRUD + SEO slug/title generation
+    plan_service.py      Plan CRUD + task toggle/add/delete + stats; creates plans from plan-type cards
 ```
 
 **API endpoints:**
 - `GET /api/health` — liveness
 - `POST /api/video/info` — parse URL, return metadata (no download)
 - `POST /api/extract` — full pipeline (parse → transcribe → AI → save)
+- `GET /api/extract/stream` — same pipeline as SSE `text/event-stream` with per-step progress events
 - `GET /api/notes?page=&per_page=` — paginated list
 - `GET /api/notes/{id}` — single note
+- `GET /api/plans` · `GET /api/plans/stats` · `GET /api/plans/{id}` — plan list/stats/detail
+- `POST /api/plans/{id}/tasks` · `PATCH /api/plans/{id}/tasks/{tid}` · `DELETE /api/plans/{id}/tasks/{tid}` · `DELETE /api/plans/{id}` — plan task CRUD + delete
+- `GET /api/video/proxy` — proxies Douyin video play URLs with the required headers; if `note_id` given and the stored URL expired, re-parses the share link for a fresh URL
 
 **Response envelope:** `{success: bool, data: T | null, error: string | null}`
 
@@ -96,22 +104,33 @@ backend/app/
 ```
 frontend/src/
   app/
-    layout.tsx          Root layout — inter font, glass nav, theme toggle, QR modal, footer
-    page.tsx            Home — 'use client', InputBar → CardRenderer, loading skeleton
+    layout.tsx          Root layout — inter font, glass nav, theme toggle, QR modal, footer, BottomTabBar (mobile)
+    page.tsx            Home — 'use client', InputBar → CardRenderer, loading skeleton, homeCategories
+    process/page.tsx    Extraction-in-progress + result detail view; consumes SSE via ExtractionContext, shows PipelineProgress + TranscriptViewer
+    plans/page.tsx      Plans list + detail (via ?id=), task toggle/add, progress stats
     notes/page.tsx      Notes list + detail (via ?id= query param), pagination
+    settings/page.tsx   App settings (theme, ASR/LLM prefs surfaced via SettingsContext)
+    style/page.tsx      Card-style picker for the multi-layout card system
+    Providers.tsx       Client providers root (ExtractionContext, SettingsContext)
     globals.css         ALL styles — CSS custom properties for dark/light themes, glassmorphism, animations
   components/
     InputBar.tsx        URL input with paste detection
-    CardRenderer.tsx    Full card — header, sections, conclusion, export; double-bezel glass borders
-    CardSection.tsx     Single section with emoji, title, formatted content
-    Conclusion.tsx      "3-line ultimate takeaway" box
-    PitfallRating.tsx   5-star rating display
+    CardRenderer.tsx    Full card — header, sections, conclusion, export; double-bezel glass borders; delegates to a card-styles/* layout
+    CardSection.tsx / SectionIcon.tsx   Section rendering with emoji/icon
+    Conclusion.tsx / PitfallRating.tsx  Takeaway box + 5-star rating
+    card-styles/        Swap-in card layouts: Standard, CompactList, Creative, Hero, Magazine, Minimal — chosen via the style system
+    StyleToolbar.tsx    In-card style switcher
+    PipelineProgress.tsx / TranscriptViewer.tsx   Live extraction progress + transcript display
+    PlanCard.tsx / PlanTaskList.tsx / PlanDynamicField.tsx   Plan rendering + interactive task list + dynamic field renderer
+    BottomTabBar.tsx / BottomSheet.tsx / GlobalSheetManager.tsx   Mobile tab nav + bottom-sheet system (GlobalSheetManager is the singleton controller other components open sheets through)
     ThemeToggle.tsx     Dark/light with localStorage persistence
     ExportButton.tsx    → PNG via html2canvas
     QRModal.tsx / QRCodeDownload.tsx / MobileDownloadButton.tsx / AndroidBanner.tsx
   lib/
-    api.ts              fetch wrappers: extractVideo(), getVideoInfo(), listNotes(), getNote()
-    types.ts            CardData, CardSection, Note, NoteDetail, ApiResponse, PaginatedResponse, CARD_TYPE_CONFIG
+    api.ts              fetch wrappers: extractVideo(), getVideoInfo(), listNotes(), getNote(), listPlans/getPlan/deletePlan, plan task ops
+    types.ts            CardData, CardSection, Note, NoteDetail, PlanData, PlanDay, ApiResponse, PaginatedResponse, CARD_TYPE_CONFIG + plan progress helpers (getPlanCurrentDay/getPlanProgress/getTodayTasks)
+    homeCategories.ts   Home-screen category config
+    hooks/              ExtractionContext (SSE pipeline state), SettingsContext, useLocalStorage, useMediaQuery
 ```
 
 **Important frontend facts:**

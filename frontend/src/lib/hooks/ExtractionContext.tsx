@@ -47,6 +47,7 @@ const ExtractionContext = createContext<ExtractionState | null>(null);
 
 export function ExtractionProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(false);
+  const [pendingUrl, setPendingUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cardData, setCardData] = useState<CardData | null>(null);
   const [progressSteps, setProgressSteps] = useState<StepState[]>(initialSteps());
@@ -111,6 +112,10 @@ export function ExtractionProvider({ children }: { children: ReactNode }) {
       });
 
       if (!result.success && !controller.signal.aborted) {
+        // If 401, save the URL so the user can resume after login
+        if (result.error === '请先登录') {
+          setPendingUrl(url);
+        }
         setError(result.error || '提取失败');
         setIsLoading(false);
       }

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useSettings } from '@/lib/hooks/SettingsContext';
 import { CARD_STYLE_CONFIG, DENSITY_CONFIG, type CardStyle, type DensityLevel } from '@/lib/types';
+import { STYLE_ICONS } from '@/lib/style-icons';
 import { Monitor, Zap, ChevronDown } from 'lucide-react';
 import BottomSheet from './BottomSheet';
 
@@ -56,7 +57,7 @@ export default function StyleToolbar({
             <Monitor size={14} className="text-foreground-muted" />
             <span>风格</span>
             <span className="inline-flex items-center gap-1 text-xs text-foreground-muted">
-              <span className="text-base leading-none">{currentStyleMeta.icon}</span>
+              <span className="text-base leading-none text-accent-emerald">{STYLE_ICONS[currentStyleMeta.key]}</span>
               <span>{currentStyleMeta.label}</span>
             </span>
             <span className="mx-1 text-foreground-muted/40">·</span>
@@ -98,7 +99,7 @@ export default function StyleToolbar({
                     }`}
                   title={meta.description}
                 >
-                  <span className="text-sm leading-none">{meta.icon}</span>
+                  <span className="text-sm leading-none text-accent-emerald">{STYLE_ICONS[meta.key]}</span>
                   <span>{meta.label}</span>
                   {isActive && !isGlobal && (
                     <span className="text-[10px] opacity-80">*</span>
@@ -195,7 +196,7 @@ export default function StyleToolbar({
                     }`}
                   aria-pressed={isActive}
                 >
-                  <span className="text-2xl leading-none flex-shrink-0">{meta.icon}</span>
+                  <span className="text-2xl leading-none flex-shrink-0 text-accent-emerald">{STYLE_ICONS[meta.key]}</span>
                   <span className="flex-1 min-w-0">
                     <span className="block text-sm font-semibold text-foreground">
                       {meta.label}

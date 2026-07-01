@@ -5,7 +5,7 @@ Note ORM model -- the core entity that stores a video-to-card result.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -24,6 +24,9 @@ class Note(Base):
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=_uuid
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     video_id: Mapped[str] = mapped_column(String(128), nullable=False)
     video_title: Mapped[str] = mapped_column(String(512), nullable=False)

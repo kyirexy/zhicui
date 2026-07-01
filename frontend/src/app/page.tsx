@@ -9,7 +9,14 @@ import PipelineProgress from '@/components/PipelineProgress';
 import { useExtraction } from '@/lib/hooks/ExtractionContext';
 import { getPlanStats } from '@/lib/api';
 import MobileDownloadButton from '@/components/MobileDownloadButton';
-import { X, CheckSquare } from 'lucide-react';
+import { HOME_CATEGORIES, type HomeCategory } from '@/lib/homeCategories';
+import { X, CheckSquare, Code2, Brain, BookOpen, Target, Lightbulb, TrendingUp, LineChart, Star, FileText } from 'lucide-react';
+
+const CATEGORY_ICON_MAP: Record<string, typeof Code2> = {
+  'Code2': Code2, 'Brain': Brain, 'BookOpen': BookOpen,
+  'Target': Target, 'Lightbulb': Lightbulb, 'TrendingUp': TrendingUp,
+  'LineChart': LineChart, 'Star': Star, 'FileText': FileText,
+};
 
 export default function HomePage() {
   const { isLoading, error, cardData, progressSteps, startExtraction, clearCard, dismissError } = useExtraction();
@@ -82,20 +89,30 @@ export default function HomePage() {
 
       {/* Hero section */}
       <section className={`relative z-10 text-center px-4 transition-all duration-500 ${
-        isLoading ? 'pt-3 pb-2 md:pt-8 md:pb-6' : 'pt-4 pb-3 md:pt-24 md:pb-16 lg:pt-28 lg:pb-20'
+        isLoading ? 'pt-2 pb-1 md:pt-8 md:pb-6' : 'pt-4 pb-2 md:pt-24 md:pb-16 lg:pt-28 lg:pb-20'
       }`}>
         <div className="animate-fade-up-blur">
+          {/* Mobile eyebrow — compact version of the desktop chip */}
+          <div className="md:hidden flex items-center justify-center mb-4">
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-accent-emerald/90 bg-accent-emerald/[0.06] rounded-full px-3 py-1 border border-accent-emerald/10">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent-emerald animate-pulse" />AI 视频知识提取
+            </span>
+          </div>
           <div className="hidden md:flex items-center justify-center mb-6">
             <span className="eyebrow">
               <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent-emerald animate-pulse" />AI 视频知识提取
             </span>
           </div>
-          <div className="flex items-center justify-center gap-3 mb-2 md:mb-5">
-            <span className="text-3xl md:text-6xl lg:text-7xl drop-shadow-[0_0_30px_rgba(16,185,129,0.2)]">🫒</span>
+          <div className="flex items-center justify-center gap-2 md:gap-3 mb-2 md:mb-5">
+            <img
+              src="/logo.png"
+              alt="知萃"
+              className="h-10 w-10 md:h-20 md:w-20 lg:h-24 lg:w-24 object-contain drop-shadow-[0_0_30px_rgba(16,185,129,0.2)]"
+            />
+            <h1 className="text-2xl md:text-5xl lg:text-6xl font-extrabold text-foreground tracking-tight text-balance leading-[1.1]">知萃</h1>
           </div>
-          <h1 className="text-2xl md:text-5xl lg:text-6xl font-extrabold text-foreground mb-1.5 md:mb-4 tracking-tight text-balance leading-[1.1]">知萃</h1>
-          <p className="text-foreground-secondary text-sm md:text-xl max-w-lg mx-auto leading-relaxed text-pretty">短视频一键萃成结构化知识卡</p>
-          <p className="hidden md:block text-foreground-muted text-sm md:text-base max-w-md mx-auto mt-2">知萃 KnowBrew · AI 萃取视频干货</p>
+          <p className="text-foreground-secondary text-xs md:text-xl max-w-lg mx-auto leading-relaxed text-pretty px-2">粘贴视频链接,AI 自动萃成知识卡片和行动计划</p>
+          <p className="text-foreground-muted text-[10px] md:text-base max-w-md mx-auto mt-1 md:mt-2">支持抖音 · B站 · 公众号文章</p>
         </div>
       </section>
 
@@ -120,14 +137,19 @@ export default function HomePage() {
         </section>
       )}
 
-      {/* Features hint — desktop-only */}
+      {/* Category cards */}
       {!cardData && !isLoading && (
-        <section className="relative z-10 w-full max-w-3xl mx-auto px-2 hidden md:block">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-5 mb-4 md:mb-5">
-            <FeatureCard emoji="🍳" title="食谱提取" desc="从烹饪视频中提取完整食谱，步骤清晰可操作" accent="var(--accent-orange)" delay={0} />
-            <FeatureCard emoji="💡" title="知识洞察" desc="从讲座中提炼核心观点，三行字掌握精髓" accent="var(--accent-emerald)" delay={1} />
+        <section className="relative z-10 w-full max-w-5xl mx-auto px-2 md:px-0">
+          <div className="mb-4 md:mb-6 text-center">
+            <p className="text-[11px] md:text-xs font-medium text-accent-emerald/90">覆盖你收藏夹里的高频内容</p>
+            <h2 className="mt-1 md:mt-1.5 text-base md:text-2xl font-bold text-foreground tracking-tight">各类视频，一键萃成可用知识</h2>
+            <p className="mt-1 md:mt-2 text-[11px] md:text-sm text-foreground-muted">AI 自动识别内容类型，生成结构化卡片和行动计划</p>
           </div>
-          <FeatureCardWide emoji="📚" title="历史解读" desc="从纪录片中梳理历史脉络，关键事件一目了然" accent="var(--accent-amber)" delay={2} />
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-2.5 md:gap-5">
+            {HOME_CATEGORIES.map((category, index) => (
+              <CategoryCard key={category.slug} category={category} delay={index} />
+            ))}
+          </div>
         </section>
       )}
 
@@ -170,26 +192,72 @@ export default function HomePage() {
   );
 }
 
-function FeatureCard({ emoji, title, desc, accent, delay }: { emoji: string; title: string; desc: string; accent: string; delay: number }) {
-  return (
-    <div className="glass-card p-5 md:p-6 animate-fade-up-blur" style={{ animationDelay: `${delay * 100}ms` }}>
-      <span className="text-2xl mb-3 block">{emoji}</span>
-      <h3 className="text-sm font-semibold text-foreground mb-1.5">{title}</h3>
-      <p className="text-xs text-foreground-muted leading-relaxed">{desc}</p>
-    </div>
-  );
-}
+function CategoryCard({ category, delay }: { category: HomeCategory; delay: number }) {
+  const [imgOk, setImgOk] = useState(false);
+  const IconComp = CATEGORY_ICON_MAP[category.icon];
 
-function FeatureCardWide({ emoji, title, desc, accent, delay }: { emoji: string; title: string; desc: string; accent: string; delay: number }) {
+  const handleClick = () => {
+    // Click the card → fill InputBar with the first sample URL (if any).
+    if (category.samples.length > 0) {
+      const first = category.samples[0].url;
+      const input = document.querySelector<HTMLInputElement>('input[placeholder*="粘贴"]');
+      if (input) {
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype, 'value'
+        )?.set;
+        nativeInputValueSetter?.call(input, first);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.focus();
+      }
+    }
+  };
+
   return (
-    <div className="glass-card p-5 md:p-6 animate-fade-up-blur" style={{ animationDelay: `${delay * 100}ms` }}>
-      <div className="flex items-start gap-4">
-        <span className="text-2xl">{emoji}</span>
-        <div>
-          <h3 className="text-sm font-semibold text-foreground mb-1.5">{title}</h3>
-          <p className="text-xs text-foreground-muted leading-relaxed">{desc}</p>
+    <article
+      onClick={handleClick}
+      className="group relative min-h-[100px] md:min-h-[140px] overflow-hidden rounded-2xl animate-fade-up-blur transition-all duration-300 active:scale-[0.98] md:hover:-translate-y-1 cursor-pointer"
+      style={{
+        animationDelay: `${delay * 50}ms`,
+        backgroundColor: category.accent + '12',
+        borderLeft: `4px solid ${category.accent}`,
+        boxShadow: `0 4px 24px ${category.accent}10`,
+      }}
+    >
+      {/* Giant watermark icon — top-right, very subtle */}
+      {IconComp && (
+        <IconComp
+          size={56}
+          className="absolute -top-2 -right-2 md:top-0 md:right-0 transition-all duration-500 md:group-hover:scale-110 md:group-hover:opacity-20"
+          style={{ color: category.accent, opacity: 0.1 }}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Content */}
+      <div className="relative z-10 flex flex-col justify-end h-full min-h-[100px] md:min-h-[140px] p-3 md:p-4">
+        {/* Small icon + title row */}
+        <div className="flex items-center gap-2 mb-1.5 md:mb-2">
+          {IconComp && (
+            <div
+              className="flex-shrink-0 w-8 h-8 md:w-9 md:h-9 rounded-xl flex items-center justify-center transition-colors duration-300"
+              style={{ backgroundColor: category.accent + '28' }}
+            >
+              <IconComp
+                size={16}
+                className="md:size-[17px]"
+                style={{ color: category.accent }}
+                aria-hidden="true"
+              />
+            </div>
+          )}
+          <h3 className="text-[14px] md:text-lg font-bold text-foreground tracking-tight">
+            {category.title}
+          </h3>
         </div>
+        <p className="text-[11px] md:text-[13px] leading-relaxed text-foreground-muted/90 line-clamp-2 pl-10 md:pl-[44px]">
+          {category.desc}
+        </p>
       </div>
-    </div>
+    </article>
   );
 }

@@ -17,18 +17,27 @@ export default function PlanCard({ plan }: PlanCardProps) {
 
   // Count completed days (days where ALL tasks are done)
   const completedDays = plan.days?.filter(d => d.tasks.length > 0 && d.tasks.every(t => t.done)).length || 0;
+  const isComplete = plan.status === 'done' || (total > 0 && pct === 100);
 
   return (
     <Link
       href={`/plans?id=${plan.id}`}
-      className="glass-card p-4 md:p-5 group hover:scale-[1.02] transition-all duration-200 cursor-pointer block text-foreground no-underline"
+      className={`glass-card p-4 md:p-5 group hover:scale-[1.02] transition-all duration-200 cursor-pointer block text-foreground no-underline relative overflow-hidden ${
+        isComplete ? 'border-accent-emerald/40 ring-1 ring-accent-emerald/20' : ''
+      }`}
     >
-      <div className="flex items-start justify-between gap-2 mb-3">
+      {/* Completion glow */}
+      {isComplete && (
+        <div className="absolute inset-0 pointer-events-none opacity-60"
+          style={{ background: 'radial-gradient(circle at 80% 0%, rgba(16,185,129,0.16), transparent 55%)' }}
+          aria-hidden="true" />
+      )}
+      <div className="flex items-start justify-between gap-2 mb-3 relative">
         <h3 className="text-sm md:text-base font-semibold text-foreground line-clamp-2 text-balance leading-snug">
           {plan.title}
         </h3>
-        {plan.status === 'done' && (
-          <span className="flex-shrink-0 text-xs px-2 py-0.5 rounded-full bg-accent-emerald/10 border border-accent-emerald/20 text-accent-emerald">
+        {isComplete && (
+          <span className="flex-shrink-0 text-xs px-2 py-0.5 rounded-full bg-accent-emerald/15 border border-accent-emerald/30 text-accent-emerald font-medium">
             已完成
           </span>
         )}

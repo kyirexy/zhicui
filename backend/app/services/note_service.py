@@ -58,6 +58,7 @@ def create_note(
     video_info: dict[str, Any],
     transcript: str,
     ai_result: dict[str, Any],
+    user_id: str = "",
 ) -> Note:
     """Persist a new note from extraction results.
 
@@ -86,6 +87,7 @@ def create_note(
 
     note = Note(
         id=str(uuid.uuid4()),
+        user_id=user_id,
         video_id=video_info.get("video_id", ""),
         video_title=video_title,
         video_url=video_url,
@@ -106,20 +108,27 @@ def create_note(
     return note
 
 
-def get_note(db: Session, note_id: str) -> Note | None:
-    """Fetch a single note by primary key."""
-    return db.query(Note).filter(Note.id == note_id).first()
+def get_note(db: Session, note_id: str, user_id: str = "") -> Note | None:
+    """Fetch a single note by primary key, optionally scoped to user."""
+    q = db.query(Note).filter(Note.id == note_id)
+    if user_id:
+        q = q.filter(Note.user_id == user_id)
+    return q.first()
 
 
-def get_note_by_slug(db: Session, slug: str) -> Note | None:
-    """Fetch a single note by its SEO slug."""
-    return db.query(Note).filter(Note.seo_slug == slug).first()
+def get_note_by_slug(db: Session, slug: str, user_id: str = "") -> Note | None:
+    """Fetch a single note by its SEO slug, optionally scoped to user."""
+    q = db.query(Note).filter(Note.seo_slug == slug)
+    if user_id:
+        q = q.filter(Note.user_id == user_id)
+    return q.first()
 
 
 def list_notes(
     db: Session,
     page: int = 1,
     per_page: int = 20,
+    user_id: str = "",
 ) -> tuple[list[Note], int]:
     """Return a paginated list of notes and the total count.
 
@@ -138,12 +147,13 @@ def list_notes(
     per_page = min(per_page, 100)
     offset = (max(page, 1) - 1) * per_page
 
-    total: int = db.query(func.count(Note.id)).scalar() or 0
-    notes = (
-        db.query(Note)
-        .order_by(Note.created_at.desc())
-        .offset(offset)
-        .limit(per_page)
-        .all()
-    )
+    q_total = db.query(func.count(Note.id))
+    if user_id:
+        q_total = q_total.filter(Note.user_id == user_id)
+    total: int = q_total.scalar() or 0
+
+    q = db.query(Note).order_by(Note.created_at.desc())
+    if user_id:
+        q = q.filter(Note.user_id == user_id)
+    notes = q.offset(offset).limit(per_page).all()
     return notes, total

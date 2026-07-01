@@ -10,10 +10,6 @@ import { CARD_TYPE_CONFIG } from '@/lib/types';
 import CardRenderer from '@/components/CardRenderer';
 import TranscriptViewer from '@/components/TranscriptViewer';
 
-/** Render-time URL guard — never let `javascript:` / `data:` URLs into href/src. */
-const isHttpUrl = (u: string | null | undefined): u is string =>
-  !!u && /^https?:\/\//i.test(u);
-
 function ProcessContent() {
   const searchParams = useSearchParams();
   const noteId = searchParams.get('id');
@@ -96,12 +92,6 @@ function ProcessView({ id }: { id: string }) {
     video_id: note.video_id,
   };
 
-  // Build a proxy URL to avoid Douyin CDN expiry and Referer blocks.
-  const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-  const playableUrl = isHttpUrl(note.video_url)
-    ? `${apiBase}/api/video/proxy?url=${encodeURIComponent(note.video_url)}&note_id=${encodeURIComponent(id)}`
-    : '';
-
   return (
     <div className="pb-16">
       {/* Back navigation */}
@@ -156,29 +146,8 @@ function ProcessView({ id }: { id: string }) {
                 </div>
               </div>
             </div>
-            {/* Inline player — direct mp4 from Douyin (no watermark).
-                The `<a>` link to the same URL is intentionally dropped — the
-                player itself is the canonical view. URL is guarded against
-                non-http schemes. */}
-            {playableUrl ? (
-              <div className="mt-3 rounded-xl overflow-hidden bg-black/40 border border-card-border">
-                <video
-                  controls
-                  preload="metadata"
-                  playsInline
-                  className="w-full max-h-[50vh] md:max-h-[70vh] bg-black"
-                  src={playableUrl}
-                >
-                  您的浏览器不支持内嵌视频播放。
-                </video>
-                {/* TODO: if Douyin's CDN starts blocking with Referer:localhost,
-                    add a backend /api/proxy/video?id=... reverse-proxy. */}
-              </div>
-            ) : (
-              <div className="mt-3 rounded-xl border border-dashed border-card-border p-4 text-xs text-foreground-muted">
-                ⚠️ 该笔记未保存可播放的视频地址。请重新提取后查看。
-              </div>
-            )}
+            {/* 视频播放已移除 — 抖音 CDN 链接存在时效性，B站 iframe 体验也不一致。
+                如需观看原视频，请通过原始链接跳转。 */}
           </div>
         </section>
 

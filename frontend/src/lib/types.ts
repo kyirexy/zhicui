@@ -159,6 +159,24 @@ export function getTodayTasks(plan: PlanData): PlanTask[] {
   const all = plan.days?.flatMap(d => d.tasks) || plan.tasks || [];
   return all.filter(t => !t.done && t.scheduled_at?.startsWith(today));
 }
+
+/**
+ * Tasks due "today" by the plan's day calendar — i.e. the unfinished tasks on
+ * the current day (derived from created_at). Unlike getTodayTasks, this works
+ * for AI-generated plans whose tasks carry no scheduled_at.
+ */
+export function getTodayDayTasks(plan: PlanData): PlanTask[] {
+  const currentDay = getPlanCurrentDay(plan);
+  const todayDay = plan.days?.find(d => d.day === currentDay);
+  if (!todayDay) return [];
+  return todayDay.tasks.filter(t => !t.done);
+}
+
+/** The PlanDay object for the plan's current day, or null if it doesn't exist. */
+export function getTodayDay(plan: PlanData): PlanDay | null {
+  const currentDay = getPlanCurrentDay(plan);
+  return plan.days?.find(d => d.day === currentDay) ?? null;
+}
 export interface PlanStats {
   open_tasks: number;
   due_today: number;
@@ -202,12 +220,12 @@ export interface StyleCardProps {
 }
 
 export const CARD_STYLE_CONFIG: Record<CardStyle, CardStyleMeta> = {
-  hero:     { key: 'hero',     label: '聚光',  description: '自适应排版，金句+干货分层',   icon: '✦' },
-  minimal:  { key: 'minimal',  label: '极简',  description: '纯文本高密度，无装饰',     icon: '◻' },
-  standard: { key: 'standard', label: '标准',  description: '玻璃拟物化卡片设计',       icon: '🪟' },
-  creative: { key: 'creative', label: '创意',  description: '渐变光晕，装饰丰富',       icon: '🎨' },
-  magazine: { key: 'magazine', label: '杂志',  description: '杂志版式，多栏排版',       icon: '📰' },
-  compact:  { key: 'compact',  label: '列表',  description: '紧凑列表，可折叠章节',     icon: '📋' },
+  hero:     { key: 'hero',     label: '聚光',  description: '数字滚动·逐字浮现·进度光条',   icon: '✦' },
+  minimal:  { key: 'minimal',  label: '极简',  description: '呼吸感·慢速淡入·星星弹跳',     icon: '◻' },
+  standard: { key: 'standard', label: '标准',  description: '3D翻转·流光边框·弹性指示条',   icon: '🪟' },
+  creative: { key: 'creative', label: '创意',  description: '霓虹脉冲·3D视差·贝塞尔粒子',   icon: '🎨' },
+  magazine: { key: 'magazine', label: '杂志',  description: '双栏滑入·弹性引号·翻页节奏',   icon: '📰' },
+  compact:  { key: 'compact',  label: '列表',  description: '弹性折叠·GSAP手风琴·交错展开',  icon: '📋' },
 };
 
 export const DENSITY_CONFIG: Record<DensityLevel, { label: string; description: string }> = {

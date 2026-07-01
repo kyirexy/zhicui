@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -64,12 +66,232 @@ if str(_SCRIPTS_DIR) not in sys.path:
 
 from douyin_downloader import DouyinProcessor  # noqa: E402
 
+import re
+
+
+# ---------------------------------------------------------------------------
+# Platform detection and Bilibili helpers
+# ---------------------------------------------------------------------------
+
+def _detect_platform(url: str) -> str:
+    """Return platform identifier based on URL host."""
+    if 'bilibili.com' in url or 'b23.tv' in url:
+        return 'bilibili'
+    if 'douyin.com' in url or 'iesdouyin.com' in url:
+        return 'douyin'
+    if 'mp.weixin.qq.com' in url:
+        return 'wechat'
+    if 'xiaohongshu.com' in url or 'rednote.com' in url or 'xhslink.com' in url:
+        return 'xiaohongshu'
+    return 'unknown'
+
+
+_BILI_HEADERS = [
+    '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    '--add-header', 'Referer:https://www.bilibili.com/',
+    '--add-header', 'Origin:https://www.bilibili.com',
+    '--add-header', 'Accept-Language:zh-CN,zh;q=0.9,en;q=0.8',
+]
+
+
+def _clean_bilibili_url(url: str) -> str:
+    """Extract a clean B站 BV/av URL from any user input."""
+    import re as _re
+    # b23.tv short link → pass through raw
+    if 'b23.tv' in url:
+        return url.split('?')[0].split(' ')[0].rstrip('/')
+    # Extract BV/av number
+    m = _re.search(r'(?:/video/|/bangumi/play/)(BV[\w]+|av\d+|ep\d+|ss\d+)', url)
+    if m:
+        return f'https://www.bilibili.com/video/{m.group(1)}/'
+    # Fallback: strip query + spaces
+    return url.split('?')[0].split(' ')[0].rstrip('/')
+
+def _bilibili_get_title(bvid: str) -> str:
+    """Return the title for a B站 BV id, or empty string on any error."""
+    try:
+        r = subprocess.run(
+            [sys.executable, '-c',
+             f'from bilibili_api import video; import asyncio; '
+             f'v=video.Video(bvid=\"{bvid}\"); '
+             f'info=asyncio.run(v.get_info()); '
+             f'print(info.get(\"title\",\"\"))'],
+            capture_output=True, text=True, timeout=15,
+        )
+        return r.stdout.strip() if r.returncode == 0 else ''
+    except Exception:
+        return ''
+
+def _parse_bilibili(url: str) -> dict[str, Any]:
+    """Extract B站 video metadata.  Tries bilibili-api first, falls back to yt-dlp."""
+    import json as _json
+    import re as _re
+
+    clean_url = _clean_bilibili_url(url)
+    bv_match = _re.search(r'(BV[\w]+|av\d+)', clean_url)
+    bvid = bv_match.group(1) if bv_match else ''
+
+    # ── bilibili-api (never chokes under uvicorn's asyncio loop) ──
+    if bvid:
+        try:
+            # Use a subprocess to avoid event-loop clobbering inside uvicorn
+            info_raw = subprocess.run(
+                [sys.executable, '-c',
+                 f'from bilibili_api import video; import asyncio; '
+                 f'v=video.Video(bvid=\"{bvid}\"); '
+                 f'info=asyncio.run(v.get_info()); '
+                 f'print(info.get(\"title\",\"\"))'],
+                capture_output=True, text=True, timeout=15,
+            )
+            title = info_raw.stdout.strip()
+            if title and info_raw.returncode == 0:
+                return {
+                    'video_id': bvid,
+                    'title': title,
+                    'download_url': f'https://www.bilibili.com/video/{bvid}/',
+                    'url': f'https://www.bilibili.com/video/{bvid}/',
+                    'platform': 'bilibili',
+                    'subtitles': {},
+                }
+        except Exception:
+            pass  # Fall through to yt-dlp on error
+
+    # ── Fallback: yt-dlp (only reached if bilibili-api completely fails) ──
+    cmd = [
+        sys.executable, '-m', 'yt_dlp',
+        '--dump-json', '--no-playlist', '--no-download',
+        *_BILI_HEADERS,
+        clean_url,
+    ]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except FileNotFoundError:
+        raise NotImplementedError(
+            "B站视频解析需要 yt-dlp，请先安装: pip install yt-dlp"
+        )
+    if r.returncode != 0:
+        raise RuntimeError(
+            f"yt-dlp 解析 B站视频失败 (code={r.returncode}): {r.stderr[:300]}"
+        )
+    info = _json.loads(r.stdout)
+    bv_link = f'https://www.bilibili.com/video/{bvid}/' if bvid else ''
+    return {
+        'video_id': info.get('id', ''),
+        'title': info.get('title', 'B站视频'),
+        'download_url': info.get('url', '') or bv_link,
+        'url': info.get('url', '') or bv_link,
+        'platform': 'bilibili',
+        'subtitles': info.get('subtitles', {}),
+    }
+
+
+def _bilibili_subtitles(url: str) -> str:
+    """Download B站 auto-generated subtitles and return as plain text.
+
+    Raises RuntimeError if no subtitles are available.
+    """
+    clean_url = _clean_bilibili_url(url)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        outtmpl = os.path.join(tmpdir, '%(id)s.%(ext)s')
+        cmd = [
+            sys.executable, '-m', 'yt_dlp',
+            '--write-auto-subs', '--sub-lang', 'zh-Hans,zh,ai-zh,en',
+            '--convert-subs', 'srt',
+            '--skip-download',
+            '--output', outtmpl,
+            *_BILI_HEADERS,
+            clean_url,
+        ]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        except FileNotFoundError:
+            raise NotImplementedError(
+                "B站字幕下载需要 yt-dlp，请先安装: pip install yt-dlp"
+            )
+
+        for f in os.listdir(tmpdir):
+            if f.endswith(('.srt', '.vtt')):
+                sub_path = os.path.join(tmpdir, f)
+                with open(sub_path, encoding='utf-8') as sf:
+                    content = sf.read()
+                # Strip SRT/VTT markup to plain text
+                clean = re.sub(
+                    r'\d+\n\d{2}:\d{2}:\d{2}[.,]\d{3} --> \d{2}:\d{2}:\d{2}[.,]\d{3}\n',
+                    '', content,
+                )
+                clean = re.sub(r'<[^>]+>', '', clean)
+                clean = re.sub(r'\n\n+', '\n', clean)
+                return clean.strip()
+
+        raise RuntimeError("B站视频没有可用的自动字幕")
+
+
+def _bilibili_download_audio(url: str, output_dir: str) -> str:
+    """Download B站 audio track to *output_dir*, return the file path."""
+    clean_url = _clean_bilibili_url(url)
+    outtmpl = os.path.join(output_dir, '%(id)s.%(ext)s')
+    cmd = [
+        sys.executable, '-m', 'yt_dlp',
+        '-f', 'worstaudio',
+        '--output', outtmpl,
+        *_BILI_HEADERS,
+        clean_url,
+    ]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except FileNotFoundError:
+        raise NotImplementedError(
+            "B站音频下载需要 yt-dlp，请先安装: pip install yt-dlp"
+        )
+    for f in os.listdir(output_dir):
+        if f.endswith(('.m4a', '.mp3', '.webm', '.opus')):
+            return os.path.join(output_dir, f)
+    raise RuntimeError(f"B站音频下载失败: {r.stderr[:300]}")
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 def parse_video_info(url: str) -> dict[str, Any]:
-    """Return video_id, title, and download_url for a Douyin share link.
+    """Return video_id, title, and download_url for a video share link.
 
-    Does NOT require an API key -- only fetches the web page.
+    Supports Douyin (抖音) and Bilibili (B站).
+    Does NOT require an API key -- only fetches metadata.
     """
+    platform = _detect_platform(url)
+
+    if platform == 'bilibili':
+        return _parse_bilibili(url)
+
+    if platform == 'wechat':
+        from app.services.wechat_extractor import extract_wechat_article
+        article = extract_wechat_article(url)
+        return {
+            "video_id": article["video_id"],
+            "title": article["title"],
+            "download_url": article["download_url"],
+            "platform": "wechat",
+        }
+
+    if platform == 'xiaohongshu':
+        from app.services.xhs_extractor import parse_xhs_note
+        import os as _os
+        cookie = _os.environ.get('XHS_COOKIE', '')
+        note = parse_xhs_note(url, cookie=cookie)
+        return {
+            "video_id": note.get("note_id", ""),
+            "title": note.get("title", "小红书笔记"),
+            "download_url": "",
+            "platform": "xiaohongshu",
+        }
+
+    if platform == 'unknown':
+        raise NotImplementedError(
+            f"暂不支持该平台的视频链接。当前支持: 抖音、B站、微信公众号、小红书。链接: {url[:80]}..."
+        )
+
+    # Douyin path
     processor = DouyinProcessor(api_key="")
     info: dict = processor.parse_share_url(url)
     return {
@@ -79,22 +301,63 @@ def parse_video_info(url: str) -> dict[str, Any]:
     }
 
 
-def extract_transcript(url: str, api_key: str) -> str:
+def extract_transcript(
+    url: str,
+    api_key: str,
+    api_base_url: str | None = None,
+    model: str | None = None,
+) -> str:
     """Full pipeline: parse -> download -> extract audio -> transcribe.
+
+    Supports Douyin (抖音) and Bilibili (B站).
 
     Parameters
     ----------
     url:
-        A Douyin share link (or text containing one).
+        A video share link (Douyin or Bilibili).
     api_key:
         SiliconFlow API key used for the ASR endpoint.
+    api_base_url:
+        Optional ASR endpoint URL. Defaults to ``DouyinProcessor`` settings.
+    model:
+        Optional ASR model name. Defaults to ``DouyinProcessor`` settings.
 
     Returns
     -------
     str
         The transcribed text.
     """
-    processor = DouyinProcessor(api_key=api_key)
+    platform = _detect_platform(url)
+
+    if platform == 'wechat':
+        raise NotImplementedError(
+            "微信公众号文章无需语音识别，直接使用文章文本作为文案"
+        )
+
+    if platform == 'xiaohongshu':
+        from app.services.xhs_extractor import extract_xhs_content
+        import os as _os
+        cookie = _os.environ.get('XHS_COOKIE', '')
+        return extract_xhs_content(url, cookie=cookie)
+
+    if platform == 'bilibili':
+        # B站: fast subtitle check (15s timeout), skip if none
+        try:
+            subs = _bilibili_subtitles(url)
+            if subs.strip() and len(subs) > 50:
+                return subs
+        except Exception:
+            pass  # No subs — use video title as minimal transcript
+        # Fallback: return title as transcript so AI can still generate a card
+        info = _parse_bilibili(url)
+        return f"[B站视频] {info.get('title', '')}"
+
+    # Douyin path
+    processor = DouyinProcessor(
+        api_key=api_key,
+        api_base_url=api_base_url,
+        model=model,
+    )
     video_info = processor.parse_share_url(url)
 
     # Download video to temp dir
@@ -115,15 +378,42 @@ def extract_transcript(url: str, api_key: str) -> str:
 def fallback_local_asr(url: str) -> str:
     """Offline ASR fallback using FunASR (Alibaba DAMO Academy).
 
-    Downloads the video, extracts audio, then transcribes locally with
-    FunASR's Paraformer-large model. Falls back to faster-whisper if FunASR fails.
+    Supports Douyin (抖音), Bilibili (B站), 微信公众号 (WeChat), and 小红书 (Xiaohongshu).
+    Downloads the video, extracts audio, then
+    transcribes locally with FunASR's Paraformer-large model.
+    Falls back to faster-whisper if FunASR fails.
     """
-    import tempfile
-    import shutil
-    import subprocess
-    from pathlib import Path
+    import tempfile as _tempfile
+    import shutil as _shutil
+    import subprocess as _subprocess
+    from pathlib import Path as _Path
 
     from app.services.local_asr import transcribe_file, transcribe_with_whisper
+
+    platform = _detect_platform(url)
+
+    if platform == 'wechat':
+        raise NotImplementedError(
+            "微信公众号文章无需本地语音识别，直接使用文章文本作为文案"
+        )
+
+    if platform == 'xiaohongshu':
+        from app.services.xhs_extractor import extract_xhs_content
+        import os as _os
+        cookie = _os.environ.get('XHS_COOKIE', '')
+        return extract_xhs_content(url, cookie=cookie)
+
+    if platform == 'bilibili':
+        # B站: fast subtitle check, skip heavy audio download
+        try:
+            subs = _bilibili_subtitles(url)
+            if subs.strip() and len(subs) > 50:
+                return subs
+        except Exception:
+            pass
+        # Fallback: title as transcript
+        info = _parse_bilibili(url)
+        return f"[B站视频] {info.get('title', '')}"
 
     # Step 1: Extract video info to get the download URL
     processor = DouyinProcessor(api_key="")
@@ -131,7 +421,7 @@ def fallback_local_asr(url: str) -> str:
     video_url = video_info["url"]
 
     # Step 2: Download video and extract audio
-    temp_dir = Path(tempfile.mkdtemp())
+    temp_dir = _Path(_tempfile.mkdtemp())
     audio_path = temp_dir / "audio.mp3"
 
     try:
@@ -158,7 +448,7 @@ def fallback_local_asr(url: str) -> str:
             "-vn", "-acodec", "libmp3lame", "-q:a", "0",
             str(audio_path),
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = _subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
             raise RuntimeError(f"ffmpeg 提取音频失败: {result.stderr[:200]}")
 
@@ -176,7 +466,7 @@ def fallback_local_asr(url: str) -> str:
         raise RuntimeError("本地 ASR 未能识别到任何文本")
 
     finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        _shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def _get_ffmpeg_path() -> str:

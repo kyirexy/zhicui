@@ -101,6 +101,20 @@ function NoteDetailView({ id }: { id: string }) {
           <ExportButton targetRef={cardRef} />
         </div>
       </div>
+      {/* Transcript section */}
+      {note.transcript_raw && (
+        <details className="mb-6">
+          <summary className="text-sm font-medium text-foreground-muted cursor-pointer hover:text-foreground transition-colors py-2">
+            查看原视频文案 ▾
+          </summary>
+          <div className="mt-2 p-4 rounded-xl bg-card-bg border border-card-border max-h-[400px] overflow-y-auto">
+            <pre className="text-xs text-foreground-muted whitespace-pre-wrap font-sans leading-relaxed">
+              {note.transcript_raw}
+            </pre>
+          </div>
+        </details>
+      )}
+
       <div ref={cardRef}>
         <CardRenderer cardData={cardData} showExport={false} noteId={note.id} showToolbar={true} />
       </div>

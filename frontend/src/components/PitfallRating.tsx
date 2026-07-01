@@ -40,6 +40,7 @@ export default function PitfallRating({
             <button
               key={i}
               type="button"
+              data-star
               className={`${cfg.text} transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] hover:scale-125 focus:outline-none cursor-default`}
               onMouseEnter={() => setHoveredIndex(i)}
               aria-label={`${i + 1} 星`}

@@ -2,6 +2,8 @@
 VideoCapsule FastAPI application entry point.
 """
 
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -11,6 +13,7 @@ from app.core.database import Base, engine
 # Import all models so they are registered with Base.metadata before create_all.
 from app.models.note import Note  # noqa: F401
 from app.models.plan import Plan  # noqa: F401
+from app.models.user import User  # noqa: F401
 
 
 def create_app() -> FastAPI:
@@ -21,11 +24,17 @@ def create_app() -> FastAPI:
         version="0.1.0",
     )
 
-    # CORS -- wide-open for local development; tighten in production.
+    # CORS — permissive in dev, configurable in production via ALLOWED_ORIGINS.
+    allowed_origins_raw = os.environ.get("ALLOWED_ORIGINS", "*")
+    allowed_origins = (
+        [o.strip() for o in allowed_origins_raw.split(",") if o.strip()]
+        if allowed_origins_raw != "*"
+        else ["*"]
+    )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
+        allow_origins=allowed_origins,
+        allow_credentials=True if allowed_origins != ["*"] else False,
         allow_methods=["*"],
         allow_headers=["*"],
     )

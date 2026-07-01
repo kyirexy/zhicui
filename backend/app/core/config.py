@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     # LLM configuration — supports Anthropic-compatible endpoints via LiteLLM.
     LLM_MODEL: str = "mimo-v2.5-pro"
-    LLM_API_BASE: str = "https://token-plan-cn.xiaomimimo.com/anthropic"
+    LLM_API_BASE: str = ""  # 留空走 DeepSeek 官方；或填入 Anthropic 兼容端点 URL
     LLM_API_KEY: str = ""
 
     # SiliconFlow ASR endpoint and model (used by the DouyinProcessor)
@@ -25,6 +25,9 @@ class Settings(BaseSettings):
 
     HOST: str = "0.0.0.0"
     PORT: int = 8000
+
+    # JWT signing key — must be set in production.
+    JWT_SECRET: str = ""
 
     model_config = {
         "env_file": ".env",

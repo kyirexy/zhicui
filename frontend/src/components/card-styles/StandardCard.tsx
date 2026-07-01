@@ -1,28 +1,108 @@
 'use client';
 
+import { useRef, useCallback } from 'react';
+import gsap from 'gsap';
 import { type StyleCardProps, CARD_TYPE_CONFIG } from '@/lib/types';
+import { useGsapAnimation, shouldAnimate } from '@/lib/hooks/useGsapAnimation';
 import CardSection from '../CardSection';
 import Conclusion from '../Conclusion';
 import PitfallRating from '../PitfallRating';
 import TranscriptViewer from '../TranscriptViewer';
 
+/**
+ * StandardCard — 精致玻璃卡片。
+ *
+ * GSAP 驱动的：
+ * - 卡片入场 3D 翻转展开（rotationX + perspective）
+ * - 边框流光动画（渐变在边框上循环流动）
+ * - 分区标题 hover 时左侧指示条弹性伸缩
+ */
 export default function StandardCard({ cardData, density, cardRef }: StyleCardProps) {
   const config = CARD_TYPE_CONFIG[cardData.card_type] || CARD_TYPE_CONFIG.general;
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const shineRef = useRef<HTMLDivElement>(null);
+  const sectionRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  // ---- Section hover (React events, not addEventListener) ----
+  const handleSectionEnter = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!shouldAnimate()) return;
+      const indicator = e.currentTarget.querySelector('.section-hover-bar') as HTMLElement | null;
+      if (!indicator) return;
+      gsap.to(indicator, {
+        scaleY: 1,
+        duration: 0.35,
+        ease: 'elastic.out(1, 0.5)',
+      });
+    },
+    [],
+  );
+
+  const handleSectionLeave = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!shouldAnimate()) return;
+      const indicator = e.currentTarget.querySelector('.section-hover-bar') as HTMLElement | null;
+      if (!indicator) return;
+      gsap.to(indicator, {
+        scaleY: 0.3,
+        duration: 0.25,
+        ease: 'power2.out',
+      });
+    },
+    [],
+  );
+
+  useGsapAnimation((gsap) => {
+    if (!shouldAnimate()) return;
+
+    // 1. Card entrance — 3D flip-down reveal
+    if (wrapperRef.current) {
+      gsap.from(wrapperRef.current, {
+        rotationX: 8,
+        opacity: 0,
+        y: 30,
+        duration: 0.7,
+        ease: 'power3.out',
+        transformOrigin: 'top center',
+      });
+    }
+
+    // 2. Accent top bar — shimmer sweep (CSS pseudo-element approach: use a ref'd div)
+    if (shineRef.current) {
+      gsap.to(shineRef.current, {
+        x: 'calc(100% + 60px)',
+        duration: 2.5,
+        repeat: -1,
+        ease: 'power2.inOut',
+        repeatDelay: 3,
+        delay: 0.8,
+      });
+    }
+  }, [config.accent]);
 
   return (
     <div className="standard-card">
       {/* Double-bezel architecture */}
-      <div className="bezel-outer">
-        <div ref={cardRef} className={`bezel-inner accent-${cardData.card_type}`}>
-          {/* Accent top bar */}
+      <div ref={wrapperRef} className="bezel-outer">
+        <div ref={cardRef as React.RefObject<HTMLDivElement>} className={`bezel-inner accent-${cardData.card_type}`}>
+          {/* Accent top bar with shimmer */}
           <div
-            className="h-[3px] w-full"
+            className="h-[3px] w-full relative overflow-hidden"
             style={{ background: `linear-gradient(90deg, ${config.accent}, ${config.accent}40, transparent)` }}
-          />
+          >
+            <div
+              ref={shineRef}
+              className="absolute top-0 left-0 h-full pointer-events-none"
+              style={{
+                width: 60,
+                background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent)',
+                transform: 'translateX(-60px)',
+              }}
+            />
+          </div>
 
           {/* Card header */}
           <div className="p-5 pb-4 md:p-6 md:pb-5 relative">
-            {/* Subtle inner glow orb */}
             <div
               className="absolute top-0 right-0 w-40 h-40 rounded-full opacity-[0.06] pointer-events-none blur-3xl"
               style={{ background: config.accent }}
@@ -51,7 +131,6 @@ export default function StandardCard({ cardData, density, cardRef }: StyleCardPr
               </div>
             </div>
 
-            {/* Pitfall rating */}
             {density !== 'low' && (
               <div className="relative mt-4 pt-3.5">
                 <div className="premium-divider mb-3.5" />
@@ -60,11 +139,27 @@ export default function StandardCard({ cardData, density, cardRef }: StyleCardPr
             )}
           </div>
 
-          {/* Card sections */}
+          {/* Card sections — with hover indicator bar */}
           {density !== 'low' && cardData.sections.length > 0 && (
             <div className="px-5 pb-5 md:px-6 md:pb-6 space-y-5 md:space-y-6">
               {cardData.sections.map((section, index) => (
-                <div key={index}>
+                <div
+                  key={index}
+                  ref={(el) => { sectionRefs.current[index] = el; }}
+                  className="relative pl-4 group"
+                  onMouseEnter={handleSectionEnter}
+                  onMouseLeave={handleSectionLeave}
+                >
+                  {/* Elastic hover indicator bar */}
+                  <div
+                    className="section-hover-bar absolute left-0 top-1 bottom-1 w-[3px] rounded-full"
+                    style={{
+                      background: config.accent,
+                      transform: 'scaleY(0.3)',
+                      transformOrigin: 'center',
+                      opacity: 0.7,
+                    }}
+                  />
                   <CardSection section={section} index={index} accentColor={config.accent} />
                   {index < cardData.sections.length - 1 && (
                     <div className="mt-5 md:mt-6">
@@ -76,14 +171,13 @@ export default function StandardCard({ cardData, density, cardRef }: StyleCardPr
             </div>
           )}
 
-          {/* Conclusion — always visible */}
+          {/* Conclusion */}
           {cardData.conclusion && (
             <div className="px-5 pb-4 md:px-6 md:pb-5">
               <Conclusion text={cardData.conclusion} accentColor={config.accent} />
             </div>
           )}
 
-          {/* Pitfall for low density (after conclusion) */}
           {density === 'low' && (
             <div className="px-5 pb-5 md:px-6 md:pb-6">
               <PitfallRating rating={cardData.pitfall_rating} />
@@ -107,7 +201,6 @@ export default function StandardCard({ cardData, density, cardRef }: StyleCardPr
         </div>
       </div>
 
-      {/* Transcript for high density */}
       {density === 'high' && cardData.transcript_raw && (
         <div className="mt-6">
           <TranscriptViewer transcript={cardData.transcript_raw} />

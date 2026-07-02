@@ -87,7 +87,7 @@ export async function extractVideoStream(
   const encoded = encodeURIComponent(url);
 
   try {
-    const sseBase = API_BASE || 'http://localhost:8000';
+    const sseBase = API_BASE || '';
     const response = await fetch(`${sseBase}/api/extract/stream?url=${encoded}`, {
       headers: authHeaders({ Accept: 'text/event-stream' }),
     });

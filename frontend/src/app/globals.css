@@ -1400,19 +1400,18 @@ body::before {
   overflow-y: auto;
   overscroll-behavior: contain;
   border-radius: 20px;
-  background: linear-gradient(160deg, #0f172a 0%, #0a0a0f 100%);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(160deg, #ffffff 0%, #f8fafc 100%);
+  border: 1px solid rgba(0, 0, 0, 0.08);
   box-shadow:
-    0 24px 80px rgba(0, 0, 0, 0.6),
-    0 0 0 1px rgba(255, 255, 255, 0.04),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    0 24px 80px rgba(0, 0, 0, 0.15),
+    0 0 0 1px rgba(0, 0, 0, 0.04);
   animation: slideUp 0.25s cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 /* Custom scrollbar for panel */
 .qr-panel::-webkit-scrollbar { width: 4px; }
 .qr-panel::-webkit-scrollbar-track { background: transparent; }
-.qr-panel::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+.qr-panel::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 2px; }
 
 /* Mobile: slide up from bottom */
 @media (max-width: 640px) {

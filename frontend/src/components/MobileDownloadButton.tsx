@@ -64,13 +64,13 @@ export default function MobileDownloadButton() {
       <div className="qr-panel" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="flex items-center justify-between px-6 pt-6 pb-2">
-          <h2 className="text-base font-bold text-white flex items-center gap-2">
+          <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
             <Download size={16} className="text-accent-emerald" />
             下载知萃
           </h2>
           <button
             onClick={() => setOpen(false)}
-            className="w-8 h-8 flex items-center justify-center rounded-lg bg-emerald-50/8 hover:bg-emerald-50/15 transition-colors text-white/60 hover:text-white"
+            className="w-8 h-8 flex items-center justify-center rounded-lg bg-slate-100 hover:bg-slate-200 transition-colors text-slate-500 hover:text-slate-900"
             aria-label="关闭"
           >
             <X size={16} />
@@ -113,9 +113,9 @@ export default function MobileDownloadButton() {
 
           {/* Divider */}
           <div className="flex items-center gap-3">
-            <div className="flex-1 h-px bg-emerald-50/10" />
-            <span className="text-xs text-white/40">或</span>
-            <div className="flex-1 h-px bg-emerald-50/10" />
+            <div className="flex-1 h-px bg-slate-200" />
+            <span className="text-xs text-slate-400">或</span>
+            <div className="flex-1 h-px bg-slate-200" />
           </div>
 
           {/* Web version QR */}

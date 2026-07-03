@@ -35,6 +35,8 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<ApiR
       let msg = `Request failed with status ${response.status}`;
       if (response.status === 401) {
         msg = '请先登录';
+      } else if (response.status === 422) {
+        msg = '输入有误,请检查后再试';
       } else if (typeof errorData.detail === 'string') {
         msg = errorData.detail;
       } else if (Array.isArray(errorData.detail)) {
@@ -97,6 +99,8 @@ export async function extractVideoStream(
       let msg = `Request failed with status ${response.status}`;
       if (response.status === 401) {
         msg = '请先登录';
+      } else if (response.status === 422) {
+        msg = '输入有误,请检查后再试';
       } else if (typeof errorData.detail === 'string') {
         msg = errorData.detail;
       } else if (Array.isArray(errorData.detail)) {

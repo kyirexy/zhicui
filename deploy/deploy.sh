@@ -6,8 +6,9 @@ set -e
 APP_DIR=/opt/zhicui
 VENV=$APP_DIR/venv
 
-G='\033[0;32m'; R='\033[0;31m'; N='\033[0m'
+G='\033[0;32m'; Y='\033[1;33m'; R='\033[0;31m'; N='\033[0m'
 log() { echo -e "${G}[$(date +%H:%M:%S)]${N} $1"; }
+warn() { echo -e "${Y}[$(date +%H:%M:%S)] 警告:${N} $1"; }
 err() { echo -e "${R}[$(date +%H:%M:%S)] 错误:${N} $1"; exit 1; }
 
 cd $APP_DIR || err "部署目录 $APP_DIR 不存在,请先跑 setup.sh"
@@ -20,7 +21,7 @@ $VENV/bin/pip install -r $APP_DIR/deploy/requirements-server.txt -q
 
 log "构建前端..."
 cd $APP_DIR/frontend
-npm ci --silent 2>/dev/null || npm install --silent
+npm ci --silent || { warn "npm ci 失败,回退 npm install"; npm install --silent; }
 npm run build
 
 log "重启服务..."

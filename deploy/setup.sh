@@ -16,9 +16,14 @@ REPO_URL=https://github.com/kyirexy/zhicui.git
 
 log "=== [0/8] 创建 2G swap(防内存不足) ==="
 if ! swapon --show | grep -q swap; then
-  fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
-  grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
-  log "swap 2G 已启用"
+  if [ -f /swapfile ]; then
+    warn "/swapfile 已存在但未启用,尝试启用"
+    swapon /swapfile 2>/dev/null || warn "/swapfile 启用失败,跳过 swap"
+  else
+    fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+    grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    log "swap 2G 已启用"
+  fi
 else
   log "swap 已存在,跳过"
 fi
@@ -29,7 +34,7 @@ apt install -y python3.12 python3.12-venv ffmpeg git nginx curl ca-certificates
 # Node.js 20+ (Next.js 16 要求 >=20.9.0；Ubuntu 24.04 自带 18 不够)
 if ! command -v node >/dev/null 2>&1 || [ "$(node -v 2>/dev/null | cut -dv -f2 | cut -d. -f1)" -lt 20 ]; then
   log "安装 NodeSource Node 20..."
-  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+  curl -fsSL https://deb.nodesource.com/setup_20.x -o /tmp/nodesource-setup.sh && bash /tmp/nodesource-setup.sh
   apt install -y nodejs
 fi
 log "Python $(python3 --version 2>&1) | Node $(node -v) | npm $(npm -v)"
@@ -70,7 +75,7 @@ fi
 
 log "=== [5/8] 构建前端 ==="
 cd $APP_DIR/frontend
-npm ci --silent 2>/dev/null || npm install --silent
+npm ci --silent || { warn "npm ci 失败,回退 npm install"; npm install --silent; }
 npm run build
 
 log "=== [6/8] 安装 systemd 服务 ==="

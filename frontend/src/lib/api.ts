@@ -36,7 +36,8 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<ApiR
       if (response.status === 401) {
         msg = '请先登录';
       } else if (response.status === 422) {
-        msg = '输入有误,请检查后再试';
+        const locs = Array.isArray(errorData.detail) ? errorData.detail.map((e: any) => (e.loc || []).join('.')) : [];
+        msg = locs.some((l: string) => l.includes('url')) ? '请输入有效的视频链接' : '输入有误,请检查后再试';
       } else if (typeof errorData.detail === 'string') {
         msg = errorData.detail;
       } else if (Array.isArray(errorData.detail)) {
@@ -100,7 +101,8 @@ export async function extractVideoStream(
       if (response.status === 401) {
         msg = '请先登录';
       } else if (response.status === 422) {
-        msg = '输入有误,请检查后再试';
+        const locs = Array.isArray(errorData.detail) ? errorData.detail.map((e: any) => (e.loc || []).join('.')) : [];
+        msg = locs.some((l: string) => l.includes('url')) ? '请输入有效的视频链接' : '输入有误,请检查后再试';
       } else if (typeof errorData.detail === 'string') {
         msg = errorData.detail;
       } else if (Array.isArray(errorData.detail)) {

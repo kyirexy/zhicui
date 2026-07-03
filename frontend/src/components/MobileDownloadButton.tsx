@@ -93,7 +93,7 @@ export default function MobileDownloadButton() {
                   bgColor="#ffffff"
                   fgColor="#111827"
                   imageSettings={{
-                    src: '/icons/icon-192.png',
+                    src: '/icons/logo.svg',
                     height: 40,
                     width: 40,
                     excavate: true,

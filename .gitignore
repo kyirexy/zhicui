@@ -50,3 +50,7 @@ videos/
 
 # OpenSpec (keep changes tracked)
 # openspec/changes/ - tracked for project history
+
+# 打包文件
+zhicui.tar.gz
+*.tar.gz

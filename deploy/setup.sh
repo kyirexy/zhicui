@@ -25,7 +25,13 @@ fi
 
 log "=== [1/8] 安装系统依赖 ==="
 apt update -qq
-apt install -y python3.12 python3.12-venv ffmpeg git nginx curl nodejs npm
+apt install -y python3.12 python3.12-venv ffmpeg git nginx curl ca-certificates
+# Node.js 20+ (Next.js 16 要求 >=20.9.0；Ubuntu 24.04 自带 18 不够)
+if ! command -v node >/dev/null 2>&1 || [ "$(node -v 2>/dev/null | cut -dv -f2 | cut -d. -f1)" -lt 20 ]; then
+  log "安装 NodeSource Node 20..."
+  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+  apt install -y nodejs
+fi
 log "Python $(python3 --version 2>&1) | Node $(node -v) | npm $(npm -v)"
 
 log "=== 配置 pip / npm 国内镜像 ==="
@@ -33,18 +39,20 @@ mkdir -p /root/.config/pip
 printf '[global]\nindex-url = https://pypi.tuna.tsinghua.edu.cn/simple\n' > /root/.config/pip/pip.conf
 npm config set registry https://registry.npmmirror.com
 
-log "=== [2/8] 克隆代码到 $APP_DIR ==="
-mkdir -p $APP_DIR
-if [ -d "$APP_DIR/.git" ]; then
-  cd $APP_DIR && git pull
+log "=== [2/8] 检查代码 ==="
+mkdir -p $APP_DIR && cd $APP_DIR
+if [ -d "$APP_DIR/backend" ]; then
+  log "代码已就位(本地打包上传),跳过 clone"
+elif [ -d "$APP_DIR/.git" ]; then
+  git pull
 else
-  git clone $REPO_URL $APP_DIR && cd $APP_DIR
+  git clone $REPO_URL $APP_DIR
 fi
 if [ ! -d "$APP_DIR/douyin-mcp-server" ]; then
-  log "克隆 douyin-mcp-server 依赖..."
-  git clone https://github.com/yzfly/douyin-mcp-server.git $APP_DIR/douyin-mcp-server
+  log "尝试克隆 douyin-mcp-server 依赖..."
+  git clone https://github.com/yzfly/douyin-mcp-server.git $APP_DIR/douyin-mcp-server || warn "douyin-mcp-server clone 失败,若已打包上传可忽略"
 fi
-git config core.sharedRepository group
+git config core.sharedRepository group 2>/dev/null || true
 
 log "=== [3/8] 创建 Python venv + 装后端依赖 ==="
 python3.12 -m venv $VENV

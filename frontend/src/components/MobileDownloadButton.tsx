@@ -107,7 +107,7 @@ export default function MobileDownloadButton() {
               className="mt-4 mx-auto btn-primary btn-magnetic inline-flex items-center gap-2 px-6 py-3 text-sm font-semibold w-full justify-center"
             >
               <Download size={15} />
-              直接下载 APK (4.6MB)
+              直接下载 APK
             </a>
           </div>
 

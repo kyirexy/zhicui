@@ -70,7 +70,7 @@ export default function MobileDownloadButton() {
           </h2>
           <button
             onClick={() => setOpen(false)}
-            className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/8 hover:bg-white/15 transition-colors text-white/60 hover:text-white"
+            className="w-8 h-8 flex items-center justify-center rounded-lg bg-emerald-50/8 hover:bg-emerald-50/15 transition-colors text-white/60 hover:text-white"
             aria-label="关闭"
           >
             <X size={16} />
@@ -79,7 +79,7 @@ export default function MobileDownloadButton() {
 
         <div className="p-6 pt-3 space-y-5">
           {/* APK Download QR */}
-          <div className="bg-white rounded-2xl p-5 text-center shadow-xl">
+          <div className="bg-emerald-50 rounded-2xl p-5 text-center shadow-xl">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-4">
               <Smartphone size={11} className="inline mr-1" />
               手机扫码安装 Android 版
@@ -113,13 +113,13 @@ export default function MobileDownloadButton() {
 
           {/* Divider */}
           <div className="flex items-center gap-3">
-            <div className="flex-1 h-px bg-white/10" />
+            <div className="flex-1 h-px bg-emerald-50/10" />
             <span className="text-xs text-white/40">或</span>
-            <div className="flex-1 h-px bg-white/10" />
+            <div className="flex-1 h-px bg-emerald-50/10" />
           </div>
 
           {/* Web version QR */}
-          <div className="bg-white rounded-xl p-4 text-center shadow-lg">
+          <div className="bg-emerald-50 rounded-xl p-4 text-center shadow-lg">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
               <Globe size={11} className="inline mr-1" />
               扫码打开网页版

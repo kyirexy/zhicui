@@ -27,7 +27,12 @@ log "重启服务..."
 sudo systemctl restart videocapsule-backend
 sudo systemctl restart videocapsule-frontend
 
-log "健康检查..."
-sleep 3
-curl -sf http://127.0.0.1:8000/api/health || err "后端健康检查失败"
-log "✅ CI/CD 部署成功"
+log "健康检查(等待后端就绪,最多 60s)..."
+for i in $(seq 1 30); do
+  if curl -sf http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
+    log "✅ CI/CD 部署成功"
+    exit 0
+  fi
+  sleep 2
+done
+err "后端健康检查失败(60s 内未就绪,看 journalctl -u videocapsule-backend 排查)"

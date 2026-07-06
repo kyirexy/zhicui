@@ -45,9 +45,14 @@ export default function AppHeader() {
 
         {user ? (
           <div className="flex items-center gap-2 ml-2">
+            {user.is_admin && (
+              <a href="/admin" className="text-xs text-accent-emerald hover:underline px-2 py-1">
+                管理端
+              </a>
+            )}
             <span className="text-xs text-foreground-muted flex items-center gap-1">
               <User size={12} />
-              {user.email}
+              {user.username || user.email}
             </span>
             <button
               onClick={logout}

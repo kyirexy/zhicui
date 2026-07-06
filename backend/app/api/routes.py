@@ -17,9 +17,9 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.auth import get_current_user, get_current_user_optional
+from app.core.auth import get_current_user, get_current_user_optional, get_current_admin
 from app.models.note import Note
-from app.models.user import User as UserModel
+from app.models.user import User as UserModel, list_users, count_users
 from app.services import ai_juicer, note_service, plan_service, video_extractor
 from app.services import auth_service
 from app.services.video_extractor import _detect_platform
@@ -103,7 +103,7 @@ def health_check() -> dict:
 
 @router.post("/api/auth/register")
 def auth_register(body: RegisterRequest, db: Session = Depends(get_db)) -> dict:
-    user, error = auth_service.register(db, body.email, body.password)
+    user, error = auth_service.register(db, body.email, body.password, body.username)
     if error:
         return _err(error)
     token = auth_service.create_access_token(user.id, user.email)
@@ -798,3 +798,73 @@ def proxy_video(
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"视频代理失败: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Admin endpoints — manage users (admin only)
+# ---------------------------------------------------------------------------
+class AdminUserPatch(BaseModel):
+    is_active: bool | None = None
+    is_admin: bool | None = None
+
+
+@router.get("/api/admin/stats")
+def admin_stats(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    return _ok({
+        "users": count_users(db),
+        "notes": db.query(Note).count(),
+    })
+
+
+@router.get("/api/admin/users")
+def admin_list_users(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    users, total = list_users(db, page=page, per_page=per_page)
+    return _ok({
+        "items": [u.to_dict() for u in users],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+    })
+
+
+@router.patch("/api/admin/users/{user_id}")
+def admin_patch_user(
+    user_id: str,
+    body: AdminUserPatch,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not user:
+        return _err("用户不存在")
+    if body.is_active is not None:
+        user.is_active = body.is_active
+    if body.is_admin is not None:
+        user.is_admin = body.is_admin
+    db.commit()
+    db.refresh(user)
+    return _ok(user.to_dict())
+
+
+@router.delete("/api/admin/users/{user_id}")
+def admin_delete_user(
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    if user_id == current_user.id:
+        return _err("不能删除自己")
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not user:
+        return _err("用户不存在")
+    db.delete(user)
+    db.commit()
+    return _ok({"deleted": True})

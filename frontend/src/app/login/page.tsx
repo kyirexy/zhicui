@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/hooks/AuthContext';
-import { Mail, Lock, ArrowRight } from 'lucide-react';
+import { Mail, Lock, ArrowRight, User } from 'lucide-react';
 
 export default function LoginPage() {
   const { login, register, error, clearError } = useAuth();
@@ -11,6 +11,7 @@ export default function LoginPage() {
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [username, setUsername] = useState('');
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [submitting, setSubmitting] = useState(false);
   const [fieldError, setFieldError] = useState('');
@@ -18,6 +19,7 @@ export default function LoginPage() {
   const validate = () => {
     if (!email.includes('@')) return '请输入有效的邮箱地址';
     if (password.length < 6) return '密码至少需要 6 位字符';
+    if (mode === 'register' && username.trim().length < 2) return '请输入用户名（至少 2 个字符）';
     return '';
   };
 
@@ -31,7 +33,7 @@ export default function LoginPage() {
     setSubmitting(true);
     const ok = mode === 'login'
       ? await login(email, password)
-      : await register(email, password);
+      : await register(email, password, username);
     setSubmitting(false);
 
     if (ok) {
@@ -80,6 +82,20 @@ export default function LoginPage() {
               autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
             />
           </div>
+
+          {mode === 'register' && (
+            <div className="relative">
+              <User size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-foreground-muted" />
+              <input
+                type="text"
+                value={username}
+                onChange={e => { setUsername(e.target.value); setFieldError(''); clearError(); }}
+                placeholder="用户名（至少2位，不可重复）"
+                className="w-full pl-10 pr-4 py-3 rounded-xl bg-card-bg border border-card-border text-foreground text-sm placeholder:text-foreground-muted/50 focus:outline-none focus:border-accent-emerald/50 transition-colors"
+                autoComplete="username"
+              />
+            </div>
+          )}
 
           {(fieldError || error) && (
             <p className="text-xs text-accent-rose bg-accent-rose/5 rounded-lg px-3 py-2">

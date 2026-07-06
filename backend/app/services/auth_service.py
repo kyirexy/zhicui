@@ -10,7 +10,7 @@ from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 from werkzeug.security import generate_password_hash, check_password_hash
 
-from app.models.user import User, create_user, get_user_by_email
+from app.models.user import User, create_user, get_user_by_email, get_user_by_username, count_users
 from app.core.config import settings
 
 # ---------------------------------------------------------------------------
@@ -62,19 +62,27 @@ def decode_access_token(token: str) -> dict | None:
 # ---------------------------------------------------------------------------
 # Business logic
 # ---------------------------------------------------------------------------
-def register(db: Session, email: str, password: str) -> tuple[User | None, str | None]:
-    """Register a new user. Returns (user, error)."""
+def register(db: Session, email: str, password: str, username: str | None = None) -> tuple[User | None, str | None]:
+    """Register a new user. Returns (user, error). First user becomes admin."""
     email = email.strip().lower()
     if not email or "@" not in email:
         return None, "请输入有效的邮箱地址"
     if len(password) < 6:
         return None, "密码至少需要 6 位字符"
-
-    existing = get_user_by_email(db, email)
-    if existing:
+    if not username or len(username.strip()) < 2:
+        return None, "请输入用户名（至少 2 个字符）"
+    username = username.strip()
+    if get_user_by_email(db, email):
         return None, "该邮箱已注册，请直接登录"
+    if get_user_by_username(db, username):
+        return None, "该用户名已被使用"
 
-    user = create_user(db, email, hash_password(password))
+    is_first = count_users(db) == 0
+    user = create_user(db, email, hash_password(password), username=username)
+    if is_first:
+        user.is_admin = True
+        db.commit()
+        db.refresh(user)
     return user, None
 
 

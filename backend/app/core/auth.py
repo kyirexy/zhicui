@@ -51,3 +51,10 @@ def get_current_user_optional(
     if not user_id:
         return None
     return get_user_by_id(db, user_id)
+
+
+def get_current_admin(user=Depends(get_current_user)):
+    """Require admin — raises 403 if not admin."""
+    if not getattr(user, "is_admin", False):
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+    return user

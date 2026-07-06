@@ -90,34 +90,34 @@ export default function RootLayout({
         />
       </head>
       <body className="min-h-[100dvh] flex flex-col bg-background">
-        {/* Desktop-only inline header — not fixed, scrolls with content.
-            Hidden on mobile where BottomTabBar handles all navigation. */}
-        <AppHeader />
+        <Providers>
+          {/* Desktop-only inline header — not fixed, scrolls with content.
+              Hidden on mobile where BottomTabBar handles all navigation. */}
+          <AppHeader />
 
-        {/* Main content — extra bottom padding on mobile so content clears
-            the fixed BottomTabBar (60px tabbar + safe-area + breathing room). */}
-        <main className="mx-auto max-w-6xl px-5 pt-6 pb-24 md:px-8 md:py-8 lg:px-12 flex-1 w-full">
-          <Providers>
+          {/* Main content — extra bottom padding on mobile so content clears
+              the fixed BottomTabBar (60px tabbar + safe-area + breathing room). */}
+          <main className="mx-auto max-w-6xl px-5 pt-6 pb-24 md:px-8 md:py-8 lg:px-12 flex-1 w-full">
             <AuthGuard>
               <GlobalSheetManager />
               {children}
             </AuthGuard>
-          </Providers>
-        </main>
+          </main>
 
-        {/* Footer — desktop only. On mobile the BottomTabBar replaces it. */}
-        <footer className="relative border-t border-card-border/50 py-8 md:py-10 hidden md:block">
-          <div className="mx-auto max-w-6xl px-4 md:px-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-foreground-muted text-xs">
-            <p className="flex items-center gap-2">
-              <img src="/logo.png" alt="知萃 Logo" className="h-5 w-5 object-contain" />
-              <span>知萃 · 萃取视频里的全部干货</span>
-            </p>
-            <p className="text-foreground-muted/60">知识卡片提取工具</p>
-          </div>
-        </footer>
+          {/* Footer — desktop only. On mobile the BottomTabBar replaces it. */}
+          <footer className="relative border-t border-card-border/50 py-8 md:py-10 hidden md:block">
+            <div className="mx-auto max-w-6xl px-4 md:px-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-foreground-muted text-xs">
+              <p className="flex items-center gap-2">
+                <img src="/logo.png" alt="知萃 Logo" className="h-5 w-5 object-contain" />
+                <span>知萃 · 萃取视频里的全部干货</span>
+              </p>
+              <p className="text-foreground-muted/60">知识卡片提取工具</p>
+            </div>
+          </footer>
 
-        {/* Mobile-only: bottom tab bar (hidden on md+). */}
-        <BottomTabBar />
+          {/* Mobile-only: bottom tab bar (hidden on md+). */}
+          <BottomTabBar />
+        </Providers>
       </body>
     </html>
   );

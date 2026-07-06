@@ -87,7 +87,7 @@ export default function MobileDownloadButton() {
             <div className="inline-block">
               {url && (
                 <QRCodeSVG
-                  value={`${url}/download/videocapsule.apk`}
+                  value={`${url}/download/zhicui.apk`}
                   size={200}
                   level="M"
                   bgColor="#ffffff"
@@ -102,7 +102,7 @@ export default function MobileDownloadButton() {
               )}
             </div>
             <a
-              href="/download/videocapsule.apk"
+              href="/download/zhicui.apk"
               download
               className="mt-4 mx-auto btn-primary btn-magnetic inline-flex items-center gap-2 px-6 py-3 text-sm font-semibold w-full justify-center"
             >

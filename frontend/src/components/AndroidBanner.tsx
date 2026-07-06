@@ -39,7 +39,7 @@ export default function AndroidBanner() {
         </p>
       </div>
       <a
-        href="/download/videocapsule.apk"
+        href="/download/zhicui.apk"
         className="btn-primary px-4 py-2 text-sm font-medium flex-shrink-0 min-h-[44px] flex items-center"
         download
       >

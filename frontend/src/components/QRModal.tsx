@@ -75,7 +75,7 @@ export default function QRModal() {
             <div className="inline-block">
               {url && (
                 <QRCodeSVG
-                  value={`${url}/download/videocapsule.apk`}
+                  value={`${url}/download/zhicui.apk`}
                   size={180}
                   level="M"
                   bgColor="#ffffff"
@@ -90,7 +90,7 @@ export default function QRModal() {
               )}
             </div>
             <a
-              href="/download/videocapsule.apk"
+              href="/download/zhicui.apk"
               download
               className="mt-4 mx-auto btn-primary btn-magnetic inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium"
             >

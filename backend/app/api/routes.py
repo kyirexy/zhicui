@@ -54,6 +54,7 @@ class ExtractRequest(BaseModel):
 class RegisterRequest(BaseModel):
     email: str = Field(..., min_length=5, max_length=128)
     password: str = Field(..., min_length=6, max_length=128)
+    username: str = Field(..., min_length=2, max_length=128)
 
 
 class LoginRequest(BaseModel):

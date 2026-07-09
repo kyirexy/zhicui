@@ -87,11 +87,19 @@ def register(db: Session, email: str, password: str, username: str | None = None
 
 
 def login(db: Session, email: str, password: str) -> tuple[str | None, User | None, str | None]:
-    """Login. Returns (token, user, error)."""
-    email = email.strip().lower()
-    user = get_user_by_email(db, email)
+    """Login by email or username. Returns (token, user, error).
+
+    The ``email`` parameter accepts either an email address (contains '@')
+    or a username; the lookup switches accordingly. Email comparison is
+    case-insensitive (lowered), username matched as-is.
+    """
+    identifier = email.strip()
+    if "@" in identifier:
+        user = get_user_by_email(db, identifier.lower())
+    else:
+        user = get_user_by_username(db, identifier)
     if not user:
-        return None, None, "邮箱未注册"
+        return None, None, "账号不存在"
     if not verify_password(password, user.hashed_password):
         return None, None, "密码错误"
     if not user.is_active:

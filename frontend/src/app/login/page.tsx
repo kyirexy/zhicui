@@ -17,7 +17,8 @@ export default function LoginPage() {
   const [fieldError, setFieldError] = useState('');
 
   const validate = () => {
-    if (!email.includes('@')) return '请输入有效的邮箱地址';
+    if (!email.trim()) return '请输入邮箱或用户名';
+    if (mode === 'register' && !email.includes('@')) return '请输入有效的邮箱地址';
     if (password.length < 6) return '密码至少需要 6 位字符';
     if (mode === 'register' && username.trim().length < 2) return '请输入用户名（至少 2 个字符）';
     return '';
@@ -62,12 +63,12 @@ export default function LoginPage() {
           <div className="relative">
             <Mail size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-foreground-muted" />
             <input
-              type="email"
+              type="text"
               value={email}
               onChange={e => { setEmail(e.target.value); setFieldError(''); clearError(); }}
-              placeholder="邮箱地址"
+              placeholder="邮箱或用户名"
               className="w-full pl-10 pr-4 py-3 rounded-xl bg-card-bg border border-card-border text-foreground text-sm placeholder:text-foreground-muted/50 focus:outline-none focus:border-accent-emerald/50 transition-colors"
-              autoComplete="email"
+              autoComplete="username"
             />
           </div>
 

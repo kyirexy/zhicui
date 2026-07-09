@@ -62,7 +62,7 @@ def _migrate_db() -> None:
         if "username" not in cols:
             conn.execute(text("ALTER TABLE users ADD COLUMN username VARCHAR NULL"))
         if "is_admin" not in cols:
-            conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT FALSE"))
 
 
 app = create_app()

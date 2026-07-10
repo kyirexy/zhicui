@@ -17,8 +17,8 @@ interface AuthState {
   token: string | null;
   loading: boolean;
   error: string | null;
-  login: (email: string, password: string) => Promise<boolean>;
-  register: (email: string, password: string, username: string) => Promise<boolean>;
+  login: (email: string, password: string) => Promise<AuthUser | null>;
+  register: (email: string, password: string, username: string) => Promise<AuthUser | null>;
   logout: () => void;
   clearError: () => void;
 }
@@ -28,8 +28,8 @@ const AuthContext = createContext<AuthState>({
   token: null,
   loading: true,
   error: null,
-  login: async () => false,
-  register: async () => false,
+  login: async () => null,
+  register: async () => null,
   logout: () => {},
   clearError: () => {},
 });
@@ -78,10 +78,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.setItem('zhicui_token', d.data.token);
       setToken(d.data.token);
       setUser(d.data.user);
-      return true;
+      return d.data.user;
     }
     setError(d.error || d.detail || '登录失败');
-    return false;
+    return null;
   }, []);
 
   const register = useCallback(async (email: string, password: string, username: string) => {
@@ -96,10 +96,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.setItem('zhicui_token', d.data.token);
       setToken(d.data.token);
       setUser(d.data.user);
-      return true;
+      return d.data.user;
     }
     setError(d.error || d.detail || '注册失败');
-    return false;
+    return null;
   }, []);
 
   const logout = useCallback(() => {

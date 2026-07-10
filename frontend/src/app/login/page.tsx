@@ -32,14 +32,14 @@ export default function LoginPage() {
     setFieldError('');
 
     setSubmitting(true);
-    const ok = mode === 'login'
+    const u = mode === 'login'
       ? await login(email, password)
       : await register(email, password, username);
     setSubmitting(false);
 
-    if (ok) {
+    if (u) {
       const params = new URLSearchParams(window.location.search);
-      const redirect = params.get('redirect') || '/';
+      const redirect = params.get('redirect') || (u.is_admin ? '/admin' : '/');
       router.push(redirect);
     }
   };

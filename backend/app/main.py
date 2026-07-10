@@ -15,6 +15,7 @@ from sqlalchemy import inspect, text
 from app.models.note import Note  # noqa: F401
 from app.models.plan import Plan  # noqa: F401
 from app.models.user import User  # noqa: F401
+from app.models.system_setting import SystemSetting  # noqa: F401
 
 
 def create_app() -> FastAPI:

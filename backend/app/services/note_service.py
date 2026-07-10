@@ -157,3 +157,66 @@ def list_notes(
         q = q.filter(Note.user_id == user_id)
     notes = q.offset(offset).limit(per_page).all()
     return notes, total
+
+
+def delete_note(db: Session, note_id: str) -> bool:
+    """Delete a note by id (admin — no user scoping). Returns True if deleted."""
+    note = db.query(Note).filter(Note.id == note_id).first()
+    if not note:
+        return False
+    db.delete(note)
+    db.commit()
+    return True
+
+
+def update_note_ai(db: Session, note: Note, ai_result: dict[str, Any]) -> Note:
+    """Re-apply an AI result to an existing note (re-extraction).
+
+    Updates ai_summary, card_type, pitfall_rating, updated_at.
+    """
+    note.ai_summary = json.dumps(ai_result, ensure_ascii=False)
+    note.card_type = ai_result.get("card_type", note.card_type)
+    note.pitfall_rating = int(ai_result.get("pitfall_rating", note.pitfall_rating))
+    note.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(note)
+    return note
+
+
+def list_notes_admin(
+    db: Session,
+    page: int = 1,
+    per_page: int = 20,
+) -> tuple[list[dict[str, Any]], int]:
+    """Paginated notes for the admin panel, with author username joined.
+
+    Returns (items, total) where items are lightweight dicts (no transcript)
+    suitable for a management table.
+    """
+    from app.models.user import User
+
+    per_page = min(per_page, 100)
+    offset = (max(page, 1) - 1) * per_page
+
+    total: int = db.query(func.count(Note.id)).scalar() or 0
+
+    rows = (
+        db.query(Note, User.username)
+        .outerjoin(User, Note.user_id == User.id)
+        .order_by(Note.created_at.desc())
+        .offset(offset)
+        .limit(per_page)
+        .all()
+    )
+    items = [
+        {
+            "id": note.id,
+            "video_title": note.video_title,
+            "card_type": note.card_type,
+            "author": username or "-",
+            "has_transcript": bool(note.transcript_raw),
+            "created_at": note.created_at.isoformat() if note.created_at else None,
+        }
+        for note, username in rows
+    ]
+    return items, total

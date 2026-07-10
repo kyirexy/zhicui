@@ -284,8 +284,9 @@ def _generate_card_once(
     # Supports custom Anthropic-compatible endpoints (e.g. mimo proxy).
     import os  # noqa: F401  # kept for callers that monkey-patch env
 
+    llm_cfg = _get_llm_config()
     llm_kwargs: dict = {
-        "model": settings.LLM_MODEL,
+        "model": llm_cfg["model"],
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
@@ -300,12 +301,10 @@ def _generate_card_once(
     }
 
     # Custom API base and key for proxied Anthropic endpoints.
-    if settings.LLM_API_BASE:
-        llm_kwargs["api_base"] = settings.LLM_API_BASE
-    if settings.LLM_API_KEY:
-        llm_kwargs["api_key"] = settings.LLM_API_KEY
-    elif settings.API_KEY:
-        llm_kwargs["api_key"] = settings.API_KEY
+    if llm_cfg["api_base"]:
+        llm_kwargs["api_base"] = llm_cfg["api_base"]
+    if llm_cfg["api_key"]:
+        llm_kwargs["api_key"] = llm_cfg["api_key"]
 
     response = completion(**llm_kwargs)
 
@@ -460,9 +459,9 @@ def _call_llm(
     """Single LLM round-trip. Returns raw text, raises on any failure."""
     import os
 
-    model = model_override or settings.LLM_MODEL
+    llm_cfg = _get_llm_config()
     kwargs: dict = {
-        "model": model,
+        "model": model_override or llm_cfg["model"],
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -471,12 +470,10 @@ def _call_llm(
         "max_tokens": max_tokens,
         "timeout": timeout,
     }
-    if settings.LLM_API_BASE:
-        kwargs["api_base"] = settings.LLM_API_BASE
-    if settings.LLM_API_KEY:
-        kwargs["api_key"] = settings.LLM_API_KEY
-    elif settings.API_KEY:
-        kwargs["api_key"] = settings.API_KEY
+    if llm_cfg["api_base"]:
+        kwargs["api_base"] = llm_cfg["api_base"]
+    if llm_cfg["api_key"]:
+        kwargs["api_key"] = llm_cfg["api_key"]
 
     response = completion(**kwargs)
     choice = response.choices[0]
@@ -675,18 +672,17 @@ def generate_card_from_images(
         for img in images:
             content.append({"type": "image_url", "image_url": {"url": img}})
 
+        llm_cfg = _get_llm_config()
         kwargs: dict = {
-            "model": settings.LLM_MODEL,
+            "model": llm_cfg["model"],
             "messages": [{"role": "user", "content": content}],
             "max_tokens": 4096,
             "timeout": 90,
         }
-        if settings.LLM_API_BASE:
-            kwargs["api_base"] = settings.LLM_API_BASE
-        if settings.LLM_API_KEY:
-            kwargs["api_key"] = settings.LLM_API_KEY
-        elif settings.API_KEY:
-            kwargs["api_key"] = settings.API_KEY
+        if llm_cfg["api_base"]:
+            kwargs["api_base"] = llm_cfg["api_base"]
+        if llm_cfg["api_key"]:
+            kwargs["api_key"] = llm_cfg["api_key"]
 
         response = completion(**kwargs)
         choice = response.choices[0]

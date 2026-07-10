@@ -20,7 +20,7 @@ from app.core.database import get_db
 from app.core.auth import get_current_user, get_current_user_optional, get_current_admin
 from app.models.note import Note
 from app.models.user import User as UserModel, list_users, count_users
-from app.services import ai_juicer, note_service, plan_service, video_extractor
+from app.services import ai_juicer, note_service, plan_service, video_extractor, settings_service
 from app.services import auth_service
 from app.services.video_extractor import _detect_platform
 from app.services.wechat_extractor import extract_wechat_article
@@ -271,14 +271,15 @@ def extract(
         # 2. Extract transcript (with fallback)
         transcript = None
 
-        # Try primary ASR (SiliconFlow/DashScope)
-        if settings.API_KEY:
+        # Try primary ASR (SiliconFlow/DashScope) — config from DB (admin-tunable)
+        asr_cfg = settings_service.get_asr_config(db)
+        if asr_cfg["api_key"]:
             try:
                 transcript = video_extractor.extract_transcript(
                     body.url,
-                    settings.API_KEY,
-                    settings.ASR_API_BASE_URL,
-                    settings.ASR_MODEL,
+                    asr_cfg["api_key"],
+                    asr_cfg["api_base_url"],
+                    asr_cfg["model"],
                 )
             except Exception:
                 traceback.print_exc()
@@ -485,13 +486,14 @@ def extract_stream(
             yield _event("transcribe", "正在提取视频文案...", "active")
             transcript: str | None = None
 
-            if settings.API_KEY:
+            asr_cfg = settings_service.get_asr_config(db)
+            if asr_cfg["api_key"]:
                 try:
                     transcript = video_extractor.extract_transcript(
                         url,
-                        settings.API_KEY,
-                        settings.ASR_API_BASE_URL,
-                        settings.ASR_MODEL,
+                        asr_cfg["api_key"],
+                        asr_cfg["api_base_url"],
+                        asr_cfg["model"],
                     )
                 except Exception:
                     traceback.print_exc()
@@ -814,9 +816,32 @@ def admin_stats(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_admin),
 ) -> dict:
+    from app.models.plan import Plan
+    from sqlalchemy import func as _func
+
+    recent_users_rows = (
+        db.query(UserModel).order_by(UserModel.created_at.desc()).limit(5).all()
+    )
+    recent_users = [
+        {
+            "username": u.username or u.email,
+            "email": u.email,
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+        }
+        for u in recent_users_rows
+    ]
+
+    type_rows = (
+        db.query(Note.card_type, _func.count(Note.id)).group_by(Note.card_type).all()
+    )
+    type_dist = {ct or "general": cnt for ct, cnt in type_rows}
+
     return _ok({
         "users": count_users(db),
         "notes": db.query(Note).count(),
+        "plans": db.query(Plan).count(),
+        "recent_users": recent_users,
+        "type_dist": type_dist,
     })
 
 
@@ -846,6 +871,25 @@ def admin_patch_user(
     user = db.query(UserModel).filter(UserModel.id == user_id).first()
     if not user:
         return _err("用户不存在")
+
+    # Guard: cannot disable or demote yourself (would lock you out).
+    if user_id == current_user.id:
+        if body.is_active is False:
+            return _err("不能禁用自己")
+        if body.is_admin is False:
+            return _err("不能取消自己的管理员权限")
+
+    # Guard: must keep at least one enabled admin.
+    demoting_admin = user.is_admin and (body.is_admin is False or body.is_active is False)
+    if demoting_admin:
+        active_admins = (
+            db.query(UserModel)
+            .filter(UserModel.is_admin.is_(True), UserModel.is_active.is_(True))
+            .count()
+        )
+        if active_admins <= 1:
+            return _err("至少保留一个启用的管理员")
+
     if body.is_active is not None:
         user.is_active = body.is_active
     if body.is_admin is not None:
@@ -869,3 +913,108 @@ def admin_delete_user(
     db.delete(user)
     db.commit()
     return _ok({"deleted": True})
+
+
+# ---------------------------------------------------------------------------
+# Admin endpoints — runtime LLM/ASR configuration (no restart needed)
+# ---------------------------------------------------------------------------
+class LlmConfigRequest(BaseModel):
+    model: str | None = None
+    api_base: str | None = None
+    api_key: str | None = None  # None/empty = leave unchanged
+
+
+class AsrConfigRequest(BaseModel):
+    api_key: str | None = None
+    api_base_url: str | None = None
+    model: str | None = None
+
+
+@router.get("/api/admin/llm-config")
+def admin_get_llm_config(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    return _ok(settings_service.get_llm_config_masked(db))
+
+
+@router.put("/api/admin/llm-config")
+def admin_put_llm_config(
+    body: LlmConfigRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    if body.model is not None:
+        settings_service.set_setting(db, settings_service.LLM_MODEL_KEY, body.model)
+    if body.api_base is not None:
+        settings_service.set_setting(db, settings_service.LLM_API_BASE_KEY, body.api_base)
+    if body.api_key:  # empty string = leave unchanged
+        settings_service.set_setting(db, settings_service.LLM_API_KEY_KEY, body.api_key)
+    return _ok(settings_service.get_llm_config_masked(db))
+
+
+@router.get("/api/admin/asr-config")
+def admin_get_asr_config(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    return _ok(settings_service.get_asr_config_masked(db))
+
+
+@router.put("/api/admin/asr-config")
+def admin_put_asr_config(
+    body: AsrConfigRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    if body.api_key:  # empty = leave unchanged
+        settings_service.set_setting(db, settings_service.ASR_API_KEY_KEY, body.api_key)
+    if body.api_base_url is not None:
+        settings_service.set_setting(db, settings_service.ASR_API_BASE_URL_KEY, body.api_base_url)
+    if body.model is not None:
+        settings_service.set_setting(db, settings_service.ASR_MODEL_KEY, body.model)
+    return _ok(settings_service.get_asr_config_masked(db))
+
+
+# ---------------------------------------------------------------------------
+# Admin endpoints — note management
+# ---------------------------------------------------------------------------
+@router.get("/api/admin/notes")
+def admin_list_notes(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    items, total = note_service.list_notes_admin(db, page=page, per_page=per_page)
+    return _ok({"items": items, "total": total, "page": page, "per_page": per_page})
+
+
+@router.delete("/api/admin/notes/{note_id}")
+def admin_delete_note(
+    note_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    if not note_service.delete_note(db, note_id):
+        return _err("笔记不存在")
+    return _ok({"deleted": True})
+
+
+@router.post("/api/admin/notes/{note_id}/re-extract")
+def admin_re_extract_note(
+    note_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    note = db.query(Note).filter(Note.id == note_id).first()
+    if not note:
+        return _err("笔记不存在")
+    transcript = note.transcript_raw or ""
+    if not transcript.strip():
+        return _err("该笔记没有转录文本，无法重新抽取")
+    # Re-run AI on the existing transcript with current LLM config.
+    content_type = ai_juicer.detect_content_type(transcript)
+    ai_result = ai_juicer.generate_card(transcript, content_type, note.video_title)
+    note = note_service.update_note_ai(db, note, ai_result)
+    return _ok(note.to_dict())

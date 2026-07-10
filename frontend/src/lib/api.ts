@@ -215,3 +215,103 @@ export async function deletePlanTask(planId: string, taskId: string): Promise<Ap
 export async function deletePlan(planId: string): Promise<ApiResponse<{ deleted: boolean }>> {
   return request<{ deleted: boolean }>(`/api/plans/${planId}`, { method: 'DELETE' });
 }
+
+// ---------------------------------------------------------------------------
+// Admin API
+// ---------------------------------------------------------------------------
+export interface AdminUser {
+  id: string;
+  email: string;
+  username: string | null;
+  is_active: boolean;
+  is_admin: boolean;
+  created_at: string;
+}
+
+export interface AdminStats {
+  users: number;
+  notes: number;
+  plans: number;
+  recent_users: { username: string; email: string; created_at: string }[];
+  type_dist: Record<string, number>;
+}
+
+export interface AdminNoteItem {
+  id: string;
+  video_title: string;
+  card_type: string;
+  author: string;
+  has_transcript: boolean;
+  created_at: string;
+}
+
+export interface LlmConfig {
+  model: string;
+  api_base: string;
+  api_key_masked: string;
+}
+
+export interface AsrConfig {
+  api_key_masked: string;
+  api_base_url: string;
+  model: string;
+}
+
+export async function getAdminStats(): Promise<ApiResponse<AdminStats>> {
+  return request<AdminStats>('/api/admin/stats');
+}
+
+export async function listAdminUsers(
+  perPage = 100,
+): Promise<ApiResponse<{ items: AdminUser[]; total: number }>> {
+  return request<{ items: AdminUser[]; total: number }>(`/api/admin/users?per_page=${perPage}`);
+}
+
+export async function patchAdminUser(
+  id: string,
+  body: { is_active?: boolean; is_admin?: boolean },
+): Promise<ApiResponse<AdminUser>> {
+  return request<AdminUser>(`/api/admin/users/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteAdminUser(id: string): Promise<ApiResponse<{ deleted: boolean }>> {
+  return request<{ deleted: boolean }>(`/api/admin/users/${id}`, { method: 'DELETE' });
+}
+
+export async function listAdminNotes(
+  page = 1,
+  perPage = 20,
+): Promise<ApiResponse<{ items: AdminNoteItem[]; total: number }>> {
+  return request<{ items: AdminNoteItem[]; total: number }>(`/api/admin/notes?page=${page}&per_page=${perPage}`);
+}
+
+export async function deleteAdminNote(id: string): Promise<ApiResponse<{ deleted: boolean }>> {
+  return request<{ deleted: boolean }>(`/api/admin/notes/${id}`, { method: 'DELETE' });
+}
+
+export async function reExtractNote(id: string): Promise<ApiResponse<Note>> {
+  return request<Note>(`/api/admin/notes/${id}/re-extract`, { method: 'POST' });
+}
+
+export async function getLlmConfig(): Promise<ApiResponse<LlmConfig>> {
+  return request<LlmConfig>('/api/admin/llm-config');
+}
+
+export async function putLlmConfig(
+  body: { model?: string; api_base?: string; api_key?: string },
+): Promise<ApiResponse<LlmConfig>> {
+  return request<LlmConfig>('/api/admin/llm-config', { method: 'PUT', body: JSON.stringify(body) });
+}
+
+export async function getAsrConfig(): Promise<ApiResponse<AsrConfig>> {
+  return request<AsrConfig>('/api/admin/asr-config');
+}
+
+export async function putAsrConfig(
+  body: { api_key?: string; api_base_url?: string; model?: string },
+): Promise<ApiResponse<AsrConfig>> {
+  return request<AsrConfig>('/api/admin/asr-config', { method: 'PUT', body: JSON.stringify(body) });
+}

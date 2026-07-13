@@ -1,4 +1,5 @@
 import { ApiResponse, CardData, Note, NoteDetail, PaginatedResponse, VideoInfo, PlanData, PlanStats } from './types';
+export type { ApiResponse };
 
 // In Capacitor/static-export mode, NEXT_PUBLIC_API_URL is set explicitly
 // (e.g. http://localhost:8000 or http://10.60.10.75:8000).
@@ -262,14 +263,18 @@ export async function getAdminStats(): Promise<ApiResponse<AdminStats>> {
 }
 
 export async function listAdminUsers(
-  perPage = 100,
-): Promise<ApiResponse<{ items: AdminUser[]; total: number }>> {
-  return request<{ items: AdminUser[]; total: number }>(`/api/admin/users?per_page=${perPage}`);
+  page = 1,
+  perPage = 20,
+  q?: string,
+): Promise<ApiResponse<{ items: AdminUser[]; total: number; page: number; per_page: number }>> {
+  const params = new URLSearchParams({ page: String(page), per_page: String(perPage) });
+  if (q) params.set('q', q);
+  return request<{ items: AdminUser[]; total: number; page: number; per_page: number }>(`/api/admin/users?${params.toString()}`);
 }
 
 export async function patchAdminUser(
   id: string,
-  body: { is_active?: boolean; is_admin?: boolean },
+  body: { is_active?: boolean; is_admin?: boolean; username?: string; email?: string },
 ): Promise<ApiResponse<AdminUser>> {
   return request<AdminUser>(`/api/admin/users/${id}`, {
     method: 'PATCH',
@@ -281,11 +286,50 @@ export async function deleteAdminUser(id: string): Promise<ApiResponse<{ deleted
   return request<{ deleted: boolean }>(`/api/admin/users/${id}`, { method: 'DELETE' });
 }
 
+export interface AdminUserRecentNote {
+  id: string;
+  video_title: string;
+  card_type: string;
+  created_at: string | null;
+}
+export interface AdminUserRecentPlan {
+  id: string;
+  title: string;
+  status: string;
+  total_days: number;
+  created_at: string | null;
+}
+export interface AdminUserDetail extends AdminUser {
+  notes_count: number;
+  plans_count: number;
+  recent_notes: AdminUserRecentNote[];
+  recent_plans: AdminUserRecentPlan[];
+}
+
+export async function getAdminUserDetail(id: string): Promise<ApiResponse<AdminUserDetail>> {
+  return request<AdminUserDetail>(`/api/admin/users/${id}`);
+}
+
+export async function resetAdminUserPassword(
+  id: string,
+  newPassword: string,
+): Promise<ApiResponse<{ reset: boolean }>> {
+  return request<{ reset: boolean }>(`/api/admin/users/${id}/reset-password`, {
+    method: 'POST',
+    body: JSON.stringify({ new_password: newPassword }),
+  });
+}
+
 export async function listAdminNotes(
   page = 1,
   perPage = 20,
+  search?: string,
+  cardType?: string,
 ): Promise<ApiResponse<{ items: AdminNoteItem[]; total: number }>> {
-  return request<{ items: AdminNoteItem[]; total: number }>(`/api/admin/notes?page=${page}&per_page=${perPage}`);
+  const params = new URLSearchParams({ page: String(page), per_page: String(perPage) });
+  if (search) params.set('search', search);
+  if (cardType) params.set('card_type', cardType);
+  return request<{ items: AdminNoteItem[]; total: number }>(`/api/admin/notes?${params.toString()}`);
 }
 
 export async function deleteAdminNote(id: string): Promise<ApiResponse<{ deleted: boolean }>> {
@@ -294,6 +338,13 @@ export async function deleteAdminNote(id: string): Promise<ApiResponse<{ deleted
 
 export async function reExtractNote(id: string): Promise<ApiResponse<Note>> {
   return request<Note>(`/api/admin/notes/${id}/re-extract`, { method: 'POST' });
+}
+
+export async function batchDeleteAdminNotes(ids: string[]): Promise<ApiResponse<{ deleted: number }>> {
+  return request<{ deleted: number }>(`/api/admin/notes/batch-delete`, {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+  });
 }
 
 export async function getLlmConfig(): Promise<ApiResponse<LlmConfig>> {
@@ -314,4 +365,102 @@ export async function putAsrConfig(
   body: { api_key?: string; api_base_url?: string; model?: string },
 ): Promise<ApiResponse<AsrConfig>> {
   return request<AsrConfig>('/api/admin/asr-config', { method: 'PUT', body: JSON.stringify(body) });
+}
+
+export interface AdminAuditLog {
+  id: number;
+  admin_user_id: string;
+  admin_username: string | null;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  detail: Record<string, unknown> | null;
+  ip: string | null;
+  created_at: string;
+}
+
+export async function listAdminAuditLogs(
+  page = 1,
+  perPage = 20,
+  action?: string,
+): Promise<ApiResponse<{ items: AdminAuditLog[]; total: number; page: number; per_page: number }>> {
+  const params = new URLSearchParams({ page: String(page), per_page: String(perPage) });
+  if (action) params.set('action', action);
+  return request(`/api/admin/audit-logs?${params.toString()}`);
+}
+
+export interface AdminPlanItem {
+  id: string;
+  title: string;
+  user_id: string;
+  author: string;
+  status: string;
+  total_days: number;
+  created_at: string;
+}
+
+export async function listAdminPlans(
+  page = 1,
+  perPage = 20,
+  q?: string,
+): Promise<ApiResponse<{ items: AdminPlanItem[]; total: number; page: number; per_page: number }>> {
+  const params = new URLSearchParams({ page: String(page), per_page: String(perPage) });
+  if (q) params.set('q', q);
+  return request(`/api/admin/plans?${params.toString()}`);
+}
+
+export async function deleteAdminPlan(id: string): Promise<ApiResponse<{ deleted: boolean }>> {
+  return request<{ deleted: boolean }>(`/api/admin/plans/${id}`, { method: 'DELETE' });
+}
+
+export interface ConfigTestResult {
+  ok: boolean;
+  error?: string;
+  reply?: string;
+  note?: string;
+  model?: string;
+  status?: number;
+}
+
+export async function testLlmConfig(): Promise<ApiResponse<ConfigTestResult>> {
+  return request<ConfigTestResult>('/api/admin/llm-config/test', { method: 'POST' });
+}
+
+export async function testAsrConfig(): Promise<ApiResponse<ConfigTestResult>> {
+  return request<ConfigTestResult>('/api/admin/asr-config/test', { method: 'POST' });
+}
+
+export interface SystemInfo {
+  db_type: string;
+  llm_model: string;
+  llm_api_base: string;
+  llm_key_set: boolean;
+  asr_model: string;
+  asr_api_base_url: string;
+  asr_key_set: boolean;
+  encryption_key_set: boolean;
+  jwt_secret_set: boolean;
+  users: number;
+  notes: number;
+  plans: number;
+}
+
+export async function getSystemInfo(): Promise<ApiResponse<SystemInfo>> {
+  return request<SystemInfo>('/api/admin/system-info');
+}
+
+export interface AdminOps {
+  table_counts: { users: number; notes: number; plans: number; audit_logs: number };
+  recent_audit: AdminAuditLog[];
+  keys: {
+    llm_key_set: boolean;
+    asr_key_set: boolean;
+    encryption_key_set: boolean;
+    jwt_secret_set: boolean;
+  };
+  db_type: string;
+}
+
+export async function getAdminOps(): Promise<ApiResponse<AdminOps>> {
+  return request<AdminOps>('/api/admin/ops');
 }

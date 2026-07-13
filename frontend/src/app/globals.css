@@ -2,16 +2,23 @@
 
 /* ========== Theme Variables ========== */
 :root {
-  --background: #050505;
-  --background-secondary: #0a0a0f;
-  --foreground: #f0f0f5;
-  --foreground-secondary: #a0a0b0;
-  --foreground-muted: #606070;
+  /* 深蓝灰底，不死黑；参考 GitHub Dark，柔和有质感 */
+  --background: #0d1117;
+  --background-secondary: #161b22;
+  --foreground: #f0f6fc;
+  --foreground-secondary: #9198a5;
+  --foreground-muted: #6e7681;
 
-  --card-bg: rgba(255, 255, 255, 0.025);
-  --card-border: rgba(255, 255, 255, 0.06);
-  --card-shadow: rgba(0, 0, 0, 0.4);
-  --card-inner-glow: rgba(16, 185, 129, 0.03);
+  --card-bg: rgba(255, 255, 255, 0.04);
+  --card-border: rgba(255, 255, 255, 0.08);
+  --card-shadow: rgba(0, 0, 0, 0.45);
+  --card-inner-glow: rgba(16, 185, 129, 0.04);
+
+  --admin-sidebar-bg: rgba(22, 27, 34, 0.72);
+  --admin-sidebar-shadow: 1px 0 0 rgba(0, 0, 0, 0.25);
+  --admin-surface: rgba(255, 255, 255, 0.03);
+  --admin-surface-2: rgba(255, 255, 255, 0.05);
+  --admin-panel-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.25);
 
   --accent-emerald: #10b981;
   --accent-emerald-dim: rgba(16, 185, 129, 0.15);
@@ -60,6 +67,12 @@ html[data-capacitor="true"] .capacitor-hide {
   --card-border: rgba(0, 0, 0, 0.08);
   --card-shadow: rgba(0, 0, 0, 0.08);
   --card-inner-glow: rgba(16, 185, 129, 0.04);
+
+  --admin-sidebar-bg: rgba(255, 255, 255, 0.92);
+  --admin-sidebar-shadow: 1px 0 0 rgba(0, 0, 0, 0.02), 4px 0 24px rgba(0, 0, 0, 0.03);
+  --admin-surface: #ffffff;
+  --admin-surface-2: #f1f5f9;
+  --admin-panel-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.05);
 
   --glass-bg: rgba(255, 255, 255, 0.7);
   --glass-border: rgba(0, 0, 0, 0.08);
@@ -1426,3 +1439,73 @@ body::before {
     animation: slideUp 0.3s cubic-bezier(0.32, 0.72, 0, 1);
   }
 }
+
+/* ========== Admin Panel ========== */
+/* 管理端：实色面板，亮色下白底+阴影，暗色下深底+边框，不再依赖半透明 */
+.admin-sidebar {
+  background: var(--admin-sidebar-bg);
+  border-right: 1px solid var(--card-border);
+  box-shadow: var(--admin-sidebar-shadow);
+  backdrop-filter: blur(20px) saturate(1.2);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2);
+}
+
+.admin-panel {
+  background: var(--admin-surface);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--admin-panel-shadow);
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.admin-table thead tr {
+  background: var(--admin-surface-2);
+}
+.admin-table thead th {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--card-border);
+}
+.admin-table tbody tr {
+  transition: background 150ms ease;
+}
+.admin-table tbody tr:hover {
+  background: var(--admin-surface-2);
+}
+.admin-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* 主题色条卡片（仪表盘统计） */
+.admin-stat {
+  position: relative;
+  overflow: hidden;
+  background: var(--admin-surface);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--admin-panel-shadow);
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+.admin-stat:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 24px var(--card-shadow);
+}
+.admin-stat::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--stat-color, var(--accent-emerald));
+}
+
+@keyframes adminDrawerIn {
+  from { transform: translateX(100%); opacity: 0.6; }
+  to { transform: translateX(0); opacity: 1; }
+}
+

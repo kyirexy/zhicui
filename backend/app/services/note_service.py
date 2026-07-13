@@ -187,23 +187,30 @@ def list_notes_admin(
     db: Session,
     page: int = 1,
     per_page: int = 20,
+    search: str | None = None,
+    card_type: str | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Paginated notes for the admin panel, with author username joined.
 
     Returns (items, total) where items are lightweight dicts (no transcript)
-    suitable for a management table.
+    suitable for a management table. Optional filters: search (title ILIKE)
+    and card_type (exact match).
     """
     from app.models.user import User
 
     per_page = min(per_page, 100)
     offset = (max(page, 1) - 1) * per_page
 
-    total: int = db.query(func.count(Note.id)).scalar() or 0
+    q = db.query(Note, User.username).outerjoin(User, Note.user_id == User.id)
+    if search:
+        q = q.filter(Note.video_title.ilike(f"%{search}%"))
+    if card_type:
+        q = q.filter(Note.card_type == card_type)
+
+    total: int = q.count() or 0
 
     rows = (
-        db.query(Note, User.username)
-        .outerjoin(User, Note.user_id == User.id)
-        .order_by(Note.created_at.desc())
+        q.order_by(Note.created_at.desc())
         .offset(offset)
         .limit(per_page)
         .all()

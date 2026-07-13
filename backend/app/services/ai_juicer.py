@@ -13,6 +13,23 @@ from typing import Any
 from litellm import completion
 
 from app.core.config import settings
+from app.core.database import SessionLocal
+from app.services import settings_service
+
+
+def _get_llm_config() -> dict[str, str]:
+    """Resolve effective LLM config: DB (admin runtime) first, .env fallback.
+
+    Opens a short-lived session so ai_juicer (whose call signatures carry no
+    DB dependency) can read runtime config set via the admin panel. Without
+    this helper, the three call sites at lines 287/462/675 raise NameError,
+    get swallowed by the retry loop's ``except Exception``, and every card
+    silently degrades to the fallback — so the admin "LLM config" and
+    "re-extract" features have no effect.
+    """
+    with SessionLocal() as db:
+        return settings_service.get_llm_config(db)
+
 
 # ---------------------------------------------------------------------------
 # Content-type detection (keyword-based)

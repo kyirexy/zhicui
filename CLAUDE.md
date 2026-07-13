@@ -168,5 +168,30 @@ Copy `.env.example` → `.env` and fill in:
 - `LLM_API_KEY` — API key for the LLM endpoint (DeepSeek or Anthropic-compatible)
 - `LLM_MODEL` — model identifier (default `mimo-v2.5-pro`; use `deepseek/deepseek-chat` for DeepSeek)
 - `LLM_API_BASE` — LiteLLM-compatible base URL
+- `JWT_SECRET` — required in production (random hex; `python -c "import secrets; print(secrets.token_hex(32))"`)
+- `DATABASE_URL` — `sqlite:///./videocapsule.db` (local) or `postgresql://zhicui:Zhc2026abc@localhost:5432/zhicui` (prod)
+- `ALLOWED_ORIGINS` — comma-separated origins for CORS (default `*` in dev)
 
 See `.env.example` for all variables. FFmpeg must be installed on the host system (or bundled via `imageio-ffmpeg` on Windows).
+
+## Production deployment (腾讯云 + Gitee + Jenkins CI/CD)
+
+Live at **https://luxai.cn** on Tencent Cloud Lighthouse (`124.223.193.227`, Ubuntu 24.04). Full architecture and operational runbook in user memory `zhicui-deployment.md`; essentials:
+
+**Stack:** FastAPI (uvicorn :8000, systemd `videocapsule-backend`) + Next.js (next start :3000, systemd `videocapsule-frontend`) + Nginx (80/443 → 3000/8000, SSE-aware) + PostgreSQL 16 (`zhicui` db/user, port 5432 open for remote Navicat). Slim backend deps (`deploy/requirements-server.txt` — drops torch/funasr, adds psycopg2-binary). HTTPS via Let's Encrypt certbot (auto-renew).
+
+**CI/CD:** GitHub `kyirexy/zhicui` → Gitee `liu-xiangyu-0725/zhicui` mirror. Gitee Push webhook → Jenkins (`:8080`, Java 21, Generic Webhook Trigger, token `zhicui2026`) → `deploy/deploy.sh` (git pull + pip install + npm build + systemctl restart + health-check loop 60s). Local flow: `git push gitee master` → auto deploy. **Never run git on `/opt/zhicui` as root** — root-owned `.git/objects` break jenkins `git pull`; use `sudo -u ubuntu` or let Jenkins do it. Fix: `sudo chown -R ubuntu:ubuntu /opt/zhicui`.
+
+**APK:** `frontend/public/download/zhicui.apk` (~33MB debug), API points to `https://luxai.cn`. Server has no Android SDK — **build APK locally** with `bash scripts/build-apk.sh` (Next export → cap sync → gradle assembleDebug → copy → git push, Jenkins auto-syncs). The `cap:build:prod` npm script sets `NEXT_PUBLIC_API_URL=https://luxai.cn`; `CAPACITOR_BUILD=true` env syntax fails in Windows cmd — use Git Bash. Download: https://luxai.cn/download/zhicui.apk.
+
+**Auth & admin:** JWT (30-day), registration requires unique `username`, **first registered user auto-becomes admin**. Admin sees 「管理端」link in header → `/admin` (user list, disable/delete). Login accepts email or username.
+
+**Server ops (SSH `ubuntu@124.223.193.227`):**
+- Logs: `sudo journalctl -u videocapsule-backend -f` / `-u videocapsule-frontend -f`
+- Restart: `sudo systemctl restart videocapsule-backend` / `videocapsule-frontend`
+- Health: `curl http://127.0.0.1:8000/api/health`
+- `.next` 502/permission: `sudo chown -R ubuntu:ubuntu /opt/zhicui/frontend/.next && sudo chmod -R a+r /opt/zhicui/frontend/.next`; if still broken: `cd /opt/zhicui/frontend && sudo rm -rf .next && sudo -u ubuntu npm run build`
+- PG: `sudo -u postgres psql zhicui`; make user admin: `UPDATE users SET is_admin=true WHERE email='x';` + restart backend
+- Nginx: `/etc/nginx/sites-available/nginx-videocapsule.conf` → `sudo nginx -t && sudo systemctl reload nginx`
+
+**Tencent Cloud firewall open:** 80/443 (Nginx), 8080 (Jenkins), 5432 (PostgreSQL for remote Navicat).

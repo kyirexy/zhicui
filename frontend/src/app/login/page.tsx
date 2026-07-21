@@ -183,7 +183,9 @@ export default function LoginPage() {
                 {mode === 'login' ? '账号登录' : '创建账号'}
               </h1>
               <p className="mt-1 text-pretty text-xs text-foreground-muted">
-                {mode === 'login' ? '用于测试正式账号认证流程' : '注册一个新的普通测试账号'}
+                {mode === 'login'
+                  ? '登录后继续整理你的知识卡片与行动计划'
+                  : '创建账号，保存你的知识卡片与行动计划'}
               </p>
             </div>
 

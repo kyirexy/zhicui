@@ -46,8 +46,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (loading || !user) return;
-    const fallback = IS_DEV ? '/' : (user.is_admin ? '/admin' : '/');
-    router.replace(getSafeRedirect(fallback));
+    router.replace(getSafeRedirect('/'));
   }, [loading, router, user]);
 
   const validate = () => {

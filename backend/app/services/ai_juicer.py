@@ -8,7 +8,10 @@ DeepSeek-V3 via LiteLLM.
 from __future__ import annotations
 
 import json
+import re
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from litellm import completion
 
@@ -509,6 +512,454 @@ def _call_llm(
 
 
 # ---------------------------------------------------------------------------
+# Grounded note Q&A
+# ---------------------------------------------------------------------------
+
+_NOTE_CHAT_SYSTEM_PROMPT = """\
+你是知萃的内容追问助手。你只能依据当前笔记提供的标题、AI 对内容的结构化理解，以及视频完整文稿或从完整文稿中检索出的相关原文片段回答。
+
+回答规则：
+1. 先直接回答问题，再给出必要的依据或步骤；默认使用简洁中文。
+2. 不得补造原文没有出现的数字、人物、结论、产品参数或因果关系。
+3. 如果来源不足以回答，必须明确说“原内容没有提到这一点”，然后说明当前内容最多能支持什么判断。
+4. 可以做归纳、对比和行动化整理，但推断必须标注为“基于原内容的推断”。
+5. 对话历史只用于理解指代和上下文，不得覆盖笔记来源中的事实。
+6. 不要声称访问了互联网、完整视频画面或笔记之外的资料。
+7. evidence 中的 quote 必须逐字复制自【视频文稿上下文】或【AI 对内容的结构化理解】，不得改写。
+8. follow_up_questions 最多给 3 个，必须能继续用同一份内容回答或核实。
+9. 【视频文稿上下文】中的“相关片段/原文约 N% 处”是检索标记，不得复制进 evidence quote。
+10. AI 结构化理解可以帮助归纳、关联和行动化，但具体事实应优先服从视频文稿原文。
+
+只输出下面结构的 JSON，不要输出 Markdown 代码围栏或额外解释：
+{
+  "answer": "直接、清晰的中文回答",
+  "evidence": [
+    {"quote": "20-180 字的来源原文", "source": "transcript"}
+  ],
+  "grounded": true,
+  "follow_up_questions": ["一个自然的后续问题"]
+}
+
+source 只能是 transcript 或 summary。来源不足时 evidence 返回空数组，grounded 返回 false。
+"""
+
+_NOTE_TRANSCRIPT_DIRECT_LIMIT = 14000
+_NOTE_TRANSCRIPT_CHUNK_SIZE = 2400
+_NOTE_TRANSCRIPT_CHUNK_OVERLAP = 280
+_NOTE_TRANSCRIPT_MAX_CHUNKS = 4
+_NOTE_AI_CONTEXT_LIMIT = 8000
+_NOTE_QUERY_STOP_SIGNALS = {
+    "这个", "那个", "视频", "内容", "原文", "什么", "怎么", "如何",
+    "哪些", "是否", "可以", "一下", "提到", "观点", "问题", "其中",
+    "他们", "它们", "时候", "方面", "以及", "进行", "一个",
+}
+
+
+def _note_ai_summary_context(
+    ai_summary: str | dict[str, Any] | None,
+    limit: int = _NOTE_AI_CONTEXT_LIMIT,
+) -> str:
+    """Turn the stored card JSON into compact, readable Q&A context."""
+    if isinstance(ai_summary, dict):
+        parsed: Any = ai_summary
+        raw_fallback = json.dumps(ai_summary, ensure_ascii=False)
+    else:
+        raw_fallback = (ai_summary or "").strip()
+        if not raw_fallback:
+            return ""
+        try:
+            parsed = json.loads(raw_fallback)
+        except (json.JSONDecodeError, TypeError):
+            return raw_fallback[:limit]
+
+    if not isinstance(parsed, dict):
+        return raw_fallback[:limit]
+
+    parts: list[str] = []
+
+    def add(label: str, value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, str):
+            text = value.strip()
+        elif isinstance(value, (int, float, bool)):
+            text = str(value)
+        else:
+            return
+        if text:
+            parts.append(f"{label}：{text}")
+
+    add("内容标题", parsed.get("title"))
+    add("核心洞察", parsed.get("key_insight"))
+    add("代表金句", parsed.get("hero_quote"))
+
+    sections = parsed.get("sections")
+    if isinstance(sections, list):
+        section_lines: list[str] = []
+        for index, section in enumerate(sections[:12], start=1):
+            if not isinstance(section, dict):
+                continue
+            title = str(section.get("title") or f"要点 {index}").strip()
+            content = str(section.get("content") or "").strip()
+            if not content and isinstance(section.get("items"), list):
+                content = "；".join(
+                    str(item).strip()
+                    for item in section["items"]
+                    if str(item).strip()
+                )
+            if title or content:
+                section_lines.append(f"{index}. {title}：{content}".rstrip("："))
+        if section_lines:
+            parts.append("AI 内容拆解：\n" + "\n".join(section_lines))
+
+    add("AI 总结", parsed.get("conclusion"))
+
+    stats = parsed.get("stats")
+    if isinstance(stats, list):
+        stat_lines = []
+        for item in stats[:10]:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label") or "").strip()
+            value = str(item.get("value") or "").strip()
+            if label and value:
+                stat_lines.append(f"{label}：{value}")
+        if stat_lines:
+            parts.append("AI 提取数据：" + "；".join(stat_lines))
+
+    rating = parsed.get("pitfall_rating")
+    if isinstance(rating, (int, float)):
+        parts.append(f"AI 风险/踩坑判断：{rating}/5")
+
+    add("内容语气", parsed.get("tone"))
+    context = "\n\n".join(parts).strip()
+    return (context or raw_fallback)[:limit]
+
+
+def _note_query_signals(query: str) -> list[tuple[str, int]]:
+    """Extract deterministic Chinese n-grams and ASCII terms for retrieval."""
+    normalized = query.lower().strip()
+    weighted: dict[str, int] = {}
+
+    for term in re.findall(r"[a-z0-9][a-z0-9._+-]{1,31}", normalized):
+        weighted[term] = max(weighted.get(term, 0), min(8, len(term)))
+
+    for sequence in re.findall(r"[\u4e00-\u9fff]+", normalized):
+        if 2 <= len(sequence) <= 12 and sequence not in _NOTE_QUERY_STOP_SIGNALS:
+            weighted[sequence] = max(weighted.get(sequence, 0), min(10, len(sequence) + 2))
+        for size, weight in ((2, 2), (3, 4)):
+            for index in range(max(0, len(sequence) - size + 1)):
+                signal = sequence[index:index + size]
+                if signal in _NOTE_QUERY_STOP_SIGNALS:
+                    continue
+                weighted[signal] = max(weighted.get(signal, 0), weight)
+
+    return sorted(weighted.items(), key=lambda item: (-item[1], -len(item[0]), item[0]))
+
+
+def _note_transcript_chunks(
+    transcript: str,
+    chunk_size: int = _NOTE_TRANSCRIPT_CHUNK_SIZE,
+    overlap: int = _NOTE_TRANSCRIPT_CHUNK_OVERLAP,
+) -> list[tuple[int, str]]:
+    """Split a transcript into bounded overlapping chunks with source offsets."""
+    if not transcript:
+        return []
+
+    chunks: list[tuple[int, str]] = []
+    step = max(1, chunk_size - overlap)
+    start = 0
+    while start < len(transcript):
+        text = transcript[start:start + chunk_size]
+        if text:
+            chunks.append((start, text))
+        if start + chunk_size >= len(transcript):
+            break
+        start += step
+    return chunks
+
+
+def _uniform_chunk_indices(chunk_count: int, target_count: int) -> list[int]:
+    """Return stable indices spread across the complete document."""
+    if chunk_count <= 0 or target_count <= 0:
+        return []
+    if chunk_count <= target_count:
+        return list(range(chunk_count))
+    if target_count == 1:
+        return [chunk_count // 2]
+    return sorted({
+        round(index * (chunk_count - 1) / (target_count - 1))
+        for index in range(target_count)
+    })
+
+
+def _build_note_transcript_context(
+    transcript: str,
+    query: str,
+    direct_limit: int = _NOTE_TRANSCRIPT_DIRECT_LIMIT,
+    max_chunks: int = _NOTE_TRANSCRIPT_MAX_CHUNKS,
+) -> str:
+    """Backward-compatible text-only wrapper around detailed context building."""
+    context, _ = _build_note_transcript_context_details(
+        transcript,
+        query,
+        direct_limit=direct_limit,
+        max_chunks=max_chunks,
+    )
+    return context
+
+
+def _build_note_transcript_context_details(
+    transcript: str,
+    query: str,
+    direct_limit: int = _NOTE_TRANSCRIPT_DIRECT_LIMIT,
+    max_chunks: int = _NOTE_TRANSCRIPT_MAX_CHUNKS,
+) -> tuple[str, dict[str, Any]]:
+    """Build bounded context and report how the complete transcript was covered."""
+    source_context: dict[str, Any] = {
+        "transcript_chars": len(transcript),
+        "transcript_mode": "none",
+        "scanned_chunks": 0,
+        "selected_chunks": 0,
+        "ai_summary_used": False,
+    }
+    if not transcript:
+        return "", source_context
+    if len(transcript) <= direct_limit:
+        source_context.update({
+            "transcript_mode": "full",
+            "scanned_chunks": 1,
+            "selected_chunks": 1,
+        })
+        return transcript, source_context
+
+    chunks = _note_transcript_chunks(transcript)
+    signals = _note_query_signals(query)
+    ranked: list[tuple[int, int]] = []
+    for index, (_, chunk_text) in enumerate(chunks):
+        lowered = chunk_text.lower()
+        score = sum(lowered.count(signal) * weight for signal, weight in signals)
+        ranked.append((score, index))
+
+    selected: list[int] = []
+    # Prefer positive, non-adjacent matches so overlapping chunks do not waste
+    # the limited context budget on the same passage.
+    for score, index in sorted(ranked, key=lambda item: (-item[0], item[1])):
+        if score <= 0:
+            break
+        if any(abs(index - existing) <= 1 for existing in selected):
+            continue
+        selected.append(index)
+        if len(selected) >= max_chunks:
+            break
+
+    # Broad questions and sparse matches still receive document-wide coverage.
+    for index in _uniform_chunk_indices(len(chunks), max_chunks):
+        if index not in selected:
+            selected.append(index)
+        if len(selected) >= max_chunks:
+            break
+
+    selected = sorted(selected[:max_chunks])
+    parts: list[str] = []
+    denominator = max(1, len(transcript) - 1)
+    for display_index, chunk_index in enumerate(selected, start=1):
+        start, chunk_text = chunks[chunk_index]
+        position = round(start / denominator * 100)
+        parts.append(
+            f"[相关片段 {display_index}/{len(selected)} · 原文约 {position}% 处]\n"
+            f"{chunk_text}"
+        )
+    source_context.update({
+        "transcript_mode": "retrieved",
+        "scanned_chunks": len(chunks),
+        "selected_chunks": len(selected),
+    })
+    return "\n\n".join(parts), source_context
+
+
+def _validated_note_evidence(
+    raw_evidence: Any,
+    transcript_text: str,
+    summary_text: str,
+    transcript_source: str | None = None,
+) -> list[dict[str, Any]]:
+    """Keep only unique quotes that can be found verbatim in supplied sources."""
+    if not isinstance(raw_evidence, list):
+        return []
+
+    validated: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw_evidence:
+        if not isinstance(item, dict):
+            continue
+        quote = str(item.get("quote") or "").strip()
+        if not quote or quote in seen:
+            continue
+
+        source = ""
+        if quote in transcript_text:
+            source = "transcript"
+        elif quote in summary_text:
+            source = "summary"
+        if not source:
+            continue
+
+        seen.add(quote)
+        evidence: dict[str, Any] = {"quote": quote[:360], "source": source}
+        if source == "transcript" and transcript_source:
+            source_index = transcript_source.find(quote)
+            if source_index >= 0:
+                evidence["position_percent"] = round(
+                    source_index / max(1, len(transcript_source) - 1) * 100
+                )
+        validated.append(evidence)
+        if len(validated) >= 3:
+            break
+    return validated
+
+
+def _note_follow_up_questions(raw_questions: Any) -> list[str]:
+    """Normalize a short, de-duplicated list of model-suggested questions."""
+    if not isinstance(raw_questions, list):
+        return []
+
+    questions: list[str] = []
+    seen: set[str] = set()
+    for item in raw_questions:
+        question = str(item or "").strip()
+        if not question or question in seen:
+            continue
+        seen.add(question)
+        questions.append(question[:120])
+        if len(questions) >= 3:
+            break
+    return questions
+
+
+def answer_note_question(
+    title: str,
+    transcript: str | None,
+    ai_summary: str | dict[str, Any] | None,
+    question: str,
+    history: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    """Answer a question using a saved note as the only factual source.
+
+    The endpoint already validates ownership and input length. This helper also
+    enforces a bounded context so a long transcript or client-supplied history
+    cannot consume an unbounded model window.
+    """
+    clean_question = question.strip()
+    if not clean_question:
+        raise ValueError("问题不能为空")
+
+    summary_text = _note_ai_summary_context(ai_summary)
+
+    history_lines: list[str] = []
+    retrieval_history: list[str] = []
+    for item in (history or [])[-6:]:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        content = str(item.get("content") or "").strip()[:1000]
+        if role not in {"user", "assistant"} or not content:
+            continue
+        label = "用户" if role == "user" else "助手"
+        history_lines.append(f"{label}：{content}")
+        if role == "user":
+            retrieval_history.append(content)
+
+    raw_transcript = (transcript or "").strip()
+    retrieval_query = "\n".join([clean_question, *retrieval_history[-3:]])
+    transcript_text, source_context = _build_note_transcript_context_details(
+        raw_transcript,
+        retrieval_query,
+    )
+    source_context["ai_summary_used"] = bool(summary_text)
+    if source_context["transcript_mode"] == "full":
+        transcript_coverage = "完整文稿已直接加入本次回答上下文。"
+    elif source_context["transcript_mode"] == "retrieved":
+        transcript_coverage = (
+            f"已扫描完整文稿的 {source_context['scanned_chunks']} 个片段，"
+            f"并选取 {source_context['selected_chunks']} 个相关原文片段进入回答上下文。"
+        )
+    else:
+        transcript_coverage = "当前笔记没有可用视频文稿。"
+
+    user_prompt = f"""\
+【笔记标题】
+{title.strip()[:512] or '未命名内容'}
+
+【来源覆盖说明】
+{transcript_coverage}
+{"已同时加入 AI 对内容的结构化理解。" if summary_text else "没有可用的 AI 结构化理解。"}
+
+【AI 对内容的结构化理解】
+{summary_text or '无结构化摘要'}
+
+【视频文稿上下文】
+{transcript_text or '无可用视频文稿；只能依据 AI 对内容的结构化理解回答'}
+
+【最近对话】
+{chr(10).join(history_lines) if history_lines else '无'}
+
+【当前问题】
+{clean_question}
+"""
+
+    raw_answer = _call_llm(
+        system=_NOTE_CHAT_SYSTEM_PROMPT,
+        user=user_prompt,
+        max_tokens=1600,
+        temperature=0.2,
+        timeout=60,
+    )
+
+    try:
+        parsed = json.loads(raw_answer)
+    except (json.JSONDecodeError, TypeError):
+        return {
+            "answer": raw_answer,
+            "evidence": [],
+            "grounded": False,
+            "follow_up_questions": [],
+            "source_context": source_context,
+        }
+
+    if not isinstance(parsed, dict):
+        return {
+            "answer": raw_answer,
+            "evidence": [],
+            "grounded": False,
+            "follow_up_questions": [],
+            "source_context": source_context,
+        }
+
+    answer = str(parsed.get("answer") or "").strip()
+    if not answer:
+        answer = "原内容没有提供足够信息来回答这个问题。"
+
+    evidence = _validated_note_evidence(
+        parsed.get("evidence"),
+        transcript_text=transcript_text,
+        summary_text=summary_text,
+        transcript_source=raw_transcript,
+    )
+    return {
+        "answer": answer,
+        "evidence": evidence,
+        # Never trust the model's boolean directly: evidence is grounded only
+        # after the quote has been found in the exact context supplied above.
+        "grounded": bool(evidence),
+        "follow_up_questions": _note_follow_up_questions(
+            parsed.get("follow_up_questions")
+        ),
+        "source_context": source_context,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Mini Agent 1: Intent Classifier (flash — cheap, fast)
 # ---------------------------------------------------------------------------
 
@@ -522,12 +973,17 @@ _INTENT_CLASSIFIER_PROMPT = """\
 }
 
 分类标准：
-- recipe: 美食烹饪、食谱教程
-- insight: 知识观点、认知方法论
+- recipe: 美食烹饪、食谱教程（重点是"怎么做菜"）
+- insight: 知识观点、认知方法论（重点是"怎么想"）
 - history: 历史科普、文化解读
 - product: 产品测评、好物推荐
-- plan: 计划打卡、目标管理、训练安排、习惯养成
+- plan: 包含可执行的时间安排、训练计划、打卡周期、分步骤行动指南、按天/周组织的任务
+  关键信号：出现"第X天""X周计划""每天做什么""打卡""周期""训练安排""饮食计划""执行步骤""3个月""21天"
+  注意：即使内容包含食物/营养/知识讲解，只要核心是"按时间执行的计划或行动指南"，就归为 plan
 - general: 不属于以上任何类别
+
+判断 is_plan 时，优先看转录文本是否有明确的时间维度（天/周/月/阶段）和可执行任务，
+而不仅仅是知识点分享。健身减脂、学习路线、备考安排、习惯养成类视频通常是 plan。
 """
 
 
@@ -558,48 +1014,221 @@ def classify_intent(transcript: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 _PLAN_GENERATOR_PROMPT = """\
-你是一个计划生成助手。根据视频转录文本，提取其中的计划/训练/打卡内容，
-生成一份按天组织的可执行计划。
+你是一个自适应计划架构师。根据视频转录文本，提取其中真正存在的计划、训练、
+打卡、学习或执行方法，生成一份粒度与原内容相匹配的可执行计划。
 
 输出严格遵守 JSON 格式，不要包含任何其他文字：
 {
   "goal": "计划的终极目标（20-50字）",
-  "duration": "周期描述（如4周，28天）",
+  "duration": "视频中有依据的周期描述，没有则留空",
   "days": [
     {
       "day": 1,
-      "label": "第一天：适应期",
+      "label": "启动阶段",
+      "date": "YYYY-MM-DD（仅在有可靠日期依据时填写）",
+      "focus": "当天或阶段的核心重点",
       "tasks": [
-        {"id": "t-001", "title": "具体任务", "done": false}
-      ]
-    },
-    {
-      "day": 2,
-      "label": "第二天：进阶",
-      "tasks": [
-        {"id": "t-002", "title": "任务标题", "done": false},
-        {"id": "t-003", "title": "另一任务", "done": false}
+        {
+          "id": "t-001",
+          "title": "具体可执行任务",
+          "done": false,
+          "scheduled_at": "YYYY-MM-DDTHH:MM（仅在视频明确或可可靠换算时填写）",
+          "duration_minutes": 30,
+          "frequency": "每天 3 次",
+          "priority": "high",
+          "details": [
+            {"name": "repetitions", "label": "每组次数", "type": "number", "value": 12},
+            {"name": "success", "label": "完成标准", "type": "text", "value": "动作稳定且完成3组"}
+          ]
+        }
       ]
     }
   ],
   "dynamic_fields": [
-    {"name": "goal", "label": "终极目标", "type": "text", "value": "..."},
-    {"name": "duration", "label": "周期", "type": "text", "value": "4周"},
-    {"name": "progress", "label": "整体进度", "type": "progress", "value": 0},
-    {"name": "metrics", "label": "量化指标", "type": "list", "value": ["体重减5kg", "体脂降3%"]},
-    {"name": "checkpoints", "label": "里程碑", "type": "checklist", "value": ["Week1: 建立习惯", "Week2: 初见成效"]},
-    {"name": "resources", "label": "参考资料", "type": "list", "value": ["饮食计划表", "训练视频链接"]}
+    {"name": "goal", "label": "终极目标", "group": "目标与衡量", "type": "text", "value": "..."},
+    {"name": "metrics", "label": "完成指标", "group": "目标与衡量", "type": "list", "value": ["..."]},
+    {"name": "resources", "label": "所需资源", "group": "准备事项", "type": "list", "value": ["..."]}
   ]
 }
 
 要求：
-- days 数组每条代表一天，day 从 1 开始连续编号
-- 每天至少 1 条 task，最多 8 条 task
-- 每条 task 必须有 id（t-001 起）、title、done（默认 false）
-- dynamic_fields 由你根据视频内容动态决定哪些字段展示（最少 3 个字段）
-- 字段类型可选: text/number/list/checklist/progress/quote
-- 没有内容就写空数组 []
+- 你自主决定 dynamic_fields 的数量、名称、分组和类型，只保留视频有依据且对执行有帮助的字段，
+  不设最少数量，不要为了凑字段而虚构内容
+- 字段类型可以使用 text/number/date/time/duration/frequency/list/checklist/progress/quote/metric；
+  需要其他类型时可给出清晰的字符串 type，前端会安全降级展示
+- days 表示真实执行节点或阶段，day 必须是正整数但不要求连续；例如视频只讲第1、3、7天，
+  就只生成 day=1、3、7，不补造其他天
+- 任务数量由视频内容决定，不设固定的每天任务数；计划类内容至少要有 1 条真正可执行的 task
+- 每条 task 必须有 id（t-001 起）、title、done（默认 false），title 要具体可执行，
+  不要写空泛的“完成任务”
+- scheduled_at 使用 YYYY-MM-DDTHH:MM，只有视频明确时间或可结合当前日期可靠换算时填写；
+  没有依据就省略，不能虚构具体日期和时间
+- duration_minutes、frequency、details 都是可选的，只有内容确实提到时才填写；
+  details 数量和字段类型同样由你决定
+- priority 仅使用 low/medium/high；没有明显优先级时使用 medium
+- 没有内容的数组写 []；只有当视频完全不是计划类内容时，才返回空 days 和空 tasks
 """
+
+_PLAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
+_PLAN_SCHEDULE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?$")
+_PLAN_PRIORITIES = {"low", "medium", "high"}
+
+
+def _normalize_plan_field(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    name = str(value.get("name") or "").strip()
+    label = str(value.get("label") or "").strip()
+    if not name or not label:
+        return None
+    normalized = dict(value)
+    normalized["name"] = name[:80]
+    normalized["label"] = label[:120]
+    normalized["type"] = str(value.get("type") or "text").strip()[:40] or "text"
+    group = str(value.get("group") or "").strip()
+    if group:
+        normalized["group"] = group[:80]
+    else:
+        normalized.pop("group", None)
+    return normalized
+
+
+def _normalize_plan_schedule(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()[:16]
+    return normalized if _PLAN_SCHEDULE_RE.fullmatch(normalized) else None
+
+
+def _normalize_plan_task(
+    value: Any,
+    *,
+    day_number: int,
+    task_number: int,
+) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    title = str(value.get("title") or "").strip()
+    if not title:
+        return None
+
+    normalized = dict(value)
+    task_id = str(value.get("id") or "").strip()
+    normalized["id"] = task_id[:80] or f"t-{task_number:03d}"
+    normalized["title"] = title[:256]
+    normalized["done"] = bool(value.get("done", False))
+    normalized["day"] = day_number
+    normalized["priority"] = (
+        value.get("priority") if value.get("priority") in _PLAN_PRIORITIES else "medium"
+    )
+
+    scheduled_at = _normalize_plan_schedule(value.get("scheduled_at"))
+    if scheduled_at:
+        normalized["scheduled_at"] = scheduled_at
+    else:
+        normalized.pop("scheduled_at", None)
+
+    duration = value.get("duration_minutes")
+    if isinstance(duration, (int, float)) and 0 < duration <= 10080:
+        normalized["duration_minutes"] = int(duration)
+    else:
+        normalized.pop("duration_minutes", None)
+
+    frequency = str(value.get("frequency") or "").strip()
+    if frequency:
+        normalized["frequency"] = frequency[:120]
+    else:
+        normalized.pop("frequency", None)
+
+    details = [
+        field
+        for item in (value.get("details") or [])
+        if (field := _normalize_plan_field(item)) is not None
+    ] if isinstance(value.get("details"), list) else []
+    if details:
+        normalized["details"] = details
+    else:
+        normalized.pop("details", None)
+    return normalized
+
+
+def _normalize_plan_payload(plan: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(plan)
+    dynamic_fields = plan.get("dynamic_fields")
+    normalized["dynamic_fields"] = [
+        field
+        for item in dynamic_fields
+        if (field := _normalize_plan_field(item)) is not None
+    ] if isinstance(dynamic_fields, list) else []
+
+    normalized_days: list[dict[str, Any]] = []
+    flat_tasks: list[dict[str, Any]] = []
+    raw_days = plan.get("days")
+    if isinstance(raw_days, list):
+        for day_index, raw_day in enumerate(raw_days, start=1):
+            if not isinstance(raw_day, dict):
+                continue
+            raw_day_number = raw_day.get("day")
+            day_number = raw_day_number if isinstance(raw_day_number, int) and raw_day_number > 0 else day_index
+            day_tasks: list[dict[str, Any]] = []
+            for raw_task in raw_day.get("tasks") or []:
+                task = _normalize_plan_task(
+                    raw_task,
+                    day_number=day_number,
+                    task_number=len(flat_tasks) + 1,
+                )
+                if task is not None:
+                    day_tasks.append(task)
+                    flat_tasks.append(dict(task))
+            normalized_day = dict(raw_day)
+            normalized_day["day"] = day_number
+            normalized_day["label"] = str(raw_day.get("label") or f"第{day_number}天").strip()[:160]
+            normalized_day["tasks"] = day_tasks
+            date_value = _normalize_plan_schedule(raw_day.get("date"))
+            if date_value:
+                normalized_day["date"] = date_value[:10]
+            else:
+                normalized_day.pop("date", None)
+            focus = str(raw_day.get("focus") or "").strip()
+            if focus:
+                normalized_day["focus"] = focus[:240]
+            else:
+                normalized_day.pop("focus", None)
+            if day_tasks:
+                normalized_days.append(normalized_day)
+
+    if not flat_tasks:
+        raw_tasks = plan.get("tasks")
+        if isinstance(raw_tasks, list):
+            for raw_task in raw_tasks:
+                raw_day_number = raw_task.get("day") if isinstance(raw_task, dict) else None
+                day_number = (
+                    raw_day_number
+                    if isinstance(raw_day_number, int) and raw_day_number > 0
+                    else 1
+                )
+                task = _normalize_plan_task(
+                    raw_task,
+                    day_number=day_number,
+                    task_number=len(flat_tasks) + 1,
+                )
+                if task is not None:
+                    flat_tasks.append(task)
+        if flat_tasks:
+            for day_number in sorted({int(task["day"]) for task in flat_tasks}):
+                normalized_days.append({
+                    "day": day_number,
+                    "label": f"第{day_number}天",
+                    "tasks": [
+                        dict(task)
+                        for task in flat_tasks
+                        if task.get("day") == day_number
+                    ],
+                })
+
+    normalized["days"] = normalized_days
+    normalized["tasks"] = flat_tasks
+    return normalized
 
 
 def generate_plan(transcript: str) -> dict[str, Any] | None:
@@ -607,8 +1236,11 @@ def generate_plan(transcript: str) -> dict[str, Any] | None:
     try:
         raw = _call_llm(
             system=_PLAN_GENERATOR_PROMPT,
-            user=f"视频转录文本：\n\n{transcript[:3000]}",
-            max_tokens=2048,
+            user=(
+                f"当前北京时间日期：{datetime.now(_PLAN_TIMEZONE).date().isoformat()}\n"
+                f"视频转录文本：\n\n{transcript[:5000]}"
+            ),
+            max_tokens=3072,
         )
         plan = json.loads(raw)
         plan.setdefault("goal", "")
@@ -617,11 +1249,8 @@ def generate_plan(transcript: str) -> dict[str, Any] | None:
         plan.setdefault("metrics", [])
         plan.setdefault("resources", [])
         plan.setdefault("checkpoints", [])
-        for i, t in enumerate(plan.get("tasks", [])):
-            if isinstance(t, dict):
-                t.setdefault("id", f"t-{i+1:03d}")
-                t.setdefault("done", False)
-        return plan
+
+        return _normalize_plan_payload(plan)
     except Exception:
         return None
 
@@ -724,43 +1353,48 @@ def plan_to_storage(plan: dict) -> tuple[list[dict], list[dict], int]:
     """Convert LLM plan into (fields, tasks, total_days). Supports new day-organized format."""
     import re
     total_days = 0
+    normalized_plan = _normalize_plan_payload(plan)
 
     # Dynamic fields (new format) — AI decides which fields to display
-    dynamic_fields = plan.get("dynamic_fields") or []
+    dynamic_fields = normalized_plan.get("dynamic_fields") or []
     if isinstance(dynamic_fields, list) and dynamic_fields:
-        fields = []
-        for f in dynamic_fields:
-            if isinstance(f, dict) and f.get("name") and f.get("label"):
-                fields.append({"name": f["name"], "label": f["label"],
-                              "type": f.get("type", "text"), "value": f.get("value")})
+        fields = [dict(field) for field in dynamic_fields]
     else:
         # Legacy: build fields from flat plan
         fields = []
-        if plan.get("goal"):
-            fields.append({"name": "goal", "label": "终极目标", "type": "text", "value": plan["goal"]})
-        if plan.get("duration"):
-            fields.append({"name": "duration", "label": "周期", "type": "text", "value": plan["duration"]})
+        if normalized_plan.get("goal"):
+            fields.append({"name": "goal", "label": "终极目标", "type": "text", "value": normalized_plan["goal"]})
+        if normalized_plan.get("duration"):
+            fields.append({"name": "duration", "label": "周期", "type": "text", "value": normalized_plan["duration"]})
 
     # Day-organized tasks (new format)
-    days = plan.get("days") or []
-    tasks_flat = []
+    days = normalized_plan.get("days") or []
+    tasks_flat: list[dict[str, Any]] = []
     if isinstance(days, list) and days:
-        total_days = len(days)
+        total_days = max(
+            (day.get("day", 0) for day in days if isinstance(day, dict)),
+            default=0,
+        )
         for day_obj in days:
             if isinstance(day_obj, dict):
                 for t in day_obj.get("tasks", []):
                     if isinstance(t, dict):
-                        t.setdefault("id", f"t-{len(tasks_flat)+1:03d}")
-                        t.setdefault("done", False)
-                        tasks_flat.append(t)
+                        tasks_flat.append(dict(t))
     else:
         # Legacy flat tasks
-        tasks_flat = plan.get("tasks") or []
+        tasks_flat = normalized_plan.get("tasks") or []
         if not total_days and tasks_flat:
-            total_days = 1
+            total_days = max(
+                (
+                    task.get("day", 1)
+                    for task in tasks_flat
+                    if isinstance(task, dict) and isinstance(task.get("day", 1), int)
+                ),
+                default=1,
+            )
 
     # Parse total_days from duration
-    duration = plan.get("duration", "")
+    duration = normalized_plan.get("duration", "")
     if duration and not total_days:
         num_match = re.search(r'(\d+)', str(duration))
         if num_match:

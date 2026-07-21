@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useRef } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { Search, Copy, Check, FileText } from 'lucide-react';
 
 interface TranscriptViewerProps {
@@ -12,6 +12,7 @@ export default function TranscriptViewer({ transcript, className = '' }: Transcr
   const [search, setSearch] = useState('');
   const [copied, setCopied] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const copyResetTimer = useRef<number | null>(null);
 
   const lines = useMemo(() => transcript.split('\n'), [transcript]);
 
@@ -21,11 +22,27 @@ export default function TranscriptViewer({ transcript, className = '' }: Transcr
     return lines.filter((line) => line.toLowerCase().includes(lower));
   }, [lines, search]);
 
+  useEffect(() => () => {
+    if (copyResetTimer.current !== null) {
+      window.clearTimeout(copyResetTimer.current);
+    }
+  }, []);
+
+  const markCopied = () => {
+    setCopied(true);
+    if (copyResetTimer.current !== null) {
+      window.clearTimeout(copyResetTimer.current);
+    }
+    copyResetTimer.current = window.setTimeout(() => {
+      setCopied(false);
+      copyResetTimer.current = null;
+    }, 2000);
+  };
+
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(transcript);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      markCopied();
     } catch {
       // Fallback for older browsers / non-HTTPS contexts.
       const ta = document.createElement('textarea');
@@ -36,8 +53,7 @@ export default function TranscriptViewer({ transcript, className = '' }: Transcr
       ta.select();
       document.execCommand('copy');
       document.body.removeChild(ta);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      markCopied();
     }
   };
 
@@ -77,6 +93,7 @@ export default function TranscriptViewer({ transcript, className = '' }: Transcr
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="搜索文案内容…"
+            aria-label="搜索完整文稿"
             className="transcript-search w-full pl-9 pr-3 py-2 text-sm rounded-lg
                        bg-card-bg border border-card-border text-foreground
                        placeholder:text-foreground-muted
@@ -90,6 +107,7 @@ export default function TranscriptViewer({ transcript, className = '' }: Transcr
             {lineCount} 行 · {charCount} 字
           </span>
           <button
+            type="button"
             onClick={handleCopy}
             className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium
                        rounded-lg border border-card-border bg-card-bg

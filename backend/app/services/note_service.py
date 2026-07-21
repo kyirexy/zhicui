@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.models.note import Note
@@ -129,6 +129,8 @@ def list_notes(
     page: int = 1,
     per_page: int = 20,
     user_id: str = "",
+    search: str | None = None,
+    card_type: str | None = None,
 ) -> tuple[list[Note], int]:
     """Return a paginated list of notes and the total count.
 
@@ -147,15 +149,32 @@ def list_notes(
     per_page = min(per_page, 100)
     offset = (max(page, 1) - 1) * per_page
 
-    q_total = db.query(func.count(Note.id))
+    query = db.query(Note)
     if user_id:
-        q_total = q_total.filter(Note.user_id == user_id)
-    total: int = q_total.scalar() or 0
+        query = query.filter(Note.user_id == user_id)
+    clean_search = (search or "").strip()
+    if clean_search:
+        escaped_search = (
+            clean_search
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        pattern = f"%{escaped_search}%"
+        query = query.filter(or_(
+            Note.video_title.ilike(pattern, escape="\\"),
+            Note.ai_summary.ilike(pattern, escape="\\"),
+        ))
+    if card_type:
+        query = query.filter(Note.card_type == card_type)
 
-    q = db.query(Note).order_by(Note.created_at.desc())
-    if user_id:
-        q = q.filter(Note.user_id == user_id)
-    notes = q.offset(offset).limit(per_page).all()
+    total: int = query.count() or 0
+    notes = (
+        query.order_by(Note.created_at.desc())
+        .offset(offset)
+        .limit(per_page)
+        .all()
+    )
     return notes, total
 
 

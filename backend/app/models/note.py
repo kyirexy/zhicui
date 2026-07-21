@@ -91,6 +91,7 @@ class Note(Base):
             "seo_slug": self.seo_slug,
             "seo_meta": self.seo_meta,
             "excerpt": (ai.get("conclusion", "") or "")[:160],
+            "section_count": len(ai.get("sections", []) or []),
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

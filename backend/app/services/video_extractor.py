@@ -249,6 +249,33 @@ def _bilibili_download_audio(url: str, output_dir: str) -> str:
     raise RuntimeError(f"B站音频下载失败: {r.stderr[:300]}")
 
 
+def _asr_audio_file(
+    audio_path: str,
+    api_key: str,
+    api_base_url: str | None = None,
+    model: str | None = None,
+) -> str:
+    """Send an audio file to the SiliconFlow ASR API, return transcribed text.
+
+    This is the B站 equivalent of ``DouyinProcessor.extract_text_from_audio``
+    — it uploads the downloaded audio and gets back the transcript.
+    """
+    import requests as _req
+    api_base_url = api_base_url or "https://api.siliconflow.cn/v1/audio/transcriptions"
+    model = model or "FunAudioLLM/SenseVoiceSmall"
+
+    with open(audio_path, 'rb') as f:
+        resp = _req.post(
+            api_base_url,
+            headers={"Authorization": f"Bearer {api_key}"},
+            data={"model": model},
+            files={"file": f},
+            timeout=300,
+        )
+    resp.raise_for_status()
+    return resp.json().get("text", "")
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -347,9 +374,24 @@ def extract_transcript(
             if subs.strip() and len(subs) > 50:
                 return subs
         except Exception:
-            pass  # No subs — use video title as minimal transcript
-        # Fallback: return title as transcript so AI can still generate a card
+            pass  # No subs — fall through to audio download + ASR
+
         info = _parse_bilibili(url)
+
+        # No subtitles → download audio → cloud ASR
+        if api_key:
+            import tempfile as _tmp
+            import traceback as _tb
+            try:
+                with _tmp.TemporaryDirectory() as tmpdir:
+                    audio_path = _bilibili_download_audio(url, tmpdir)
+                    text = _asr_audio_file(audio_path, api_key, api_base_url, model)
+                    if text and text.strip():
+                        return text
+            except Exception:
+                _tb.print_exc()
+
+        # Cloud ASR failed → title fallback
         return f"[B站视频] {info.get('title', '')}"
 
     # Douyin path
@@ -404,15 +446,39 @@ def fallback_local_asr(url: str) -> str:
         return extract_xhs_content(url, cookie=cookie)
 
     if platform == 'bilibili':
-        # B站: fast subtitle check, skip heavy audio download
+        # B站: fast subtitle check, skip heavy audio download if subs exist
         try:
             subs = _bilibili_subtitles(url)
             if subs.strip() and len(subs) > 50:
                 return subs
         except Exception:
             pass
-        # Fallback: title as transcript
+
         info = _parse_bilibili(url)
+
+        # No subtitles → download audio → local FunASR / whisper
+        import tempfile as _tmp2
+        import shutil as _sh2
+        import traceback as _tb2
+        from pathlib import Path as _Path2
+        tmp_dir = _Path2(_tmp2.mkdtemp())
+        try:
+            audio_path = _bilibili_download_audio(url, str(tmp_dir))
+            try:
+                text = transcribe_file(audio_path)
+                if text and text.strip():
+                    return text
+            except Exception:
+                _tb2.print_exc()
+            text = transcribe_with_whisper(audio_path)
+            if text and text.strip():
+                return text
+        except Exception:
+            _tb2.print_exc()
+        finally:
+            _sh2.rmtree(tmp_dir, ignore_errors=True)
+
+        # All local ASR failed → title fallback
         return f"[B站视频] {info.get('title', '')}"
 
     # Step 1: Extract video info to get the download URL

@@ -14,9 +14,13 @@ const ICON_MAP: Record<string, typeof TrendingUp> = {
   hero_quote: Quote,
 };
 
+function formatScalar(value: unknown): string {
+  if (typeof value === 'boolean') return value ? '是' : '否';
+  return value == null || value === '' ? '—' : String(value);
+}
 
 export default function PlanDynamicField({ field }: PlanDynamicFieldProps) {
-  const Icon = ICON_MAP[field.name] || null;
+  const Icon = ICON_MAP[field.name] || TrendingUp;
   const value = field.value;
 
   const renderValue = () => {
@@ -30,7 +34,7 @@ export default function PlanDynamicField({ field }: PlanDynamicFieldProps) {
                 <span className="text-lg font-bold text-foreground tabular-nums">{pct}%</span>
               </div>
               <div className="h-2 rounded-full bg-card-bg overflow-hidden">
-                <div className="h-full rounded-full bg-gradient-to-r from-accent-emerald to-accent-indigo transition-all duration-700" style={{ width: `${pct}%` }} />
+                <div className="h-full rounded-full bg-accent-emerald" style={{ width: `${pct}%` }} />
               </div>
             </div>
           );
@@ -78,28 +82,52 @@ export default function PlanDynamicField({ field }: PlanDynamicFieldProps) {
         return <p className="text-sm text-foreground-secondary">—</p>;
 
       case 'number':
+      case 'metric':
         return (
           <div className="flex items-baseline gap-1">
-            <span className="text-2xl font-bold text-foreground tabular-nums">{value != null ? String(value) : '—'}</span>
+            <span className="text-2xl font-bold text-foreground tabular-nums">{formatScalar(value)}</span>
           </div>
         );
 
       case 'date':
-        return <p className="text-sm font-medium text-foreground-secondary">{value ? String(value) : '—'}</p>;
+      case 'time':
+      case 'duration':
+      case 'frequency':
+        return <p className="text-sm font-medium text-foreground-secondary text-pretty">{formatScalar(value)}</p>;
 
       case 'text':
       default:
-        if (typeof value === 'string') {
-          return <p className="text-sm text-foreground-secondary leading-relaxed text-pretty">{value}</p>;
+        if (Array.isArray(value)) {
+          return (
+            <ul className="space-y-1.5">
+              {value.map((item, index) => (
+                <li key={index} className="text-sm text-foreground-secondary text-pretty">
+                  {formatScalar(item)}
+                </li>
+              ))}
+            </ul>
+          );
         }
-        return <p className="text-sm text-foreground-muted">—</p>;
+        if (value && typeof value === 'object') {
+          return (
+            <dl className="space-y-1.5">
+              {Object.entries(value).map(([key, item]) => (
+                <div key={key} className="flex items-start justify-between gap-3 text-sm">
+                  <dt className="text-foreground-muted">{key}</dt>
+                  <dd className="text-right text-foreground-secondary text-pretty">{formatScalar(item)}</dd>
+                </div>
+              ))}
+            </dl>
+          );
+        }
+        return <p className="text-sm text-foreground-secondary leading-relaxed text-pretty">{formatScalar(value)}</p>;
     }
   };
 
   return (
     <div className="bg-card-bg border border-card-border rounded-2xl p-4 md:p-5 hover:border-foreground-muted/20 transition-colors">
-      <span className="text-[11px] font-semibold text-foreground-muted uppercase tracking-wide flex items-center gap-1.5 mb-2">
-        {Icon && <Icon size={12} />}
+      <span className="text-[11px] font-semibold text-foreground-muted flex items-center gap-1.5 mb-2">
+        <Icon size={12} />
         {field.label}
       </span>
       {renderValue()}

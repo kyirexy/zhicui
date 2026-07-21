@@ -30,6 +30,7 @@ export interface CardData {
   source_url?: string;
   video_url?: string;
   created_at?: string;
+  seo_meta?: string;
   transcript_raw?: string | null;
   video_title?: string;
   video_id?: string;
@@ -52,8 +53,10 @@ export interface Note {
   excerpt: string;
   created_at: string;
   source_url?: string;
+  seo_meta?: string;
   tone?: ContentTone;
   density?: ContentDensity;
+  section_count?: number;
 }
 
 export interface NoteDetail extends Note {
@@ -81,6 +84,40 @@ export interface ApiResponse<T> {
   error?: string;
 }
 
+export type NoteChatRole = 'user' | 'assistant';
+
+export interface NoteChatTurn {
+  role: NoteChatRole;
+  content: string;
+}
+
+export type NoteEvidenceSource = 'transcript' | 'summary';
+
+export interface NoteEvidence {
+  quote: string;
+  source: NoteEvidenceSource;
+  position_percent?: number;
+}
+
+export type NoteTranscriptMode = 'full' | 'retrieved' | 'none';
+
+export interface NoteSourceContext {
+  transcript_chars: number;
+  transcript_mode: NoteTranscriptMode;
+  scanned_chunks: number;
+  selected_chunks: number;
+  ai_summary_used: boolean;
+}
+
+export interface NoteAskResult {
+  note_id: string;
+  answer: string;
+  grounded: boolean;
+  evidence: NoteEvidence[];
+  follow_up_questions: string[];
+  source_context?: NoteSourceContext | null;
+}
+
 export interface PaginatedResponse<T> {
   items: T[];
   total: number;
@@ -102,24 +139,34 @@ export const CARD_TYPE_CONFIG: Record<CardType, { emoji: string; label: string; 
 // Plan types
 // ============================================================================
 
+export type PlanPriority = 'low' | 'medium' | 'high';
+
 export interface PlanTask {
   id: string;
   title: string;
   done: boolean;
+  day?: number;
   scheduled_at?: string | null;
   reminder_at?: string | null;
+  duration_minutes?: number | null;
+  frequency?: string | null;
+  details?: PlanField[];
+  priority?: PlanPriority;
 }
 
 export interface PlanField {
   name: string;
   label: string;
-  type: 'text' | 'number' | 'date' | 'list' | 'checklist' | 'progress' | 'quote';
-  value?: any;
+  type: string;
+  value?: unknown;
+  group?: string;
 }
 
 export interface PlanDay {
   day: number;
   label: string;
+  date?: string | null;
+  focus?: string | null;
   tasks: PlanTask[];
 }
 
@@ -137,6 +184,25 @@ export interface PlanData {
   updated_at?: string;
 }
 
+export interface PlanFocusTask {
+  plan_id: string;
+  plan_title: string;
+  task_id: string;
+  title: string;
+  day?: number | null;
+  scheduled_at?: string | null;
+  duration_minutes?: number | null;
+  frequency?: string | null;
+  priority: PlanPriority;
+}
+
+export interface PlanOverview {
+  summary: PlanStats;
+  today: PlanFocusTask[];
+  overdue: PlanFocusTask[];
+  upcoming: PlanFocusTask[];
+}
+
 
 /** Day/progress helpers for PlanData. */
 export function getPlanCurrentDay(plan: PlanData): number {
@@ -147,17 +213,78 @@ export function getPlanCurrentDay(plan: PlanData): number {
   return Math.max(1, diffDays + 1);
 }
 
+export function getPlanTasks(plan: PlanData): PlanTask[] {
+  const dayTasks = plan.days?.flatMap(day =>
+    day.tasks.map(task => ({ ...task, day: task.day ?? day.day }))
+  ) ?? [];
+  return dayTasks.length > 0 ? dayTasks : plan.tasks ?? [];
+}
+
+export function getTaskPriority(task: PlanTask): PlanPriority {
+  return task.priority === 'high' || task.priority === 'low' ? task.priority : 'medium';
+}
+
+export function getChinaToday(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
+export function formatPlanSchedule(value?: string | null): string | null {
+  if (!value) return null;
+  const dateValue = value.slice(0, 10);
+  const timeValue = value.length >= 16 ? value.slice(11, 16) : '';
+  const dateLabel = dateValue === getChinaToday()
+    ? '今天'
+    : dateValue.slice(5).replace('-', '/');
+  return timeValue ? `${dateLabel} ${timeValue}` : dateLabel;
+}
+
+export function formatPlanDuration(value?: number | null): string | null {
+  if (!value || value < 1) return null;
+  if (value < 60) return `${value} 分钟`;
+  const hours = Math.floor(value / 60);
+  const minutes = value % 60;
+  return minutes ? `${hours} 小时 ${minutes} 分钟` : `${hours} 小时`;
+}
+
+export function formatPlanFieldValue(value: unknown): string {
+  if (Array.isArray(value)) return value.map(item => formatPlanFieldValue(item)).join('、');
+  if (value && typeof value === 'object') {
+    return Object.entries(value)
+      .map(([key, item]) => `${key}：${formatPlanFieldValue(item)}`)
+      .join('；');
+  }
+  if (typeof value === 'boolean') return value ? '是' : '否';
+  return value == null || value === '' ? '—' : String(value);
+}
+
 export function getPlanProgress(plan: PlanData): { done: number; total: number; pct: number } {
-  const all = plan.days?.flatMap(d => d.tasks) || plan.tasks || [];
+  const all = getPlanTasks(plan);
   const total = all.length;
   const done = all.filter(t => t.done).length;
   return { done, total, pct: total > 0 ? Math.round((done / total) * 100) : 0 };
 }
 
 export function getTodayTasks(plan: PlanData): PlanTask[] {
-  const today = new Date().toISOString().slice(0, 10);
-  const all = plan.days?.flatMap(d => d.tasks) || plan.tasks || [];
-  return all.filter(t => !t.done && t.scheduled_at?.startsWith(today));
+  const today = getChinaToday();
+  const currentDay = getPlanCurrentDay(plan);
+  return getPlanTasks(plan).filter(task =>
+    !task.done && (
+      task.scheduled_at?.startsWith(today)
+      || (!task.scheduled_at && task.day === currentDay)
+    )
+  );
+}
+
+export function getOverdueTasks(plan: PlanData): PlanTask[] {
+  const today = getChinaToday();
+  return getPlanTasks(plan).filter(task =>
+    !task.done && !!task.scheduled_at && task.scheduled_at.slice(0, 10) < today
+  );
 }
 
 /**
@@ -169,7 +296,10 @@ export function getTodayDayTasks(plan: PlanData): PlanTask[] {
   const currentDay = getPlanCurrentDay(plan);
   const todayDay = plan.days?.find(d => d.day === currentDay);
   if (!todayDay) return [];
-  return todayDay.tasks.filter(t => !t.done);
+  const today = getChinaToday();
+  return todayDay.tasks.filter(task =>
+    !task.done && (!task.scheduled_at || task.scheduled_at.startsWith(today))
+  );
 }
 
 /** The PlanDay object for the plan's current day, or null if it doesn't exist. */
@@ -178,8 +308,10 @@ export function getTodayDay(plan: PlanData): PlanDay | null {
   return plan.days?.find(d => d.day === currentDay) ?? null;
 }
 export interface PlanStats {
+  active_plans: number;
   open_tasks: number;
   due_today: number;
+  overdue_tasks: number;
 }
 
 // ============================================================================
@@ -187,7 +319,16 @@ export interface PlanStats {
 // ============================================================================
 
 /** Card display style presets */
-export type CardStyle = 'hero' | 'minimal' | 'standard' | 'creative' | 'magazine' | 'compact';
+export type CardStyle =
+  | 'hero'
+  | 'minimal'
+  | 'standard'
+  | 'creative'
+  | 'magazine'
+  | 'compact'
+  | 'aurora'
+  | 'blueprint'
+  | 'paper';
 
 /** Information density levels */
 export type DensityLevel = 'low' | 'medium' | 'high';
@@ -226,12 +367,15 @@ export const CARD_STYLE_CONFIG: Record<CardStyle, CardStyleMeta> = {
   creative: { key: 'creative', label: '创意',  description: '霓虹脉冲·3D视差·贝塞尔粒子',   icon: '🎨' },
   magazine: { key: 'magazine', label: '杂志',  description: '双栏滑入·弹性引号·翻页节奏',   icon: '📰' },
   compact:  { key: 'compact',  label: '列表',  description: '弹性折叠·GSAP手风琴·交错展开',  icon: '📋' },
+  aurora:   { key: 'aurora',   label: '流光',  description: '极光幕布·悬浮层次·柔和呼吸',     icon: '≈' },
+  blueprint:{ key: 'blueprint',label: '蓝图',  description: '技术网格·编号路径·扫描线',         icon: '⌗' },
+  paper:    { key: 'paper',    label: '纸感',  description: '暖白纸张·墨色层级·边注排版',       icon: '✎' },
 };
 
 export const DENSITY_CONFIG: Record<DensityLevel, { label: string; description: string }> = {
   low:    { label: '简要', description: '仅展示结论与评分' },
   medium: { label: '标准', description: '章节、结论与评分' },
-  high:   { label: '详细', description: '含完整转录原文' },
+  high:   { label: '详细', description: '展示全部章节与补充信息' },
 };
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {

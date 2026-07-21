@@ -155,7 +155,7 @@ export default function HomePage() {
 
       {/* Card display */}
       {cardData && (
-        <section className="relative z-10 w-full max-w-2xl mx-auto">
+        <section className="relative z-10 w-full max-w-6xl mx-auto">
           <CardRenderer cardData={cardData} showExport={true} showToolbar={true} noteId={cardData.id} />
           {cardData.card_type === 'plan' && cardData.plan_id && (
             <div className="mt-5 animate-fade-in">

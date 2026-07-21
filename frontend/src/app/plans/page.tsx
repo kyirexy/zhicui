@@ -1,14 +1,26 @@
 'use client';
 
-import { useEffect, useState, Suspense } from 'react';
+import { useCallback, useEffect, useState, Suspense } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { ArrowLeft, Calendar, CheckSquare, Target, CalendarDays, Trash2, Check, Loader2, Sun } from 'lucide-react';
-import { listPlans, getPlan, deletePlan, togglePlanTask } from '@/lib/api';
+import { ArrowLeft, Calendar, CheckSquare, Target, CalendarDays, Trash2, Check, Loader2, Sun, Pencil, RotateCcw } from 'lucide-react';
+import { ListChecks } from '@phosphor-icons/react';
+import { listPlans, getPlan, getPlanOverview, deletePlan, togglePlanTask, updatePlan } from '@/lib/api';
 import { useRouter } from 'next/navigation';
-import type { PlanData, PlanDay } from '@/lib/types';
-import { getPlanCurrentDay, getPlanProgress, getTodayTasks, getTodayDayTasks, getTodayDay } from '@/lib/types';
+import type { PlanData, PlanDay, PlanField, PlanOverview } from '@/lib/types';
+import {
+  formatPlanDuration,
+  formatPlanFieldValue,
+  formatPlanSchedule,
+  getOverdueTasks,
+  getPlanCurrentDay,
+  getPlanProgress,
+  getTodayTasks,
+  getTodayDayTasks,
+  getTodayDay,
+} from '@/lib/types';
 import PlanCard from '@/components/PlanCard';
+import PlanExecutionOverview from '@/components/PlanExecutionOverview';
 import PlanTaskList from '@/components/PlanTaskList';
 import PlanDynamicField from '@/components/PlanDynamicField';
 
@@ -16,6 +28,15 @@ function PlansContent() {
   const searchParams = useSearchParams();
   const planId = searchParams.get('id');
   return planId ? <PlanDetail id={planId} /> : <PlanList />;
+}
+
+function groupPlanFields(fields: PlanField[]): { label: string; fields: PlanField[] }[] {
+  const groups = new Map<string, PlanField[]>();
+  for (const field of fields) {
+    const group = field.group?.trim() || '计划信息';
+    groups.set(group, [...(groups.get(group) ?? []), field]);
+  }
+  return Array.from(groups, ([label, groupedFields]) => ({ label, fields: groupedFields }));
 }
 
 /* ------------------------------------------------------------------ */
@@ -27,21 +48,27 @@ function PlanList() {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
-  const [filter, setFilter] = useState<'all' | 'today'>('all');
+  const [overview, setOverview] = useState<PlanOverview | null>(null);
+  const [filter, setFilter] = useState<'all' | 'today' | 'overdue' | 'done'>('all');
 
-  const load = (p: number) => {
+  const load = useCallback(async (p: number) => {
     setLoading(true);
-    listPlans(p).then((res) => {
-      if (res.success && res.data) {
-        setPlans(res.data.items);
-        setTotalPages(res.data.total_pages);
-        setPage(res.data.page);
-      }
-      setLoading(false);
-    });
-  };
+    const [plansResponse, overviewResponse] = await Promise.all([
+      listPlans(p),
+      getPlanOverview(),
+    ]);
+    if (plansResponse.success && plansResponse.data) {
+      setPlans(plansResponse.data.items);
+      setTotalPages(plansResponse.data.total_pages);
+      setPage(plansResponse.data.page);
+    }
+    if (overviewResponse.success && overviewResponse.data) {
+      setOverview(overviewResponse.data);
+    }
+    setLoading(false);
+  }, []);
 
-  useEffect(() => { load(1); }, []);
+  useEffect(() => { void load(1); }, [load]);
 
   if (loading) {
     return (
@@ -53,25 +80,37 @@ function PlanList() {
     );
   }
 
-  const todayCount = plans.filter(p => getTodayDayTasks(p).length > 0).length;
-  const visiblePlans = filter === 'today' ? plans.filter(p => getTodayDayTasks(p).length > 0) : plans;
+  const todayCount = plans.filter(plan => getTodayTasks(plan).length > 0).length;
+  const overdueCount = plans.filter(plan => getOverdueTasks(plan).length > 0).length;
+  const doneCount = plans.filter(plan => plan.status === 'done').length;
+  const visiblePlans = plans.filter(plan => {
+    if (filter === 'today') return getTodayTasks(plan).length > 0;
+    if (filter === 'overdue') return getOverdueTasks(plan).length > 0;
+    if (filter === 'done') return plan.status === 'done';
+    return true;
+  });
 
   return (
     <div className="max-w-4xl mx-auto">
       <div className="mb-6 md:mb-8">
-        <h1 className="text-xl md:text-3xl font-bold text-foreground tracking-tight">
-          📋 我的计划
+        <h1 className="flex items-center gap-2.5 text-xl md:text-3xl font-bold text-foreground tracking-tight">
+          <ListChecks size={30} weight="duotone" className="text-accent-emerald" />
+          计划工作台
         </h1>
         <p className="text-foreground-muted text-sm mt-1">
-          AI 从计划类视频中自动提取的任务清单
+          把视频里的方法整理成每天真正能推进的行动
         </p>
       </div>
 
+      {overview && <PlanExecutionOverview overview={overview} />}
+
       {/* Filter tabs */}
       {plans.length > 0 && (
-        <div className="flex items-center gap-2 mb-5">
+        <div className="flex items-center gap-2 mb-5 overflow-x-auto pb-1">
           <FilterTab active={filter === 'all'} onClick={() => setFilter('all')} label="全部" count={plans.length} />
           <FilterTab active={filter === 'today'} onClick={() => setFilter('today')} label="今日到期" count={todayCount} highlight />
+          <FilterTab active={filter === 'overdue'} onClick={() => setFilter('overdue')} label="已逾期" count={overdueCount} highlight />
+          <FilterTab active={filter === 'done'} onClick={() => setFilter('done')} label="已完成" count={doneCount} />
         </div>
       )}
 
@@ -88,8 +127,10 @@ function PlanList() {
         </div>
       ) : visiblePlans.length === 0 ? (
         <div className="min-h-[30vh] flex flex-col items-center justify-center text-center px-4">
-          <p className="text-3xl mb-3">🎉</p>
-          <p className="text-foreground-secondary text-sm">今天没有到期的任务</p>
+          <CheckSquare size={32} className="text-accent-emerald mb-3" />
+          <p className="text-foreground-secondary text-sm">
+            {filter === 'today' ? '今天没有到期任务' : filter === 'overdue' ? '没有逾期任务' : '暂无已完成计划'}
+          </p>
           <button onClick={() => setFilter('all')} className="text-accent-emerald hover:underline text-sm mt-3">查看全部计划</button>
         </div>
       ) : (
@@ -133,7 +174,11 @@ function PlanDetail({ id }: { id: string }) {
   const [plan, setPlan] = useState<PlanData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [actionError, setActionError] = useState('');
   const [deleting, setDeleting] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [savingMetadata, setSavingMetadata] = useState(false);
   const [todayMutating, setTodayMutating] = useState<Set<string>>(new Set());
   const router = useRouter();
 
@@ -141,6 +186,7 @@ function PlanDetail({ id }: { id: string }) {
     getPlan(id).then((res) => {
       if (res.success && res.data) {
         setPlan(res.data);
+        setTitleDraft(res.data.title);
       } else {
         setError(res.error || '加载失败');
       }
@@ -148,9 +194,7 @@ function PlanDetail({ id }: { id: string }) {
     });
   }, [id]);
 
-  const handleMutate = (days: PlanDay[]) => {
-    if (plan) setPlan({ ...plan, days });
-  };
+  const handleMutate = (nextPlan: PlanData) => setPlan(nextPlan);
 
   // Quick-toggle from the "today" pinned card. Shares plan state with PlanTaskList.
   const handleTodayToggle = async (taskId: string) => {
@@ -161,9 +205,10 @@ function PlanDetail({ id }: { id: string }) {
     setTodayMutating(s => new Set(s).add(taskId));
     const res = await togglePlanTask(plan.id, taskId);
     if (res.success && res.data) {
-      setPlan({ ...plan, days: res.data.days || newDays });
+      setPlan(res.data);
     } else {
       setPlan({ ...plan, days: prev });
+      setActionError(res.error || '任务状态更新失败，请重试。');
     }
     setTodayMutating(s => { const n = new Set(s); n.delete(taskId); return n; });
   };
@@ -175,9 +220,42 @@ function PlanDetail({ id }: { id: string }) {
     if (res.success) {
       router.push('/plans');
     } else {
-      alert('删除失败: ' + (res.error || '未知错误'));
+      setActionError(res.error || '计划删除失败，请重试。');
       setDeleting(false);
     }
+  };
+
+  const saveTitle = async () => {
+    if (!plan || !titleDraft.trim() || titleDraft.trim() === plan.title) {
+      setEditingTitle(false);
+      setTitleDraft(plan?.title ?? '');
+      return;
+    }
+    setSavingMetadata(true);
+    setActionError('');
+    const response = await updatePlan(plan.id, { title: titleDraft.trim() });
+    if (response.success && response.data) {
+      setPlan(response.data);
+      setTitleDraft(response.data.title);
+      setEditingTitle(false);
+    } else {
+      setActionError(response.error || '计划标题保存失败，请重试。');
+    }
+    setSavingMetadata(false);
+  };
+
+  const togglePlanStatus = async () => {
+    if (!plan) return;
+    setSavingMetadata(true);
+    setActionError('');
+    const nextStatus = plan.status === 'done' ? 'active' : 'done';
+    const response = await updatePlan(plan.id, { status: nextStatus });
+    if (response.success && response.data) {
+      setPlan(response.data);
+    } else {
+      setActionError(response.error || '计划状态更新失败，请重试。');
+    }
+    setSavingMetadata(false);
   };
 
   if (loading) {
@@ -205,10 +283,17 @@ function PlanDetail({ id }: { id: string }) {
   const progress = getPlanProgress(plan);
   const currentDay = getPlanCurrentDay(plan);
   const todayTasks = getTodayTasks(plan);
-  const days = plan.days || [];
+  // Fallback: if the LLM returned a flat tasks array (no day structure),
+  // synthesize a single-day PlanDay so PlanTaskList can render them.
+  const days: PlanDay[] = plan.days?.length
+    ? plan.days
+    : plan.tasks?.length
+      ? [{ day: 1, label: '第1天', tasks: plan.tasks }]
+      : [];
+  const fieldGroups = groupPlanFields(plan.fields ?? []);
 
   return (
-    <div className="max-w-2xl mx-auto pb-24">
+    <div className="max-w-5xl mx-auto pb-24">
       <div className="mb-6 flex items-center justify-between">
         <Link href="/plans"
           className="inline-flex items-center gap-1.5 text-foreground-secondary hover:text-foreground transition-colors text-sm px-3 py-2.5 rounded-lg hover:bg-white/5 min-h-[44px]">
@@ -224,7 +309,51 @@ function PlanDetail({ id }: { id: string }) {
 
       {/* Header with key metrics */}
       <div className="mb-8">
-        <h1 className="text-xl md:text-2xl font-bold text-foreground leading-snug text-balance">{plan.title}</h1>
+        <div className="plan-title-row">
+          {editingTitle ? (
+            <form
+              className="plan-title-editor"
+              onSubmit={event => {
+                event.preventDefault();
+                void saveTitle();
+              }}
+            >
+              <input
+                value={titleDraft}
+                onChange={event => setTitleDraft(event.target.value)}
+                maxLength={256}
+                autoFocus
+                aria-label="计划标题"
+              />
+              <button type="submit" disabled={savingMetadata || !titleDraft.trim()} className="plan-primary-button">
+                {savingMetadata ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />}
+                保存
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setTitleDraft(plan.title);
+                  setEditingTitle(false);
+                }}
+                className="plan-secondary-button"
+              >
+                取消
+              </button>
+            </form>
+          ) : (
+            <>
+              <h1 className="text-xl md:text-2xl font-bold text-foreground leading-snug text-balance">{plan.title}</h1>
+              <button
+                type="button"
+                onClick={() => setEditingTitle(true)}
+                className="plan-icon-button"
+                aria-label="修改计划标题"
+              >
+                <Pencil size={15} />
+              </button>
+            </>
+          )}
+        </div>
         <div className="flex flex-wrap items-center gap-3 mt-3">
           <span className="inline-flex items-center gap-1 text-sm text-foreground-muted">
             <CalendarDays size={14} className="text-accent-emerald" />
@@ -240,6 +369,7 @@ function PlanDetail({ id }: { id: string }) {
             </span>
           )}
         </div>
+        {actionError && <p className="plan-inline-error mt-3" role="alert">{actionError}</p>}
       </div>
 
       {/* 2-column layout (desktop) */}
@@ -247,25 +377,54 @@ function PlanDetail({ id }: { id: string }) {
         <section className="flex-1 lg:flex-[2] min-w-0">
           {/* Today pinned card — surfaces the current day's todos at the top. */}
           <TodayCard plan={plan} onToggle={handleTodayToggle} mutatingIds={todayMutating} />
-          <PlanTaskList planId={plan.id} days={days} currentDay={currentDay} onMutate={handleMutate} />
+          <PlanTaskList plan={plan} onMutate={handleMutate} />
         </section>
 
         {/* Right: meta + dynamic fields (narrower sidebar on desktop) */}
         <aside className="lg:flex-[1] lg:min-w-[240px]">
           <div className="space-y-4 lg:sticky lg:top-24">
             {/* Status badge */}
-            <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-card-bg border border-card-border">
-              <Target size={13} className="text-accent-emerald" />
-              <span className="text-sm text-foreground-secondary">
-                {plan.status === 'done' ? '已完成' : plan.status === 'draft' ? '草稿' : '进行中'}
-              </span>
+            <div className="plan-status-panel">
+              <div>
+                <Target size={15} className="text-accent-emerald" />
+                <span>
+                  <strong>{plan.status === 'done' ? '计划已完成' : '计划进行中'}</strong>
+                  <small>{plan.status === 'done' ? '需要时可以重新开启' : '所有任务完成后会自动归档'}</small>
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => void togglePlanStatus()}
+                disabled={savingMetadata}
+                className={plan.status === 'done' ? 'plan-secondary-button' : 'plan-primary-button'}
+              >
+                {savingMetadata
+                  ? <Loader2 size={14} className="animate-spin" />
+                  : plan.status === 'done'
+                    ? <RotateCcw size={14} />
+                    : <Check size={14} />}
+                {plan.status === 'done' ? '重新开启' : '标记完成'}
+              </button>
             </div>
 
             {/* Dynamic fields */}
-            {plan.fields.length > 0 && (
-              <div className="space-y-3">
-                {plan.fields.map((f, i) => (
-                  <PlanDynamicField key={i} field={f} />
+            {fieldGroups.length > 0 && (
+              <div className="plan-field-groups">
+                {fieldGroups.map(group => (
+                  <section key={group.label} className="plan-field-group">
+                    <header>
+                      <h2 className="text-balance">{group.label}</h2>
+                      <span className="tabular-nums">{group.fields.length} 项</span>
+                    </header>
+                    <div className="space-y-3">
+                      {group.fields.map((field, index) => (
+                        <PlanDynamicField
+                          key={`${field.name}-${index}`}
+                          field={field}
+                        />
+                      ))}
+                    </div>
+                  </section>
                 ))}
               </div>
             )}
@@ -370,6 +529,14 @@ function TodayCard({ plan, onToggle, mutatingIds }: {
         <div className="space-y-1">
           {tasks.map(t => {
             const busy = mutatingIds.has(t.id);
+            const taskMeta = [
+              formatPlanSchedule(t.scheduled_at),
+              formatPlanDuration(t.duration_minutes),
+              t.frequency,
+              ...(t.details?.slice(0, 2).map(detail => (
+                `${detail.label} ${formatPlanFieldValue(detail.value)}`
+              )) ?? []),
+            ].filter(Boolean).join(' · ');
             return (
               <button key={t.id} type="button" onClick={() => onToggle(t.id)} disabled={busy}
                 className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl bg-card-bg/50 hover:bg-card-bg transition-colors text-left min-h-[48px] disabled:opacity-60">
@@ -378,7 +545,14 @@ function TodayCard({ plan, onToggle, mutatingIds }: {
                 }`}>
                   {busy ? <Loader2 size={12} className="animate-spin text-accent-emerald" /> : t.done ? <Check size={12} className="text-white" strokeWidth={3} /> : null}
                 </span>
-                <span className={`flex-1 min-w-0 text-sm ${t.done ? 'line-through text-foreground-muted' : 'text-foreground'}`}>{t.title}</span>
+                <span className="flex-1 min-w-0">
+                  <span className={`block text-sm ${t.done ? 'line-through text-foreground-muted' : 'text-foreground'}`}>{t.title}</span>
+                  {taskMeta && (
+                    <small className="mt-0.5 block truncate text-[11px] text-foreground-muted">
+                      {taskMeta}
+                    </small>
+                  )}
+                </span>
               </button>
             );
           })}

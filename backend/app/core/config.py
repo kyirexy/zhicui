@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # JWT signing key — must be set in production.
     JWT_SECRET: str = ""
 
+    # Local development convenience. Disabled unless an explicit local
+    # launcher enables it; production uvicorn/systemd starts never opt in.
+    DEV_AUTH_BYPASS: bool = False
+
     # Fernet key for encrypting secrets stored in the DB (admin-configured
     # LLM/ASR API keys). Generate with:
     #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"

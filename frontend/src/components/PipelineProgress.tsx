@@ -2,26 +2,25 @@
 
 import { Check, Loader2, AlertCircle, Circle } from 'lucide-react';
 
-export interface StepState {
-  key: string;
-  label: string;
-  message: string;
-  status: 'pending' | 'active' | 'done' | 'error';
-}
+import type { StepState } from '@/lib/hooks/ExtractionContext';
 
-const STEPS: { key: string; label: string }[] = [
-  { key: 'parse', label: '解析视频' },
-  { key: 'transcribe', label: '提取文案' },
-  { key: 'ai', label: 'AI 榨汁' },
-  { key: 'save', label: '保存笔记' },
-];
+function formatElapsed(ms: number | undefined): string {
+  if (ms === undefined) return '';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  return `${m}m${rs}s`;
+}
 
 interface PipelineProgressProps {
   steps: StepState[];
 }
 
 export default function PipelineProgress({ steps }: PipelineProgressProps) {
-  const stepMap = new Map(steps.map((s) => [s.key, s]));
+  // Filter out internal steps like error that aren't part of normal flow timeline
+  // 'done' will already be marked on individual steps.
+  const displaySteps = steps.filter((step) => step.key !== 'error');
 
   return (
     <div className="w-full max-w-md mx-auto animate-fade-in">
@@ -38,11 +37,11 @@ export default function PipelineProgress({ steps }: PipelineProgressProps) {
 
       {/* Timeline */}
       <div className="relative">
-        {STEPS.map((step, i) => {
-          const state = stepMap.get(step.key);
-          const status = state?.status || 'pending';
-          const message = state?.message || '';
-          const isLast = i === STEPS.length - 1;
+        {displaySteps.map((step, i) => {
+          const status = step.status;
+          const message = step.message;
+          const isLast = i === displaySteps.length - 1;
+          const showLogs = (status === 'active' || step.key === 'transcribe') && step.logs?.length > 1;
 
           return (
             <div key={step.key} className="relative flex gap-4 pb-5 last:pb-0">
@@ -101,7 +100,7 @@ export default function PipelineProgress({ steps }: PipelineProgressProps) {
                 >
                   {step.label}
                 </p>
-                {message && (
+                {message && !showLogs && (
                   <p
                     className={`text-xs mt-0.5 leading-relaxed transition-colors duration-300 ${
                       status === 'error'
@@ -111,6 +110,20 @@ export default function PipelineProgress({ steps }: PipelineProgressProps) {
                   >
                     {message}
                   </p>
+                )}
+                {showLogs && (
+                  <ul className="mt-1.5 space-y-1.5">
+                    {step.logs.slice(-5).map((log, logIdx) => (
+                      <li key={logIdx} className={`text-[11px] leading-relaxed transition-colors duration-300 ${
+                        log.level === 'warning' ? 'text-amber-500/80' :
+                        log.status === 'error' ? 'text-accent-rose/80' :
+                        'text-foreground-muted/80'
+                      }`}>
+                        {log.elapsedMs !== undefined && <span className="opacity-70 mr-1.5 inline-block w-8 font-mono">{formatElapsed(log.elapsedMs)}</span>}
+                        {log.message}
+                      </li>
+                    ))}
+                  </ul>
                 )}
               </div>
             </div>

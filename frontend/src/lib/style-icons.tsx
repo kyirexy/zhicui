@@ -1,13 +1,42 @@
-import { Sparkles, Minus, Layout, Wand2, Columns3, List } from 'lucide-react';
+import {
+  Circuitry,
+  Columns,
+  GridFour,
+  ListBullets,
+  MagicWand,
+  Minus,
+  Notebook,
+  Sparkle,
+  WaveSine,
+  type Icon,
+} from '@phosphor-icons/react';
 import type { CardStyle } from './types';
 
-/** Lucide SVG icons mapped to each card style preset.
-    Used by the style picker, toolbar, and bottom sheet. */
-export const STYLE_ICONS: Record<CardStyle, React.ReactNode> = {
-  hero:     <Sparkles size={20} strokeWidth={1.8} />,
-  minimal:  <Minus size={20} strokeWidth={1.8} />,
-  standard: <Layout size={20} strokeWidth={1.8} />,
-  creative: <Wand2 size={20} strokeWidth={1.8} />,
-  magazine: <Columns3 size={20} strokeWidth={1.8} />,
-  compact:  <List size={20} strokeWidth={1.8} />,
+const STYLE_ICON_COMPONENTS: Record<CardStyle, Icon> = {
+  hero: Sparkle,
+  minimal: Minus,
+  standard: GridFour,
+  creative: MagicWand,
+  magazine: Columns,
+  compact: ListBullets,
+  aurora: WaveSine,
+  blueprint: Circuitry,
+  paper: Notebook,
 };
+
+interface StyleIconProps {
+  style: CardStyle;
+  active?: boolean;
+  size?: number;
+  className?: string;
+}
+
+/** Consistent duotone icon treatment shared by all style selectors. */
+export function StyleIcon({ style, active = false, size = 20, className = '' }: StyleIconProps) {
+  const IconComponent = STYLE_ICON_COMPONENTS[style];
+  return (
+    <span className={`style-icon ${active ? 'is-active' : ''} ${className}`} aria-hidden>
+      <IconComponent size={size} weight={active ? 'fill' : 'duotone'} />
+    </span>
+  );
+}

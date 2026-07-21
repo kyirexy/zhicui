@@ -1,9 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { Calendar, CheckSquare, TrendingUp, Layers } from 'lucide-react';
+import { AlertCircle, Calendar, CheckSquare, TrendingUp, Layers } from 'lucide-react';
 import type { PlanData } from '@/lib/types';
-import { getPlanCurrentDay, getPlanProgress, getTodayTasks } from '@/lib/types';
+import { getOverdueTasks, getPlanCurrentDay, getPlanProgress, getTodayTasks } from '@/lib/types';
 
 interface PlanCardProps {
   plan: PlanData;
@@ -14,6 +14,7 @@ export default function PlanCard({ plan }: PlanCardProps) {
   const currentDay = getPlanCurrentDay(plan);
   const totalDays = plan.total_days || plan.days?.length || 0;
   const todayTasks = getTodayTasks(plan);
+  const overdueTasks = getOverdueTasks(plan);
 
   // Count completed days (days where ALL tasks are done)
   const completedDays = plan.days?.filter(d => d.tasks.length > 0 && d.tasks.every(t => t.done)).length || 0;
@@ -22,16 +23,10 @@ export default function PlanCard({ plan }: PlanCardProps) {
   return (
     <Link
       href={`/plans?id=${plan.id}`}
-      className={`glass-card p-4 md:p-5 group hover:scale-[1.02] transition-all duration-200 cursor-pointer block text-foreground no-underline relative overflow-hidden ${
+      className={`glass-card plan-card p-4 md:p-5 group cursor-pointer block text-foreground no-underline relative overflow-hidden ${
         isComplete ? 'border-accent-emerald/40 ring-1 ring-accent-emerald/20' : ''
       }`}
     >
-      {/* Completion glow */}
-      {isComplete && (
-        <div className="absolute inset-0 pointer-events-none opacity-60"
-          style={{ background: 'radial-gradient(circle at 80% 0%, rgba(16,185,129,0.16), transparent 55%)' }}
-          aria-hidden="true" />
-      )}
       <div className="flex items-start justify-between gap-2 mb-3 relative">
         <h3 className="text-sm md:text-base font-semibold text-foreground line-clamp-2 text-balance leading-snug">
           {plan.title}
@@ -48,7 +43,7 @@ export default function PlanCard({ plan }: PlanCardProps) {
         <div className="flex items-center justify-between text-xs text-foreground-muted">
           <span className="flex items-center gap-1">
             <Calendar size={11} />
-            第 {currentDay}/{totalDays} 天
+            {totalDays > 0 ? `第 ${Math.min(currentDay, totalDays)}/${totalDays} 天` : '未设周期'}
           </span>
           <span className="flex items-center gap-1">
             <CheckSquare size={11} />
@@ -59,11 +54,8 @@ export default function PlanCard({ plan }: PlanCardProps) {
         {/* Progress bar */}
         <div className="h-1.5 rounded-full bg-card-bg overflow-hidden">
           <div
-            className="h-full rounded-full transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)]"
-            style={{
-              width: `${pct}%`,
-              background: 'linear-gradient(90deg, var(--accent-emerald), var(--accent-indigo, #6366f1))',
-            }}
+            className="h-full rounded-full bg-accent-emerald transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)]"
+            style={{ width: `${pct}%` }}
           />
         </div>
 
@@ -94,8 +86,12 @@ export default function PlanCard({ plan }: PlanCardProps) {
           <TrendingUp size={11} />
           {completedDays > 0 ? (
             <span className="text-accent-emerald font-medium">已完成 {completedDays} 天</span>
+          ) : overdueTasks.length > 0 ? (
+            <span className="flex items-center gap-1 text-accent-rose font-medium">
+              <AlertCircle size={10} />{overdueTasks.length} 项已逾期
+            </span>
           ) : todayTasks.length > 0 ? (
-            <span className="text-accent-emerald font-medium">{todayTasks.length} 项今日到期</span>
+            <span className="text-accent-emerald font-medium">{todayTasks.length} 项今日聚焦</span>
           ) : (
             <span className="flex items-center gap-1"><Layers size={10} />{plan.days?.length || 0} 天 · {total} 项任务</span>
           )}

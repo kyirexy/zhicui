@@ -19,5 +19,15 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     }
   }, [user, loading, pathname, router]);
 
+  if (!PUBLIC.includes(pathname) && (loading || !user)) {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center" role="status" aria-live="polite">
+        <p className="text-pretty text-sm text-foreground-muted">
+          {loading ? '正在恢复开发会话…' : '正在前往登录页…'}
+        </p>
+      </div>
+    );
+  }
+
   return <>{children}</>;
 }

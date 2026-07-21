@@ -5,8 +5,9 @@ API route definitions for VideoCapsule.
 from __future__ import annotations
 
 import json
+import time
 import traceback
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import unquote
 
 import requests as http_requests
@@ -47,6 +48,16 @@ class ExtractRequest(BaseModel):
     url: str = Field(..., min_length=1, description="Douyin share link or text containing one")
 
 
+class NoteChatHistoryItem(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=1000)
+
+
+class NoteAskRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=600)
+    history: list[NoteChatHistoryItem] = Field(default_factory=list, max_length=6)
+
+
 # ---------------------------------------------------------------------------
 # Auth schemas
 # ---------------------------------------------------------------------------
@@ -74,6 +85,43 @@ def _err(msg: str) -> dict:
     return {"success": False, "data": None, "error": msg}
 
 
+def _save_generated_note(
+    db: Session,
+    video_info: dict[str, Any],
+    transcript: str,
+    ai_result: dict[str, Any],
+    user_id: str,
+) -> tuple[dict[str, Any], bool]:
+    """Persist one generated note and its optional plan in a single code path."""
+    note = note_service.create_note(
+        db,
+        video_info,
+        transcript,
+        ai_result,
+        user_id,
+    )
+
+    plan_id: str | None = None
+    plan = ai_result.get("plan")
+    if isinstance(plan, dict) and plan.get("tasks"):
+        fields, tasks, total_days = ai_juicer.plan_to_storage(plan)
+        plan_obj = plan_service.create_plan(
+            db=db,
+            note_id=note.id,
+            title=plan.get("goal") or note.video_title,
+            user_id=user_id,
+            fields=fields,
+            tasks=tasks,
+            total_days=total_days,
+            days=plan.get("days") or [],
+        )
+        plan_id = plan_obj.id
+
+    result = note.to_dict()
+    result["plan_id"] = plan_id
+    return result, plan_id is not None
+
+
 # ---------------------------------------------------------------------------
 # Content type display labels (for progress messages)
 # ---------------------------------------------------------------------------
@@ -85,6 +133,14 @@ _TYPE_LABELS: dict[str, str] = {
     "product": "产品",
     "plan": "计划",
     "general": "通用知识",
+}
+
+_PLATFORM_LABELS: dict[str, str] = {
+    "douyin": "抖音",
+    "bilibili": "B站",
+    "wechat": "微信公众号",
+    "xiaohongshu": "小红书",
+    "unknown": "未知平台",
 }
 
 
@@ -116,6 +172,21 @@ def auth_login(body: LoginRequest, db: Session = Depends(get_db)) -> dict:
     token, user, error = auth_service.login(db, body.email, body.password)
     if error:
         return _err(error)
+    return _ok({"token": token, "user": user.to_dict()})
+
+
+@router.post("/api/auth/dev-session", include_in_schema=False)
+def auth_dev_session(request: Request, db: Session = Depends(get_db)) -> dict:
+    """Issue a normal JWT only for explicitly enabled loopback development."""
+    if not settings.DEV_AUTH_BYPASS:
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    client_host = request.client.host if request.client else ""
+    if client_host not in {"127.0.0.1", "::1", "testclient"}:
+        raise HTTPException(status_code=403, detail="开发会话仅允许本机访问")
+
+    user = auth_service.get_or_create_dev_user(db)
+    token = auth_service.create_access_token(user.id, user.email)
     return _ok({"token": token, "user": user.to_dict()})
 
 
@@ -183,29 +254,9 @@ def extract(
             if plan_data:
                 ai_result["plan"] = plan_data
 
-            # Save to database
-            note = note_service.create_note(db, video_info, transcript, ai_result, current_user.id)
-
-            # Auto-create plan
-            plan_id: str | None = None
-            plan = ai_result.get("plan")
-            if isinstance(plan, dict) and plan.get("tasks"):
-                fields, tasks, total_days = ai_juicer.plan_to_storage(plan)
-                days_data = plan.get("days") or []
-                plan_obj = plan_service.create_plan(
-                    db=db,
-                    note_id=note.id,
-                    title=plan.get("goal") or note.video_title,
-                    user_id=current_user.id,
-                    fields=fields,
-                    tasks=tasks,
-                    total_days=total_days,
-                    days=days_data,
-                )
-                plan_id = plan_obj.id
-
-            result = note.to_dict()
-            result["plan_id"] = plan_id
+            result, _ = _save_generated_note(
+                db, video_info, transcript, ai_result, current_user.id,
+            )
             return _ok(result)
 
         # ── WeChat path: article content IS the transcript ──────────────
@@ -239,29 +290,9 @@ def extract(
             if plan_data:
                 ai_result["plan"] = plan_data
 
-            # Save to database
-            note = note_service.create_note(db, video_info, transcript, ai_result, current_user.id)
-
-            # Auto-create plan
-            plan_id: str | None = None
-            plan = ai_result.get("plan")
-            if isinstance(plan, dict) and plan.get("tasks"):
-                fields, tasks, total_days = ai_juicer.plan_to_storage(plan)
-                days_data = plan.get("days") or []
-                plan_obj = plan_service.create_plan(
-                    db=db,
-                    note_id=note.id,
-                    title=plan.get("goal") or note.video_title,
-                    user_id=current_user.id,
-                    fields=fields,
-                    tasks=tasks,
-                    total_days=total_days,
-                    days=days_data,
-                )
-                plan_id = plan_obj.id
-
-            result = note.to_dict()
-            result["plan_id"] = plan_id
+            result, _ = _save_generated_note(
+                db, video_info, transcript, ai_result, current_user.id,
+            )
             return _ok(result)
 
         # ── Video path (Douyin / Bilibili) ──────────────────────────────
@@ -332,29 +363,9 @@ def extract(
             if plan_data:
                 ai_result["plan"] = plan_data
 
-        # 4. Save to database
-        note = note_service.create_note(db, video_info, transcript, ai_result, current_user.id)
-
-        # 5. Auto-create plan
-        plan_id: str | None = None
-        plan = ai_result.get("plan")
-        if isinstance(plan, dict) and plan.get("tasks"):
-            fields, tasks, total_days = ai_juicer.plan_to_storage(plan)
-            days_data = plan.get("days") or []
-            plan_obj = plan_service.create_plan(
-                db=db,
-                note_id=note.id,
-                title=plan.get("goal") or note.video_title,
-                user_id=current_user.id,
-                fields=fields,
-                tasks=tasks,
-                total_days=total_days,
-                days=days_data,
-            )
-            plan_id = plan_obj.id
-
-        result = note.to_dict()
-        result["plan_id"] = plan_id
+        result, _ = _save_generated_note(
+            db, video_info, transcript, ai_result, current_user.id,
+        )
         return _ok(result)
 
     except NotImplementedError as exc:
@@ -387,8 +398,26 @@ def extract_stream(
         return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     def _generate():
+        started_at = time.monotonic()
+
+        def _progress(
+            step: str,
+            message: str,
+            status: str = "active",
+            data: dict[str, Any] | None = None,
+        ) -> str:
+            event_data: dict[str, Any] = {**(data or {})}
+            event_data.setdefault("elapsed_ms", int((time.monotonic() - started_at) * 1000))
+            return _event(step, message, status, event_data)
+
         try:
             platform = _detect_platform(url)
+            yield _progress(
+                "parse",
+                f"已识别平台：{_PLATFORM_LABELS.get(platform, platform)}",
+                "active",
+                {"phase": "platform_detected", "platform": platform},
+            )
 
             # ═══ WeChat path: article content IS the transcript ═══════════
             if platform == "wechat":
@@ -439,99 +468,218 @@ def extract_stream(
 
                 # Save to database
                 yield _event("save", "正在保存笔记...", "active")
-                note = note_service.create_note(db, video_info, transcript, ai_result, current_user.id)
+                result, plan_created = _save_generated_note(
+                    db, video_info, transcript, ai_result, current_user.id,
+                )
                 yield _event("save", "保存成功", "done")
 
-                # Auto-create plan
-                plan_id: str | None = None
-                plan = ai_result.get("plan")
-                if isinstance(plan, dict) and plan.get("tasks"):
-                    fields, tasks, total_days = ai_juicer.plan_to_storage(plan)
-                    days_data = plan.get("days") or []
-                    plan_obj = plan_service.create_plan(
-                        db=db,
-                        note_id=note.id,
-                        title=plan.get("goal") or note.video_title,
-                        user_id=current_user.id,
-                        fields=fields,
-                        tasks=tasks,
-                        total_days=total_days,
-                        days=days_data,
-                    )
-                    plan_id = plan_obj.id
+                if plan_created:
                     yield _event("plan", "已为文章中的计划自动建立任务清单", "done")
 
-                result = note.to_dict()
-                result["plan_id"] = plan_id
                 yield _event("done", "提取完成", "done", result)
                 return
 
             # ═══ Video path (Douyin / Bilibili) ════════════════════════════
             # Step 1: Parse video metadata
-            yield _event("parse", "正在解析视频链接...", "active")
+            yield _progress(
+                "parse",
+                "正在解析视频链接...",
+                "active",
+                {"phase": "parse_start", "platform": platform},
+            )
             try:
                 video_info = video_extractor.parse_video_info(url)
-                yield _event("parse", f"解析完成：{video_info.get('title', '未知标题')}", "done")
+                yield _progress(
+                    "parse",
+                    f"解析完成：{video_info.get('title', '未知标题')}",
+                    "done",
+                    {"phase": "parse_done", "platform": platform},
+                )
             except NotImplementedError as exc:
-                yield _event("parse", f"解析失败: {exc}", "error")
-                yield _event("error", str(exc), "error")
+                yield _progress("parse", f"解析失败: {exc}", "error", {"phase": "parse_error", "platform": platform})
+                yield _progress("error", str(exc), "error", {"phase": "fatal_error", "platform": platform})
                 return
             except Exception as exc:
                 traceback.print_exc()
-                yield _event("parse", f"解析失败: {exc}", "error")
-                yield _event("error", str(exc), "error")
+                yield _progress("parse", f"解析失败: {exc}", "error", {"phase": "parse_error", "platform": platform})
+                yield _progress("error", str(exc), "error", {"phase": "fatal_error", "platform": platform})
                 return
 
             # Step 2: Extract transcript
-            yield _event("transcribe", "正在提取视频文案...", "active")
+            yield _progress(
+                "transcribe",
+                "正在准备语音识别配置...",
+                "active",
+                {"phase": "asr_prepare", "platform": platform},
+            )
             transcript: str | None = None
 
             asr_cfg = settings_service.get_asr_config(db)
+            remote_asr_started = time.monotonic()
             if asr_cfg["api_key"]:
                 try:
+                    yield _progress(
+                        "transcribe",
+                        f"正在使用云端 ASR（{asr_cfg['model']}）识别音频，长视频可能需要数分钟...",
+                        "active",
+                        {
+                            "phase": "remote_asr_start",
+                            "platform": platform,
+                            "provider": "siliconflow",
+                            "model": asr_cfg["model"],
+                        },
+                    )
                     transcript = video_extractor.extract_transcript(
                         url,
                         asr_cfg["api_key"],
                         asr_cfg["api_base_url"],
                         asr_cfg["model"],
                     )
+                    if transcript and transcript.strip():
+                        yield _progress(
+                            "transcribe",
+                            f"云端 ASR 完成，共 {len(transcript)} 字",
+                            "active",
+                            {
+                                "phase": "remote_asr_done",
+                                "platform": platform,
+                                "provider": "siliconflow",
+                                "model": asr_cfg["model"],
+                                "duration_ms": int((time.monotonic() - remote_asr_started) * 1000),
+                                "transcript_chars": len(transcript),
+                            },
+                        )
+                    else:
+                        yield _progress(
+                            "transcribe",
+                            "云端 ASR 未返回有效文本，正在切换本地识别...",
+                            "active",
+                            {
+                                "phase": "remote_asr_empty",
+                                "platform": platform,
+                                "provider": "siliconflow",
+                                "fallback": True,
+                                "level": "warning",
+                            },
+                        )
                 except Exception:
                     traceback.print_exc()
+                    yield _progress(
+                        "transcribe",
+                        "云端 ASR 暂未成功，正在切换本地识别...",
+                        "active",
+                        {
+                            "phase": "remote_asr_error",
+                            "platform": platform,
+                            "provider": "siliconflow",
+                            "fallback": True,
+                            "level": "warning",
+                            "duration_ms": int((time.monotonic() - remote_asr_started) * 1000),
+                        },
+                    )
+            else:
+                yield _progress(
+                    "transcribe",
+                    "未配置云端 ASR，将直接使用本地识别...",
+                    "active",
+                    {
+                        "phase": "remote_asr_skipped",
+                        "platform": platform,
+                        "fallback": True,
+                        "level": "warning",
+                    },
+                )
 
             if not transcript or not transcript.strip():
                 try:
-                    yield _event("transcribe", "本地语音识别启动,长视频需要1-3分钟,请耐心等待...", "active")
+                    local_asr_started = time.monotonic()
+                    yield _progress(
+                        "transcribe",
+                        "本地语音识别启动：正在下载视频并提取音频，长视频请耐心等待...",
+                        "active",
+                        {
+                            "phase": "local_asr_start",
+                            "platform": platform,
+                            "provider": "local",
+                            "fallback": True,
+                        },
+                    )
                     transcript = video_extractor.fallback_local_asr(url)
+                    if transcript and transcript.strip():
+                        yield _progress(
+                            "transcribe",
+                            f"本地 ASR 完成，共 {len(transcript)} 字",
+                            "active",
+                            {
+                                "phase": "local_asr_done",
+                                "platform": platform,
+                                "provider": "local",
+                                "fallback": True,
+                                "duration_ms": int((time.monotonic() - local_asr_started) * 1000),
+                                "transcript_chars": len(transcript),
+                            },
+                        )
                 except Exception:
                     traceback.print_exc()
-                    yield _event("transcribe", "文案提取失败，请稍后重试或检查视频链接。", "error")
-                    yield _event("error", "语音识别失败，请稍后重试或检查视频链接。", "error")
+                    yield _progress(
+                        "transcribe",
+                        "文案提取失败，请稍后重试或检查视频链接。",
+                        "error",
+                        {"phase": "local_asr_error", "platform": platform, "provider": "local"},
+                    )
+                    yield _progress(
+                        "error",
+                        "语音识别失败，请稍后重试或检查视频链接。",
+                        "error",
+                        {"phase": "fatal_error", "platform": platform},
+                    )
                     return
 
             use_images = False
             if not transcript or not transcript.strip():
                 # Try image-based extraction
                 video_url = video_info.get("download_url") or video_info.get("url", "")
+                yield _progress(
+                    "ai",
+                    "未识别到音频文本，正在尝试截图分析...",
+                    "active",
+                    {"phase": "image_fallback_start", "platform": platform, "fallback": True},
+                )
                 frames = ai_juicer.extract_video_frames(video_url)
                 if frames:
-                    yield _event("ai", f"未提取到音频文案，正在分析 {len(frames)} 张视频截图...", "active")
+                    yield _progress(
+                        "ai",
+                        f"已抽取 {len(frames)} 张关键帧，正在进行视觉分析...",
+                        "active",
+                        {"phase": "image_frames_done", "platform": platform, "fallback": True},
+                    )
                     ai_result = ai_juicer.generate_card_from_images(frames, video_info["title"])
                     if ai_result:
                         use_images = True
                         transcript = "[no audio — analysed from video frames]"
-                        yield _event("transcribe", f"截图分析完成，共 {len(frames)} 张", "done")
+                        yield _progress(
+                            "transcribe",
+                            f"截图分析完成，共 {len(frames)} 张",
+                            "done",
+                            {"phase": "image_fallback_done", "platform": platform, "fallback": True},
+                        )
                     else:
-                        yield _event("transcribe", "未能从视频中提取到文本内容", "error")
-                        yield _event("error", "未能从视频中提取到文本内容，截图分析也失败。", "error")
+                        yield _progress("transcribe", "未能从视频中提取到文本内容", "error", {"phase": "image_fallback_error", "platform": platform})
+                        yield _progress("error", "未能从视频中提取到文本内容，截图分析也失败。", "error", {"phase": "fatal_error", "platform": platform})
                         return
                 else:
-                    yield _event("transcribe", "未能从视频中提取到文本内容", "error")
-                    yield _event("error", "未能从视频中提取到文本内容。", "error")
+                    yield _progress("transcribe", "未能从视频中提取到文本内容", "error", {"phase": "no_transcript", "platform": platform})
+                    yield _progress("error", "未能从视频中提取到文本内容。", "error", {"phase": "fatal_error", "platform": platform})
                     return
 
             if not use_images:
                 char_count = len(transcript)
-                yield _event("transcribe", f"文案提取完成，共 {char_count} 字", "done")
+                yield _progress(
+                    "transcribe",
+                    f"文案提取完成，共 {char_count} 字",
+                    "done",
+                    {"phase": "transcribe_done", "platform": platform, "transcript_chars": char_count},
+                )
 
                 # Mini Agent 1: classify intent
                 yield _event("ai", "AI 正在识别内容类型...", "active")
@@ -561,31 +709,14 @@ def extract_stream(
 
             # Step 4: Save to database
             yield _event("save", "正在保存笔记...", "active")
-            note = note_service.create_note(db, video_info, transcript, ai_result, current_user.id)
+            result, plan_created = _save_generated_note(
+                db, video_info, transcript, ai_result, current_user.id,
+            )
             yield _event("save", "保存成功", "done")
 
-            # Step 5: Auto-create plan
-            plan_id: str | None = None
-            plan = ai_result.get("plan")
-            if isinstance(plan, dict) and plan.get("tasks"):
-                fields, tasks, total_days = ai_juicer.plan_to_storage(plan)
-                days_data = plan.get("days") or []
-                plan_obj = plan_service.create_plan(
-                    db=db,
-                    note_id=note.id,
-                    title=plan.get("goal") or note.video_title,
-                    user_id=current_user.id,
-                    fields=fields,
-                    tasks=tasks,
-                    total_days=total_days,
-                    days=days_data,
-                )
-                plan_id = plan_obj.id
+            if plan_created:
                 yield _event("plan", "已为视频中的计划自动建立任务清单", "done")
 
-
-            result = note.to_dict()
-            result["plan_id"] = plan_id
             yield _event("done", "提取完成", "done", result)
 
         except Exception as exc:
@@ -607,11 +738,23 @@ def extract_stream(
 def list_notes(
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     per_page: int = Query(20, ge=1, le=100, description="Items per page"),
+    q: str | None = Query(None, min_length=1, max_length=80, description="Search note title or summary"),
+    card_type: Literal["recipe", "insight", "history", "product", "plan", "general"] | None = Query(
+        None,
+        description="Filter by card type",
+    ),
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
-    """Return a paginated list of saved notes."""
-    notes, total = note_service.list_notes(db, page=page, per_page=per_page, user_id=current_user.id)
+    """Return a paginated, user-scoped list of saved notes."""
+    notes, total = note_service.list_notes(
+        db,
+        page=page,
+        per_page=per_page,
+        user_id=current_user.id,
+        search=q,
+        card_type=card_type,
+    )
     total_pages = max(1, (total + per_page - 1) // per_page)
     return _ok({
         "items": [n.to_dict() for n in notes],
@@ -639,15 +782,77 @@ def get_note(note_id: str, db: Session = Depends(get_db),
     return _ok(result)
 
 
+@router.post("/api/notes/{note_id}/ask")
+def ask_note(
+    note_id: str,
+    body: NoteAskRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Answer a question using one user-owned note as the source."""
+    note = note_service.get_note(db, note_id, user_id=current_user.id)
+    if note is None:
+        # Keep the same response for missing notes and notes owned by another
+        # user so this endpoint does not reveal cross-user resource existence.
+        raise HTTPException(status_code=404, detail="Note not found")
+
+    try:
+        result = ai_juicer.answer_note_question(
+            title=note.video_title,
+            transcript=note.transcript_raw,
+            ai_summary=note.ai_summary,
+            question=body.question,
+            history=[item.model_dump() for item in body.history[-6:]],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=502, detail="内容问答暂时不可用，请稍后重试") from exc
+
+    return _ok({
+        "note_id": note.id,
+        "answer": result["answer"],
+        "grounded": result["grounded"],
+        "evidence": result["evidence"],
+        "follow_up_questions": result["follow_up_questions"],
+        "source_context": result.get("source_context"),
+    })
+
+
 # ---------------------------------------------------------------------------
 # Plan endpoints
 # ---------------------------------------------------------------------------
 
 class AddTaskRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=256)
-    day: int | None = None
-    scheduled_at: str | None = None
+    day: int | None = Field(default=None, ge=1, le=3650)
+    scheduled_at: str | None = Field(
+        default=None,
+        pattern=r"^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?$",
+    )
     reminder_at: str | None = None
+    duration_minutes: int | None = Field(default=None, ge=1, le=10080)
+    frequency: str | None = Field(default=None, max_length=120)
+    priority: Literal["low", "medium", "high"] = "medium"
+
+
+class UpdatePlanRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=256)
+    status: Literal["active", "done"] | None = None
+
+
+class UpdateTaskRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=256)
+    day: int | None = Field(default=None, ge=1, le=3650)
+    scheduled_at: str | None = Field(
+        default=None,
+        pattern=r"^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?$",
+    )
+    reminder_at: str | None = None
+    duration_minutes: int | None = Field(default=None, ge=1, le=10080)
+    frequency: str | None = Field(default=None, max_length=120)
+    priority: Literal["low", "medium", "high"] | None = None
 
 
 @router.get("/api/plans")
@@ -657,7 +862,12 @@ def list_plans(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
-    plans, total = plan_service.list_plans(db, page=page, per_page=per_page)
+    plans, total = plan_service.list_plans(
+        db,
+        page=page,
+        per_page=per_page,
+        user_id=current_user.id,
+    )
     total_pages = max(1, (total + per_page - 1) // per_page)
     return _ok({
         "items": [p.to_dict() for p in plans],
@@ -673,14 +883,46 @@ def get_plan_stats(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
-    stats = plan_service.get_plan_stats(db)
+    stats = plan_service.get_plan_stats(db, user_id=current_user.id)
     return _ok(stats)
+
+
+@router.get("/api/plans/overview")
+def get_plan_overview(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    return _ok(plan_service.get_plan_overview(db, user_id=current_user.id))
 
 
 @router.get("/api/plans/{plan_id}")
 def get_plan(plan_id: str, db: Session = Depends(get_db),
         current_user: UserModel = Depends(get_current_user)) -> dict:
-    plan = plan_service.get_plan(db, plan_id)
+    plan = plan_service.get_plan(db, plan_id, user_id=current_user.id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    return _ok(plan.to_dict())
+
+
+@router.patch("/api/plans/{plan_id}")
+def update_plan(
+    plan_id: str,
+    body: UpdatePlanRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    updates = body.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=422, detail="至少提供一个计划更新字段")
+    try:
+        plan = plan_service.update_plan(
+            db,
+            plan_id,
+            updates=updates,
+            user_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if plan is None:
         raise HTTPException(status_code=404, detail="Plan not found")
     return _ok(plan.to_dict())
@@ -689,7 +931,38 @@ def get_plan(plan_id: str, db: Session = Depends(get_db),
 @router.patch("/api/plans/{plan_id}/tasks/{task_id}")
 def toggle_plan_task(plan_id: str, task_id: str, db: Session = Depends(get_db),
         current_user: UserModel = Depends(get_current_user)) -> dict:
-    plan = plan_service.toggle_task(db, plan_id, task_id)
+    plan = plan_service.toggle_task(
+        db,
+        plan_id,
+        task_id,
+        user_id=current_user.id,
+    )
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Plan or task not found")
+    return _ok(plan.to_dict())
+
+
+@router.put("/api/plans/{plan_id}/tasks/{task_id}")
+def update_plan_task(
+    plan_id: str,
+    task_id: str,
+    body: UpdateTaskRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    updates = body.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=422, detail="至少提供一个任务更新字段")
+    try:
+        plan = plan_service.update_task(
+            db,
+            plan_id,
+            task_id,
+            updates=updates,
+            user_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if plan is None:
         raise HTTPException(status_code=404, detail="Plan or task not found")
     return _ok(plan.to_dict())
@@ -704,6 +977,10 @@ def add_plan_task(plan_id: str, body: AddTaskRequest, db: Session = Depends(get_
         day=body.day,
         scheduled_at=body.scheduled_at,
         reminder_at=body.reminder_at,
+        duration_minutes=body.duration_minutes,
+        frequency=body.frequency,
+        priority=body.priority,
+        user_id=current_user.id,
     )
     if plan is None:
         raise HTTPException(status_code=404, detail="Plan not found")
@@ -713,7 +990,12 @@ def add_plan_task(plan_id: str, body: AddTaskRequest, db: Session = Depends(get_
 @router.delete("/api/plans/{plan_id}/tasks/{task_id}")
 def delete_plan_task(plan_id: str, task_id: str, db: Session = Depends(get_db),
         current_user: UserModel = Depends(get_current_user)) -> dict:
-    plan = plan_service.delete_task(db, plan_id, task_id)
+    plan = plan_service.delete_task(
+        db,
+        plan_id,
+        task_id,
+        user_id=current_user.id,
+    )
     if plan is None:
         raise HTTPException(status_code=404, detail="Plan or task not found")
     return _ok(plan.to_dict())
@@ -722,7 +1004,7 @@ def delete_plan_task(plan_id: str, task_id: str, db: Session = Depends(get_db),
 @router.delete("/api/plans/{plan_id}")
 def delete_plan(plan_id: str, db: Session = Depends(get_db),
         current_user: UserModel = Depends(get_current_user)) -> dict:
-    deleted = plan_service.delete_plan(db, plan_id)
+    deleted = plan_service.delete_plan(db, plan_id, user_id=current_user.id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Plan not found")
     return _ok({"deleted": True})

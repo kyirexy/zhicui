@@ -1,6 +1,14 @@
 'use client';
 
-import { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
 import { API_BASE } from '@/lib/api';
 
 interface AuthUser {
@@ -16,102 +24,287 @@ interface AuthState {
   user: AuthUser | null;
   token: string | null;
   loading: boolean;
+  enteringDevelopmentSession: boolean;
   error: string | null;
+  enterDevelopmentSession: () => Promise<AuthUser | null>;
   login: (email: string, password: string) => Promise<AuthUser | null>;
   register: (email: string, password: string, username: string) => Promise<AuthUser | null>;
   logout: () => void;
   clearError: () => void;
 }
 
+interface AuthSession {
+  token: string;
+  user: AuthUser;
+}
+
+interface AuthResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  detail?: unknown;
+}
+
 const AuthContext = createContext<AuthState>({
   user: null,
   token: null,
   loading: true,
+  enteringDevelopmentSession: false,
   error: null,
+  enterDevelopmentSession: async () => null,
   login: async () => null,
   register: async () => null,
   logout: () => {},
   clearError: () => {},
 });
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
+const IS_DEV = process.env.NODE_ENV === 'development';
+const TOKEN_STORAGE_KEY = 'zhicui_token';
+const DEV_SESSION_RETRY_DELAYS_MS = [0, 300, 800] as const;
+
+function wait(delay: number, signal: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve(false);
+      return;
+    }
+
+    let timeoutId = 0;
+    const handleAbort = () => {
+      window.clearTimeout(timeoutId);
+      resolve(false);
+    };
+    timeoutId = window.setTimeout(() => {
+      signal.removeEventListener('abort', handleAbort);
+      resolve(true);
+    }, delay);
+    signal.addEventListener('abort', handleAbort, { once: true });
+  });
+}
+
+function readStoredToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredToken(token: string): void {
+  try {
+    localStorage.setItem(TOKEN_STORAGE_KEY, token);
+  } catch {
+    // The in-memory session still works when browser storage is unavailable.
+  }
+}
+
+function removeStoredToken(): void {
+  try {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    // Storage may be disabled; state cleanup below remains authoritative.
+  }
+}
+
+function resolveAuthError<T>(
+  payload: AuthResponse<T> | null,
+  status: number,
+): string {
+  if (payload?.error) return payload.error;
+  if (typeof payload?.detail === 'string') return payload.detail;
+  if (Array.isArray(payload?.detail)) {
+    const messages = payload.detail
+      .map((item) => (
+        item && typeof item === 'object' && 'msg' in item
+          ? String(item.msg)
+          : ''
+      ))
+      .filter(Boolean);
+    if (messages.length > 0) return messages.join('；');
+  }
+  return `请求失败（${status}）`;
+}
+
+async function authRequest<T>(
+  endpoint: string,
+  options?: RequestInit,
+): Promise<AuthResponse<T>> {
+  try {
+    const response = await fetch(`${API_BASE}${endpoint}`, options);
+    const payload = await response.json().catch(() => null) as AuthResponse<T> | null;
+
+    if (!response.ok || !payload?.success) {
+      return {
+        success: false,
+        error: resolveAuthError(payload, response.status),
+      };
+    }
+    return payload;
+  } catch (requestError) {
+    return {
+      success: false,
+      error: requestError instanceof Error ? requestError.message : '网络连接失败',
+    };
+  }
+}
+
+export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [enteringDevelopmentSession, setEnteringDevelopmentSession] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Restore session on mount
-  useEffect(() => {
-    const saved = localStorage.getItem('zhicui_token');
-    if (saved) {
-      setToken(saved);
-      fetch(`${API_BASE}/api/auth/me`, {
-        headers: { Authorization: `Bearer ${saved}` },
-      })
-        .then(r => r.json())
-        .then(d => {
-          if (d.success) setUser(d.data);
-          else {
-            localStorage.removeItem('zhicui_token');
-            setToken(null);
-          }
-        })
-        .catch(() => {
-          localStorage.removeItem('zhicui_token');
-          setToken(null);
-        })
-        .finally(() => setLoading(false));
-    } else {
-      setLoading(false);
-    }
+  const applySession = useCallback((session: AuthSession) => {
+    writeStoredToken(session.token);
+    setToken(session.token);
+    setUser(session.user);
   }, []);
+
+  const enterDevelopmentSession = useCallback(async () => {
+    if (!IS_DEV) {
+      setError('开发会话仅在本地开发模式可用');
+      return null;
+    }
+
+    setError(null);
+    setEnteringDevelopmentSession(true);
+    try {
+      const response = await authRequest<AuthSession>('/api/auth/dev-session', {
+        method: 'POST',
+      });
+      if (response.success && response.data) {
+        applySession(response.data);
+        return response.data.user;
+      }
+      setError(response.error || '开发会话连接失败，请确认本地后端已启动');
+      return null;
+    } finally {
+      setEnteringDevelopmentSession(false);
+    }
+  }, [applySession]);
+
+  // Restore the saved session first. A development build may request a fresh,
+  // backend-issued local session if the saved token is missing or invalid.
+  // A short bounded retry window covers the common "frontend started first"
+  // race without creating an endless request loop.
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+
+    const restore = async () => {
+      const saved = readStoredToken();
+      if (saved) {
+        const restored = await authRequest<AuthUser>('/api/auth/me', {
+          headers: { Authorization: `Bearer ${saved}` },
+          signal: controller.signal,
+        });
+        if (cancelled) return;
+        if (restored.success && restored.data) {
+          applySession({ token: saved, user: restored.data });
+          return;
+        }
+
+        removeStoredToken();
+        setToken(null);
+        setUser(null);
+      }
+
+      if (IS_DEV) {
+        setEnteringDevelopmentSession(true);
+        for (const delay of DEV_SESSION_RETRY_DELAYS_MS) {
+          if (delay > 0 && !(await wait(delay, controller.signal))) return;
+          if (cancelled) return;
+
+          const development = await authRequest<AuthSession>('/api/auth/dev-session', {
+            method: 'POST',
+            signal: controller.signal,
+          });
+          if (cancelled) return;
+          if (development.success && development.data) {
+            applySession(development.data);
+            return;
+          }
+        }
+      }
+    };
+
+    restore().finally(() => {
+      if (!cancelled) {
+        setEnteringDevelopmentSession(false);
+        setLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [applySession]);
 
   const login = useCallback(async (email: string, password: string) => {
     setError(null);
-    const res = await fetch(`${API_BASE}/api/auth/login`, {
+    const response = await authRequest<AuthSession>('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
     });
-    const d = await res.json();
-    if (d.success) {
-      localStorage.setItem('zhicui_token', d.data.token);
-      setToken(d.data.token);
-      setUser(d.data.user);
-      return d.data.user;
+    if (response.success && response.data) {
+      applySession(response.data);
+      return response.data.user;
     }
-    setError(d.error || d.detail || '登录失败');
+    setError(response.error || '登录失败');
     return null;
-  }, []);
+  }, [applySession]);
 
   const register = useCallback(async (email: string, password: string, username: string) => {
     setError(null);
-    const res = await fetch(`${API_BASE}/api/auth/register`, {
+    const response = await authRequest<AuthSession>('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password, username }),
     });
-    const d = await res.json();
-    if (d.success) {
-      localStorage.setItem('zhicui_token', d.data.token);
-      setToken(d.data.token);
-      setUser(d.data.user);
-      return d.data.user;
+    if (response.success && response.data) {
+      applySession(response.data);
+      return response.data.user;
     }
-    setError(d.error || d.detail || '注册失败');
+    setError(response.error || '注册失败');
     return null;
-  }, []);
+  }, [applySession]);
 
   const logout = useCallback(() => {
-    localStorage.removeItem('zhicui_token');
+    removeStoredToken();
     setToken(null);
     setUser(null);
+    setError(null);
   }, []);
 
   const clearError = useCallback(() => setError(null), []);
+  const contextValue = useMemo<AuthState>(() => ({
+    user,
+    token,
+    loading,
+    enteringDevelopmentSession,
+    error,
+    enterDevelopmentSession,
+    login,
+    register,
+    logout,
+    clearError,
+  }), [
+    clearError,
+    enterDevelopmentSession,
+    enteringDevelopmentSession,
+    error,
+    loading,
+    login,
+    logout,
+    register,
+    token,
+    user,
+  ]);
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, error, login, register, logout, clearError }}>
+    <AuthContext.Provider value={contextValue}>
       {children}
     </AuthContext.Provider>
   );

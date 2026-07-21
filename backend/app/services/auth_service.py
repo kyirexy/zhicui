@@ -4,9 +4,11 @@ Authentication service — JWT issuance, password hashing, login/register.
 from __future__ import annotations
 
 import os
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from jose import JWTError, jwt
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -26,6 +28,8 @@ if not _JWT_SECRET:
 SECRET_KEY: str = _JWT_SECRET
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 30  # long-lived for MVP, refresh later
+DEV_USER_EMAIL = "dev@zhicui.local"
+DEV_USER_USERNAME = "zhicui_dev"
 
 
 # ---------------------------------------------------------------------------
@@ -107,3 +111,45 @@ def login(db: Session, email: str, password: str) -> tuple[str | None, User | No
 
     token = create_access_token(user.id, user.email)
     return token, user, None
+
+
+def get_or_create_dev_user(db: Session) -> User:
+    """Return the reserved local administrator used by the gated dev session."""
+    if not settings.DEV_AUTH_BYPASS:
+        raise RuntimeError("开发账号只能在 DEV_AUTH_BYPASS 启用时创建")
+
+    user = get_user_by_email(db, DEV_USER_EMAIL)
+    if not user:
+        username = DEV_USER_USERNAME
+        existing_username = get_user_by_username(db, username)
+        if existing_username:
+            username = f"{DEV_USER_USERNAME}_{secrets.token_hex(2)}"
+        try:
+            user = create_user(
+                db,
+                DEV_USER_EMAIL,
+                hash_password(secrets.token_urlsafe(32)),
+                username=username,
+            )
+        except IntegrityError:
+            # React Strict Mode can issue two first-load requests at once.
+            # Reuse the row created by the winning request instead of failing.
+            db.rollback()
+            user = get_user_by_email(db, DEV_USER_EMAIL)
+            if not user:
+                raise
+
+    changed = False
+    if user.username != DEV_USER_USERNAME and not get_user_by_username(db, DEV_USER_USERNAME):
+        user.username = DEV_USER_USERNAME
+        changed = True
+    if not user.is_active:
+        user.is_active = True
+        changed = True
+    if not user.is_admin:
+        user.is_admin = True
+        changed = True
+    if changed:
+        db.commit()
+        db.refresh(user)
+    return user

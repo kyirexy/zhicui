@@ -1,262 +1,567 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { Check, Plus, Trash2, Loader2, ChevronDown, CalendarDays } from 'lucide-react';
-import type { PlanDay } from '@/lib/types';
-import { togglePlanTask, addPlanTask, deletePlanTask } from '@/lib/api';
-import { useIsMobile } from '@/lib/hooks/useMediaQuery';
-import { celebrateDayDone, celebrateCompletion } from '@/lib/celebrate';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  CalendarBlank,
+  CaretDown,
+  Check,
+  ClockCountdown,
+  NotePencil,
+  Plus,
+  Repeat,
+  SpinnerGap,
+  Trash,
+} from '@phosphor-icons/react';
+import type { PlanData, PlanDay, PlanPriority, PlanTask } from '@/lib/types';
+import {
+  formatPlanDuration,
+  formatPlanFieldValue,
+  formatPlanSchedule,
+  getChinaToday,
+  getPlanCurrentDay,
+  getTaskPriority,
+} from '@/lib/types';
+import {
+  addPlanTask,
+  deletePlanTask,
+  togglePlanTask,
+  updatePlanTask,
+} from '@/lib/api';
+import { celebrateCompletion, celebrateDayDone } from '@/lib/celebrate';
 import BottomSheet from './BottomSheet';
 
 interface PlanTaskListProps {
-  planId: string;
-  days: PlanDay[];
-  currentDay: number;
-  onMutate: (days: PlanDay[]) => void;
+  plan: PlanData;
+  onMutate: (plan: PlanData) => void;
 }
 
-export default function PlanTaskList({ planId, days, currentDay, onMutate }: PlanTaskListProps) {
-  const isMobile = useIsMobile();
+interface TaskDraft {
+  title: string;
+  day: number;
+  scheduled_at: string;
+  duration_minutes: string;
+  frequency: string;
+  priority: PlanPriority;
+}
+
+interface TaskEditor {
+  mode: 'add' | 'edit';
+  taskId?: string;
+  draft: TaskDraft;
+}
+
+const priorityOptions: { value: PlanPriority; label: string; note: string }[] = [
+  { value: 'high', label: '高', note: '优先推进' },
+  { value: 'medium', label: '中', note: '正常节奏' },
+  { value: 'low', label: '低', note: '有空处理' },
+];
+
+function deriveDays(plan: PlanData): PlanDay[] {
+  if (plan.days?.length) return plan.days;
+  if (plan.tasks?.length) {
+    return [{ day: 1, label: '第1天', tasks: plan.tasks.map(task => ({ ...task, day: task.day ?? 1 })) }];
+  }
+  return [];
+}
+
+function patchTask(
+  plan: PlanData,
+  taskId: string,
+  transform: (task: PlanTask) => PlanTask,
+): PlanData {
+  return {
+    ...plan,
+    tasks: plan.tasks?.map(task => task.id === taskId ? transform(task) : task) ?? [],
+    days: plan.days?.map(day => ({
+      ...day,
+      tasks: day.tasks.map(task => task.id === taskId ? transform(task) : task),
+    })) ?? [],
+  };
+}
+
+function maybeCelebrate(previous: PlanData, next: PlanData, taskId: string) {
+  const previousDays = deriveDays(previous);
+  const nextDays = deriveDays(next);
+  const dayBefore = previousDays.find(day => day.tasks.some(task => task.id === taskId));
+  const dayAfter = nextDays.find(day => day.tasks.some(task => task.id === taskId));
+  if (dayBefore && dayAfter) {
+    const wasDone = dayBefore.tasks.length > 0 && dayBefore.tasks.every(task => task.done);
+    const isDone = dayAfter.tasks.length > 0 && dayAfter.tasks.every(task => task.done);
+    if (!wasDone && isDone) celebrateDayDone();
+  }
+
+  const beforeTasks = previousDays.flatMap(day => day.tasks);
+  const afterTasks = nextDays.flatMap(day => day.tasks);
+  if (
+    afterTasks.length > 0
+    && afterTasks.every(task => task.done)
+    && !beforeTasks.every(task => task.done)
+  ) {
+    celebrateCompletion();
+  }
+}
+
+export default function PlanTaskList({ plan, onMutate }: PlanTaskListProps) {
+  const days = useMemo(() => deriveDays(plan), [plan]);
+  const currentDay = getPlanCurrentDay(plan);
   const [mutatingIds, setMutatingIds] = useState<Set<string>>(new Set());
-  const [newTitle, setNewTitle] = useState('');
-  const [adding, setAdding] = useState(false);
-  const [addSheetOpen, setAddSheetOpen] = useState(false);
-  const [addTargetDay, setAddTargetDay] = useState(currentDay);
   const [collapsedDays, setCollapsedDays] = useState<Set<number>>(new Set());
-  const desktopInputRef = useRef<HTMLInputElement>(null);
+  const [editor, setEditor] = useState<TaskEditor | null>(null);
+  const [savingEditor, setSavingEditor] = useState(false);
+  const [mutationError, setMutationError] = useState('');
 
-  const withMutating = (id: string, fn: () => Promise<void>) => {
-    setMutatingIds((s) => new Set(s).add(id));
-    fn().finally(() => setMutatingIds((s) => { const n = new Set(s); n.delete(id); return n; }));
+  const availableDays = useMemo(() => {
+    const configuredMax = Math.min(Math.max(plan.total_days ?? 0, 1), 365);
+    const existingMax = Math.max(...days.map(day => day.day), 1);
+    const maxDay = Math.max(configuredMax, existingMax, currentDay);
+    return Array.from({ length: maxDay }, (_, index) => index + 1);
+  }, [currentDay, days, plan.total_days]);
+
+  const setBusy = (taskId: string, busy: boolean) => {
+    setMutatingIds(current => {
+      const next = new Set(current);
+      if (busy) next.add(taskId);
+      else next.delete(taskId);
+      return next;
+    });
   };
 
-  // Fire celebrations based on the optimistic next state, not the server echo.
-  const maybeCelebrate = (prev: PlanDay[], next: PlanDay[], taskId: string) => {
-    const dayBefore = prev.find(d => d.tasks.some(t => t.id === taskId));
-    const dayAfter = next.find(d => d.tasks.some(t => t.id === taskId));
-    if (dayBefore && dayAfter) {
-      const wasDone = dayBefore.tasks.length > 0 && dayBefore.tasks.every(t => t.done);
-      const isDone = dayAfter.tasks.length > 0 && dayAfter.tasks.every(t => t.done);
-      if (!wasDone && isDone) celebrateDayDone();
-    }
-    const allAfter = next.flatMap(d => d.tasks);
-    const totalAfter = allAfter.length;
-    const doneAfter = allAfter.filter(t => t.done).length;
-    const doneBefore = prev.flatMap(d => d.tasks).filter(t => t.done).length;
-    if (totalAfter > 0 && doneAfter === totalAfter && doneBefore < totalAfter) {
-      celebrateCompletion();
-    }
+  const openAddEditor = () => {
+    setMutationError('');
+    setEditor({
+      mode: 'add',
+      draft: {
+        title: '',
+        day: Math.min(currentDay, availableDays.at(-1) ?? 1),
+        scheduled_at: '',
+        duration_minutes: '',
+        frequency: '',
+        priority: 'medium',
+      },
+    });
   };
 
-  const handleToggle = async (dayIdx: number, taskId: string) => {
-    const prev = [...days];
-    const newDays = days.map(d => ({
-      ...d,
-      tasks: d.tasks.map(t => t.id === taskId ? { ...t, done: !t.done } : t),
-    }));
-    onMutate(newDays);
-    maybeCelebrate(prev, newDays, taskId);
-    withMutating(taskId, async () => {
-      const res = await togglePlanTask(planId, taskId);
-      if (res.success && res.data) {
-        onMutate(res.data.days || newDays);
-      } else {
-        onMutate(prev);
+  const openEditEditor = (task: PlanTask, day: number) => {
+    setMutationError('');
+    setEditor({
+      mode: 'edit',
+      taskId: task.id,
+      draft: {
+        title: task.title,
+        day: task.day ?? day,
+        scheduled_at: task.scheduled_at?.slice(0, 16) ?? '',
+        duration_minutes: task.duration_minutes ? String(task.duration_minutes) : '',
+        frequency: task.frequency ?? '',
+        priority: getTaskPriority(task),
+      },
+    });
+  };
+
+  const handleToggle = async (taskId: string) => {
+    const previous = plan;
+    const optimistic = patchTask(plan, taskId, task => ({ ...task, done: !task.done }));
+    onMutate(optimistic);
+    maybeCelebrate(previous, optimistic, taskId);
+    setBusy(taskId, true);
+    setMutationError('');
+    try {
+      const response = await togglePlanTask(plan.id, taskId);
+      if (response.success && response.data) onMutate(response.data);
+      else {
+        onMutate(previous);
+        setMutationError(response.error || '任务状态更新失败，请重试。');
       }
-    });
-  };
-
-  const handleDelete = async (dayIdx: number, taskId: string) => {
-    const prev = [...days];
-    const newDays = days.map(d => ({
-      ...d,
-      tasks: d.tasks.filter(t => t.id !== taskId),
-    }));
-    onMutate(newDays);
-    withMutating(taskId, async () => {
-      const res = await deletePlanTask(planId, taskId);
-      if (res.success && res.data) onMutate(res.data.days || newDays);
-      else onMutate(prev);
-    });
-  };
-
-  const doAdd = async (dayIdx: number, title: string) => {
-    setAdding(true);
-    const res = await addPlanTask(planId, title, addTargetDay);
-    if (res.success && res.data) {
-      onMutate(res.data.days || days);
-      setNewTitle('');
-      setAddSheetOpen(false);
+    } finally {
+      setBusy(taskId, false);
     }
-    setAdding(false);
+  };
+
+  const handleDelete = async (taskId: string) => {
+    const previous = plan;
+    const optimistic: PlanData = {
+      ...plan,
+      tasks: plan.tasks?.filter(task => task.id !== taskId) ?? [],
+      days: plan.days?.map(day => ({
+        ...day,
+        tasks: day.tasks.filter(task => task.id !== taskId),
+      })) ?? [],
+    };
+    onMutate(optimistic);
+    setBusy(taskId, true);
+    setMutationError('');
+    try {
+      const response = await deletePlanTask(plan.id, taskId);
+      if (response.success && response.data) onMutate(response.data);
+      else {
+        onMutate(previous);
+        setMutationError(response.error || '删除任务失败，请重试。');
+      }
+    } finally {
+      setBusy(taskId, false);
+    }
+  };
+
+  const saveEditor = async () => {
+    if (!editor || !editor.draft.title.trim()) return;
+    setSavingEditor(true);
+    setMutationError('');
+    const payload = {
+      title: editor.draft.title.trim(),
+      day: editor.draft.day,
+      scheduled_at: editor.draft.scheduled_at || null,
+      duration_minutes: editor.draft.duration_minutes
+        ? Number(editor.draft.duration_minutes)
+        : null,
+      frequency: editor.draft.frequency.trim() || null,
+      priority: editor.draft.priority,
+    };
+
+    try {
+      const response = editor.mode === 'edit' && editor.taskId
+        ? await updatePlanTask(plan.id, editor.taskId, payload)
+        : await addPlanTask(plan.id, {
+            ...payload,
+            scheduled_at: payload.scheduled_at ?? undefined,
+          });
+      if (response.success && response.data) {
+        onMutate(response.data);
+        setEditor(null);
+      } else {
+        setMutationError(response.error || '保存任务失败，请检查后重试。');
+      }
+    } finally {
+      setSavingEditor(false);
+    }
   };
 
   const toggleDay = (day: number) => {
-    setCollapsedDays(prev => {
-      const next = new Set(prev);
-      if (next.has(day)) next.delete(day); else next.add(day);
+    setCollapsedDays(current => {
+      const next = new Set(current);
+      if (next.has(day)) next.delete(day);
+      else next.add(day);
       return next;
     });
   };
 
   const expandAll = () => setCollapsedDays(new Set());
-  const collapseAll = () => setCollapsedDays(new Set(days.map(d => d.day)));
+  const collapseAll = () => setCollapsedDays(new Set(days.map(day => day.day)));
 
-  // Global keyboard shortcuts (ignored while typing in a field).
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-      const key = e.key.toLowerCase();
+    const onKeyDown = (event: KeyboardEvent) => {
+      const tagName = (event.target as HTMLElement | null)?.tagName;
+      if (tagName === 'INPUT' || tagName === 'SELECT' || tagName === 'TEXTAREA') return;
+      const key = event.key.toLowerCase();
       if (key === 'n') {
-        e.preventDefault();
-        if (isMobile) { setNewTitle(''); setAddTargetDay(currentDay); setAddSheetOpen(true); }
-        else desktopInputRef.current?.focus();
+        event.preventDefault();
+        setMutationError('');
+        setEditor({
+          mode: 'add',
+          draft: {
+            title: '',
+            day: Math.min(currentDay, availableDays.at(-1) ?? 1),
+            scheduled_at: '',
+            duration_minutes: '',
+            frequency: '',
+            priority: 'medium',
+          },
+        });
       } else if (key === 'e') {
-        expandAll();
+        setCollapsedDays(new Set());
       } else if (key === 'c') {
-        collapseAll();
+        setCollapsedDays(new Set(days.map(day => day.day)));
       }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [isMobile, currentDay, days]);
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [availableDays, currentDay, days]);
 
-  const today = new Date().toISOString().slice(0, 10);
-  const rowClass = 'flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200 group/task min-h-[52px] md:min-h-[44px] outline-none focus-visible:ring-2 focus-visible:ring-accent-emerald/40';
-
-  if (!days || days.length === 0) {
-    return <p className="text-sm text-foreground-muted text-center py-8">暂无任务</p>;
-  }
+  const today = getChinaToday();
 
   return (
     <div className="space-y-3">
-      {/* Expand / collapse all */}
-      {days.length > 1 && (
-        <div className="flex items-center justify-end gap-3 text-xs text-foreground-muted">
-          <button type="button" onClick={expandAll} className="hover:text-foreground-secondary transition-colors">全部展开</button>
-          <span className="text-foreground-muted/30">·</span>
-          <button type="button" onClick={collapseAll} className="hover:text-foreground-secondary transition-colors">全部折叠</button>
+      <div className="plan-task-toolbar">
+        <div>
+          <h2>执行清单</h2>
+          <p>{days.reduce((sum, day) => sum + day.tasks.length, 0)} 项任务，按天推进</p>
         </div>
-      )}
-
-      {days.map((planDay, di) => {
-        const isCollapsed = collapsedDays.has(planDay.day);
-        const dayDone = planDay.tasks.length > 0 && planDay.tasks.every(t => t.done);
-        const isToday = planDay.day === currentDay;
-
-        return (
-          <div key={planDay.day} className={`rounded-2xl border overflow-hidden transition-all duration-300 ${
-            isToday ? 'border-accent-emerald/30 bg-accent-emerald/[0.03]' :
-            dayDone ? 'border-card-border/30 bg-card-bg/40' :
-            'border-card-border bg-card-bg/60'
-          }`}>
-            {/* Day header */}
-            <button
-              type="button"
-              onClick={() => toggleDay(planDay.day)}
-              className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-card-bg/50 transition-colors ${
-                isToday ? 'bg-accent-emerald/[0.04]' : ''
-              }`}
-            >
-              <span className={`flex items-center justify-center w-7 h-7 rounded-lg text-xs font-bold ${
-                dayDone ? 'bg-accent-emerald text-white' :
-                isToday ? 'bg-accent-emerald/15 text-accent-emerald ring-1 ring-accent-emerald/30' :
-                'bg-card-bg border border-card-border text-foreground-muted'
-              }`}>
-                {planDay.day}
-              </span>
-              <span className={`flex-1 text-sm font-medium ${dayDone ? 'text-foreground-muted line-through' : 'text-foreground'}`}>
-                {planDay.label || `第${planDay.day}天`}
-              </span>
-              <span className="text-xs text-foreground-muted">
-                {planDay.tasks.filter(t => t.done).length}/{planDay.tasks.length}
-              </span>
-              <ChevronDown
-                size={14}
-                className={`text-foreground-muted transition-transform duration-300 ${isCollapsed ? '' : 'rotate-180'}`}
-              />
-            </button>
-
-            {/* Day tasks */}
-            {!isCollapsed && (
-              <div className="px-2 pb-2 space-y-0.5">
-                {planDay.tasks.map(task => {
-                  const isDue = !task.done && !!task.scheduled_at?.startsWith(today);
-                  const busy = mutatingIds.has(task.id);
-                  return (
-                    <div key={task.id} tabIndex={0} role="checkbox" aria-checked={task.done}
-                      onKeyDown={(e) => { if ((e.key === ' ' || e.key === 'Enter') && !busy) { e.preventDefault(); handleToggle(di, task.id); } }}
-                      className={`${rowClass} ${task.done ? 'bg-card-bg/30 text-foreground-muted' : isDue ? 'bg-accent-emerald/[0.05]' : 'hover:bg-card-bg'}`}>
-                      <button type="button" onClick={() => handleToggle(di, task.id)} disabled={busy}
-                        className={`flex-shrink-0 w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all ${
-                          task.done ? 'bg-accent-emerald border-accent-emerald' : 'border-card-border hover:border-accent-emerald/50'
-                        }`}
-                        aria-label={task.done ? '标记未完成' : '标记完成'}>
-                        {busy ? <Loader2 size={12} className="animate-spin text-accent-emerald" /> : task.done ? <Check size={12} className="text-white" strokeWidth={3} /> : null}
-                      </button>
-                      <span className={`flex-1 min-w-0 text-sm leading-snug ${task.done ? 'line-through decoration-foreground-muted/40' : 'text-foreground'}`}>{task.title}</span>
-                      <button type="button" onClick={() => handleDelete(di, task.id)} disabled={busy}
-                        className="flex-shrink-0 p-1 rounded-lg text-foreground-muted/30 hover:text-accent-rose hover:bg-accent-rose/10 opacity-0 group-hover/task:opacity-100 focus-visible:opacity-100 transition-all"
-                        aria-label="删除任务">
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        );
-      })}
-
-      {/* Add task button */}
-      {isMobile ? (
-        <button type="button" onClick={() => { setNewTitle(''); setAddTargetDay(currentDay); setAddSheetOpen(true); }}
-          className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-card-bg border border-dashed border-card-border text-foreground-muted hover:text-foreground-secondary hover:border-foreground-muted/30 transition-all min-h-[52px]">
-          <Plus size={16} /><span className="text-sm font-medium">添加任务</span>
-        </button>
-      ) : (
-        <div className="flex items-center gap-2 pt-2">
-          <input ref={desktopInputRef} type="text" value={newTitle} onChange={(e) => setNewTitle(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') doAdd(addTargetDay, newTitle); }}
-            placeholder="添加新任务 (N)" style={{ fontSize: '16px' }}
-            className="flex-1 bg-card-bg border border-card-border rounded-xl px-3 py-2.5 text-sm text-foreground placeholder:text-foreground-muted outline-none focus:border-accent-emerald/50 min-h-[44px]" />
-          <button type="button" onClick={() => doAdd(addTargetDay, newTitle)} disabled={adding || !newTitle.trim()}
-            className="flex-shrink-0 btn-primary px-3 py-2.5 rounded-xl min-h-[44px] min-w-[44px] disabled:opacity-40">
-            {adding ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
+        <div className="flex items-center gap-2">
+          {days.length > 1 && (
+            <>
+              <button type="button" onClick={expandAll} className="plan-quiet-action">展开</button>
+              <button type="button" onClick={collapseAll} className="plan-quiet-action">折叠</button>
+            </>
+          )}
+          <button type="button" onClick={openAddEditor} className="plan-add-task">
+            <Plus size={16} weight="bold" />
+            添加任务
           </button>
         </div>
+      </div>
+
+      {mutationError && (
+        <p className="plan-inline-error" role="alert">{mutationError}</p>
       )}
 
-      {/* Mobile add sheet */}
-      <BottomSheet open={addSheetOpen} onClose={() => setAddSheetOpen(false)} title="添加任务">
-        <div className="space-y-3">
-          <select value={addTargetDay} onChange={(e) => setAddTargetDay(Number(e.target.value))}
-            className="w-full bg-card-bg border border-card-border rounded-xl px-4 py-3 text-sm text-foreground outline-none">
-            {days.map(d => (
-              <option key={d.day} value={d.day}>第{d.day}天 · {d.label}</option>
-            ))}
-          </select>
-          <div className="flex items-center gap-2">
-            <input type="text" value={newTitle} onChange={(e) => setNewTitle(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') doAdd(addTargetDay, newTitle); }}
-              placeholder="任务标题..." style={{ fontSize: '16px' }} autoFocus
-              className="flex-1 bg-card-bg border border-card-border rounded-xl px-4 py-3 text-base text-foreground placeholder:text-foreground-muted outline-none focus:border-accent-emerald/50 min-h-[52px]" />
-            <button type="button" onClick={() => doAdd(addTargetDay, newTitle)} disabled={adding || !newTitle.trim()}
-              className="flex-shrink-0 btn-primary px-5 py-3 rounded-xl text-sm font-semibold min-h-[52px] disabled:opacity-40">
-              {adding ? <Loader2 size={16} className="animate-spin" /> : '添加'}
-            </button>
-          </div>
-        </div>
-      </BottomSheet>
+      {days.length === 0 ? (
+        <button type="button" onClick={openAddEditor} className="plan-empty-tasks">
+          <Plus size={20} weight="duotone" />
+          <span>
+            <strong>还没有执行任务</strong>
+            <small>添加第一项任务，把计划变成可执行的下一步。</small>
+          </span>
+        </button>
+      ) : (
+        days.map(planDay => {
+          const isCollapsed = collapsedDays.has(planDay.day);
+          const dayDone = planDay.tasks.length > 0 && planDay.tasks.every(task => task.done);
+          const isToday = planDay.day === currentDay;
+          const dayContext = [
+            planDay.date ? planDay.date.slice(5).replace('-', '/') : null,
+            planDay.focus,
+            `${planDay.tasks.filter(task => task.done).length}/${planDay.tasks.length} 已完成`,
+          ].filter(Boolean).join(' · ');
 
-      <p className="hidden md:block text-[11px] text-foreground-muted/50 text-center mt-3">
-        <kbd className="px-1 py-0.5 rounded bg-card-bg border border-card-border text-[10px]">Space</kbd> 勾选 ·
-        <kbd className="px-1 py-0.5 rounded bg-card-bg border border-card-border text-[10px] ml-1">N</kbd> 新增 ·
-        <kbd className="px-1 py-0.5 rounded bg-card-bg border border-card-border text-[10px] ml-1">E</kbd> 展开 ·
-        <kbd className="px-1 py-0.5 rounded bg-card-bg border border-card-border text-[10px] ml-1">C</kbd> 折叠
+          return (
+            <section
+              key={planDay.day}
+              className={`plan-day ${isToday ? 'is-today' : ''} ${dayDone ? 'is-done' : ''}`}
+            >
+              <button
+                type="button"
+                onClick={() => toggleDay(planDay.day)}
+                className="plan-day__header"
+                aria-expanded={!isCollapsed}
+              >
+                <span className="plan-day__number">{dayDone ? <Check size={14} weight="bold" /> : planDay.day}</span>
+                <span className="min-w-0 flex-1 text-left">
+                  <strong>{planDay.label || `第${planDay.day}天`}</strong>
+                  <small className="truncate">{dayContext}</small>
+                </span>
+                {isToday && <span className="plan-day__today">今天</span>}
+                <CaretDown size={15} className={isCollapsed ? '' : 'rotate-180'} />
+              </button>
+
+              {!isCollapsed && (
+                <ul className="plan-day__tasks">
+                  {planDay.tasks.length === 0 && (
+                    <li className="plan-day__empty">这一天还没有任务</li>
+                  )}
+                  {planDay.tasks.map(task => {
+                    const busy = mutatingIds.has(task.id);
+                    const priority = getTaskPriority(task);
+                    const taskDate = task.scheduled_at?.slice(0, 10);
+                    const scheduleLabel = formatPlanSchedule(task.scheduled_at);
+                    const durationLabel = formatPlanDuration(task.duration_minutes);
+                    const overdue = !task.done && !!taskDate && taskDate < today;
+                    const dueToday = !task.done && taskDate === today;
+                    return (
+                      <li
+                        key={task.id}
+                        className={`plan-task-row ${task.done ? 'is-done' : ''} ${overdue ? 'is-overdue' : ''}`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => handleToggle(task.id)}
+                          disabled={busy}
+                          className="plan-task-row__check"
+                          aria-label={task.done ? `重开任务：${task.title}` : `完成任务：${task.title}`}
+                        >
+                          {busy
+                            ? <SpinnerGap size={14} className="animate-spin" />
+                            : task.done
+                              ? <Check size={14} weight="bold" />
+                              : null}
+                        </button>
+                        <span className="min-w-0 flex-1">
+                          <span className="plan-task-row__title">{task.title}</span>
+                          <span className="plan-task-row__meta">
+                            <span className={`plan-priority is-${priority}`}>
+                              {priority === 'high' ? '高优先' : priority === 'low' ? '低优先' : '中优先'}
+                            </span>
+                            {scheduleLabel && (
+                              <span className={overdue ? 'text-accent-rose' : dueToday ? 'text-accent-emerald' : ''}>
+                                <CalendarBlank size={12} />
+                                {overdue ? '逾期 ' : ''}
+                                {scheduleLabel}
+                              </span>
+                            )}
+                            {durationLabel && (
+                              <span>
+                                <ClockCountdown size={12} />
+                                {durationLabel}
+                              </span>
+                            )}
+                            {task.frequency && (
+                              <span>
+                                <Repeat size={12} />
+                                {task.frequency}
+                              </span>
+                            )}
+                          </span>
+                          {task.details && task.details.length > 0 && (
+                            <span className="plan-task-row__details">
+                              {task.details.map((detail, index) => (
+                                <span key={`${detail.name}-${index}`}>
+                                  <small>{detail.label}</small>
+                                  <strong>{formatPlanFieldValue(detail.value)}</strong>
+                                </span>
+                              ))}
+                            </span>
+                          )}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => openEditEditor(task, planDay.day)}
+                          disabled={busy}
+                          className="plan-task-row__action"
+                          aria-label={`编辑任务：${task.title}`}
+                        >
+                          <NotePencil size={15} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(task.id)}
+                          disabled={busy}
+                          className="plan-task-row__action is-danger"
+                          aria-label={`删除任务：${task.title}`}
+                        >
+                          <Trash size={15} />
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </section>
+          );
+        })
+      )}
+
+      <p className="hidden md:block text-[11px] text-foreground-muted/50 text-center pt-1">
+        N 新增 · E 展开 · C 折叠
       </p>
+
+      <BottomSheet
+        open={editor !== null}
+        onClose={() => !savingEditor && setEditor(null)}
+        title={editor?.mode === 'edit' ? '编辑任务' : '添加任务'}
+      >
+        {editor && (
+          <form
+            className="plan-task-editor"
+            onSubmit={event => {
+              event.preventDefault();
+              void saveEditor();
+            }}
+          >
+            <label>
+              <span>任务标题</span>
+              <input
+                value={editor.draft.title}
+                onChange={event => setEditor({
+                  ...editor,
+                  draft: { ...editor.draft, title: event.target.value },
+                })}
+                placeholder="例如：整理第一版宣传脚本"
+                maxLength={256}
+                autoFocus
+              />
+            </label>
+
+            <div className="plan-task-editor__grid">
+              <label>
+                <span>所属计划日</span>
+                <select
+                  value={editor.draft.day}
+                  onChange={event => setEditor({
+                    ...editor,
+                    draft: { ...editor.draft, day: Number(event.target.value) },
+                  })}
+                >
+                  {availableDays.map(day => (
+                    <option key={day} value={day}>第 {day} 天</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>执行日期与时间（可选）</span>
+                <input
+                  type="datetime-local"
+                  value={editor.draft.scheduled_at}
+                  onChange={event => setEditor({
+                    ...editor,
+                    draft: { ...editor.draft, scheduled_at: event.target.value },
+                  })}
+                />
+              </label>
+            </div>
+
+            <div className="plan-task-editor__grid">
+              <label>
+                <span>预计时长（分钟）</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={10080}
+                  value={editor.draft.duration_minutes}
+                  onChange={event => setEditor({
+                    ...editor,
+                    draft: { ...editor.draft, duration_minutes: event.target.value },
+                  })}
+                  placeholder="例如：30"
+                />
+              </label>
+              <label>
+                <span>执行频率（可选）</span>
+                <input
+                  value={editor.draft.frequency}
+                  onChange={event => setEditor({
+                    ...editor,
+                    draft: { ...editor.draft, frequency: event.target.value },
+                  })}
+                  placeholder="例如：每天 3 次"
+                  maxLength={120}
+                />
+              </label>
+            </div>
+
+            <fieldset>
+              <legend>优先级</legend>
+              <div className="plan-priority-picker">
+                {priorityOptions.map(option => (
+                  <label key={option.value} className={`is-${option.value}`}>
+                    <input
+                      type="radio"
+                      name="priority"
+                      value={option.value}
+                      checked={editor.draft.priority === option.value}
+                      onChange={() => setEditor({
+                        ...editor,
+                        draft: { ...editor.draft, priority: option.value },
+                      })}
+                    />
+                    <span>
+                      <strong>{option.label}</strong>
+                      <small>{option.note}</small>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+
+            {mutationError && <p className="plan-inline-error" role="alert">{mutationError}</p>}
+            <div className="plan-task-editor__actions">
+              <button type="button" onClick={() => setEditor(null)} disabled={savingEditor} className="plan-secondary-button">
+                取消
+              </button>
+              <button type="submit" disabled={savingEditor || !editor.draft.title.trim()} className="plan-primary-button">
+                {savingEditor && <SpinnerGap size={16} className="animate-spin" />}
+                {editor.mode === 'edit' ? '保存修改' : '添加任务'}
+              </button>
+            </div>
+          </form>
+        )}
+      </BottomSheet>
     </div>
   );
 }

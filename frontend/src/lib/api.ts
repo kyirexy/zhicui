@@ -1,65 +1,101 @@
-import { ApiResponse, CardData, Note, NoteDetail, PaginatedResponse, VideoInfo, PlanData, PlanStats } from './types';
+import type { ApiResponse, CardData, Note, NoteDetail, PaginatedResponse, VideoInfo, PlanData, PlanStats, PlanOverview, PlanPriority, NoteAskResult, NoteChatTurn } from './types';
 export type { ApiResponse };
 
 // In Capacitor/static-export mode, NEXT_PUBLIC_API_URL is set explicitly
 // (e.g. http://localhost:8000 or http://10.60.10.75:8000).
-// In dev mode it is left empty so requests go through the Next.js rewrite
-// proxy (/api/* → localhost:8000/api/*), avoiding CORS issues.
+// Development can either set a local backend URL or leave it empty to use
+// the Next.js /api rewrite.
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
+type UnknownRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 /** Attach JWT to every API call automatically. */
-function authHeaders(extra?: HeadersInit): HeadersInit {
-  const h: Record<string, string> = { 'Content-Type': 'application/json' };
+function authHeaders(extra?: HeadersInit, hasJsonBody = false): Headers {
+  const headers = new Headers(extra);
+  if (hasJsonBody && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
   if (typeof window !== 'undefined') {
     try {
-      const t = localStorage.getItem('zhicui_token');
-      if (t) h['Authorization'] = `Bearer ${t}`;
+      const token = localStorage.getItem('zhicui_token');
+      if (token) headers.set('Authorization', `Bearer ${token}`);
     } catch {}
   }
-  if (extra) {
-    const ext = extra as Record<string, string>;
-    Object.assign(h, ext);
+  return headers;
+}
+
+function validationMessages(detail: unknown): string[] {
+  if (!Array.isArray(detail)) return [];
+  return detail.flatMap((item) => {
+    if (!isRecord(item)) return [];
+    if (typeof item.msg === 'string') return [item.msg];
+    return [];
+  });
+}
+
+function validationLocations(detail: unknown): string[] {
+  if (!Array.isArray(detail)) return [];
+  return detail.flatMap((item) => {
+    if (!isRecord(item) || !Array.isArray(item.loc)) return [];
+    return [item.loc.map(String).join('.')];
+  });
+}
+
+async function responseErrorMessage(response: Response): Promise<string> {
+  const payload: unknown = await response.json().catch(() => null);
+  const data = isRecord(payload) ? payload : {};
+
+  if (response.status === 401) return '请先登录';
+  if (response.status === 422) {
+    const locations = validationLocations(data.detail);
+    return locations.some((location) => location.includes('url'))
+      ? '请输入有效的视频链接'
+      : '输入有误，请检查后再试';
   }
-  return h;
+
+  if (typeof data.error === 'string' && data.error) return data.error;
+  if (typeof data.detail === 'string' && data.detail) return data.detail;
+  const messages = validationMessages(data.detail);
+  if (messages.length > 0) return messages.join('；');
+  if (typeof data.message === 'string' && data.message) return data.message;
+  return `请求失败（${response.status}）`;
+}
+
+function requestFailureMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.name === 'AbortError' ? '请求已取消' : error.message;
+  }
+  return '网络连接失败';
 }
 
 async function request<T>(endpoint: string, options?: RequestInit): Promise<ApiResponse<T>> {
   try {
-    const { headers: _h, ...rest } = options || {};
+    const { headers, ...rest } = options || {};
     const response = await fetch(`${API_BASE}${endpoint}`, {
       ...rest,
-      headers: authHeaders(_h),
+      headers: authHeaders(headers, typeof rest.body === 'string'),
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      let msg = `Request failed with status ${response.status}`;
-      if (response.status === 401) {
-        msg = '请先登录';
-      } else if (response.status === 422) {
-        const locs = Array.isArray(errorData.detail) ? errorData.detail.map((e: any) => (e.loc || []).join('.')) : [];
-        msg = locs.some((l: string) => l.includes('url')) ? '请输入有效的视频链接' : '输入有误,请检查后再试';
-      } else if (typeof errorData.detail === 'string') {
-        msg = errorData.detail;
-      } else if (Array.isArray(errorData.detail)) {
-        msg = errorData.detail.map((e: any) => e.msg || JSON.stringify(e)).join('; ');
-      } else if (typeof errorData.message === 'string') {
-        msg = errorData.message;
-      }
-      return { success: false, error: msg };
+      return { success: false, error: await responseErrorMessage(response) };
     }
 
-    const json = await response.json();
+    const json: unknown = await response.json().catch(() => null);
     // Backend returns {success, data, error} envelope — unwrap it.
-    if (json && typeof json === 'object' && 'success' in json) {
-      return { success: json.success, data: json.data, error: json.error };
+    if (isRecord(json) && typeof json.success === 'boolean') {
+      return {
+        success: json.success,
+        data: json.data as T | undefined,
+        error: typeof json.error === 'string' ? json.error : undefined,
+      };
     }
-    return { success: true, data: json };
+    return { success: true, data: json as T };
   } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Network error',
-    };
+    return { success: false, error: requestFailureMessage(error) };
   }
 }
 
@@ -70,12 +106,51 @@ export async function extractVideo(url: string): Promise<ApiResponse<CardData>> 
   });
 }
 
+/** Metadata carried by intermediate SSE progress events. */
+export interface ProgressEventData {
+  phase?: string;
+  platform?: string;
+  provider?: string;
+  model?: string;
+  elapsed_ms?: number;
+  duration_ms?: number;
+  transcript_chars?: number;
+  fallback?: boolean;
+  level?: 'info' | 'warning';
+  [key: string]: unknown;
+}
+
 /** SSE progress event emitted by /api/extract/stream */
 export interface ProgressEvent {
   step: string;
   message: string;
   status: 'active' | 'done' | 'error';
-  data?: CardData;
+  data?: CardData | ProgressEventData;
+}
+
+function parseProgressEvent(line: string): ProgressEvent | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('data:')) return null;
+
+  const payload = trimmed.slice(5).trimStart();
+  if (!payload || payload === '[DONE]') return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+
+  if (
+    !isRecord(parsed)
+    || typeof parsed.step !== 'string'
+    || typeof parsed.message !== 'string'
+    || !['active', 'done', 'error'].includes(String(parsed.status))
+  ) {
+    return null;
+  }
+  return parsed as unknown as ProgressEvent;
 }
 
 /**
@@ -87,6 +162,7 @@ export interface ProgressEvent {
 export async function extractVideoStream(
   url: string,
   onProgress: (event: ProgressEvent) => void,
+  signal?: AbortSignal,
 ): Promise<ApiResponse<CardData>> {
   const encoded = encodeURIComponent(url);
 
@@ -94,22 +170,11 @@ export async function extractVideoStream(
     const sseBase = API_BASE || '';
     const response = await fetch(`${sseBase}/api/extract/stream?url=${encoded}`, {
       headers: authHeaders({ Accept: 'text/event-stream' }),
+      signal,
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      let msg = `Request failed with status ${response.status}`;
-      if (response.status === 401) {
-        msg = '请先登录';
-      } else if (response.status === 422) {
-        const locs = Array.isArray(errorData.detail) ? errorData.detail.map((e: any) => (e.loc || []).join('.')) : [];
-        msg = locs.some((l: string) => l.includes('url')) ? '请输入有效的视频链接' : '输入有误,请检查后再试';
-      } else if (typeof errorData.detail === 'string') {
-        msg = errorData.detail;
-      } else if (Array.isArray(errorData.detail)) {
-        msg = errorData.detail.map((e: any) => e.msg || JSON.stringify(e)).join('; ');
-      }
-      return { success: false, error: msg };
+      return { success: false, error: await responseErrorMessage(response) };
     }
 
     const reader = response.body?.getReader();
@@ -120,6 +185,19 @@ export async function extractVideoStream(
     const decoder = new TextDecoder();
     let buffer = '';
     let finalData: CardData | undefined;
+
+    const handleLine = (line: string): string | null => {
+      const event = parseProgressEvent(line);
+      if (!event) return null;
+
+      // Consumer errors are application errors and must not be swallowed as
+      // malformed SSE payloads.
+      onProgress(event);
+      if (event.step === 'done' && event.data) {
+        finalData = event.data as CardData;
+      }
+      return event.step === 'error' ? event.message : null;
+    };
 
     while (true) {
       const { done, value } = await reader.read();
@@ -132,25 +210,15 @@ export async function extractVideoStream(
       buffer = lines.pop() || '';
 
       for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith('data: ')) continue;
-
-        try {
-          const json = JSON.parse(trimmed.slice(6));
-          const event: ProgressEvent = json;
-
-          onProgress(event);
-
-          if (event.step === 'done' && event.data) {
-            finalData = event.data;
-          }
-          if (event.step === 'error') {
-            return { success: false, error: event.message };
-          }
-        } catch {
-          // Skip malformed lines
-        }
+        const streamError = handleLine(line);
+        if (streamError) return { success: false, error: streamError };
       }
+    }
+
+    buffer += decoder.decode();
+    for (const line of buffer.split('\n')) {
+      const streamError = handleLine(line);
+      if (streamError) return { success: false, error: streamError };
     }
 
     if (finalData) {
@@ -158,10 +226,7 @@ export async function extractVideoStream(
     }
     return { success: false, error: 'Stream ended without result' };
   } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Network error',
-    };
+    return { success: false, error: requestFailureMessage(error) };
   }
 }
 
@@ -172,12 +237,36 @@ export async function getVideoInfo(url: string): Promise<ApiResponse<VideoInfo>>
   });
 }
 
-export async function listNotes(page: number = 1, perPage: number = 12): Promise<ApiResponse<PaginatedResponse<Note>>> {
-  return request<PaginatedResponse<Note>>(`/api/notes?page=${page}&per_page=${perPage}`);
+export async function listNotes(
+  page: number = 1,
+  perPage: number = 12,
+  query?: string,
+  cardType?: Note['card_type'],
+): Promise<ApiResponse<PaginatedResponse<Note>>> {
+  const params = new URLSearchParams({
+    page: String(page),
+    per_page: String(perPage),
+  });
+  if (query?.trim()) params.set('q', query.trim());
+  if (cardType) params.set('card_type', cardType);
+  return request<PaginatedResponse<Note>>(`/api/notes?${params.toString()}`);
 }
 
 export async function getNote(id: string): Promise<ApiResponse<NoteDetail>> {
   return request<NoteDetail>(`/api/notes/${id}`);
+}
+
+export async function askNote(
+  noteId: string,
+  question: string,
+  history: NoteChatTurn[] = [],
+  signal?: AbortSignal,
+): Promise<ApiResponse<NoteAskResult>> {
+  return request<NoteAskResult>(`/api/notes/${noteId}/ask`, {
+    method: 'POST',
+    body: JSON.stringify({ question, history: history.slice(-6) }),
+    signal,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -196,16 +285,48 @@ export async function getPlanStats(): Promise<ApiResponse<PlanStats>> {
   return request<PlanStats>('/api/plans/stats');
 }
 
+export async function getPlanOverview(): Promise<ApiResponse<PlanOverview>> {
+  return request<PlanOverview>('/api/plans/overview');
+}
+
+export async function updatePlan(
+  planId: string,
+  updates: { title?: string; status?: 'active' | 'done' },
+): Promise<ApiResponse<PlanData>> {
+  return request<PlanData>(`/api/plans/${planId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+  });
+}
+
 export async function togglePlanTask(planId: string, taskId: string): Promise<ApiResponse<PlanData>> {
   return request<PlanData>(`/api/plans/${planId}/tasks/${taskId}`, { method: 'PATCH' });
 }
 
-export async function addPlanTask(planId: string, title: string, day?: number): Promise<ApiResponse<PlanData>> {
-  const body: Record<string, unknown> = { title };
-  if (day !== undefined) body.day = day;
+export interface PlanTaskMutation {
+  title: string;
+  day?: number;
+  scheduled_at?: string | null;
+  duration_minutes?: number | null;
+  frequency?: string | null;
+  priority?: PlanPriority;
+}
+
+export async function addPlanTask(planId: string, task: PlanTaskMutation): Promise<ApiResponse<PlanData>> {
   return request<PlanData>(`/api/plans/${planId}/tasks`, {
     method: 'POST',
-    body: JSON.stringify(body),
+    body: JSON.stringify(task),
+  });
+}
+
+export async function updatePlanTask(
+  planId: string,
+  taskId: string,
+  updates: Partial<PlanTaskMutation>,
+): Promise<ApiResponse<PlanData>> {
+  return request<PlanData>(`/api/plans/${planId}/tasks/${taskId}`, {
+    method: 'PUT',
+    body: JSON.stringify(updates),
   });
 }
 

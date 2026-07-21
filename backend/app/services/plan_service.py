@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone, date
+from datetime import date, datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.plan import Plan
+
+APP_TIMEZONE = ZoneInfo("Asia/Shanghai")
+TASK_PRIORITIES = {"low", "medium", "high"}
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +48,160 @@ def _dump_days(days: list[dict]) -> str:
     return json.dumps(days, ensure_ascii=False)
 
 
+def _normalize_priority(value: Any) -> str:
+    return value if value in TASK_PRIORITIES else "medium"
+
+
+def _normalize_schedule(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise ValueError("任务排期格式无效")
+    normalized = value.strip()
+    try:
+        if len(normalized) == 10:
+            date.fromisoformat(normalized)
+        elif len(normalized) == 16 and normalized[10] == "T":
+            datetime.fromisoformat(normalized)
+        else:
+            raise ValueError
+    except ValueError as exc:
+        raise ValueError("任务排期必须为 YYYY-MM-DD 或 YYYY-MM-DDTHH:MM") from exc
+    return normalized
+
+
+def _normalize_duration(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("预计时长必须为分钟数")
+    normalized = int(value)
+    if normalized < 1 or normalized > 10080:
+        raise ValueError("预计时长必须在 1 到 10080 分钟之间")
+    return normalized
+
+
+def _normalize_frequency(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    if len(normalized) > 120:
+        raise ValueError("执行频率不能超过 120 个字符")
+    return normalized
+
+
+def _task_state(plan: Plan) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return canonical tasks and days, recovering legacy day-only plans."""
+    flat_tasks = _parse_tasks(plan)
+    days = _parse_days(plan)
+    day_by_task: dict[str, int] = {}
+    day_task_by_id: dict[str, dict[str, Any]] = {}
+
+    for day_item in days:
+        day_number = day_item.get("day")
+        if not isinstance(day_number, int) or day_number < 1:
+            continue
+        for raw_task in day_item.get("tasks", []):
+            if not isinstance(raw_task, dict):
+                continue
+            task_id = raw_task.get("id")
+            if not isinstance(task_id, str) or not task_id:
+                continue
+            day_by_task[task_id] = day_number
+            day_task_by_id[task_id] = raw_task
+
+    canonical: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_task in flat_tasks:
+        if not isinstance(raw_task, dict):
+            continue
+        task_id = raw_task.get("id")
+        if not isinstance(task_id, str) or not task_id:
+            continue
+        merged = {**day_task_by_id.get(task_id, {}), **raw_task}
+        if task_id in day_by_task:
+            merged["day"] = day_by_task[task_id]
+        merged["priority"] = _normalize_priority(merged.get("priority"))
+        canonical.append(merged)
+        seen.add(task_id)
+
+    for task_id, raw_task in day_task_by_id.items():
+        if task_id in seen:
+            continue
+        recovered = dict(raw_task)
+        recovered["day"] = day_by_task[task_id]
+        recovered["priority"] = _normalize_priority(recovered.get("priority"))
+        canonical.append(recovered)
+
+    return canonical, days
+
+
+def _sync_task_state(
+    plan: Plan,
+    tasks: list[dict[str, Any]],
+    existing_days: list[dict[str, Any]],
+) -> None:
+    """Persist canonical tasks to flat and per-day JSON representations."""
+    normalized_tasks = [dict(task) for task in tasks]
+    for task in normalized_tasks:
+        task["priority"] = _normalize_priority(task.get("priority"))
+
+    needs_days = bool(existing_days) or any(
+        isinstance(task.get("day"), int) and task["day"] > 0
+        for task in normalized_tasks
+    )
+    if needs_days:
+        day_metadata = {
+            day_item.get("day"): {
+                key: day_item.get(key)
+                for key in ("label", "date", "focus")
+                if day_item.get(key)
+            }
+            for day_item in existing_days
+            if isinstance(day_item.get("day"), int)
+        }
+        default_day = max(day_metadata, default=1)
+        for task in normalized_tasks:
+            day_number = task.get("day")
+            if not isinstance(day_number, int) or day_number < 1:
+                task["day"] = default_day
+
+        day_numbers = sorted({int(task["day"]) for task in normalized_tasks})
+        rebuilt_days = []
+        for day_number in day_numbers:
+            metadata = day_metadata.get(day_number, {})
+            rebuilt_days.append({
+                "day": day_number,
+                "label": metadata.get("label") or f"第{day_number}天",
+                **({"date": metadata["date"]} if metadata.get("date") else {}),
+                **({"focus": metadata["focus"]} if metadata.get("focus") else {}),
+                "tasks": [
+                    dict(task)
+                    for task in normalized_tasks
+                    if task.get("day") == day_number
+                ],
+            })
+        plan.days_json = _dump_days(rebuilt_days)
+
+    plan.tasks = _dump_tasks(normalized_tasks)
+
+
+def _sync_completion_status(plan: Plan, tasks: list[dict[str, Any]]) -> None:
+    if tasks and all(task.get("done", False) for task in tasks):
+        plan.status = "done"
+    elif plan.status == "done":
+        plan.status = "active"
+
+
+def _commit_plan(db: Session, plan: Plan) -> Plan:
+    plan.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(plan)
+    return plan
+
+
 def _current_day_for_plan(plan: Plan) -> int:
     """1-based "today is day N" derived from created_at.
 
@@ -62,8 +220,8 @@ def _current_day_for_plan(plan: Plan) -> int:
 
 
 def _get_today() -> str:
-    """ISO date string for today in local-ish UTC (midnight)."""
-    return datetime.now(timezone.utc).date().isoformat()
+    """ISO date string for the product's primary China locale."""
+    return datetime.now(APP_TIMEZONE).date().isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +245,7 @@ def create_plan(
         user_id=user_id,
         note_id=note_id,
         title=title,
-        schema_version=1,
+        schema_version=2,
         total_days=total_days,
         fields=json.dumps(fields or [], ensure_ascii=False) if fields else "[]",
         tasks=json.dumps(tasks or [], ensure_ascii=False) if tasks else "[]",
@@ -142,46 +300,89 @@ def list_plans(
 
 
 # ---------------------------------------------------------------------------
-# Stats (badge)
+# Stats and execution overview
 # ---------------------------------------------------------------------------
 
-def get_plan_stats(db: Session, user_id: str = "") -> dict[str, int]:
-    """Return {open_tasks, due_today} for the BottomTabBar badge."""
+def _focus_sort_key(item: dict[str, Any]) -> tuple[int, str, str]:
+    priority_order = {"high": 0, "medium": 1, "low": 2}
+    return (
+        priority_order.get(item.get("priority"), 1),
+        item.get("scheduled_at") or "9999-12-31",
+        item.get("title") or "",
+    )
+
+
+def get_plan_overview(
+    db: Session,
+    user_id: str = "",
+    focus_limit: int = 8,
+) -> dict[str, Any]:
+    """Aggregate the current user's active execution workload."""
     q = db.query(Plan).filter(Plan.status != "done")
     if user_id:
         q = q.filter(Plan.user_id == user_id)
     plans = q.all()
 
-    open_tasks = 0
-    due_today = 0
+    today_value = _get_today()
+    today: list[dict[str, Any]] = []
+    overdue: list[dict[str, Any]] = []
+    upcoming: list[dict[str, Any]] = []
 
     for plan in plans:
         current_day = _current_day_for_plan(plan)
-        days = _parse_days(plan)
-        if days:
-            for d in days:
-                is_current = d.get("day") == current_day
-                for t in d.get("tasks", []):
-                    if t.get("done", False):
-                        continue
-                    open_tasks += 1
-                    if is_current:
-                        due_today += 1
-                        continue
-                    sched = t.get("scheduled_at")
-                    if sched and sched[:10] == _get_today():
-                        due_today += 1
-        else:
-            # Legacy plans with only a flat task list and no day structure.
-            for t in _parse_tasks(plan):
-                if t.get("done", False):
-                    continue
-                open_tasks += 1
-                sched = t.get("scheduled_at")
-                if sched and sched[:10] == _get_today():
-                    due_today += 1
+        tasks, _ = _task_state(plan)
+        for task in tasks:
+            if task.get("done", False):
+                continue
 
-    return {"open_tasks": open_tasks, "due_today": due_today}
+            scheduled_raw = task.get("scheduled_at")
+            scheduled_at = scheduled_raw.strip() if isinstance(scheduled_raw, str) else None
+            scheduled_date_value = scheduled_at[:10] if scheduled_at else None
+            try:
+                scheduled_date = date.fromisoformat(scheduled_date_value) if scheduled_date_value else None
+            except ValueError:
+                scheduled_date = None
+
+            item = {
+                "plan_id": plan.id,
+                "plan_title": plan.title,
+                "task_id": task.get("id"),
+                "title": task.get("title") or "未命名任务",
+                "day": task.get("day"),
+                "scheduled_at": scheduled_at,
+                "duration_minutes": task.get("duration_minutes"),
+                "frequency": task.get("frequency"),
+                "priority": _normalize_priority(task.get("priority")),
+            }
+            if scheduled_date and scheduled_date_value < today_value:
+                overdue.append(item)
+            elif scheduled_date_value == today_value or (
+                not scheduled_date and task.get("day") == current_day
+            ):
+                today.append(item)
+            else:
+                upcoming.append(item)
+
+    today.sort(key=_focus_sort_key)
+    overdue.sort(key=_focus_sort_key)
+    upcoming.sort(key=_focus_sort_key)
+    open_tasks = len(today) + len(overdue) + len(upcoming)
+    return {
+        "summary": {
+            "active_plans": len(plans),
+            "open_tasks": open_tasks,
+            "due_today": len(today),
+            "overdue_tasks": len(overdue),
+        },
+        "today": today[:focus_limit],
+        "overdue": overdue[:focus_limit],
+        "upcoming": upcoming[:focus_limit],
+    }
+
+
+def get_plan_stats(db: Session, user_id: str = "") -> dict[str, int]:
+    """Return compact badge-compatible statistics."""
+    return get_plan_overview(db, user_id=user_id, focus_limit=0)["summary"]
 
 
 # ---------------------------------------------------------------------------
@@ -193,32 +394,17 @@ def toggle_task(db: Session, plan_id: str, task_id: str, user_id: str = "") -> P
     if plan is None:
         return None
 
-    tasks = _parse_tasks(plan)
-    days = _parse_days(plan)
-
-    toggled = False
-    for t in tasks:
-        if t.get("id") == task_id:
-            t["done"] = not t.get("done", False)
-            toggled = True
+    tasks, days = _task_state(plan)
+    for task in tasks:
+        if task.get("id") == task_id:
+            task["done"] = not task.get("done", False)
             break
-
-    if not toggled:
+    else:
         return None  # task not found
 
-    # Keep the per-day structure in sync — it is what the UI renders.
-    if days:
-        for d in days:
-            for t in d.get("tasks", []):
-                if t.get("id") == task_id:
-                    t["done"] = not t.get("done", False)
-        plan.days_json = _dump_days(days)
-
-    plan.tasks = _dump_tasks(tasks)
-    plan.updated_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(plan)
-    return plan
+    _sync_task_state(plan, tasks, days)
+    _sync_completion_status(plan, tasks)
+    return _commit_plan(db, plan)
 
 
 def add_task(
@@ -228,6 +414,9 @@ def add_task(
     day: int | None = None,
     scheduled_at: str | None = None,
     reminder_at: str | None = None,
+    duration_minutes: int | None = None,
+    frequency: str | None = None,
+    priority: str = "medium",
     user_id: str = "",
 ) -> Plan | None:
     plan = get_plan(db, plan_id, user_id=user_id)
@@ -238,34 +427,111 @@ def add_task(
         "id": f"t-{uuid.uuid4().hex[:8]}",
         "title": title,
         "done": False,
+        "priority": _normalize_priority(priority),
     }
+    if day is not None:
+        new_task["day"] = day
     if scheduled_at:
-        new_task["scheduled_at"] = scheduled_at
+        new_task["scheduled_at"] = _normalize_schedule(scheduled_at)
     if reminder_at:
         new_task["reminder_at"] = reminder_at
+    normalized_duration = _normalize_duration(duration_minutes)
+    if normalized_duration is not None:
+        new_task["duration_minutes"] = normalized_duration
+    normalized_frequency = _normalize_frequency(frequency)
+    if normalized_frequency:
+        new_task["frequency"] = normalized_frequency
 
-    # Append to the flat task list.
-    tasks = _parse_tasks(plan)
+    tasks, days = _task_state(plan)
     tasks.append(new_task)
-    plan.tasks = _dump_tasks(tasks)
 
-    # Attach to the requested day in the per-day structure (the render source).
-    days = _parse_days(plan)
-    if days:
-        if day is None:
-            day = days[-1].get("day", 1)
-        target = next((d for d in days if d.get("day") == day), None)
-        if target is None:
-            target = {"day": day, "label": f"第{day}天", "tasks": []}
-            days.append(target)
-            days.sort(key=lambda d: d.get("day", 0))
-        target.setdefault("tasks", []).append(new_task)
-        plan.days_json = _dump_days(days)
+    _sync_task_state(plan, tasks, days)
+    if plan.status == "done":
+        plan.status = "active"
+    return _commit_plan(db, plan)
 
-    plan.updated_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(plan)
-    return plan
+
+def update_plan(
+    db: Session,
+    plan_id: str,
+    updates: dict[str, Any],
+    user_id: str = "",
+) -> Plan | None:
+    plan = get_plan(db, plan_id, user_id=user_id)
+    if plan is None:
+        return None
+
+    if "title" in updates:
+        title = str(updates["title"]).strip()
+        if not title:
+            raise ValueError("计划标题不能为空")
+        plan.title = title
+    if "status" in updates:
+        status = updates["status"]
+        if status not in {"active", "done"}:
+            raise ValueError("计划状态无效")
+        plan.status = status
+    return _commit_plan(db, plan)
+
+
+def update_task(
+    db: Session,
+    plan_id: str,
+    task_id: str,
+    updates: dict[str, Any],
+    user_id: str = "",
+) -> Plan | None:
+    plan = get_plan(db, plan_id, user_id=user_id)
+    if plan is None:
+        return None
+
+    tasks, days = _task_state(plan)
+    task = next((item for item in tasks if item.get("id") == task_id), None)
+    if task is None:
+        return None
+
+    if "title" in updates:
+        title = str(updates["title"]).strip()
+        if not title:
+            raise ValueError("任务标题不能为空")
+        task["title"] = title
+    if "day" in updates:
+        day_number = updates["day"]
+        if not isinstance(day_number, int) or day_number < 1:
+            raise ValueError("任务天数必须为正整数")
+        task["day"] = day_number
+    if "scheduled_at" in updates:
+        scheduled_at = _normalize_schedule(updates["scheduled_at"])
+        if scheduled_at:
+            task["scheduled_at"] = scheduled_at
+        else:
+            task.pop("scheduled_at", None)
+    if "reminder_at" in updates:
+        reminder_at = updates["reminder_at"]
+        if reminder_at:
+            task["reminder_at"] = str(reminder_at)
+        else:
+            task.pop("reminder_at", None)
+    if "duration_minutes" in updates:
+        duration_minutes = _normalize_duration(updates["duration_minutes"])
+        if duration_minutes is not None:
+            task["duration_minutes"] = duration_minutes
+        else:
+            task.pop("duration_minutes", None)
+    if "frequency" in updates:
+        frequency = _normalize_frequency(updates["frequency"])
+        if frequency:
+            task["frequency"] = frequency
+        else:
+            task.pop("frequency", None)
+    if "priority" in updates:
+        priority = updates["priority"]
+        if priority not in TASK_PRIORITIES:
+            raise ValueError("任务优先级无效")
+        task["priority"] = priority
+
+    _sync_task_state(plan, tasks, days)
+    return _commit_plan(db, plan)
 
 
 def delete_task(db: Session, plan_id: str, task_id: str, user_id: str = "") -> Plan | None:
@@ -273,27 +539,20 @@ def delete_task(db: Session, plan_id: str, task_id: str, user_id: str = "") -> P
     if plan is None:
         return None
 
-    tasks = _parse_tasks(plan)
+    tasks, days = _task_state(plan)
     new_tasks = [t for t in tasks if t.get("id") != task_id]
     if len(new_tasks) == len(tasks):
         return None  # nothing deleted
 
-    days = _parse_days(plan)
-    if days:
-        for d in days:
-            d["tasks"] = [t for t in d.get("tasks", []) if t.get("id") != task_id]
-        plan.days_json = _dump_days(days)
-
-    plan.tasks = _dump_tasks(new_tasks)
-    plan.updated_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(plan)
-    return plan
+    _sync_task_state(plan, new_tasks, days)
+    if not new_tasks and plan.status == "done":
+        plan.status = "active"
+    return _commit_plan(db, plan)
 
 
-def delete_plan(db: Session, plan_id: str) -> bool:
+def delete_plan(db: Session, plan_id: str, user_id: str = "") -> bool:
     """Delete a plan by ID. Returns True if deleted, False if not found."""
-    plan = get_plan(db, plan_id)
+    plan = get_plan(db, plan_id, user_id=user_id)
     if plan is None:
         return False
     db.delete(plan)

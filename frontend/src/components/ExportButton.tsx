@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { Download } from 'lucide-react';
+import { DownloadSimple } from '@phosphor-icons/react';
 
 interface ExportButtonProps {
   targetRef: React.RefObject<HTMLElement | null>;
@@ -18,6 +18,8 @@ export default function ExportButton({
     if (!targetRef.current || isExporting) return;
 
     setIsExporting(true);
+    const exportInstance = `zhicui-card-${Date.now()}`;
+    targetRef.current.dataset.exportInstance = exportInstance;
     try {
       const html2canvas = (await import('html2canvas')).default;
       const canvas = await html2canvas(targetRef.current, {
@@ -25,6 +27,14 @@ export default function ExportButton({
         scale: 2,
         useCORS: true,
         logging: false,
+        onclone: (clonedDocument) => {
+          const clonedTarget = clonedDocument.querySelector(
+            `[data-export-instance="${exportInstance}"]`,
+          );
+          clonedTarget
+            ?.closest('.card-workspace__canvas')
+            ?.classList.add('is-expanded');
+        },
       });
 
       const link = document.createElement('a');
@@ -34,6 +44,7 @@ export default function ExportButton({
     } catch (error) {
       console.error('Export failed:', error);
     } finally {
+      delete targetRef.current?.dataset.exportInstance;
       setIsExporting(false);
     }
   }, [targetRef, filename, isExporting]);
@@ -42,7 +53,7 @@ export default function ExportButton({
     <button
       onClick={handleExport}
       disabled={isExporting}
-      className="glass-input btn-magnetic flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-foreground-secondary hover:text-foreground transition-all cursor-pointer disabled:opacity-50 min-h-[44px]"
+      className="card-workspace__export"
     >
       {isExporting ? (
         <>
@@ -51,7 +62,7 @@ export default function ExportButton({
         </>
       ) : (
         <>
-          <Download size={16} className="transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] group-hover:translate-y-0.5" />
+          <DownloadSimple size={16} weight="bold" aria-hidden />
           <span>导出长图</span>
         </>
       )}

@@ -3,10 +3,21 @@
 import { useState, useEffect, useCallback, Suspense, useRef } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
+import {
+  ArrowLeft,
+  ArrowRight,
+  MagnifyingGlass,
+  Plus,
+  Sparkle,
+  Stack,
+  X,
+} from '@phosphor-icons/react';
 import { listNotes, getNote } from '@/lib/api';
-import type { Note, NoteDetail } from '@/lib/types';
+import { CARD_TYPE_CONFIG, type CardType, type Note, type NoteDetail } from '@/lib/types';
 import CardRenderer from '@/components/CardRenderer';
-import ExportButton from '@/components/ExportButton';
+import LibraryNoteCard from '@/components/LibraryNoteCard';
+import NotesHero from '@/components/NotesHero';
+import { useSettings } from '@/lib/hooks/SettingsContext';
 
 function NotesContent() {
   const searchParams = useSearchParams();
@@ -22,7 +33,7 @@ function NoteDetailView({ id }: { id: string }) {
   const [note, setNote] = useState<NoteDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const cardRef = useRef<HTMLDivElement>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -71,209 +82,231 @@ function NoteDetailView({ id }: { id: string }) {
     pitfall_rating: note.pitfall_rating,
     card_type: note.card_type || 'general',
     source_url: note.source_url,
+    created_at: note.created_at,
+    seo_meta: note.seo_meta,
     transcript_raw: note.transcript_raw,
     video_id: note.video_id,
+    tone: note.tone,
+    density: note.density,
+    hero_quote: note.hero_quote,
+    key_insight: note.key_insight,
+    stats: note.stats,
   };
 
   return (
-    <div className="pb-16 max-w-2xl mx-auto">
-      <div className="mb-6 flex items-center justify-between gap-3 flex-wrap">
-        <Link
-          href="/notes"
-          className="text-foreground-secondary hover:text-foreground transition-colors text-sm flex items-center gap-1.5 px-3 py-2.5 rounded-lg hover:bg-white/5 min-h-[44px] min-w-[44px]"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="m15 18-6-6 6-6" />
-          </svg>
-          返回知识库
-        </Link>
-        <div className="flex items-center gap-2">
-          {note.card_type === 'plan' && note.plan_id && (
-            <Link
-              href={`/plans?id=${note.plan_id}`}
-              className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-medium
-                bg-accent-indigo/10 border border-accent-indigo/20 text-accent-indigo
-                hover:bg-accent-indigo/15 transition-colors min-h-[44px]"
-            >
-              📋 查看计划
-            </Link>
-          )}
-          <ExportButton targetRef={cardRef} />
-        </div>
-      </div>
-      {/* Transcript section */}
-      {note.transcript_raw && (
-        <details className="mb-6">
-          <summary className="text-sm font-medium text-foreground-muted cursor-pointer hover:text-foreground transition-colors py-2">
-            查看原视频文案 ▾
-          </summary>
-          <div className="mt-2 p-4 rounded-xl bg-card-bg border border-card-border max-h-[400px] overflow-y-auto">
-            <pre className="text-xs text-foreground-muted whitespace-pre-wrap font-sans leading-relaxed">
-              {note.transcript_raw}
-            </pre>
-          </div>
-        </details>
-      )}
+    <div className="pb-16 max-w-6xl mx-auto">
+      {/* Back link — subtle, top-left, outside the hero */}
+      <Link
+        href="/notes"
+        className="inline-flex items-center gap-1.5 text-sm text-foreground-muted hover:text-foreground transition-colors px-2 py-2 mb-4 rounded-lg hover:bg-white/5 min-h-[44px]"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="m15 18-6-6 6-6" />
+        </svg>
+        返回知识库
+      </Link>
 
-      <div ref={cardRef}>
-        <CardRenderer cardData={cardData} showExport={false} noteId={note.id} showToolbar={true} />
+      {/* Hero cover card */}
+      <NotesHero note={note} transcriptRef={transcriptRef} />
+
+      {/* Complete content, AI card and grounded assistant share one workspace. */}
+      <div ref={transcriptRef} className="space-y-6">
+        <CardRenderer cardData={cardData} showExport noteId={note.id} showToolbar />
       </div>
-      <p className="mt-6 text-center text-foreground-muted text-xs">
-        {note.created_at ? new Date(note.created_at).toLocaleString('zh-CN') : ''}
-      </p>
     </div>
   );
 }
 
 function NotesList() {
+  const { settings } = useSettings();
   const [notes, setNotes] = useState<Note[]>([]);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [query, setQuery] = useState('');
+  const [activeType, setActiveType] = useState<CardType | 'all'>('all');
+  const requestIdRef = useRef(0);
 
   const loadNotes = useCallback(async (p: number) => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
-    const res = await listNotes(p, 12);
+    setError('');
+    const res = await listNotes(
+      p,
+      12,
+      query || undefined,
+      activeType === 'all' ? undefined : activeType,
+    );
+    if (requestId !== requestIdRef.current) return;
     if (res.success && res.data) {
       setNotes(res.data.items || []);
       setTotalPages(res.data.total_pages || 1);
+      setTotal(res.data.total || 0);
+    } else {
+      setNotes([]);
+      setTotal(0);
+      setError(res.error || '知识库加载失败，请稍后重试');
     }
     setLoading(false);
-  }, []);
+  }, [activeType, query]);
 
   useEffect(() => {
     loadNotes(page);
   }, [page, loadNotes]);
 
-  if (loading) {
-    return (
-      <div>
-        <div className="mb-8">
-          <h1 className="text-2xl md:text-3xl font-bold text-foreground tracking-tight text-balance">
-            📚 知识库
-          </h1>
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setPage(1);
+      setQuery(searchInput.trim());
+    }, 320);
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
+
+  const hasFilters = Boolean(query || activeType !== 'all');
+  const resetFilters = () => {
+    setSearchInput('');
+    setQuery('');
+    setActiveType('all');
+    setPage(1);
+  };
+
+  const chooseType = (type: CardType | 'all') => {
+    setActiveType(type);
+    setPage(1);
+  };
+
+  const filters: { key: CardType | 'all'; label: string }[] = [
+    { key: 'all', label: '全部' },
+    ...(Object.entries(CARD_TYPE_CONFIG) as [CardType, (typeof CARD_TYPE_CONFIG)[CardType]][])
+      .map(([key, meta]) => ({ key, label: meta.label })),
+  ];
+
+  return (
+    <div className="library-page">
+      <header className="library-hero">
+        <div className="library-hero__copy">
+          <span className="library-hero__mark"><Stack size={22} weight="duotone" aria-hidden /></span>
+          <div>
+            <p><Sparkle size={13} weight="fill" aria-hidden /> 你的内容资产</p>
+            <h1>知识库</h1>
+            <span>搜索标题与卡片内容，按类型快速回到需要的信息。</span>
+          </div>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="skeleton p-5">
-              <div className="skeleton-line w-16 h-4 mb-3" />
-              <div className="skeleton-line w-3/4 h-5 mb-2" />
-              <div className="skeleton-line w-full h-3 mb-1" />
-              <div className="skeleton-line w-2/3 h-3" />
+        <div className="library-hero__count" aria-live="polite">
+          <strong>{loading ? '—' : total}</strong>
+          <span>{hasFilters ? '条匹配结果' : '张知识卡片'}</span>
+        </div>
+      </header>
+
+      <section className="library-controls" aria-label="知识库搜索与筛选">
+        <label className="library-search">
+          <MagnifyingGlass size={19} weight="duotone" aria-hidden />
+          <input
+            type="search"
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value.slice(0, 80))}
+            placeholder="搜索标题、结论或卡片内容"
+            aria-label="搜索知识卡片"
+          />
+          {searchInput && (
+            <button type="button" onClick={() => setSearchInput('')} aria-label="清空搜索">
+              <X size={16} weight="bold" aria-hidden />
+            </button>
+          )}
+        </label>
+
+        <div className="library-filters" role="group" aria-label="按卡片类型筛选">
+          {filters.map((filter) => (
+            <button
+              key={filter.key}
+              type="button"
+              className={activeType === filter.key ? 'is-active' : ''}
+              onClick={() => chooseType(filter.key)}
+              aria-pressed={activeType === filter.key}
+            >
+              {filter.label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <div className="library-results-meta">
+        <span>{hasFilters ? `正在查看 ${query ? `“${query}”` : '全部关键词'}的筛选结果` : '最近萃取'}</span>
+        {hasFilters && <button type="button" onClick={resetFilters}>清除筛选</button>}
+      </div>
+
+      {loading ? (
+        <div className="library-grid" aria-label="正在加载知识卡片">
+          {Array.from({ length: 6 }).map((_, index) => (
+            <div key={index} className={`library-note-skeleton ${index === 0 ? 'is-featured' : ''}`}>
+              <div className="skeleton library-note-skeleton__visual" />
+              <div className="library-note-skeleton__copy">
+                <div className="skeleton-line w-20 h-3" />
+                <div className="skeleton-line w-4/5 h-5" />
+                <div className="skeleton-line w-full h-3" />
+                <div className="skeleton-line w-2/3 h-3" />
+              </div>
             </div>
           ))}
         </div>
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      <div className="mb-8">
-        <h1 className="text-2xl md:text-3xl font-bold text-foreground tracking-tight text-balance">
-          📚 知识库
-        </h1>
-        <p className="text-foreground-muted text-sm mt-1">
-          所有提取的知识卡片
-        </p>
-      </div>
-
-      {notes.length === 0 ? (
-        <div className="min-h-[40vh] flex flex-col items-center justify-center text-center px-4">
-          <div className="w-16 h-16 rounded-xl bg-accent-emerald/10 flex items-center justify-center mb-4">
-            <span className="text-3xl">🫒</span>
-          </div>
-          <p className="text-foreground-secondary text-base font-medium mb-1.5">还没有知识卡片</p>
-          <p className="text-foreground-muted text-sm text-pretty max-w-xs">
-            在首页粘贴视频链接，开始提取第一张卡片
+      ) : error ? (
+        <div className="library-empty is-error" role="alert">
+          <span><X size={24} weight="duotone" aria-hidden /></span>
+          <h2>暂时无法读取知识库</h2>
+          <p>{error}</p>
+          <button type="button" onClick={() => loadNotes(page)}>重新加载</button>
+        </div>
+      ) : notes.length === 0 ? (
+        <div className="library-empty">
+          <span>{hasFilters ? <MagnifyingGlass size={27} weight="duotone" /> : <Stack size={27} weight="duotone" />}</span>
+          <h2>{hasFilters ? '没有找到匹配的卡片' : '知识库还没有内容'}</h2>
+          <p>
+            {hasFilters
+              ? '换一个关键词或内容类型，看看其他已经萃取的笔记。'
+              : '从一条视频、公众号文章或小红书笔记开始，生成第一张知识卡片。'}
           </p>
-          <Link
-            href="/"
-            className="mt-5 text-accent-emerald hover:underline text-sm font-medium"
-          >
-            去首页 →
-          </Link>
+          {hasFilters ? (
+            <button type="button" onClick={resetFilters}>查看全部卡片</button>
+          ) : (
+            <Link href="/"><Plus size={16} weight="bold" aria-hidden /> 开始萃取</Link>
+          )}
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
+          <div className="library-grid">
             {notes.map((note, index) => (
-              <Link
+              <LibraryNoteCard
                 key={note.id}
-                href={`/notes?id=${note.id}`}
-                className={`glass-card p-5 group hover:scale-[1.02] transition-all duration-200 cursor-pointer block text-foreground no-underline ${
-                  index === 0 && page === 1 ? 'sm:col-span-2 lg:col-span-2' : ''
-                }`}
-              >
-                <div className="flex items-start justify-between mb-2">
-                  <span
-                    className="text-xs font-medium px-2 py-0.5 rounded-full"
-                    style={{
-                      background: `var(--accent-${
-                        note.card_type === 'recipe' ? 'orange' :
-                        note.card_type === 'insight' ? 'emerald' :
-                        note.card_type === 'history' ? 'amber' :
-                        note.card_type === 'product' ? 'rose' : note.card_type === 'plan' ? 'indigo' : 'slate'
-                      })/0.12`,
-                      color: `var(--accent-${
-                        note.card_type === 'recipe' ? 'orange' :
-                        note.card_type === 'insight' ? 'emerald' :
-                        note.card_type === 'history' ? 'amber' :
-                        note.card_type === 'product' ? 'rose' : note.card_type === 'plan' ? 'indigo' : 'slate'
-                      })`,
-                    }}
-                  >
-                    {note.card_type === 'recipe' ? '🍳 食谱' :
-                     note.card_type === 'insight' ? '💡 洞察' :
-                     note.card_type === 'history' ? '📚 历史' :
-                     note.card_type === 'product' ? '🛍️ 评测' : note.card_type === 'plan' ? '📋 计划' : '📝 笔记'}
-                  </span>
-                  {note.pitfall_rating && (
-                    <span className="text-xs text-foreground-muted">
-                      {'★'.repeat(note.pitfall_rating)}{'☆'.repeat(5 - note.pitfall_rating)}
-                    </span>
-                  )}
-                </div>
-                <h3 className="text-sm font-semibold text-foreground mb-1.5 line-clamp-2 text-balance">
-                  {note.title}
-                </h3>
-                {note.excerpt && (
-                  <p className="text-xs text-foreground-muted line-clamp-2 leading-relaxed mb-3">
-                    {note.excerpt}
-                  </p>
-                )}
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-foreground-muted/60">
-                    {note.created_at ? new Date(note.created_at).toLocaleDateString('zh-CN') : ''}
-                  </span>
-                  <span className="text-xs text-accent-emerald opacity-0 group-hover:opacity-100 transition-opacity">
-                    查看详情 →
-                  </span>
-                </div>
-              </Link>
+                note={note}
+                style={settings.cardStyle}
+                featured={index === 0 && page === 1}
+              />
             ))}
           </div>
 
           {totalPages > 1 && (
-            <div className="flex items-center justify-center gap-2 mt-8">
+            <nav className="library-pagination" aria-label="知识库分页">
               <button
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                type="button"
+                onClick={() => setPage((current) => Math.max(1, current - 1))}
                 disabled={page === 1}
-                className="glass-input px-4 py-2 text-sm disabled:opacity-30 cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center"
               >
+                <ArrowLeft size={16} weight="bold" aria-hidden />
                 上一页
               </button>
-              <span className="text-sm text-foreground-muted px-3">
-                {page} / {totalPages}
-              </span>
+              <span><strong>{page}</strong> / {totalPages}</span>
               <button
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                type="button"
+                onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
                 disabled={page === totalPages}
-                className="glass-input px-4 py-2 text-sm disabled:opacity-30 cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center"
               >
                 下一页
+                <ArrowRight size={16} weight="bold" aria-hidden />
               </button>
-            </div>
+            </nav>
           )}
         </>
       )}

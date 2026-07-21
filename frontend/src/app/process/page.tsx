@@ -87,6 +87,8 @@ function ProcessView({ id }: { id: string }) {
     pitfall_rating: note.pitfall_rating,
     source_url: note.source_url,
     video_url: note.video_url,
+    created_at: note.created_at,
+    seo_meta: note.seo_meta,
     transcript_raw: note.transcript_raw,
     video_title: note.video_title,
     video_id: note.video_id,
@@ -182,6 +184,7 @@ function ProcessView({ id }: { id: string }) {
             showExport={false}
             showToolbar={false}
             noteId={id}
+            showSourceOverview={false}
           />
         </section>
       </div>

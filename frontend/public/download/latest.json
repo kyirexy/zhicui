@@ -3,9 +3,9 @@
   "platform": "android",
   "version": "1.1.0",
   "build": 2,
-  "published_at": "2026-07-27T20:30:00+08:00",
+  "published_at": "2026-07-27T12:58:14.618Z",
   "download_url": "https://luxai.cn/download/zhicui.apk",
-  "size_bytes": 80027068,
+  "size_bytes": 76715504,
   "mandatory": false,
   "release_notes": [
     "新增应用内版本检查，有新版本时会主动提醒。",

@@ -14,11 +14,11 @@
 
 - [x] 3.1 Generate a pinned-upstream Zhicui sidecar patch containing all required local modifications
 - [x] 3.2 Add a repeatable installer, hardened loopback-only systemd unit and operating notes
-- [ ] 3.3 Install the patched companion, venv, Chromium and protected Cookie/metadata-only config on the production server
-- [ ] 3.4 Verify selectable 50/100 metadata sync, ordering, ephemeral media access and zero persistent server video/audio files
+- [x] 3.3 Install the patched companion, venv, Chromium and protected Cookie/metadata-only config on the production server
+- [x] 3.4 Verify selectable 50/100 metadata sync, ordering, ephemeral media access and zero persistent server video/audio files
 
 ## 4. Mobile and release
 
 - [x] 4.1 Build production Capacitor resources and a new Android APK containing the QR flow
-- [ ] 4.2 Review scope, commit product/deployment/OpenSpec/APK changes and push GitHub plus Gitee master
-- [ ] 4.3 Confirm Jenkins, final production commit, services, authenticated connector status, QR login path and APK artifact
+- [x] 4.2 Review scope, commit product/deployment/OpenSpec/APK changes and push GitHub plus Gitee master
+- [x] 4.3 Confirm Jenkins, final production commit, services, authenticated connector status, QR login path and APK artifact

@@ -23,5 +23,5 @@
 - [x] 4.1 Validate older/current/web decision paths and unsafe or malformed manifests
 - [x] 4.2 Run frontend production build, Capacitor production sync and Android APK build
 - [x] 4.3 Verify APK native version, public manifest, trusted download behavior and mobile layout
-- [ ] 4.4 Sync and archive the OpenSpec change after all checks pass
-- [ ] 4.5 Commit the final release, push both remotes, create/update `main`, deploy via `master`, and verify production
+- [x] 4.4 Sync and archive the OpenSpec change after all checks pass
+- [x] 4.5 Commit the final release, push both remotes, create/update `main`, deploy via `master`, and verify production

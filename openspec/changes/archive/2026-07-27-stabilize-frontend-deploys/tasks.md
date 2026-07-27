@@ -18,4 +18,4 @@
 ## 4. Verification and release
 
 - [x] 4.1 Run Shell syntax checks, OpenSpec validation, and a local frontend production build
-- [ ] 4.2 Deploy through Jenkins and verify production `/api/health`, `/settings`, and `/favicon.ico`
+- [x] 4.2 Deploy through Jenkins and verify production `/api/health`, `/settings`, and `/favicon.ico`

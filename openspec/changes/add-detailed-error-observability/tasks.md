@@ -23,6 +23,6 @@
 ## 4. Release
 
 - [x] 4.1 Review and stage only intended product, OpenSpec and APK changes
-- [ ] 4.2 Commit the completed workspace and push origin plus Gitee master
-- [ ] 4.3 Confirm Jenkins deployment and production API/site health
-- [ ] 4.4 Verify production admin availability and APK download artifact
+- [x] 4.2 Commit the completed workspace and push origin plus Gitee master
+- [x] 4.3 Confirm Jenkins deployment and production API/site health
+- [x] 4.4 Verify production admin availability and APK download artifact

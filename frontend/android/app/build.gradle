@@ -1,4 +1,18 @@
+import groovy.json.JsonSlurper
+
 apply plugin: 'com.android.application'
+
+def releaseManifestFile = file('../../public/download/latest.json')
+if (!releaseManifestFile.exists()) {
+    throw new GradleException("Missing Android release manifest: ${releaseManifestFile}")
+}
+
+def releaseManifest = new JsonSlurper().parse(releaseManifestFile)
+def releaseVersion = releaseManifest.version?.toString()
+def releaseBuild = releaseManifest.build
+if (!releaseVersion || !(releaseBuild instanceof Number) || releaseBuild.intValue() < 1) {
+    throw new GradleException('Android release manifest must contain a version and positive integer build')
+}
 
 android {
     namespace = "com.videocapsule.app"
@@ -7,8 +21,8 @@ android {
         applicationId "com.videocapsule.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode releaseBuild.intValue()
+        versionName releaseVersion
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

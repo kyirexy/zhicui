@@ -4,6 +4,7 @@ import AppHeader from '@/components/AppHeader';
 import BottomTabBar from '@/components/BottomTabBar';
 import GlobalSheetManager from '@/components/GlobalSheetManager';
 import FeedbackButton from '@/components/FeedbackButton';
+import AppUpdatePrompt from '@/components/AppUpdatePrompt';
 import AuthGuard from '@/components/AuthGuard';
 import Providers from './Providers';
 import './globals.css';
@@ -119,6 +120,7 @@ export default function RootLayout({
           {/* Mobile-only: bottom tab bar (hidden on md+). */}
           <BottomTabBar />
           <FeedbackButton />
+          <AppUpdatePrompt />
         </Providers>
       </body>
     </html>

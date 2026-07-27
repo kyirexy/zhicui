@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "platform": "android",
+  "version": "1.1.0",
+  "build": 2,
+  "published_at": "2026-07-27T20:30:00+08:00",
+  "download_url": "https://luxai.cn/download/zhicui.apk",
+  "size_bytes": 80027068,
+  "mandatory": false,
+  "release_notes": [
+    "新增应用内版本检查，有新版本时会主动提醒。",
+    "更新提示现在会展示版本号、文件大小和完整更新日志。",
+    "支持从视频资料库单条移除或批量移除不需要的收藏。",
+    "移除只影响知萃资料库，不会取消抖音收藏或删除已有文案与计划。"
+  ]
+}

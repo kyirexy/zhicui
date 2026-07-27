@@ -10,6 +10,7 @@ import {
   X,
 } from 'lucide-react';
 import { listMyFeedback, submitFeedback } from '@/lib/api';
+import { getRuntimeAppInfo } from '@/lib/appUpdate';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import type {
   FeedbackCategory,
@@ -101,6 +102,11 @@ export default function FeedbackButton() {
     setSuccess('');
     setSubmitting(true);
     const platform = Capacitor.getPlatform();
+    const runtimeInfo = await getRuntimeAppInfo().catch(() => ({
+      nativeAndroid: false,
+      version: 'Web',
+      build: 0,
+    }));
     const response = await submitFeedback({
       category,
       subject: cleanSubject,
@@ -109,7 +115,9 @@ export default function FeedbackButton() {
       platform: platform === 'android' ? 'android' : Capacitor.isNativePlatform() ? 'capacitor' : 'web',
       user_agent: navigator.userAgent.slice(0, 512),
       viewport: `${window.innerWidth}×${window.innerHeight}`,
-      app_version: '0.1.0',
+      app_version: runtimeInfo.nativeAndroid
+        ? `${runtimeInfo.version} (${runtimeInfo.build})`
+        : 'Web',
     });
     setSubmitting(false);
 

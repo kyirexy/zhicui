@@ -11,7 +11,7 @@ from typing import Any, Literal
 from urllib.parse import unquote
 
 import requests as http_requests
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
@@ -24,6 +24,7 @@ from app.models.user import User as UserModel, list_users, count_users
 from app.services import (
     ai_juicer,
     activity_service,
+    app_release_service,
     audit_service,
     douyin_library,
     error_log_service,
@@ -247,6 +248,17 @@ _PLATFORM_LABELS: dict[str, str] = {
 def health_check() -> dict:
     """Simple liveness probe."""
     return _ok({"status": "ok", "service": "zhicui-knowbrew"})
+
+
+@router.get("/api/app/releases/latest")
+def latest_android_release(response: Response) -> dict:
+    """Return public, cache-resistant Android release metadata."""
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    try:
+        return _ok(app_release_service.get_latest_android_release())
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------

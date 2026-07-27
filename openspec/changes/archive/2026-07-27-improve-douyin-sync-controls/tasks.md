@@ -22,4 +22,4 @@
 
 - [x] 4.1 Run backend compilation and synchronization/logout API regressions
 - [x] 4.2 Run the Next.js production build and inspect the shared Capacitor output contract
-- [ ] 4.3 Commit scoped changes, push deployment remotes, and verify the production release
+- [x] 4.3 Commit scoped changes, push deployment remotes, and verify the production release

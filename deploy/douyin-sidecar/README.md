@@ -36,4 +36,4 @@ sudo systemctl restart zhicui-douyin-sidecar
 
 不要把 9000 端口加入公网防火墙或 Nginx。扫码登录应始终通过知萃的鉴权接口 `/api/library/douyin/login*` 发起。
 
-健康接口必须返回 `storage_mode: metadata_only` 和 `max_sync_count: 100`。同步接口只接受 50 或 100 条；`/download` 与 `/crawl` 在生产模式返回 403。
+健康接口必须返回 `storage_mode: metadata_only` 和 `max_sync_count: 100`。同步接口接受 1–100 条的精确整数范围；`/download` 与 `/crawl` 在生产模式返回 403。`DELETE /api/v1/cookies` 只清理抖音会话与二维码状态，不删除目录元数据或生成内容。

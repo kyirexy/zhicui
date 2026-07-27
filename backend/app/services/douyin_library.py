@@ -51,8 +51,17 @@ def _request(
                 json=json_body,
                 timeout=timeout,
             )
+            if not response.ok:
+                try:
+                    detail = str(response.json().get("detail") or "").strip()
+                except (AttributeError, ValueError):
+                    detail = ""
+                if detail:
+                    raise DouyinLibraryError(f"抖音收藏连接器拒绝操作：{detail}")
             response.raise_for_status()
             return response.json()
+    except DouyinLibraryError:
+        raise
     except (requests.RequestException, ValueError) as exc:
         raise DouyinLibraryError(f"抖音收藏连接器暂不可用：{exc}") from exc
 
@@ -359,16 +368,29 @@ def get_item(aweme_id: str) -> dict[str, Any] | None:
 
 
 def trigger_collect(count: int = 50, mode: str = "like") -> dict[str, Any]:
-    """启动 50/100 条的元数据同步任务。"""
+    """启动 1–100 条的元数据同步任务。"""
     safe_mode = mode if mode in {"like", "post", "collect"} else "like"
     companion_mode = "collection" if safe_mode == "collect" else safe_mode
-    safe_count = 100 if int(count) > 50 else 50
+    try:
+        safe_count = max(1, min(int(count), _MAX_SYNC_COUNT))
+    except (TypeError, ValueError):
+        safe_count = 50
     return _request(
         "POST",
         "/api/v1/auto-collect",
         json_body={"mode": companion_mode, "count": safe_count},
         timeout=15.0,
     )
+
+
+def clear_session() -> dict[str, Any]:
+    """Clear downloader cookies and QR state without deleting library data."""
+    state = _request("DELETE", "/api/v1/cookies", timeout=8.0)
+    return {
+        "disconnected": bool(state.get("cleared", True)),
+        "cookie_valid": bool(state.get("valid", False)),
+        "cookie_count": int(state.get("count") or 0),
+    }
 
 
 def start_login(browser: str = "chromium") -> dict[str, Any]:

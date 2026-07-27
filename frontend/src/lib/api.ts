@@ -364,12 +364,25 @@ export async function collectDouyinLibrary(
   count = 50,
   mode: DouyinSourceMode = 'like',
 ): Promise<ApiResponse<DouyinCollectionJob>> {
+  const boundedCount = Math.max(1, Math.min(100, Math.trunc(count) || 50));
   return request<DouyinCollectionJob>('/api/library/douyin/collect', {
     method: 'POST',
     body: JSON.stringify({
-      count: count > 50 ? 100 : 50,
+      count: boundedCount,
       mode,
     }),
+  });
+}
+
+export async function disconnectDouyinLibrary(
+  action: 'logout' | 'rebind' = 'logout',
+): Promise<ApiResponse<{
+  disconnected: boolean;
+  cookie_valid: boolean;
+  cookie_count: number;
+}>> {
+  return request(`/api/library/douyin/${action}`, {
+    method: 'POST',
   });
 }
 

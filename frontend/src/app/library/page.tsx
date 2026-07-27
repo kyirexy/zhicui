@@ -13,8 +13,10 @@ import {
   Grid3X3,
   Heart,
   LoaderCircle,
+  LogOut,
   QrCode,
   RefreshCw,
+  Repeat2,
   Search,
   ServerOff,
   SlidersHorizontal,
@@ -31,6 +33,7 @@ import LibraryVideoCard, {
 import {
   collectDouyinLibrary,
   deleteDouyinLibraryExtraction,
+  disconnectDouyinLibrary,
   extractDouyinLibraryItem,
   getDouyinCollectionJob,
   getDouyinLibraryStatus,
@@ -53,8 +56,10 @@ interface ExtractProgress {
 }
 
 const MAX_SELECTION = 50;
+const MAX_SYNC_COUNT = 100;
 const ALL_LIBRARY_ITEMS = 0;
 const SYNC_COUNT_OPTIONS = [50, 100] as const;
+type DouyinSessionAction = 'logout' | 'rebind';
 const SOURCE_MODES: Array<{
   value: DouyinSourceMode;
   label: string;
@@ -85,6 +90,11 @@ function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
+function clampInteger(value: number, minimum: number, maximum: number): number {
+  if (!Number.isFinite(value)) return minimum;
+  return Math.max(minimum, Math.min(maximum, Math.trunc(value)));
+}
+
 export default function VideoLibraryPage() {
   const [status, setStatus] = useState<DouyinLibraryStatus | null>(null);
   const [collectionJob, setCollectionJob] = useState<DouyinCollectionJob | null>(null);
@@ -103,6 +113,9 @@ export default function VideoLibraryPage() {
   const [qrPanelOpen, setQrPanelOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [batchExtracting, setBatchExtracting] = useState(false);
+  const [sessionAction, setSessionAction] = useState<DouyinSessionAction | null>(null);
+  const [sessionPending, setSessionPending] = useState(false);
+  const [sessionError, setSessionError] = useState('');
   const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
   const [aiWorkspaceOpen, setAiWorkspaceOpen] = useState(false);
   const [pipelineStage, setPipelineStage] = useState<'idle' | 'collect' | 'extract' | 'done'>('idle');
@@ -110,6 +123,7 @@ export default function VideoLibraryPage() {
   const [notice, setNotice] = useState('');
   const activeRef = useRef(true);
   const loginPollRef = useRef(0);
+  const sessionDialogRef = useRef<HTMLDialogElement | null>(null);
   const aiLauncherRef = useRef<HTMLButtonElement | null>(null);
   const aiCloseRef = useRef<HTMLButtonElement | null>(null);
   const restoreAiLauncherFocusRef = useRef(false);
@@ -404,8 +418,49 @@ export default function VideoLibraryPage() {
     setNotice('扫码登录等待超时，可以重新发起');
   };
 
+  const openSessionDialog = (action: DouyinSessionAction) => {
+    if (sessionPending) return;
+    setSessionAction(action);
+    setSessionError('');
+    sessionDialogRef.current?.showModal();
+  };
+
+  const closeSessionDialog = () => {
+    if (sessionPending) return;
+    sessionDialogRef.current?.close();
+    setSessionAction(null);
+    setSessionError('');
+  };
+
+  const confirmSessionAction = async () => {
+    if (!sessionAction || sessionPending) return;
+    const action = sessionAction;
+    setSessionPending(true);
+    setSessionError('');
+    const response = await disconnectDouyinLibrary(action);
+    if (!response.success || !response.data) {
+      setSessionPending(false);
+      setSessionError(response.error || '无法安全结束当前抖音会话，请稍后重试');
+      return;
+    }
+
+    closeQrLogin();
+    setStatus((current) => (
+      current
+        ? { ...current, cookie_valid: false, cookie_count: 0 }
+        : current
+    ));
+    setSessionPending(false);
+    sessionDialogRef.current?.close();
+    setSessionAction(null);
+    setNotice(action === 'rebind' ? '原抖音账号已退出，请扫码绑定新账号' : '已退出抖音，资料库内容仍会保留');
+    await refreshLoginStatus();
+    if (action === 'rebind') await startQrLogin();
+  };
+
   const waitForCollectionJob = async (
     initial: DouyinCollectionJob,
+    requestedCount: number,
   ): Promise<DouyinCollectionJob | null> => {
     setCollectionJob(initial);
     for (let attempt = 0; attempt < 600 && activeRef.current; attempt += 1) {
@@ -417,7 +472,7 @@ export default function VideoLibraryPage() {
         response.data.status === 'running'
           ? response.data.total > 0
             ? `自动流水线：正在同步${sourceLabel}，已处理 ${response.data.success}/${response.data.total}`
-            : `自动流水线：正在同步最近 ${syncCount} 条${sourceLabel}，已保存 ${response.data.success} 条`
+            : `自动流水线：正在同步最近 ${requestedCount} 条${sourceLabel}，已保存 ${response.data.success} 条`
           : `采集任务：${response.data.status}`,
       );
       if (response.data.status === 'success' || response.data.status === 'failed') {
@@ -429,10 +484,14 @@ export default function VideoLibraryPage() {
 
   const syncCollection = async () => {
     if (refreshing || batchExtracting || !loggedIn) return;
+    const requestedCount = clampInteger(syncCount, 1, MAX_SYNC_COUNT);
+    const requestedProcessCount = clampInteger(processCount, 0, requestedCount);
+    setSyncCount(requestedCount);
+    setProcessCount(requestedProcessCount);
     setRefreshing(true);
     setPipelineStage('collect');
-    setNotice(`自动流水线：开始同步最近 ${syncCount} 条${sourceLabel}`);
-    const response = await collectDouyinLibrary(syncCount, sourceMode);
+    setNotice(`自动流水线：开始同步最近 ${requestedCount} 条${sourceLabel}`);
+    const response = await collectDouyinLibrary(requestedCount, sourceMode);
     if (!response.success || !response.data) {
       setRefreshing(false);
       setPipelineStage('idle');
@@ -440,7 +499,7 @@ export default function VideoLibraryPage() {
       return;
     }
 
-    const finalJob = await waitForCollectionJob(response.data);
+    const finalJob = await waitForCollectionJob(response.data, requestedCount);
     setRefreshing(false);
     if (!finalJob || finalJob.status === 'failed') {
       setPipelineStage('idle');
@@ -451,9 +510,11 @@ export default function VideoLibraryPage() {
     const refreshed = await loadItems(true);
     const targets = refreshed
       .filter((item) => item.can_extract)
-      .slice(0, Math.min(processCount, syncCount, MAX_SELECTION));
-    setSelected(new Set(targets.map((item) => item.aweme_id)));
-    if (!autoProcess) {
+      .slice(0, requestedProcessCount);
+    setSelected(new Set(
+      targets.slice(0, MAX_SELECTION).map((item) => item.aweme_id),
+    ));
+    if (!autoProcess || requestedProcessCount === 0) {
       setPipelineStage('done');
       setNotice(`同步完成：资料库现有 ${refreshed.length} 条${sourceLabel}，未运行 AI 处理`);
       return;
@@ -531,10 +592,30 @@ export default function VideoLibraryPage() {
           </span>
         </div>
         {loggedIn ? (
-          <span className="library-login-state">
-            <CheckCircle2 size={15} />
-            抖音已登录
-          </span>
+          <div className="library-login-actions">
+            <span className="library-login-state">
+              <CheckCircle2 size={15} />
+              抖音已登录
+            </span>
+            <button
+              type="button"
+              className="library-session-button"
+              onClick={() => openSessionDialog('rebind')}
+              disabled={refreshing || batchExtracting || sessionPending}
+            >
+              <Repeat2 size={15} />
+              换绑账号
+            </button>
+            <button
+              type="button"
+              className="library-session-button is-danger"
+              onClick={() => openSessionDialog('logout')}
+              disabled={refreshing || batchExtracting || sessionPending}
+            >
+              <LogOut size={15} />
+              退出抖音
+            </button>
+          </div>
         ) : (
           <button
             type="button"
@@ -551,6 +632,56 @@ export default function VideoLibraryPage() {
           </button>
         )}
       </div>
+
+      <dialog
+        ref={sessionDialogRef}
+        className="library-session-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="library-session-dialog-title"
+        aria-describedby="library-session-dialog-description"
+        onCancel={(event) => {
+          if (sessionPending) {
+            event.preventDefault();
+            return;
+          }
+          setSessionAction(null);
+          setSessionError('');
+        }}
+      >
+        <div className="library-session-dialog-card">
+          <div className="library-session-dialog-icon" aria-hidden="true">
+            {sessionAction === 'rebind' ? <Repeat2 size={20} /> : <LogOut size={20} />}
+          </div>
+          <div>
+            <h2 id="library-session-dialog-title">
+              {sessionAction === 'rebind' ? '换绑另一个抖音账号？' : '确认退出抖音？'}
+            </h2>
+            <p id="library-session-dialog-description">
+              {sessionAction === 'rebind'
+                ? '会先安全退出当前账号，再立即打开新的扫码登录。已有文案、知识卡和计划不会删除。'
+                : '只会清除当前抖音登录状态；已有文案、知识卡、计划和资料库记录都会保留。'}
+            </p>
+          </div>
+          {sessionError && (
+            <p className="library-session-error" role="alert">{sessionError}</p>
+          )}
+          <div className="library-session-dialog-actions">
+            <button type="button" onClick={closeSessionDialog} disabled={sessionPending}>
+              取消
+            </button>
+            <button
+              type="button"
+              className="is-primary"
+              onClick={confirmSessionAction}
+              disabled={sessionPending}
+            >
+              {sessionPending && <LoaderCircle size={15} className="animate-spin" />}
+              {sessionAction === 'rebind' ? '退出并重新扫码' : '确认退出'}
+            </button>
+          </div>
+        </div>
+      </dialog>
 
       {qrPanelOpen && (
         <section className="library-qr-card" aria-live="polite" aria-label="抖音扫码登录">
@@ -641,46 +772,68 @@ export default function VideoLibraryPage() {
           </div>
         </div>
 
-        <details className="library-advanced-settings">
-          <summary>
-            <SlidersHorizontal size={14} />
-            <span>处理设置</span>
+        <section className="library-processing-settings" aria-labelledby="library-processing-title">
+          <div className="library-processing-heading">
+            <span id="library-processing-title">
+              <SlidersHorizontal size={14} />
+              处理设置
+            </span>
             <small>同步 {syncCount} 条 · {autoProcess ? `处理 ${processCount} 条` : '不运行 AI'}</small>
-            <ChevronDown size={14} />
-          </summary>
+          </div>
           <div className="library-advanced-body">
             <div className="library-auto-controls">
-              <div className="library-count-control">
+              <div className="library-count-control is-sync-count">
                 <span>同步范围</span>
-                <span className="library-count-options" aria-label="选择同步数量">
-                  {SYNC_COUNT_OPTIONS.map((count) => (
-                    <button
-                      type="button"
-                      key={count}
-                      className={syncCount === count ? 'is-active' : ''}
-                      aria-pressed={syncCount === count}
-                      onClick={() => {
-                        setSyncCount(count);
-                        setProcessCount((current) => Math.min(current, count, MAX_SELECTION));
+                <div className="library-sync-count-inputs">
+                  <span className="library-count-options" aria-label="选择同步数量">
+                    {SYNC_COUNT_OPTIONS.map((count) => (
+                      <button
+                        type="button"
+                        key={count}
+                        className={syncCount === count ? 'is-active' : ''}
+                        aria-pressed={syncCount === count}
+                        onClick={() => {
+                          setSyncCount(count);
+                          setProcessCount((current) => Math.min(current, count));
+                        }}
+                      >
+                        {count} 条
+                      </button>
+                    ))}
+                  </span>
+                  <label className="library-custom-count">
+                    <span className="sr-only">自定义同步数量，1 到 100 条</span>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={1}
+                      max={MAX_SYNC_COUNT}
+                      value={syncCount}
+                      aria-label="自定义同步数量"
+                      onChange={(event) => {
+                        const nextCount = clampInteger(
+                          Number(event.target.value),
+                          1,
+                          MAX_SYNC_COUNT,
+                        );
+                        setSyncCount(nextCount);
+                        setProcessCount((current) => Math.min(current, nextCount));
                       }}
-                    >
-                      {count} 条
-                    </button>
-                  ))}
-                </span>
+                    />
+                    <small>条</small>
+                  </label>
+                </div>
               </div>
               <label className="library-count-control">
                 <span>自动处理数量</span>
                 <input
                   type="number"
-                  min={1}
-                  max={Math.min(syncCount, MAX_SELECTION)}
+                  inputMode="numeric"
+                  min={0}
+                  max={syncCount}
                   value={processCount}
                   onChange={(event) => setProcessCount(
-                    Math.max(
-                      1,
-                      Math.min(syncCount, MAX_SELECTION, Number(event.target.value) || 1),
-                    ),
+                    clampInteger(Number(event.target.value), 0, syncCount),
                   )}
                 />
               </label>
@@ -697,11 +850,11 @@ export default function VideoLibraryPage() {
               </label>
             </div>
           </div>
-        </details>
+        </section>
 
         {sourceMode === 'collect' && (
           <p className="library-mode-warning">
-            这里读取抖音默认“全部收藏”，但只同步你选择的最近 50 或 100 条，不会拉取全部收藏。服务器不保存视频文件，仅保存必要元数据、文案与 AI 结果；处理时临时拉流并在结束后立即清理。
+            这里读取抖音默认“全部收藏”，但只同步你选择的最近 {syncCount} 条，单次最多 100 条，不会拉取全部收藏。服务器不保存视频文件，仅保存必要元数据、文案与 AI 结果；处理时临时拉流并在结束后立即清理。
           </p>
         )}
         {collectionJob && (refreshing || batchExtracting) && (

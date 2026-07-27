@@ -71,9 +71,11 @@ class NoteAskRequest(BaseModel):
 
 
 class LibraryCollectRequest(BaseModel):
-    count: Literal[50, 100] = Field(
+    count: int = Field(
         default=50,
-        description="本次仅同步最近 50 或 100 条，最多 100 条",
+        ge=1,
+        le=100,
+        description="本次同步最近 1–100 条，最多 100 条",
     )
     mode: Literal["like", "post", "collect"] = "like"
 
@@ -931,6 +933,28 @@ def start_douyin_library_login(
         if current["running"]:
             return _ok({**current, "started": False})
         return _ok(douyin_library.start_login(body.browser))
+    except douyin_library.DouyinLibraryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/api/library/douyin/logout")
+def logout_douyin_library(
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Clear the companion login session without deleting library data."""
+    try:
+        return _ok(douyin_library.clear_session())
+    except douyin_library.DouyinLibraryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/api/library/douyin/rebind")
+def rebind_douyin_library(
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Clear the current session before the client starts a new QR login."""
+    try:
+        return _ok(douyin_library.clear_session())
     except douyin_library.DouyinLibraryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 

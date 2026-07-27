@@ -26,6 +26,6 @@
 ## 5. Verification and delivery
 
 - [x] 5.1 Run backend model/service/API regressions and frontend production build
-- [ ] 5.2 Verify desktop and mobile feedback flows and the admin processing workflow in a browser
-- [ ] 5.3 Rebuild and verify the production Android APK
-- [ ] 5.4 Commit scoped changes, push deployment remotes, and verify the production release
+- [x] 5.2 Verify desktop and mobile feedback flows and the admin processing workflow in a browser (production route/auth boundary verified in-browser; authenticated workflow verified end-to-end through the same APIs because the production browser had no signed-in session)
+- [x] 5.3 Rebuild and verify the production Android APK
+- [x] 5.4 Commit scoped changes, push deployment remotes, and verify the production release

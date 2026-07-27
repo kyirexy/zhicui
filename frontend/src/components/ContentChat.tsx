@@ -21,6 +21,7 @@ import {
 import { askNote } from '@/lib/api';
 import type {
   CardType,
+  NoteAnswerMode,
   NoteChatTurn,
   NoteEvidence,
   NoteSourceContext,
@@ -34,6 +35,7 @@ interface ContentChatProps {
 
 interface ChatMessage extends NoteChatTurn {
   id: string;
+  answerMode?: NoteAnswerMode;
   evidence?: NoteEvidence[];
   grounded?: boolean;
   followUps?: string[];
@@ -109,6 +111,9 @@ function parseStoredMessages(value: string): ChatMessage[] {
       id: item.id as string,
       role: item.role as ChatMessage['role'],
       content: item.content as string,
+      answerMode: item.answerMode === 'creative' || item.answerMode === 'grounded'
+        ? item.answerMode
+        : undefined,
       evidence: Array.isArray(item.evidence) ? item.evidence as NoteEvidence[] : undefined,
       grounded: typeof item.grounded === 'boolean' ? item.grounded : undefined,
       followUps: Array.isArray(item.followUps)
@@ -233,6 +238,7 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
             id: createMessageId(),
             role: 'assistant',
             content: answer.answer,
+            answerMode: answer.answer_mode ?? 'grounded',
             evidence: answer.evidence ?? [],
             grounded: answer.grounded,
             followUps: answer.follow_up_questions ?? [],
@@ -278,173 +284,193 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
   return (
     <section className="content-chat" aria-labelledby={`content-chat-${noteId}`}>
       <div className="content-chat__ambient" aria-hidden />
-      <header className="content-chat__header">
-        <span className="content-chat__mark" aria-hidden>
-          <ChatCircleDots size={23} weight="duotone" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h3 id={`content-chat-${noteId}`} className="content-chat__title">向完整视频文稿提问</h3>
-            <span className="content-chat__grounded">
-              <ShieldCheck size={13} weight="duotone" aria-hidden />
-              完整文稿 + AI 理解
-            </span>
+      <div className="content-chat__fixed-head">
+        <header className="content-chat__header">
+          <span className="content-chat__mark" aria-hidden>
+            <ChatCircleDots size={23} weight="duotone" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 id={`content-chat-${noteId}`} className="content-chat__title">向完整视频文稿提问</h3>
+              <span className="content-chat__grounded">
+                <ShieldCheck size={13} weight="duotone" aria-hidden />
+                完整文稿 + AI 理解
+              </span>
+            </div>
+            <p className="content-chat__subtitle">
+              {title ? `基于《${title}》的完整文稿追问` : '扫描完整视频文稿，并结合 AI 已提炼的卡片信息回答。'}
+            </p>
           </div>
-          <p className="content-chat__subtitle">
-            {title ? `基于《${title}》的完整文稿追问` : '扫描完整视频文稿，并结合 AI 已提炼的卡片信息回答。'}
-          </p>
-        </div>
-        {messages.length > 0 && (
-          <button type="button" onClick={clearConversation} className="content-chat__clear" aria-label="清空当前对话">
-            <TrashSimple size={16} weight="duotone" aria-hidden />
-            <span className="hidden sm:inline">清空</span>
-          </button>
-        )}
-      </header>
+          {messages.length > 0 && (
+            <button type="button" onClick={clearConversation} className="content-chat__clear" aria-label="清空当前对话">
+              <TrashSimple size={16} weight="duotone" aria-hidden />
+              <span className="hidden sm:inline">清空</span>
+            </button>
+          )}
+        </header>
 
-      <div className="content-chat__source-contract" aria-label="回答使用的信息来源">
-        <span>
-          <FileText size={15} weight="duotone" aria-hidden />
-          完整视频文稿
-        </span>
-        <i aria-hidden>+</i>
-        <span>
-          <Brain size={15} weight="duotone" aria-hidden />
-          AI 卡片理解
-        </span>
+        <div className="content-chat__source-contract" aria-label="回答使用的信息来源">
+          <span>
+            <FileText size={15} weight="duotone" aria-hidden />
+            完整视频文稿
+          </span>
+          <i aria-hidden>+</i>
+          <span>
+            <Brain size={15} weight="duotone" aria-hidden />
+            AI 卡片理解
+          </span>
+        </div>
       </div>
 
-      {messages.length === 0 && (
-        <div className="content-chat__suggestions" aria-label="推荐问题">
-          {suggestions.map((question, index) => (
-            <button
-              key={question}
-              type="button"
-              onClick={() => void submitQuestion(question)}
-              className="content-chat__suggestion"
-              disabled={sending}
-            >
-              <span className="content-chat__suggestion-icon" aria-hidden>
-                {index === 0
-                  ? <Sparkle size={17} weight="duotone" />
-                  : index === 1
-                    ? <LightbulbFilament size={17} weight="duotone" />
-                    : <ListChecks size={17} weight="duotone" />}
-              </span>
-              <span>{question}</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {messages.length > 0 && (
-        <div className="content-chat__messages" role="log" aria-live="polite" aria-relevant="additions">
-          {messages.map((message) => (
-            <article key={message.id} className={`content-chat__message content-chat__message--${message.role}`}>
-              <span className="content-chat__role">
-                {message.role === 'user' ? '你' : '知萃'}
-              </span>
-              <div className="content-chat__bubble">
-                <p>{message.content}</p>
-                {message.role === 'assistant' && (
-                  <div className={`content-chat__answer-state ${message.grounded ? 'is-grounded' : 'is-limited'}`}>
-                    {message.grounded
-                      ? <CheckCircle size={14} weight="fill" aria-hidden />
-                      : <WarningCircle size={14} weight="fill" aria-hidden />}
-                    <span>{message.grounded ? '回答依据已核对' : '当前来源的依据不足'}</span>
-                  </div>
-                )}
-                {message.role === 'assistant' && message.sourceContext && (
-                  <div className="content-chat__source-context" aria-label="本次回答的来源覆盖范围">
-                    <span>
-                      <MagnifyingGlass size={13} weight="duotone" aria-hidden />
-                      {transcriptCoverageLabel(message.sourceContext)}
-                    </span>
-                    <span className={message.sourceContext.ai_summary_used ? 'is-active' : ''}>
-                      <Brain size={13} weight="duotone" aria-hidden />
-                      {message.sourceContext.ai_summary_used ? '已融合 AI 卡片理解' : '没有可用的 AI 卡片理解'}
-                    </span>
-                  </div>
-                )}
-                {message.role === 'assistant' && message.evidence && message.evidence.length > 0 && (
-                  <details className="content-chat__evidence">
-                    <summary>
-                      <BookOpenText size={15} weight="duotone" aria-hidden />
-                      查看 {message.evidence.length} 条原文依据
-                    </summary>
-                    <div className="content-chat__evidence-list">
-                      {message.evidence.map((item, index) => (
-                        <blockquote key={`${item.source}-${item.quote}-${index}`}>
-                          <Quotes size={14} weight="fill" aria-hidden />
-                          <span>{item.quote}</span>
-                          <small>
-                            {item.source === 'transcript'
-                              ? typeof item.position_percent === 'number'
-                                ? `视频转录 · 文稿约 ${item.position_percent}% 处`
-                                : '视频转录原文'
-                              : 'AI 卡片理解'}
-                          </small>
-                        </blockquote>
-                      ))}
-                    </div>
-                  </details>
-                )}
-              </div>
-            </article>
-          ))}
-          {sending && (
-            <div className="content-chat__thinking" role="status">
-              <span className="content-chat__thinking-icon" aria-hidden><Sparkle size={16} weight="fill" /></span>
-              正在扫描完整文稿，并结合 AI 卡片理解
-              <span className="content-chat__dots" aria-hidden><i /><i /><i /></span>
-            </div>
-          )}
-          <div ref={messageEndRef} aria-hidden />
-        </div>
-      )}
-
-      {messages.length > 0 && followUpSuggestions.length > 0 && !sending && (
-        <div className="content-chat__follow-ups" aria-label="继续追问">
-          <span>继续追问</span>
-          <div>
-            {followUpSuggestions.map((question) => (
-              <button key={question} type="button" onClick={() => void submitQuestion(question)}>
-                {question}
+      <div className="content-chat__scroll-region">
+        {messages.length === 0 && (
+          <div className="content-chat__suggestions" aria-label="推荐问题">
+            {suggestions.map((question, index) => (
+              <button
+                key={question}
+                type="button"
+                onClick={() => void submitQuestion(question)}
+                className="content-chat__suggestion"
+                disabled={sending}
+              >
+                <span className="content-chat__suggestion-icon" aria-hidden>
+                  {index === 0
+                    ? <Sparkle size={17} weight="duotone" />
+                    : index === 1
+                      ? <LightbulbFilament size={17} weight="duotone" />
+                      : <ListChecks size={17} weight="duotone" />}
+                </span>
+                <span>{question}</span>
               </button>
             ))}
           </div>
-        </div>
-      )}
+        )}
 
-      {error && (
-        <div className="content-chat__error" role="alert">
-          <span>{error}</span>
-          {lastQuestion && (
-            <button type="button" onClick={() => void submitQuestion(lastQuestion, false)} disabled={sending}>
-              <ArrowClockwise size={14} weight="bold" aria-hidden />
-              重试
-            </button>
-          )}
-        </div>
-      )}
+        {messages.length > 0 && (
+          <div className="content-chat__messages" role="log" aria-live="polite" aria-relevant="additions">
+            {messages.map((message) => (
+              <article key={message.id} className={`content-chat__message content-chat__message--${message.role}`}>
+                <span className="content-chat__role">
+                  {message.role === 'user' ? '你' : '知萃'}
+                </span>
+                <div className="content-chat__bubble">
+                  <p>{message.content}</p>
+                  {message.role === 'assistant' && (
+                    <div className={`content-chat__answer-state ${
+                      message.answerMode === 'creative'
+                        ? 'is-creative'
+                        : message.grounded
+                          ? 'is-grounded'
+                          : 'is-limited'
+                    }`}>
+                      {message.answerMode === 'creative'
+                        ? <Sparkle size={14} weight="fill" aria-hidden />
+                        : message.grounded
+                          ? <CheckCircle size={14} weight="fill" aria-hidden />
+                          : <WarningCircle size={14} weight="fill" aria-hidden />}
+                      <span>
+                        {message.answerMode === 'creative'
+                          ? 'AI 生成示例 · 非原文内容'
+                          : message.grounded
+                            ? '回答依据已核对'
+                            : '当前来源的依据不足'}
+                      </span>
+                    </div>
+                  )}
+                  {message.role === 'assistant' && message.sourceContext && (
+                    <div className="content-chat__source-context" aria-label="本次回答的来源覆盖范围">
+                      <span>
+                        <MagnifyingGlass size={13} weight="duotone" aria-hidden />
+                        {transcriptCoverageLabel(message.sourceContext)}
+                      </span>
+                      <span className={message.sourceContext.ai_summary_used ? 'is-active' : ''}>
+                        <Brain size={13} weight="duotone" aria-hidden />
+                        {message.sourceContext.ai_summary_used ? '已融合 AI 卡片理解' : '没有可用的 AI 卡片理解'}
+                      </span>
+                    </div>
+                  )}
+                  {message.role === 'assistant' && message.evidence && message.evidence.length > 0 && (
+                    <details className="content-chat__evidence">
+                      <summary>
+                        <BookOpenText size={15} weight="duotone" aria-hidden />
+                        查看 {message.evidence.length} 条原文依据
+                      </summary>
+                      <div className="content-chat__evidence-list">
+                        {message.evidence.map((item, index) => (
+                          <blockquote key={`${item.source}-${item.quote}-${index}`}>
+                            <Quotes size={14} weight="fill" aria-hidden />
+                            <span>{item.quote}</span>
+                            <small>
+                              {item.source === 'transcript'
+                                ? typeof item.position_percent === 'number'
+                                  ? `视频转录 · 文稿约 ${item.position_percent}% 处`
+                                  : '视频转录原文'
+                                : 'AI 卡片理解'}
+                            </small>
+                          </blockquote>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </div>
+              </article>
+            ))}
+            {sending && (
+              <div className="content-chat__thinking" role="status">
+                <span className="content-chat__thinking-icon" aria-hidden><Sparkle size={16} weight="fill" /></span>
+                正在扫描完整文稿，并结合 AI 卡片理解
+                <span className="content-chat__dots" aria-hidden><i /><i /><i /></span>
+              </div>
+            )}
+            <div ref={messageEndRef} aria-hidden />
+          </div>
+        )}
 
-      <form onSubmit={handleSubmit} className="content-chat__composer">
-        <textarea
-          value={input}
-          onChange={(event) => setInput(event.target.value.slice(0, 600))}
-          onKeyDown={handleKeyDown}
-          rows={1}
-          maxLength={600}
-          placeholder="基于完整视频文稿提问…"
-          aria-label="输入关于完整视频文稿的问题"
-          disabled={sending}
-        />
-        <span className="content-chat__count" aria-hidden>{input.length}/600</span>
-        <button type="submit" disabled={!input.trim() || sending} aria-label="发送问题">
-          <PaperPlaneTilt size={19} weight="fill" aria-hidden />
-        </button>
-      </form>
-      <p className="content-chat__hint">Enter 发送 · 回答会标明全文覆盖方式和可核对依据</p>
+        {messages.length > 0 && followUpSuggestions.length > 0 && !sending && (
+          <div className="content-chat__follow-ups" aria-label="继续追问">
+            <span>继续追问</span>
+            <div>
+              {followUpSuggestions.map((question) => (
+                <button key={question} type="button" onClick={() => void submitQuestion(question)}>
+                  {question}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div className="content-chat__error" role="alert">
+            <span>{error}</span>
+            {lastQuestion && (
+              <button type="button" onClick={() => void submitQuestion(lastQuestion, false)} disabled={sending}>
+                <ArrowClockwise size={14} weight="bold" aria-hidden />
+                重试
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="content-chat__composer-dock">
+        <form onSubmit={handleSubmit} className="content-chat__composer">
+          <textarea
+            value={input}
+            onChange={(event) => setInput(event.target.value.slice(0, 600))}
+            onKeyDown={handleKeyDown}
+            rows={1}
+            maxLength={600}
+            placeholder="基于完整视频文稿提问…"
+            aria-label="输入关于完整视频文稿的问题"
+            disabled={sending}
+          />
+          <span className="content-chat__count" aria-hidden>{input.length}/600</span>
+          <button type="submit" disabled={!input.trim() || sending} aria-label="发送问题">
+            <PaperPlaneTilt size={19} weight="fill" aria-hidden />
+          </button>
+        </form>
+        <p className="content-chat__hint">Enter 发送 · 回答会标明全文覆盖方式和可核对依据</p>
+      </div>
     </section>
   );
 }

@@ -561,23 +561,27 @@ def _call_llm(
 # ---------------------------------------------------------------------------
 
 _NOTE_CHAT_SYSTEM_PROMPT = """\
-你是知萃的内容追问助手。你只能依据当前笔记提供的标题、AI 对内容的结构化理解，以及视频完整文稿或从完整文稿中检索出的相关原文片段回答。
+你是知萃的内容追问助手。你要根据服务端指定的【任务模式】，在“事实核对”和“创作协助”之间正确切换。当前笔记的标题、AI 对内容的结构化理解，以及视频完整文稿或从完整文稿中检索出的相关原文片段，是唯一可引用的事实来源。
 
 回答规则：
-1. 先直接回答问题，再给出必要的依据或步骤；默认使用简洁中文。
+1. 先直接回答问题，再给出必要的依据或步骤；默认使用简洁中文。answer 字段使用易读纯文本，不要加入 Markdown 标记。
 2. 不得补造原文没有出现的数字、人物、结论、产品参数或因果关系。
-3. 如果来源不足以回答，必须明确说“原内容没有提到这一点”，然后说明当前内容最多能支持什么判断。
-4. 可以做归纳、对比和行动化整理，但推断必须标注为“基于原内容的推断”。
-5. 对话历史只用于理解指代和上下文，不得覆盖笔记来源中的事实。
-6. 不要声称访问了互联网、完整视频画面或笔记之外的资料。
-7. evidence 中的 quote 必须逐字复制自【视频文稿上下文】或【AI 对内容的结构化理解】，不得改写。
-8. follow_up_questions 最多给 3 个，必须能继续用同一份内容回答或核实。
-9. 【视频文稿上下文】中的“相关片段/原文约 N% 处”是检索标记，不得复制进 evidence quote。
-10. AI 结构化理解可以帮助归纳、关联和行动化，但具体事实应优先服从视频文稿原文。
+3. 【任务模式】为 grounded 时，只回答来源能够支持的事实；来源不足时必须明确说“原内容没有提到这一点”，并说明当前内容最多能支持什么判断。
+4. 【任务模式】为 creative 时，用户是在请求示例、提示词、文案、改写、扩写、模拟或头脑风暴。此时必须直接完成创作，不得因为原文没有现成成品而拒绝；回答开头要明确标注“AI 生成示例（非原文内容）”。
+5. creative 模式可以根据原文目标、风格和约束生成新内容，但不得把新内容中的细节说成原文事实，也不得把生成内容放进 evidence。
+6. 可以做归纳、对比和行动化整理，但推断必须标注为“基于原内容的推断”。
+7. 最近一轮用户指令或纠正优先；例如用户说“随便给一个”时，应直接给出一个可用版本，不要重复此前的来源不足回答。
+8. 对话历史只用于理解指代和上下文，不得覆盖笔记来源中的事实。
+9. 不要声称访问了互联网、完整视频画面或笔记之外的资料。
+10. evidence 中的 quote 必须逐字复制自【视频文稿上下文】或【AI 对内容的结构化理解】，不得改写。
+11. follow_up_questions 最多给 3 个，必须能继续用同一份内容回答、核实或继续创作。
+12. 【视频文稿上下文】中的“相关片段/原文约 N% 处”是检索标记，不得复制进 evidence quote。
+13. AI 结构化理解可以帮助归纳、关联和行动化，但具体事实应优先服从视频文稿原文。
 
 只输出下面结构的 JSON，不要输出 Markdown 代码围栏或额外解释：
 {
   "answer": "直接、清晰的中文回答",
+  "answer_mode": "grounded",
   "evidence": [
     {"quote": "20-180 字的来源原文", "source": "transcript"}
   ],
@@ -585,7 +589,7 @@ _NOTE_CHAT_SYSTEM_PROMPT = """\
   "follow_up_questions": ["一个自然的后续问题"]
 }
 
-source 只能是 transcript 或 summary。来源不足时 evidence 返回空数组，grounded 返回 false。
+answer_mode 必须与【任务模式】一致。source 只能是 transcript 或 summary。来源不足时 evidence 返回空数组，grounded 返回 false。
 """
 
 _NOTE_TRANSCRIPT_DIRECT_LIMIT = 14000
@@ -598,6 +602,44 @@ _NOTE_QUERY_STOP_SIGNALS = {
     "哪些", "是否", "可以", "一下", "提到", "观点", "问题", "其中",
     "他们", "它们", "时候", "方面", "以及", "进行", "一个",
 }
+_NOTE_CREATIVE_REQUEST_PATTERNS = (
+    r"(?:随便|直接)(?:给|来|写|生成|做|编)(?:我)?(?:一个|一份|一版|一段|一套|几个)?",
+    r"(?:给|来|写|生成|做|设计|提供|起草|拟定|创作|编写)(?:我)?"
+    r".{0,10}(?:示例|例子|提示词|文案|模板|版本|草稿|方案)",
+    r"(?:示例|例子|提示词|文案|模板|版本|草稿|方案).{0,10}"
+    r"(?:给我|来一个|写一个|生成一个|做一个|提供一个)",
+    r"(?:帮我|替我|给我)(?:写|生成|做|设计|起草|拟定|创作|编写|想)"
+    r".{0,12}",
+    r"(?:改写|重写|润色|扩写|缩写|仿写|续写|翻译|头脑风暴|脑暴|模拟一个|假设一个)",
+)
+
+
+def _note_answer_mode(question: str) -> str:
+    """Select creative assistance only for explicit generative instructions."""
+    normalized = re.sub(r"\s+", "", question).lower()
+    if any(re.search(pattern, normalized) for pattern in _NOTE_CREATIVE_REQUEST_PATTERNS):
+        return "creative"
+    return "grounded"
+
+
+def _note_plain_text_answer(answer: str) -> str:
+    """Remove common Markdown decoration because the chat bubble is plain text."""
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", answer)
+    text = re.sub(r"(?m)^\s*>\s?", "", text)
+    text = re.sub(r"\*\*([^*\n]+)\*\*", r"\1", text)
+    text = re.sub(r"__([^_\n]+)__", r"\1", text)
+    text = re.sub(r"`([^`\n]+)`", r"\1", text)
+    return text.strip()
+
+
+def _ensure_note_creative_label(answer: str, answer_mode: str) -> str:
+    """Keep generated material visibly separate from transcript facts."""
+    answer = _note_plain_text_answer(answer)
+    if answer_mode != "creative":
+        return answer
+    if re.search(r"(?:AI|人工智能).{0,8}(?:生成|创作)|非原文|不是原文", answer, re.IGNORECASE):
+        return answer
+    return f"AI 生成示例（非原文内容）：\n\n{answer}"
 
 
 def _note_ai_summary_context(
@@ -899,6 +941,7 @@ def answer_note_question(
     if not clean_question:
         raise ValueError("问题不能为空")
 
+    answer_mode = _note_answer_mode(clean_question)
     summary_text = _note_ai_summary_context(ai_summary)
 
     history_lines: list[str] = []
@@ -932,9 +975,20 @@ def answer_note_question(
     else:
         transcript_coverage = "当前笔记没有可用视频文稿。"
 
+    mode_instruction = (
+        "creative（创作协助）：直接交付用户要的示例或成品，并明确标注为 AI 生成、"
+        "非原文内容；原文只提供创作方向和约束。"
+        if answer_mode == "creative"
+        else
+        "grounded（事实核对）：只回答来源能够支持的内容；缺失的事实必须明确说明未提到。"
+    )
+
     user_prompt = f"""\
 【笔记标题】
 {title.strip()[:512] or '未命名内容'}
+
+【任务模式】
+{mode_instruction}
 
 【来源覆盖说明】
 {transcript_coverage}
@@ -957,7 +1011,7 @@ def answer_note_question(
         system=_NOTE_CHAT_SYSTEM_PROMPT,
         user=user_prompt,
         max_tokens=1600,
-        temperature=0.2,
+        temperature=0.35 if answer_mode == "creative" else 0.2,
         timeout=60,
         operation="note_qa",
     )
@@ -966,7 +1020,8 @@ def answer_note_question(
         parsed = json.loads(raw_answer)
     except (json.JSONDecodeError, TypeError):
         return {
-            "answer": raw_answer,
+            "answer": _ensure_note_creative_label(raw_answer, answer_mode),
+            "answer_mode": answer_mode,
             "evidence": [],
             "grounded": False,
             "follow_up_questions": [],
@@ -975,7 +1030,8 @@ def answer_note_question(
 
     if not isinstance(parsed, dict):
         return {
-            "answer": raw_answer,
+            "answer": _ensure_note_creative_label(raw_answer, answer_mode),
+            "answer_mode": answer_mode,
             "evidence": [],
             "grounded": False,
             "follow_up_questions": [],
@@ -984,7 +1040,12 @@ def answer_note_question(
 
     answer = str(parsed.get("answer") or "").strip()
     if not answer:
-        answer = "原内容没有提供足够信息来回答这个问题。"
+        answer = (
+            "暂时没有成功生成这个创作示例，请换一种说法后重试。"
+            if answer_mode == "creative"
+            else "原内容没有提供足够信息来回答这个问题。"
+        )
+    answer = _ensure_note_creative_label(answer, answer_mode)
 
     evidence = _validated_note_evidence(
         parsed.get("evidence"),
@@ -994,6 +1055,8 @@ def answer_note_question(
     )
     return {
         "answer": answer,
+        # The server-selected mode wins over untrusted model output.
+        "answer_mode": answer_mode,
         "evidence": evidence,
         # Never trust the model's boolean directly: evidence is grounded only
         # after the quote has been found in the exact context supplied above.

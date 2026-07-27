@@ -112,6 +112,7 @@ export interface NoteEvidence {
 }
 
 export type NoteTranscriptMode = 'full' | 'retrieved' | 'none';
+export type NoteAnswerMode = 'grounded' | 'creative';
 
 export interface NoteSourceContext {
   transcript_chars: number;
@@ -124,6 +125,7 @@ export interface NoteSourceContext {
 export interface NoteAskResult {
   note_id: string;
   answer: string;
+  answer_mode?: NoteAnswerMode;
   grounded: boolean;
   evidence: NoteEvidence[];
   follow_up_questions: string[];

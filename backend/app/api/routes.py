@@ -1292,6 +1292,7 @@ def ask_note(
     return _ok({
         "note_id": note.id,
         "answer": result["answer"],
+        "answer_mode": result["answer_mode"],
         "grounded": result["grounded"],
         "evidence": result["evidence"],
         "follow_up_questions": result["follow_up_questions"],

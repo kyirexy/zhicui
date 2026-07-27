@@ -54,7 +54,7 @@ interface ExtractProgress {
 
 const MAX_SELECTION = 50;
 const ALL_LIBRARY_ITEMS = 0;
-const MAX_SYNC_COUNT = 500;
+const SYNC_COUNT_OPTIONS = [50, 100] as const;
 const SOURCE_MODES: Array<{
   value: DouyinSourceMode;
   label: string;
@@ -650,23 +650,25 @@ export default function VideoLibraryPage() {
           </summary>
           <div className="library-advanced-body">
             <div className="library-auto-controls">
-              <label className="library-count-control">
-                <span>同步数量</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={MAX_SYNC_COUNT}
-                  value={syncCount}
-                  onChange={(event) => {
-                    const nextCount = Math.max(
-                      1,
-                      Math.min(MAX_SYNC_COUNT, Number(event.target.value) || 1),
-                    );
-                    setSyncCount(nextCount);
-                    setProcessCount((current) => Math.min(current, nextCount, MAX_SELECTION));
-                  }}
-                />
-              </label>
+              <div className="library-count-control">
+                <span>同步范围</span>
+                <span className="library-count-options" aria-label="选择同步数量">
+                  {SYNC_COUNT_OPTIONS.map((count) => (
+                    <button
+                      type="button"
+                      key={count}
+                      className={syncCount === count ? 'is-active' : ''}
+                      aria-pressed={syncCount === count}
+                      onClick={() => {
+                        setSyncCount(count);
+                        setProcessCount((current) => Math.min(current, count, MAX_SELECTION));
+                      }}
+                    >
+                      {count} 条
+                    </button>
+                  ))}
+                </span>
+              </div>
               <label className="library-count-control">
                 <span>自动处理数量</span>
                 <input
@@ -699,7 +701,7 @@ export default function VideoLibraryPage() {
 
         {sourceMode === 'collect' && (
           <p className="library-mode-warning">
-            这里读取抖音默认“全部收藏”，但只同步你选择的数量，不等同于手动收藏夹。视频文件只保存在本地下载器；知萃数据库仅保存视频地址、文案与 AI 结果。
+            这里读取抖音默认“全部收藏”，但只同步你选择的最近 50 或 100 条，不会拉取全部收藏。服务器不保存视频文件，仅保存必要元数据、文案与 AI 结果；处理时临时拉流并在结束后立即清理。
           </p>
         )}
         {collectionJob && (refreshing || batchExtracting) && (

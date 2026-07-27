@@ -14,8 +14,8 @@
 
 - [x] 3.1 Generate a pinned-upstream Zhicui sidecar patch containing all required local modifications
 - [x] 3.2 Add a repeatable installer, hardened loopback-only systemd unit and operating notes
-- [ ] 3.3 Install the patched companion, venv, Chromium and protected Cookie/config on the production server
-- [ ] 3.4 Synchronize the local Downloaded library and verify counts, bytes, manifest/order and sampled media access
+- [ ] 3.3 Install the patched companion, venv, Chromium and protected Cookie/metadata-only config on the production server
+- [ ] 3.4 Verify selectable 50/100 metadata sync, ordering, ephemeral media access and zero persistent server video/audio files
 
 ## 4. Mobile and release
 

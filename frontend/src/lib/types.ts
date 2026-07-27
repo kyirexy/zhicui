@@ -135,6 +135,8 @@ export interface DouyinLibraryStatus {
   base_url: string;
   cookie_valid: boolean;
   cookie_count: number;
+  storage_mode?: 'metadata_only' | 'local_media' | 'unknown';
+  max_sync_count?: number;
   error?: string | null;
 }
 

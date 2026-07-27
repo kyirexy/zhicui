@@ -199,7 +199,7 @@ export default function VideoKnowledgeWorkspace() {
         </Link>
         <div className="video-knowledge-storage">
           <DatabaseZap size={14} />
-          视频由本地下载器提供，知萃数据库不存视频文件
+          视频按需临时读取，服务器与数据库均不保存视频文件
         </div>
       </header>
 
@@ -306,7 +306,7 @@ export default function VideoKnowledgeWorkspace() {
                 <small>先让 AI 读懂这条视频</small>
                 <h2>生成完整文案后，就能提问和创建计划</h2>
                 <p>
-                  系统会读取下载器中的视频文件完成语音识别，只把文案、知识卡和计划保存到知萃。
+                  系统会临时读取视频完成语音识别，处理结束立即清理，只把文案、知识卡和计划保存到知萃。
                 </p>
                 <button
                   type="button"

@@ -29,7 +29,7 @@ apt-get install -y --no-install-recommends \
 install -d -o ubuntu -g ubuntu -m 0750 \
   "${APP_ROOT}" \
   "${APP_ROOT}/releases" \
-  "${APP_ROOT}/Downloaded" \
+  "${APP_ROOT}/Metadata" \
   "${APP_ROOT}/ms-playwright"
 install -d -o ubuntu -g ubuntu -m 0750 "${RELEASE_DIR}"
 
@@ -37,8 +37,8 @@ sudo -u ubuntu git -C "${RELEASE_DIR}" init --quiet
 sudo -u ubuntu git -C "${RELEASE_DIR}" remote add origin "${UPSTREAM_URL}"
 sudo -u ubuntu git -C "${RELEASE_DIR}" fetch --depth 1 origin "${UPSTREAM_COMMIT}"
 sudo -u ubuntu git -C "${RELEASE_DIR}" checkout --detach FETCH_HEAD
-sudo -u ubuntu git -C "${RELEASE_DIR}" apply --check "${DEPLOY_ROOT}/zhicui-sidecar.patch"
-sudo -u ubuntu git -C "${RELEASE_DIR}" apply "${DEPLOY_ROOT}/zhicui-sidecar.patch"
+sudo -u ubuntu git -C "${RELEASE_DIR}" apply --unidiff-zero --check "${DEPLOY_ROOT}/zhicui-sidecar.patch"
+sudo -u ubuntu git -C "${RELEASE_DIR}" apply --unidiff-zero "${DEPLOY_ROOT}/zhicui-sidecar.patch"
 
 if [[ ! -x "${APP_ROOT}/.venv/bin/python" ]]; then
   sudo -u ubuntu python3 -m venv "${APP_ROOT}/.venv"
@@ -53,19 +53,40 @@ sudo -u ubuntu "${APP_ROOT}/.venv/bin/python" -m pip install \
 
 "${APP_ROOT}/.venv/bin/playwright" install-deps chromium
 sudo -u ubuntu env PLAYWRIGHT_BROWSERS_PATH="${APP_ROOT}/ms-playwright" \
-  "${APP_ROOT}/.venv/bin/playwright" install chromium
+  "${APP_ROOT}/.venv/bin/playwright" install chromium --no-shell
 
-if [[ ! -f "${APP_ROOT}/config.yml" ]]; then
-  install -o ubuntu -g ubuntu -m 0600 \
-    "${DEPLOY_ROOT}/config.production.yml" \
-    "${APP_ROOT}/config.yml"
-fi
+install -o ubuntu -g ubuntu -m 0600 \
+  "${DEPLOY_ROOT}/config.production.yml" \
+  "${APP_ROOT}/config.yml"
 
 chown -R ubuntu:ubuntu \
-  "${APP_ROOT}/Downloaded" \
+  "${APP_ROOT}/Metadata" \
   "${APP_ROOT}/ms-playwright" \
   "${RELEASE_DIR}"
-chmod 0750 "${APP_ROOT}/Downloaded" "${APP_ROOT}/ms-playwright"
+chmod 0750 "${APP_ROOT}/Metadata" "${APP_ROOT}/ms-playwright"
+
+# Production is metadata-only. Purge media left by older releases before the
+# service may start, while preserving JSON/order/cover metadata.
+for media_root in "${APP_ROOT}/Downloaded" "${APP_ROOT}/Metadata"; do
+  if [[ ! -d "${media_root}" ]]; then
+    continue
+  fi
+  resolved_root="$(readlink -f "${media_root}")"
+  case "${resolved_root}" in
+    "${APP_ROOT}/Downloaded"|"${APP_ROOT}/Metadata") ;;
+    *)
+      echo "Refusing to purge unsafe media root: ${resolved_root}" >&2
+      exit 1
+      ;;
+  esac
+  find "${resolved_root}" -type f \( \
+    -iname '*.mp4' -o -iname '*.m4v' -o -iname '*.mov' -o \
+    -iname '*.mkv' -o -iname '*.avi' -o -iname '*.flv' -o \
+    -iname '*.webm' -o -iname '*.ts' -o -iname '*.mp3' -o \
+    -iname '*.m4a' -o -iname '*.aac' -o -iname '*.wav' -o \
+    -iname '*.ogg' -o -iname '*.part' -o -iname '*.tmp' \
+  \) -delete
+done
 if [[ -f "${APP_ROOT}/.cookies.json" ]]; then
   chown ubuntu:ubuntu "${APP_ROOT}/.cookies.json"
   chmod 0600 "${APP_ROOT}/.cookies.json"

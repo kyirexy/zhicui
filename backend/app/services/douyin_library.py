@@ -7,6 +7,9 @@ consumes its HTTP API and turns selected media into user-scoped Notes.
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
+import time
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
@@ -16,8 +19,9 @@ import requests
 from app.core.config import settings
 
 _MAX_BOUNDED_LIBRARY_ITEMS = 10000
-_MAX_SYNC_COUNT = 500
+_MAX_SYNC_COUNT = 100
 _MAX_QR_IMAGE_BYTES = 512 * 1024
+_MEDIA_URL_TTL_SECONDS = 60 * 60
 
 
 class DouyinLibraryError(RuntimeError):
@@ -96,6 +100,11 @@ def connection_status() -> dict[str, Any]:
             "base_url": base_url,
             "cookie_valid": bool(cookie_state.get("valid")),
             "cookie_count": int(cookie_state.get("count") or 0),
+            "storage_mode": str(health.get("storage_mode") or "unknown"),
+            "max_sync_count": min(
+                int(health.get("max_sync_count") or _MAX_SYNC_COUNT),
+                _MAX_SYNC_COUNT,
+            ),
             "error": None,
         }
     except DouyinLibraryError as exc:
@@ -104,13 +113,47 @@ def connection_status() -> dict[str, Any]:
             "base_url": base_url,
             "cookie_valid": False,
             "cookie_count": 0,
+            "storage_mode": "unknown",
+            "max_sync_count": _MAX_SYNC_COUNT,
             "error": str(exc),
         }
 
 
-def _media_url(path: str) -> str:
+def _local_media_url(path: str) -> str:
     clean = str(path or "").replace("\\", "/").lstrip("/")
     return f"{_base_url()}/files/{quote(clean, safe='/')}"
+
+
+def companion_media_url(aweme_id: str) -> str:
+    """Loopback-only, ephemeral media stream used by the backend ASR."""
+    return f"{_base_url()}/api/v1/media/{quote(aweme_id.strip(), safe='')}"
+
+
+def _media_signature(aweme_id: str, expires: int) -> str:
+    payload = f"{aweme_id}:{expires}".encode("utf-8")
+    return hmac.new(
+        settings.JWT_SECRET.encode("utf-8"),
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def public_media_url(aweme_id: str) -> str:
+    """Create a short-lived same-origin URL suitable for a browser video tag."""
+    expires = int(time.time()) + _MEDIA_URL_TTL_SECONDS
+    signature = _media_signature(aweme_id, expires)
+    return (
+        f"/api/library/douyin/media/{quote(aweme_id, safe='')}"
+        f"?expires={expires}&signature={signature}"
+    )
+
+
+def verify_media_signature(aweme_id: str, expires: int, signature: str) -> bool:
+    now = int(time.time())
+    if expires < now or expires > now + _MEDIA_URL_TTL_SECONDS + 60:
+        return False
+    expected = _media_signature(aweme_id, expires)
+    return hmac.compare_digest(expected, signature)
 
 
 def _pick_path(paths: list[str], suffixes: tuple[str, ...]) -> str:
@@ -154,13 +197,30 @@ def _normalize_item(raw: dict[str, Any]) -> dict[str, Any]:
     except (KeyError, TypeError, ValueError):
         source_rank = None
 
+    raw_source_mode = str(raw.get("source_mode") or "").strip().lower()
+    if raw_source_mode == "collection":
+        raw_source_mode = "collect"
+    source_mode = (
+        raw_source_mode
+        if raw_source_mode in {"like", "collect", "post"}
+        else _infer_source_mode(paths)
+    )
+    media_type = str(raw.get("media_type") or "video").strip()
+    can_extract = bool(aweme_id and media_type == "video")
+    remote_cover = str(raw.get("cover_url") or "").strip()
+    cover_url = (
+        remote_cover
+        if remote_cover.startswith(("http://", "https://"))
+        else _local_media_url(cover_path) if cover_path else ""
+    )
+
     return {
         "id": aweme_id,
         "aweme_id": aweme_id,
         "title": title,
         "caption": caption,
         "author_name": str(raw.get("author_name") or "").strip(),
-        "media_type": str(raw.get("media_type") or "video").strip(),
+        "media_type": media_type,
         "tags": [
             str(tag).strip()
             for tag in (raw.get("tags") or [])
@@ -171,13 +231,13 @@ def _normalize_item(raw: dict[str, Any]) -> dict[str, Any]:
         "publish_timestamp": raw.get("publish_timestamp"),
         "source_rank": source_rank,
         "source_synced_at": str(raw.get("source_synced_at") or "").strip(),
-        "source_mode": _infer_source_mode(paths),
+        "source_mode": source_mode,
         "source_url": (
             f"https://www.douyin.com/video/{aweme_id}" if aweme_id else ""
         ),
-        "media_url": _media_url(video_path) if video_path else "",
-        "cover_url": _media_url(cover_path) if cover_path else "",
-        "can_extract": bool(aweme_id and video_path),
+        "media_url": public_media_url(aweme_id) if can_extract else "",
+        "cover_url": cover_url,
+        "can_extract": can_extract,
     }
 
 
@@ -299,10 +359,10 @@ def get_item(aweme_id: str) -> dict[str, Any] | None:
 
 
 def trigger_collect(count: int = 50, mode: str = "like") -> dict[str, Any]:
-    """启动有数量上限的下载器同步任务。"""
+    """启动 50/100 条的元数据同步任务。"""
     safe_mode = mode if mode in {"like", "post", "collect"} else "like"
     companion_mode = "collection" if safe_mode == "collect" else safe_mode
-    safe_count = max(1, min(count, _MAX_SYNC_COUNT))
+    safe_count = 100 if int(count) > 50 else 50
     return _request(
         "POST",
         "/api/v1/auto-collect",

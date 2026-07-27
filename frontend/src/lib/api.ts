@@ -332,7 +332,7 @@ export async function collectDouyinLibrary(
   return request<DouyinCollectionJob>('/api/library/douyin/collect', {
     method: 'POST',
     body: JSON.stringify({
-      count: Math.max(1, Math.min(count, 500)),
+      count: count > 50 ? 100 : 50,
       mode,
     }),
   });

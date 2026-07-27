@@ -70,11 +70,9 @@ class NoteAskRequest(BaseModel):
 
 
 class LibraryCollectRequest(BaseModel):
-    count: int = Field(
+    count: Literal[50, 100] = Field(
         default=50,
-        ge=1,
-        le=500,
-        description="本次同步数量，限制为 1 至 500 条",
+        description="本次仅同步最近 50 或 100 条，最多 100 条",
     )
     mode: Literal["like", "post", "collect"] = "like"
 
@@ -920,6 +918,65 @@ def get_douyin_library_job(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+@router.get("/api/library/douyin/media/{aweme_id}")
+def stream_douyin_library_media(
+    request: Request,
+    aweme_id: str = Path(
+        ...,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    ),
+    expires: int = Query(..., ge=1),
+    signature: str = Query(..., min_length=64, max_length=64),
+):
+    """Proxy a short-lived Douyin stream without persisting it on the server."""
+    if not douyin_library.verify_media_signature(aweme_id, expires, signature):
+        raise HTTPException(status_code=403, detail="视频播放地址已失效，请刷新页面")
+    target_url = douyin_library.companion_media_url(aweme_id)
+    request_headers = {"Accept": "*/*", "Accept-Encoding": "identity"}
+    range_header = request.headers.get("range")
+    if range_header:
+        request_headers["Range"] = range_header
+    try:
+        response = http_requests.get(
+            target_url,
+            headers=request_headers,
+            stream=True,
+            timeout=(10, 600),
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"视频临时流读取失败：{exc}") from exc
+
+    response_headers = {
+        "Cache-Control": "private, no-store",
+        "Accept-Ranges": response.headers.get("Accept-Ranges", "bytes"),
+    }
+    for source, target in (
+        ("Content-Length", "Content-Length"),
+        ("Content-Range", "Content-Range"),
+    ):
+        value = response.headers.get(source)
+        if value:
+            response_headers[target] = value
+
+    def body():
+        try:
+            for chunk in response.iter_content(chunk_size=256 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            response.close()
+
+    return StreamingResponse(
+        body(),
+        status_code=response.status_code,
+        media_type=response.headers.get("Content-Type", "video/mp4"),
+        headers=response_headers,
+    )
+
+
 @router.get("/api/library/douyin/items")
 def list_douyin_library_items(
     limit: int = Query(
@@ -1007,7 +1064,7 @@ def extract_douyin_library_item(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
-    """Transcribe one downloaded video and persist it as a normal Note."""
+    """Temporarily stream one video, transcribe it, then persist text only."""
     existing = note_service.get_note_by_video_id(
         db,
         body.aweme_id,
@@ -1030,7 +1087,7 @@ def extract_douyin_library_item(
     try:
         asr_config = settings_service.get_asr_config(db)
         transcript = video_extractor.extract_media_url_transcript(
-            item["media_url"],
+            douyin_library.companion_media_url(item["aweme_id"]),
             asr_config["api_key"],
             asr_config["api_base_url"],
             asr_config["model"],
@@ -1063,7 +1120,7 @@ def extract_douyin_library_item(
         video_info = {
             "video_id": item["aweme_id"],
             "title": item["title"],
-            "download_url": item["media_url"],
+            "download_url": item["source_url"],
             "platform": "douyin",
         }
         result, _ = _save_generated_note(

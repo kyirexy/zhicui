@@ -2,38 +2,17 @@ diff --git a/README.md b/README.md
 index 43ac08ab7c75823c341a4051e53da756f1bab94d..0d525011854fa93b31b2ddbbf370a55e78db0c3a 100644
 --- a/README.md
 +++ b/README.md
-@@ -46,7 +46,7 @@ _Screenshots were captured from the current desktop `main` build. Demonstration
- | Single music download | `/music/{music_id}` (prefers direct audio, fallback to first related aweme) |
- | Short link parsing | `https://v.douyin.com/...`, `v.iesdouyin.com`, bare hosts |
- | Profile batch download | `/user/{sec_uid}` + `mode: [post, like, mix, music]` |
+@@ -49 +49 @@ _Screenshots were captured from the current desktop `main` build. Demonstration
 -| Logged-in favorites collections | `/user/self?showTab=favorite_collection` + `mode: [collect, collectmix]` |
 +| Logged-in collected videos and folders | `/user/self?showTab=favorite_collection` + `mode: [collection, collect, collectmix]` |
- | No-watermark preferred | Automatically selects watermark-free video source |
- | Highest-quality selection | Auto-picks highest bitrate from `video.bit_rate` ladder (video + live-photo) |
- | **Live stream recording** | `live.douyin.com/{room_id}` → FLV/HLS, preserves partial data on stream end |
-@@ -72,8 +72,8 @@ _Screenshots were captured from the current desktop `main` build. Demonstration
- 
- - Browser fallback is fully validated for `post`; `like/mix/music` currently relies on API pagination
- - `number.allmix` / `increase.allmix` are retained as compatibility aliases and normalized to `mix`
+@@ -75,2 +75,2 @@ _Screenshots were captured from the current desktop `main` build. Demonstration
 -- `collect` / `collectmix` currently work for the account represented by the logged-in cookies only
 -- `collect` / `collectmix` must be used alone and cannot be combined with `post` / `like` / `mix` / `music`
 +- `collection` (all/default collected videos), `collect` (manual folders), and `collectmix` work for the account represented by the logged-in cookies only
 +- `collection` / `collect` / `collectmix` must be used alone and cannot be combined with `post` / `like` / `mix` / `music`
- - `increase` currently applies to `post` / `like` / `mix` / `music`; favorites collection modes do not support incremental stop
- - Live stream recording saves FLV natively; HLS sources only save the playlist (use ffmpeg for playable output)
- - The webcast room endpoint is not verified against every live scenario — treat as experimental
-@@ -131,6 +131,7 @@ mode:
- 
- number:
-   post: 0
+@@ -133,0 +134 @@ number:
 +  collection: 0
-   collect: 0
-   collectmix: 0
- 
-@@ -268,7 +269,18 @@ mode:
- 
- Cross-mode deduplication: the same aweme_id won't be downloaded twice across different modes.
- 
+@@ -271 +272,12 @@ Cross-mode deduplication: the same aweme_id won't be downloaded twice across dif
 -### Download logged-in favorites collection items
 +### Download all/default collected videos
 +
@@ -47,84 +26,39 @@ index 43ac08ab7c75823c341a4051e53da756f1bab94d..0d525011854fa93b31b2ddbbf370a55e
 +```
 +
 +### Download manually-created favorites folders
- 
- ```yaml
- link:
-@@ -439,8 +451,8 @@ pytest -q
- 
- | Field | Description |
- |-------|-------------|
+@@ -442,2 +454,2 @@ pytest -q
 -| `mode` | Supports `post`/`like`/`mix`/`music`; logged-in favorites mode additionally supports standalone `collect`/`collectmix` |
 -| `number.post/like/mix/music/collect/collectmix` | Per-mode download limit, 0 = unlimited |
 +| `mode` | Supports `post`/`like`/`mix`/`music`; logged-in favorites additionally support standalone `collection`/`collect`/`collectmix` |
 +| `number.post/like/mix/music/collection/collect/collectmix` | Per-mode download limit, 0 = unlimited |
- | `increase.post/like/mix/music` | Per-mode incremental toggle |
- | `start_time` / `end_time` | Time filter (format: `YYYY-MM-DD`) |
- | `folderstyle` | Create per-item subdirectories |
 diff --git a/config.example.yml b/config.example.yml
 index ac75464af34be8b76fa9219275ebc617c07489c0..17208c42e16030433c98ecccdc99e312421eabee 100644
 --- a/config.example.yml
 +++ b/config.example.yml
-@@ -39,6 +39,7 @@ number:
-   allmix: 0
-   mix: 0
-   music: 0
+@@ -41,0 +42 @@ number:
 +  collection: 0
-   collect: 0
-   collectmix: 0
- 
-@@ -48,6 +49,7 @@ increase:
-   allmix: false
-   mix: false
-   music: false
+@@ -50,0 +52 @@ increase:
 +  collection: false
- 
- thread: 5
- retry_times: 3
 diff --git a/config/default_config.py b/config/default_config.py
 index 9961fadd66f4e24218268245a5c04e061fdfd201..8f9735caa024f4765968e08b53f2983879f0ff52 100644
 --- a/config/default_config.py
 +++ b/config/default_config.py
-@@ -31,6 +31,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
-         "allmix": 0,
-         "mix": 0,
-         "music": 0,
+@@ -33,0 +34 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 +        "collection": 0,
-         "collect": 0,
-         "collectmix": 0,
-     },
-@@ -40,6 +41,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
-         "allmix": False,
-         "mix": False,
-         "music": False,
+@@ -42,0 +44 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 +        "collection": False,
-     },
-     "thread": 5,
-     "retry_times": 3,
 diff --git a/core/api_client.py b/core/api_client.py
 index eefc764e706ff830c5cd67037d1798ac4e209873..23f32fa13fc99e29a6daf1ab76049293d6ac8ce2 100644
 --- a/core/api_client.py
 +++ b/core/api_client.py
-@@ -291,10 +291,15 @@ class DouyinAPIClient:
-         max_retries: int = 3,
-         base_url: Optional[str] = None,
-         request_headers: Optional[Dict[str, str]] = None,
+@@ -293,0 +294,2 @@ class DouyinAPIClient:
 +        method: str = "GET",
 +        json_body: Optional[Dict[str, Any]] = None,
-     ) -> Dict[str, Any]:
-         await self._ensure_session()
-         delays = [1, 2, 5]
-         last_exc: Optional[Exception] = None
+@@ -297,0 +300,3 @@ class DouyinAPIClient:
 +        request_method = str(method or "GET").strip().upper()
 +        if request_method not in {"GET", "POST"}:
 +            raise ValueError(f"Unsupported HTTP method: {request_method}")
- 
-         for attempt in range(max_retries):
-             started = time.monotonic()
-@@ -315,11 +320,26 @@ class DouyinAPIClient:
-                 ",".join(sorted(str(key) for key in params)),
-             )
-             try:
+@@ -318,5 +323,20 @@ class DouyinAPIClient:
 -                async with self._session.get(
 -                    signed_url,
 -                    headers={**self.headers, **(request_headers or {}), "User-Agent": ua},
@@ -150,13 +84,7 @@ index eefc764e706ff830c5cd67037d1798ac4e209873..23f32fa13fc99e29a6daf1ab76049293
 +                        **request_kwargs,
 +                    )
 +                async with request_context as response:
-                     if response.status == 200:
-                         body = await response.read()
-                         if not body:
-@@ -572,6 +592,33 @@ class DouyinAPIClient:
-         raw = await self._request_json("/aweme/v1/web/aweme/favorite/", params)
-         return self._normalize_paged_response(raw, item_keys=["aweme_list"])
- 
+@@ -574,0 +595,27 @@ class DouyinAPIClient:
 +    async def get_user_collection(
 +        self, sec_uid: str, max_cursor: int = 0, count: int = 20
 +    ) -> Dict[str, Any]:
@@ -184,81 +112,38 @@ index eefc764e706ff830c5cd67037d1798ac4e209873..23f32fa13fc99e29a6daf1ab76049293
 +        )
 +        return self._normalize_paged_response(raw, item_keys=["aweme_list"])
 +
-     async def get_user_mix(
-         self, sec_uid: str, max_cursor: int = 0, count: int = 20
-     ) -> Dict[str, Any]:
 diff --git a/core/user_downloader.py b/core/user_downloader.py
 index 6b2f38ecaf8c15bc12b1fcbe6b5d9f94898c6882..8da6b9994bb0c15c08f7c3f7b52a5c4df96decb4 100644
 --- a/core/user_downloader.py
 +++ b/core/user_downloader.py
-@@ -27,7 +27,7 @@ def _user_info_summary(user_info: Dict[str, Any]) -> Dict[str, Any]:
- 
- 
- class UserDownloader(BaseDownloader):
+@@ -30 +30 @@ class UserDownloader(BaseDownloader):
 -    SELF_COLLECT_MODES = {"collect", "collectmix"}
 +    SELF_COLLECT_MODES = {"collection", "collect", "collectmix"}
- 
-     def __init__(self, *args, **kwargs):
-         super().__init__(*args, **kwargs)
-@@ -153,13 +153,16 @@ class UserDownloader(BaseDownloader):
-             collects_id = (str(self.config.get("collects_id") or "")).strip()
-             if not collects_id:
-                 logger.error(
+@@ -156 +156 @@ class UserDownloader(BaseDownloader):
 -                    "Modes collect/collectmix only support "
 +                    "Modes collection/collect/collectmix only support "
-                     "/user/self?showTab=favorite_collection or "
-                     "my-content 下载本收藏夹 (collects_id required)"
-                 )
-                 return False
-         if has_collect_mode and has_regular_mode:
+@@ -162 +162,4 @@ class UserDownloader(BaseDownloader):
 -            logger.error("Modes collect/collectmix cannot be combined with post/like/mix/music")
 +            logger.error(
 +                "Modes collection/collect/collectmix cannot be combined with "
 +                "post/like/mix/music"
 +            )
-             return False
-         return True
- 
 diff --git a/core/user_mode_registry.py b/core/user_mode_registry.py
 index 9443b6e39eb289a50a1d1e5e0a80db0f15113e9f..2a3ebe62513503879241f58c4bcfbe2aa29a8a74 100644
 --- a/core/user_mode_registry.py
 +++ b/core/user_mode_registry.py
-@@ -6,6 +6,7 @@ from core.user_modes import (
-     BaseUserModeStrategy,
-     CollectMixUserModeStrategy,
-     CollectUserModeStrategy,
+@@ -8,0 +9 @@ from core.user_modes import (
 +    CollectionUserModeStrategy,
-     LikeUserModeStrategy,
-     MixUserModeStrategy,
-     MusicUserModeStrategy,
-@@ -21,6 +22,7 @@ class UserModeRegistry:
-             "mix": MixUserModeStrategy,
-             "music": MusicUserModeStrategy,
-             "collect": CollectUserModeStrategy,
+@@ -23,0 +25 @@ class UserModeRegistry:
 +            "collection": CollectionUserModeStrategy,
-             "collectmix": CollectMixUserModeStrategy,
-         }
- 
 diff --git a/core/user_modes/__init__.py b/core/user_modes/__init__.py
 index 47f560fb91d4d42aa87c7e57e4d77ad46b2b8c59..3d2f8d1fa05cc3cb17806b4cdcf5e30fb1e3f1fc 100644
 --- a/core/user_modes/__init__.py
 +++ b/core/user_modes/__init__.py
-@@ -1,6 +1,7 @@
- from .base_strategy import BaseUserModeStrategy
- from .collect_mix_strategy import CollectMixUserModeStrategy
- from .collect_strategy import CollectUserModeStrategy
+@@ -3,0 +4 @@ from .collect_strategy import CollectUserModeStrategy
 +from .collection_strategy import CollectionUserModeStrategy
- from .like_strategy import LikeUserModeStrategy
- from .mix_strategy import MixUserModeStrategy
- from .music_strategy import MusicUserModeStrategy
-@@ -10,6 +11,7 @@ __all__ = [
-     "BaseUserModeStrategy",
-     "CollectMixUserModeStrategy",
-     "CollectUserModeStrategy",
+@@ -12,0 +14 @@ __all__ = [
 +    "CollectionUserModeStrategy",
-     "PostUserModeStrategy",
-     "LikeUserModeStrategy",
-     "MixUserModeStrategy",
 diff --git a/core/user_modes/collection_strategy.py b/core/user_modes/collection_strategy.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..16ab262466a4b8752c8fe122d100c66464a7165c
@@ -277,34 +162,24 @@ diff --git a/pyproject.toml b/pyproject.toml
 index 17cb6f2ebdfca46489ca42053af0116603be721f..c08fbc26ad325a7002b8b263d86076d54254e252 100644
 --- a/pyproject.toml
 +++ b/pyproject.toml
-@@ -38,6 +38,8 @@ dependencies = [
-     # ships a native macOS arm64 wheel; older versions only shipped
-     # x86_64 macOS binaries.
-     "imageio-ffmpeg==0.6.0",
+@@ -40,0 +41,2 @@ dependencies = [
 +    # Detect and crop QR codes rendered inside Douyin's closed login component.
 +    "opencv-python-headless>=4.10,<5",
- ]
- 
- [project.optional-dependencies]
 diff --git a/requirements.txt b/requirements.txt
 index 3b0900b675722c3e3045620e89d8e0862b5a428d..309d46cbee1bcb1758520067acf1303426966a5a 100644
 --- a/requirements.txt
 +++ b/requirements.txt
-@@ -9,3 +9,5 @@ gmssl>=3.2.2
- # Bundled ffmpeg static binary for audio extraction before
- # transcription upload. Pinned exact for reproducible sidecar builds.
- imageio-ffmpeg==0.6.0
+@@ -11,0 +12,2 @@ imageio-ffmpeg==0.6.0
 +# Detect and crop QR codes rendered inside Douyin's closed login component.
 +opencv-python-headless>=4.10,<5
 diff --git a/server/app.py b/server/app.py
-index 418f875d330a45d207dd52428636dedd197e27af..8089b2e1b882afb91c0d71bf513c80ecde4b59e1 100644
+index 418f875d330a45d207dd52428636dedd197e27af..95fa8e7d41625754b393ca2f0cbf986220f1ed57 100644
 --- a/server/app.py
 +++ b/server/app.py
-@@ -1,19 +1,32 @@
+@@ -1 +1 @@
 -"""FastAPI REST 服务入口。
 +"""FastAPI REST 服务入口 + 轻量前端。
- 
- HTTP 层薄封装：
+@@ -4,2 +4,5 @@ HTTP 层薄封装：
 -- 接收 URL，创建 job，返回 job_id
 -- 实际下载委托给 cli.main.download_url 的简化复用
 +- ``/api/v1/health`` / ``/api/v1/jobs*`` —— 原有任务接口
@@ -312,47 +187,53 @@ index 418f875d330a45d207dd52428636dedd197e27af..8089b2e1b882afb91c0d71bf513c80ec
 +- ``/api/v1/fetch-cookie`` GET/POST —— Playwright 自动检测登录态，扫码后自动提取
 +- ``/api/v1/download`` / ``/api/v1/crawl`` POST —— 提交下载，crawl 必须带 mode
 +- ``/`` —— 前端单页 ``server/static/index.html``
- 
- fastapi/uvicorn 是**可选**依赖。若未安装，导入本模块会 ImportError。
- """
- 
- from __future__ import annotations
- 
+@@ -11,0 +15,5 @@ from __future__ import annotations
 +import asyncio
 +import copy
 +import hashlib
 +import json
 +import os
- from contextlib import asynccontextmanager
+@@ -13 +21,3 @@ from contextlib import asynccontextmanager
 -from typing import Any, Dict, List
 +from datetime import datetime, timezone
 +from pathlib import Path
-+from typing import Any, Dict, List, Optional
- 
-+import aiofiles
- from fastapi import FastAPI, HTTPException
++from typing import Any, Dict, List, Literal, Optional
+@@ -15,2 +25,6 @@ from typing import Any, Dict, List
+-from fastapi import FastAPI, HTTPException
 -from pydantic import BaseModel
-+from fastapi.responses import FileResponse, JSONResponse, Response
++import aiofiles
++import aiohttp
++from fastapi import FastAPI, HTTPException, Request
++from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 +from fastapi.staticfiles import StaticFiles
 +from pydantic import BaseModel, Field
- 
- from auth import CookieManager
- from config import ConfigLoader
-@@ -21,14 +34,47 @@ from control import QueueManager, RateLimiter, RetryHandler
- from core import DouyinAPIClient, DownloaderFactory, URLParser
- from server.jobs import JobManager
- from storage import FileManager
+@@ -23,0 +38 @@ from storage import FileManager
 +from utils.cookie_utils import sanitize_cookies
- from utils.logger import setup_logger
- from utils.validators import is_short_url, normalize_short_url
- 
- logger = setup_logger("REST")
- 
+@@ -28,0 +44,48 @@ logger = setup_logger("REST")
 +STATIC_DIR = Path(__file__).resolve().parent / "static"
 +SOURCE_ORDER_FILENAME = "source_order.json"
++LIBRARY_CATALOG_FILENAME = "library_catalog.json"
++MAX_SYNC_COUNT = 100
 +MAX_QR_IMAGE_BYTES = 512 * 1024
 +QR_REFRESH_SECONDS = 4
 +QR_DISCOVERY_TIMEOUT_SECONDS = 60
++PERSISTENT_MEDIA_SUFFIXES = frozenset(
++    {
++        ".mp4",
++        ".m4v",
++        ".mov",
++        ".mkv",
++        ".avi",
++        ".flv",
++        ".webm",
++        ".ts",
++        ".mp3",
++        ".m4a",
++        ".aac",
++        ".wav",
++        ".ogg",
++    }
++)
 +
 +QR_SELECTORS = (
 +    "[class*='qrcode'] img",
@@ -377,19 +258,11 @@ index 418f875d330a45d207dd52428636dedd197e27af..8089b2e1b882afb91c0d71bf513c80ec
 +    "music",
 +)
 +
- 
- class DownloadRequest(BaseModel):
-     url: str
+@@ -31,0 +95,3 @@ class DownloadRequest(BaseModel):
 +    mode: Optional[str] = None      # post/like/collection/collect/collectmix/mix/music
 +    count: Optional[int] = None     # 0 = 全部
 +    cookie: Optional[str] = None    # 可选 cookie 字符串/JSON，本次用并持久化
- 
- 
- class JobResponse(BaseModel):
-@@ -37,57 +83,394 @@ class JobResponse(BaseModel):
-     url: str
- 
- 
+@@ -39,0 +106,365 @@ class JobResponse(BaseModel):
 +class CookieRequest(BaseModel):
 +    cookie: Optional[str] = None    # "k=v; k2=v2" 或 JSON dict
 +
@@ -400,13 +273,13 @@ index 418f875d330a45d207dd52428636dedd197e27af..8089b2e1b882afb91c0d71bf513c80ec
 +
 +class AutoCollectRequest(BaseModel):
 +    mode: str = "collection"        # collection 全部收藏 / like 喜欢 / collect 手动收藏夹 / post 作品
-+    count: int = 30                 # 0 = 全量
++    count: Literal[50, 100] = 50
 +    url: Optional[str] = None      # 不填则按 mode 自动用 self 链接
 +
 +
 +class SourceOrderRequest(BaseModel):
 +    mode: str = "collection"
-+    count: int = Field(default=50, ge=1, le=500)
++    count: Literal[50, 100] = 50
 +
 +
 +def _now_utc_iso() -> str:
@@ -557,7 +430,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..8089b2e1b882afb91c0d71bf513c80ec
 +    """原子合并来源顺序：本次快照在前，旧快照未覆盖部分保持原顺序。"""
 +    clean_ids = _unique_aweme_ids(
 +        [{"aweme_id": aweme_id} for aweme_id in aweme_ids],
-+        500,
++        MAX_SYNC_COUNT,
 +    )
 +    if not clean_ids:
 +        return {"mode": mode, "count": 0, "synced_at": None}
@@ -591,6 +464,130 @@ index 418f875d330a45d207dd52428636dedd197e27af..8089b2e1b882afb91c0d71bf513c80ec
 +            "total_ranked": len(modes[mode]["aweme_ids"]),
 +            "synced_at": synced_at,
 +        }
++
++
++def _bounded_sync_count(count: Any) -> int:
++    """收藏同步只允许 50 或 100 条，任何内部调用也不能绕过上限。"""
++    try:
++        parsed = int(count)
++    except (TypeError, ValueError):
++        return 50
++    return 100 if parsed > 50 else 50
++
++
++def _first_remote_url(value: Any) -> str:
++    if isinstance(value, str):
++        return value if value.startswith(("http://", "https://")) else ""
++    if not isinstance(value, dict):
++        return ""
++    urls = value.get("url_list")
++    if isinstance(urls, list):
++        for candidate in urls:
++            if isinstance(candidate, str) and candidate.startswith(("http://", "https://")):
++                return candidate
++    return ""
++
++
++def _catalog_record(
++    item: Dict[str, Any],
++    *,
++    mode: str,
++    source_rank: int,
++    synced_at: str,
++) -> Dict[str, Any]:
++    """只保留资料库展示/提取所需元数据，不持久化播放地址或 Cookie。"""
++    aweme_id = str(item.get("aweme_id") or "").strip()
++    author = item.get("author") if isinstance(item.get("author"), dict) else {}
++    video = item.get("video") if isinstance(item.get("video"), dict) else {}
++    images = item.get("images") if isinstance(item.get("images"), list) else []
++    cover_url = ""
++    for cover_key in ("cover", "origin_cover", "dynamic_cover"):
++        cover_url = _first_remote_url(video.get(cover_key))
++        if cover_url:
++            break
++    if not cover_url and images:
++        cover_url = _first_remote_url(images[0])
++
++    tags: List[str] = []
++    text_extra = item.get("text_extra")
++    if isinstance(text_extra, list):
++        for extra in text_extra:
++            if not isinstance(extra, dict):
++                continue
++            tag = str(extra.get("hashtag_name") or "").strip()
++            if tag and tag not in tags:
++                tags.append(tag)
++            if len(tags) >= 12:
++                break
++
++    publish_timestamp = item.get("create_time")
++    try:
++        publish_timestamp = int(publish_timestamp)
++    except (TypeError, ValueError):
++        publish_timestamp = None
++    return {
++        "aweme_id": aweme_id,
++        "desc": str(item.get("desc") or "").strip(),
++        "author_name": str(author.get("nickname") or "").strip(),
++        "media_type": "gallery" if images else "video",
++        "tags": tags,
++        "publish_timestamp": publish_timestamp,
++        "cover_url": cover_url,
++        "source_mode": mode,
++        "source_rank": source_rank,
++        "source_synced_at": synced_at,
++        "recorded_at": synced_at,
++        "file_paths": [],
++    }
++
++
++async def _read_library_catalog(path: Path) -> Dict[str, Any]:
++    if not path.exists():
++        return {"version": 1, "modes": {}}
++    try:
++        async with aiofiles.open(path, "r", encoding="utf-8") as file:
++            data = json.loads(await file.read())
++    except (OSError, json.JSONDecodeError):
++        return {"version": 1, "modes": {}}
++    modes = data.get("modes") if isinstance(data, dict) else None
++    return {"version": 1, "modes": modes if isinstance(modes, dict) else {}}
++
++
++async def _persist_library_catalog(
++    deps: "_ServerDeps",
++    mode: str,
++    items: List[Dict[str, Any]],
++) -> Dict[str, Any]:
++    """原子替换一个来源的当前 50/100 条快照，避免资料库无限增长。"""
++    synced_at = _now_utc_iso()
++    limit = min(len(items), MAX_SYNC_COUNT)
++    records = [
++        _catalog_record(
++            item,
++            mode=mode,
++            source_rank=index,
++            synced_at=synced_at,
++        )
++        for index, item in enumerate(items[:limit])
++        if str(item.get("aweme_id") or "").strip()
++    ]
++    async with deps.catalog_lock:
++        data = await _read_library_catalog(deps.catalog_path)
++        data["modes"][mode] = {
++            "items": records,
++            "synced_at": synced_at,
++        }
++        payload = json.dumps(data, ensure_ascii=False, indent=2)
++        temp_path = deps.catalog_path.with_suffix(".tmp")
++        async with aiofiles.open(temp_path, "w", encoding="utf-8") as file:
++            await file.write(payload)
++        loop = asyncio.get_running_loop()
++        await loop.run_in_executor(None, temp_path.replace, deps.catalog_path)
++    return {
++        "mode": mode,
++        "count": len(records),
++        "synced_at": synced_at,
++    }
 +
 +
 +def _infer_item_source_mode(item: Dict[str, Any]) -> str:
@@ -631,9 +628,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..8089b2e1b882afb91c0d71bf513c80ec
 +    return cookies
 +
 +
- class _ServerDeps:
-     """跨请求复用的重量级依赖。
- 
+@@ -43,4 +474,3 @@ class _ServerDeps:
 -    REST 服务在进程生命周期内只需要一份 FileManager / RateLimiter / RetryHandler /
 -    QueueManager / CookieManager；每个请求重新构造既浪费又会触发文件系统 mkdir。
 -    DouyinAPIClient 由于持有 aiohttp.ClientSession，依旧按请求创建，避免跨请求泄漏
@@ -641,20 +636,14 @@ index 418f875d330a45d207dd52428636dedd197e27af..8089b2e1b882afb91c0d71bf513c80ec
 +    REST 服务在进程生命周期内只需要一份 FileManager / RateLimiter /
 +    RetryHandler / QueueManager / CookieManager。DouyinAPIClient 按请求创建，
 +    避免 aiohttp.ClientSession 跨请求泄漏连接状态。
-     """
- 
-     def __init__(self, config: ConfigLoader):
-         self.config = config
+@@ -51,3 +480,0 @@ class _ServerDeps:
 -        # Resolve the cookie file path relative to the config file's directory
 -        # so the sidecar can find it regardless of its working directory (which
 -        # on macOS is often '/' when launched by Electron).
-         if config.config_path:
+@@ -55,2 +481,0 @@ class _ServerDeps:
 -            from pathlib import Path
 -
-             cookie_file = str(Path(config.config_path).resolve().parent / ".cookies.json")
-         else:
-             cookie_file = ".cookies.json"
-         self.cookie_manager = CookieManager(cookie_file=cookie_file)
+@@ -61,11 +486,7 @@ class _ServerDeps:
 -        # Load cookies from the config (env var / YAML cookie key) first, then
 -        # fall back to whatever is already on disk in the cookie file. This
 -        # ensures that cookies saved by a previous session are picked up on
@@ -673,20 +662,16 @@ index 418f875d330a45d207dd52428636dedd197e27af..8089b2e1b882afb91c0d71bf513c80ec
 +            initial_cookies = config.get_cookies()
 +            if initial_cookies:
 +                self.cookie_manager.set_cookies(initial_cookies)
-         self.file_manager = FileManager(config.get("path"))
+@@ -72,0 +494,8 @@ class _ServerDeps:
 +        self.source_order_path = self.file_manager.base_path / SOURCE_ORDER_FILENAME
 +        self.source_order_lock = asyncio.Lock()
-         self.rate_limiter = RateLimiter(max_per_second=float(config.get("rate_limit", 2) or 2))
-         self.retry_handler = RetryHandler(max_retries=int(config.get("retry_times", 3) or 3))
-         self.queue_manager = QueueManager(max_workers=int(config.get("thread", 5) or 5))
--
--
--async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
--    """简化版 download_url：只负责执行并返回成功/失败计数。
--
--    有意不复用 cli.main.download_url —— 后者绑定了 progress_display 的 rich 状态。
--    API client 仍按请求创建（aiohttp session 不跨请求复用）；其余重量级依赖从
--    _ServerDeps 共享。
++        self.catalog_path = self.file_manager.base_path / LIBRARY_CATALOG_FILENAME
++        self.catalog_lock = asyncio.Lock()
++        server_config = config.get("server") or {}
++        if not isinstance(server_config, dict):
++            server_config = {}
++        self.metadata_only = bool(server_config.get("metadata_only", False))
+@@ -75,0 +505,9 @@ class _ServerDeps:
 +        # fetch-cookie 后台任务状态
 +        self.fetch_status: Dict[str, Any] = {"running": False, "message": "", "error": ""}
 +        self.fetch_qr_image: Optional[bytes] = None
@@ -696,7 +681,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..8089b2e1b882afb91c0d71bf513c80ec
 +    def clear_qr(self) -> None:
 +        self.fetch_qr_image = None
 +        self.fetch_qr_digest = ""
-+
+@@ -76,0 +515,10 @@ class _ServerDeps:
 +    def update_qr(self, image: bytes) -> bool:
 +        if not image or len(image) > MAX_QR_IMAGE_BYTES:
 +            return False
@@ -707,15 +692,20 @@ index 418f875d330a45d207dd52428636dedd197e27af..8089b2e1b882afb91c0d71bf513c80ec
 +        self.fetch_qr_digest = digest
 +        self.fetch_qr_version += 1
 +        return True
-+
-+
+@@ -78,2 +525,0 @@ class _ServerDeps:
+-async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
+-    """简化版 download_url：只负责执行并返回成功/失败计数。
+@@ -81,3 +527,6 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
+-    有意不复用 cli.main.download_url —— 后者绑定了 progress_display 的 rich 状态。
+-    API client 仍按请求创建（aiohttp session 不跨请求复用）；其余重量级依赖从
+-    _ServerDeps 共享。
 +async def _resolve_self_sec_uid(api_client) -> str:
 +    """用当前 cookie 调 profile/self/ 拿登录用户的真 sec_uid。
 +
 +    抖音的 favorite（喜欢）和 post（主页发布）API 都要真 sec_uid，
 +    self 链接解析出的 "self" 字符串它们不认；cookie 作用域的 collection
 +    与 collects/list 接受 "self" 上下文。所以 like/post 模式下要先解出真 sec_uid。
-     """
+@@ -85,2 +534,56 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
 -    # proxy 与 cli.main.download_url 对齐:API 请求、短链解析和 CDN 媒体
 -    # 下载(downloader_base 读 api_client.proxy)统一走配置代理。
 +    try:
@@ -732,15 +722,15 @@ index 418f875d330a45d207dd52428636dedd197e27af..8089b2e1b882afb91c0d71bf513c80ec
 +    count: int,
 +) -> Dict[str, Any]:
 +    """只读取收藏分页顺序并持久化排名，不下载任何媒体。"""
-+    limit = max(1, min(int(count), 500))
++    limit = _bounded_sync_count(count)
 +    ordered_items: List[Dict[str, Any]] = []
 +    cursor = 0
 +    has_more = True
 +
-     async with DouyinAPIClient(
-         deps.cookie_manager.get_cookies(),
-         proxy=deps.config.get("proxy"),
-     ) as api_client:
++    async with DouyinAPIClient(
++        deps.cookie_manager.get_cookies(),
++        proxy=deps.config.get("proxy"),
++    ) as api_client:
 +        while has_more and len(ordered_items) < limit:
 +            await deps.rate_limiter.acquire()
 +            request_cursor = cursor
@@ -760,6 +750,63 @@ index 418f875d330a45d207dd52428636dedd197e27af..8089b2e1b882afb91c0d71bf513c80ec
 +    if not aweme_ids:
 +        raise RuntimeError("未读取到收藏顺序，请确认抖音登录状态")
 +    return await _persist_source_order(deps, "collection", aweme_ids)
++
++
++async def _fetch_library_metadata(
++    deps: "_ServerDeps",
++    mode: str,
++    count: int,
++) -> Dict[str, int]:
++    """读取用户选择范围内的元数据，不下载、缓存或持久化任何视频文件。"""
++    safe_mode = mode if mode in {"collection", "like", "post"} else "collection"
++    limit = _bounded_sync_count(count)
++    ordered_items: List[Dict[str, Any]] = []
++    cursor = 0
++    has_more = True
++
+@@ -90,0 +594,90 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
++        sec_uid = "self"
++        if safe_mode in {"like", "post"}:
++            sec_uid = await _resolve_self_sec_uid(api_client)
++            if not sec_uid:
++                raise RuntimeError("未能识别当前抖音账号，请重新扫码登录")
++        fetch_page = {
++            "collection": api_client.get_user_collection,
++            "like": api_client.get_user_like,
++            "post": api_client.get_user_post,
++        }[safe_mode]
++        while has_more and len(ordered_items) < limit:
++            await deps.rate_limiter.acquire()
++            request_cursor = cursor
++            page = await fetch_page(sec_uid, request_cursor, min(20, limit - len(ordered_items)))
++            page_items = page.get("items") if isinstance(page, dict) else None
++            if not isinstance(page_items, list) or not page_items:
++                break
++            ordered_items.extend(item for item in page_items if isinstance(item, dict))
++            has_more = bool(page.get("has_more"))
++            cursor = int(page.get("max_cursor", 0) or 0)
++            if has_more and cursor == request_cursor:
++                break
++
++    unique_items: List[Dict[str, Any]] = []
++    seen: set[str] = set()
++    for item in ordered_items:
++        aweme_id = str(item.get("aweme_id") or "").strip()
++        if not aweme_id or aweme_id in seen:
++            continue
++        seen.add(aweme_id)
++        unique_items.append(item)
++        if len(unique_items) >= limit:
++            break
++    result = await _persist_library_catalog(deps, safe_mode, unique_items)
++    if safe_mode == "collection" and unique_items:
++        await _persist_source_order(
++            deps,
++            safe_mode,
++            [str(item.get("aweme_id") or "") for item in unique_items],
++        )
++    saved = int(result["count"])
++    return {"total": saved, "success": saved, "failed": 0, "skipped": 0}
 +
 +
 +async def _execute_download(
@@ -808,33 +855,20 @@ index 418f875d330a45d207dd52428636dedd197e27af..8089b2e1b882afb91c0d71bf513c80ec
 +
 +            api_client.get_user_collection = tracked_get_user_collection
 +
-         if is_short_url(url):
-             resolved = await api_client.resolve_short_url(normalize_short_url(url))
-             if not resolved:
-@@ -98,9 +481,15 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
-         if not parsed:
-             raise RuntimeError(f"Unsupported URL: {url}")
- 
+@@ -100,0 +694,6 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
 +        # self 链接 + like/post：用 cookie 解出真 sec_uid（collect 保持 "self"）
 +        if parsed.get("sec_uid") == "self" and mode in ("like", "post"):
 +            real_sec = await _resolve_self_sec_uid(api_client)
 +            if real_sec:
 +                parsed["sec_uid"] = real_sec
 +
-         downloader = DownloaderFactory.create(
-             parsed["type"],
+@@ -103 +702 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
 -            deps.config,
 +            job_config,
-             api_client,
-             deps.file_manager,
-             deps.cookie_manager,
-@@ -114,6 +503,16 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
-             raise RuntimeError(f"No downloader for url_type={parsed['type']}")
- 
-         result = await downloader.download(parsed)
+@@ -116,0 +716,10 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
 +        if observed_collection_items:
 +            try:
-+                snapshot_limit = max(1, min(int(count or 50), 500))
++                snapshot_limit = _bounded_sync_count(count)
 +            except (TypeError, ValueError):
 +                snapshot_limit = 50
 +            await _persist_source_order(
@@ -842,13 +876,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..8089b2e1b882afb91c0d71bf513c80ec
 +                "collection",
 +                _unique_aweme_ids(observed_collection_items, snapshot_limit),
 +            )
-         return {
-             "total": result.total,
-             "success": result.success,
-@@ -122,11 +521,75 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
-         }
- 
- 
+@@ -124,0 +734,64 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
 +async def _fetch_cookie_auto(deps: "_ServerDeps", browser: str = "chromium") -> Dict[str, str]:
 +    """打开抖音登录页，自动检测登录态并提供可远程展示的二维码。
 +
@@ -913,32 +941,27 @@ index 418f875d330a45d207dd52428636dedd197e27af..8089b2e1b882afb91c0d71bf513c80ec
 +    return cookies
 +
 +
- def build_app(config: ConfigLoader) -> FastAPI:
-     deps = _ServerDeps(config)
- 
+@@ -128,2 +801,8 @@ def build_app(config: ConfigLoader) -> FastAPI:
 -    async def executor(url: str) -> Dict[str, int]:
 -        return await _execute_download(url, deps)
 +    async def executor(url: str, **opts: Any) -> Dict[str, int]:
++        if deps.metadata_only:
++            return await _fetch_library_metadata(
++                deps,
++                str(opts.get("mode") or "collection"),
++                _bounded_sync_count(opts.get("count")),
++            )
 +        return await _execute_download(url, deps, **opts)
- 
-     server_cfg = config.get("server") or {}
-     if not isinstance(server_cfg, dict):
-@@ -148,21 +611,143 @@ def build_app(config: ConfigLoader) -> FastAPI:
-     app = FastAPI(
-         title="Douyin Downloader API",
-         version="1.0",
+@@ -151 +830 @@ def build_app(config: ConfigLoader) -> FastAPI:
 -        description="REST API for dispatching Douyin download jobs.",
 +        description="REST API + 轻量前端，支持 collection/like/collect/post 批量下载。",
-         lifespan=lifespan,
-     )
-     app.state.job_manager = manager
-     app.state.deps = deps
- 
-+    # 把 Downloaded/ 挂成静态目录，前端能直接访问/播放下载好的视频文件
+@@ -156,0 +836,18 @@ def build_app(config: ConfigLoader) -> FastAPI:
++    # 生产元数据模式不暴露持久媒体目录；视频只通过下方即时流式端点读取。
 +    download_root = Path(str(config.get("path") or "./Downloaded")).resolve()
 +    download_root.mkdir(parents=True, exist_ok=True)
 +    app.state.download_root = download_root
-+    app.mount("/files", StaticFiles(directory=str(download_root)), name="files")
++    if not deps.metadata_only:
++        app.mount("/files", StaticFiles(directory=str(download_root)), name="files")
 +
 +    # ---- 前端单页 ----
 +    @app.get("/", include_in_schema=False)
@@ -951,10 +974,16 @@ index 418f875d330a45d207dd52428636dedd197e27af..8089b2e1b882afb91c0d71bf513c80ec
 +            status_code=404,
 +        )
 +
-     @app.get("/api/v1/health")
-     async def health() -> Dict[str, str]:
-         return {"status": "ok"}
- 
+@@ -158,2 +855,98 @@ def build_app(config: ConfigLoader) -> FastAPI:
+-    async def health() -> Dict[str, str]:
+-        return {"status": "ok"}
++    async def health() -> Dict[str, Any]:
++        return {
++            "status": "ok",
++            "storage_mode": "metadata_only" if deps.metadata_only else "local_media",
++            "max_sync_count": MAX_SYNC_COUNT,
++        }
++
 +    # ---- cookie 管理 ----
 +    @app.get("/api/v1/cookies")
 +    async def get_cookies() -> Dict[str, Any]:
@@ -1046,36 +1075,43 @@ index 418f875d330a45d207dd52428636dedd197e27af..8089b2e1b882afb91c0d71bf513c80ec
 +                "X-QR-Version": str(deps.fetch_qr_version),
 +            },
 +        )
-+
+@@ -160,0 +954 @@ def build_app(config: ConfigLoader) -> FastAPI:
 +    # ---- 下载任务 ----
-     @app.post("/api/v1/download", response_model=JobResponse)
-     async def create_job(req: DownloadRequest) -> JobResponse:
-         if not req.url:
-             raise HTTPException(status_code=400, detail="url is required")
--        job = await manager.submit(req.url)
+@@ -162,0 +957,11 @@ def build_app(config: ConfigLoader) -> FastAPI:
++        if deps.metadata_only:
++            raise HTTPException(status_code=403, detail="生产元数据模式禁止下载持久视频")
++        if not req.url:
++            raise HTTPException(status_code=400, detail="url is required")
 +        job = await manager.submit(req.url, mode=req.mode, cookie=req.cookie, count=req.count)
 +        return JobResponse(job_id=job.job_id, status=job.status, url=job.url)
 +
 +    @app.post("/api/v1/crawl", response_model=JobResponse)
 +    async def crawl(req: DownloadRequest) -> JobResponse:
-+        if not req.url:
-+            raise HTTPException(status_code=400, detail="url is required")
++        if deps.metadata_only:
++            raise HTTPException(status_code=403, detail="生产元数据模式禁止下载持久视频")
+@@ -165 +970,6 @@ def build_app(config: ConfigLoader) -> FastAPI:
+-        job = await manager.submit(req.url)
 +        if not req.mode:
 +            raise HTTPException(
 +                status_code=400,
 +                detail=f"mode is required, one of {', '.join(SUPPORTED_MODES)}",
 +            )
 +        job = await manager.submit(req.url, mode=req.mode, cookie=req.cookie, count=req.count)
-         return JobResponse(job_id=job.job_id, status=job.status, url=job.url)
- 
-     @app.get("/api/v1/jobs/{job_id}")
-@@ -177,6 +762,78 @@ def build_app(config: ConfigLoader) -> FastAPI:
-         jobs = await manager.list_jobs()
-         return {"jobs": [j.to_dict() for j in jobs]}
- 
+@@ -179,0 +990,164 @@ def build_app(config: ConfigLoader) -> FastAPI:
 +    # ---- 作品列表（读 download_manifest.jsonl，每行一个作品）----
 +    @app.get("/api/v1/items")
 +    async def list_items() -> Dict[str, Any]:
++        if deps.metadata_only:
++            catalog = await _read_library_catalog(deps.catalog_path)
++            items: List[Dict[str, Any]] = []
++            for snapshot in catalog["modes"].values():
++                if not isinstance(snapshot, dict):
++                    continue
++                snapshot_items = snapshot.get("items")
++                if isinstance(snapshot_items, list):
++                    items.extend(item for item in snapshot_items if isinstance(item, dict))
++            return {"items": items, "count": len(items), "storage_mode": "metadata_only"}
++
 +        manifest = app.state.download_root / "download_manifest.jsonl"
 +        if not manifest.exists():
 +            return {"items": [], "count": 0}
@@ -1135,7 +1171,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..8089b2e1b882afb91c0d71bf513c80ec
 +    @app.post("/api/v1/auto-collect", response_model=JobResponse)
 +    async def auto_collect(req: AutoCollectRequest) -> JobResponse:
 +        mode = req.mode or "collection"
-+        count = int(req.count) if req.count is not None else 30
++        count = _bounded_sync_count(req.count)
 +        if req.url:
 +            url = req.url
 +        elif mode in ("collection", "collect", "collectmix"):
@@ -1145,65 +1181,112 @@ index 418f875d330a45d207dd52428636dedd197e27af..8089b2e1b882afb91c0d71bf513c80ec
 +        job = await manager.submit(url, mode=mode, count=count)
 +        return JobResponse(job_id=job.job_id, status=job.status, url=url)
 +
-     return app
- 
- 
++    @app.get("/api/v1/media/{aweme_id}")
++    async def stream_media(aweme_id: str, request: Request) -> StreamingResponse:
++        """即时代理当前作品；响应结束即释放连接，永不落盘。"""
++        clean_id = aweme_id.strip()
++        if not clean_id or len(clean_id) > 128 or not clean_id.replace("_", "").replace("-", "").isalnum():
++            raise HTTPException(status_code=400, detail="作品标识无效")
++
++        async with DouyinAPIClient(
++            deps.cookie_manager.get_cookies(),
++            proxy=deps.config.get("proxy"),
++        ) as api_client:
++            detail = await api_client.get_video_detail(clean_id)
++            if not detail:
++                raise HTTPException(status_code=404, detail="未找到作品")
++            downloader = DownloaderFactory.create(
++                "video",
++                deps.config,
++                api_client,
++                deps.file_manager,
++                deps.cookie_manager,
++                None,
++                deps.rate_limiter,
++                deps.retry_handler,
++                deps.queue_manager,
++                progress_reporter=None,
++            )
++            media_info = downloader._build_no_watermark_url(detail) if downloader else None
++        if not media_info:
++            raise HTTPException(status_code=422, detail="该作品没有可播放视频")
++        target_url, target_headers = media_info
++        range_header = request.headers.get("range")
++        if range_header:
++            target_headers["Range"] = range_header
++        session = aiohttp.ClientSession()
++        try:
++            upstream = await session.get(
++                target_url,
++                headers=target_headers,
++                proxy=deps.config.get("proxy") or None,
++                timeout=aiohttp.ClientTimeout(total=600),
++            )
++            if upstream.status >= 400:
++                detail_text = await upstream.text()
++                await upstream.release()
++                await session.close()
++                raise HTTPException(
++                    status_code=502,
++                    detail=f"抖音媒体流返回 {upstream.status}: {detail_text[:120]}",
++                )
++        except Exception:
++            if not session.closed:
++                await session.close()
++            raise
++
++        async def body():
++            try:
++                async for chunk in upstream.content.iter_chunked(256 * 1024):
++                    if chunk:
++                        yield chunk
++            finally:
++                upstream.release()
++                await session.close()
++
++        response_headers = {
++            "Cache-Control": "private, no-store",
++            "Accept-Ranges": upstream.headers.get("Accept-Ranges", "bytes"),
++        }
++        for source, target in (
++            ("Content-Length", "Content-Length"),
++            ("Content-Range", "Content-Range"),
++        ):
++            value = upstream.headers.get(source)
++            if value:
++                response_headers[target] = value
++        return StreamingResponse(
++            body(),
++            status_code=upstream.status,
++            media_type=upstream.headers.get("Content-Type", "video/mp4"),
++            headers=response_headers,
++        )
++
 diff --git a/server/jobs.py b/server/jobs.py
 index 2aed6adacfb3f49d5aa2af749add72ed090d87fe..5571fda4a1683e73658c922a4d5da04dc5928792 100644
 --- a/server/jobs.py
 +++ b/server/jobs.py
-@@ -27,9 +27,12 @@ class JobStatus:
- 
- 
- class DownloadJob:
+@@ -30 +30 @@ class DownloadJob:
 -    def __init__(self, job_id: str, url: str):
 +    def __init__(self, job_id: str, url: str, opts: Optional[Dict[str, Any]] = None):
-         self.job_id = job_id
-         self.url = url
+@@ -32,0 +33,3 @@ class DownloadJob:
 +        # 透传给 executor 的额外参数（如 mode / cookie / count），
 +        # 让 crawl 端点能为每个 job 指定下载模式，而不污染共享 config。
 +        self.opts: Dict[str, Any] = opts or {}
-         self.status = JobStatus.PENDING
-         self.created_at = _now_iso()
-         self.started_at: Optional[str] = None
-@@ -56,6 +59,7 @@ class DownloadJob:
-             "failed": self.failed,
-             "skipped": self.skipped,
-             "error": self.error,
+@@ -58,0 +62 @@ class DownloadJob:
 +            "mode": self.opts.get("mode"),
-         }
- 
- 
-@@ -77,7 +81,7 @@ class JobManager:
- 
-     def __init__(
-         self,
+@@ -80 +84 @@ class JobManager:
 -        executor: Callable[[str], Awaitable[Dict[str, int]]],
 +        executor: Callable[..., Awaitable[Dict[str, int]]],
-         *,
-         max_concurrency: int = 2,
-         max_jobs: int = DEFAULT_MAX_JOBS,
-@@ -90,9 +94,9 @@ class JobManager:
-         self.max_jobs = max(1, int(max_jobs))
-         self.job_ttl_seconds = max(0.0, float(job_ttl_seconds))
- 
+@@ -93 +97 @@ class JobManager:
 -    async def submit(self, url: str) -> DownloadJob:
 +    async def submit(self, url: str, **opts: Any) -> DownloadJob:
-         job_id = uuid.uuid4().hex[:12]
+@@ -95 +99 @@ class JobManager:
 -        job = DownloadJob(job_id=job_id, url=url)
 +        job = DownloadJob(job_id=job_id, url=url, opts=opts)
-         async with self._lock:
-             self._prune_locked()
-             self._jobs[job_id] = job
-@@ -134,7 +138,7 @@ class JobManager:
-             job.status = JobStatus.RUNNING
-             job.started_at = _now_iso()
-             try:
+@@ -137 +141 @@ class JobManager:
 -                counts = await self.executor(job.url)
 +                counts = await self.executor(job.url, **job.opts)
-                 job.total = int(counts.get("total", 0))
-                 job.success = int(counts.get("success", 0))
-                 job.failed = int(counts.get("failed", 0))
 diff --git a/server/static/index.html b/server/static/index.html
 new file mode 100644
 index 0000000000000000000000000000000000000000..bf5a3b94bb910804517219372f9f4fc8fd8ef2e0
@@ -1597,10 +1680,7 @@ diff --git a/tests/test_api_client.py b/tests/test_api_client.py
 index 8811da2871f51307698ef875d1a531fb823f4d11..1f9fd118a69eea7e978229b50ada7b0aecabfd68 100644
 --- a/tests/test_api_client.py
 +++ b/tests/test_api_client.py
-@@ -557,6 +557,52 @@ async def test_collect_endpoints_use_expected_paths_and_normalization(monkeypatc
-     assert collect_mix_data["items"] == [{"mix_id": "mix-1"}]
- 
- 
+@@ -559,0 +560,46 @@ async def test_collect_endpoints_use_expected_paths_and_normalization(monkeypatc
 +@pytest.mark.asyncio
 +async def test_default_collection_uses_cookie_scoped_post_endpoint(monkeypatch):
 +    client = DouyinAPIClient({"msToken": "token-1"})
@@ -1647,33 +1727,23 @@ index 8811da2871f51307698ef875d1a531fb823f4d11..1f9fd118a69eea7e978229b50ada7b0a
 +    assert called is False
 +
 +
- @pytest.mark.asyncio
- async def test_mix_and_music_endpoints_are_normalized(monkeypatch):
-     client = DouyinAPIClient({"msToken": "token-1"})
 diff --git a/tests/test_server.py b/tests/test_server.py
-index ac06496f4cb2ac2e94327df6cdeaf4f5323adf6c..c1312e65b50b6eb0f2b45c003dbb3fec2c809a90 100644
+index ac06496f4cb2ac2e94327df6cdeaf4f5323adf6c..64332de3ba3ba8c70525c34f83e132ce20a3fec1 100644
 --- a/tests/test_server.py
 +++ b/tests/test_server.py
-@@ -4,6 +4,7 @@
- """
- 
- import asyncio
+@@ -6,0 +7 @@ import asyncio
 +import json
- from typing import Dict
- 
- import pytest
-@@ -15,6 +16,7 @@ except ImportError:  # pragma: no cover
- 
- 
- from config import ConfigLoader
+@@ -17,0 +19 @@ from config import ConfigLoader
 +import server.app as server_app
- from server.app import build_app
- from server.jobs import JobManager
- 
-@@ -62,6 +64,72 @@ def test_health_endpoint(tmp_path):
-         assert resp.json() == {"status": "ok"}
- 
- 
+@@ -62 +64,71 @@ def test_health_endpoint(tmp_path):
+-        assert resp.json() == {"status": "ok"}
++        assert resp.json() == {
++            "status": "ok",
++            "storage_mode": "local_media",
++            "max_sync_count": 100,
++        }
++
++
 +def test_items_include_persisted_collection_rank(tmp_path):
 +    config = ConfigLoader(None)
 +    config.update(path=str(tmp_path))
@@ -1732,21 +1802,13 @@ index ac06496f4cb2ac2e94327df6cdeaf4f5323adf6c..c1312e65b50b6eb0f2b45c003dbb3fec
 +    with TestClient(app) as client:
 +        response = client.post(
 +            "/api/v1/source-order/refresh",
-+            json={"mode": "collection", "count": 37},
++            json={"mode": "collection", "count": 50},
 +        )
 +
 +    assert response.status_code == 200
-+    assert response.json()["count"] == 37
-+    assert captured == {"deps": app.state.deps, "count": 37}
-+
-+
- def test_download_endpoint_creates_job(tmp_path, monkeypatch):
-     config = ConfigLoader(None)
-     config.update(path=str(tmp_path))
-@@ -103,6 +171,31 @@ def test_download_endpoint_rejects_empty_url(tmp_path):
-         assert resp.status_code == 400
- 
- 
++    assert response.json()["count"] == 50
++    assert captured == {"deps": app.state.deps, "count": 50}
+@@ -105,0 +178,114 @@ def test_download_endpoint_rejects_empty_url(tmp_path):
 +def test_auto_collect_defaults_to_all_collection_mode(tmp_path, monkeypatch):
 +    config = ConfigLoader(None)
 +    config.update(path=str(tmp_path))
@@ -1765,20 +1827,103 @@ index ac06496f4cb2ac2e94327df6cdeaf4f5323adf6c..c1312e65b50b6eb0f2b45c003dbb3fec
 +    monkeypatch.setattr(app.state.job_manager, "submit", fake_submit)
 +
 +    with TestClient(app) as client:
-+        resp = client.post("/api/v1/auto-collect", json={"count": 8})
++        resp = client.post("/api/v1/auto-collect", json={"count": 50})
 +
 +    assert resp.status_code == 200
 +    assert captured["url"].endswith("showTab=favorite_collection")
-+    assert captured["opts"] == {"mode": "collection", "count": 8}
++    assert captured["opts"] == {"mode": "collection", "count": 50}
 +
 +
- def test_get_unknown_job_returns_404(tmp_path):
-     config = ConfigLoader(None)
-     config.update(path=str(tmp_path))
-@@ -131,6 +224,102 @@ def test_build_app_shares_deps_across_requests(tmp_path):
-     assert app.state.deps.file_manager is app.state.deps.file_manager  # identity
- 
- 
++def test_collect_count_is_limited_to_50_or_100(tmp_path, monkeypatch):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path))
++    app = build_app(config)
++
++    class _FakeJob:
++        job_id = "bounded-job"
++        status = "pending"
++        url = "https://www.douyin.com/user/self?showTab=favorite_collection"
++
++    async def fake_submit(url: str, **opts):
++        return _FakeJob()
++
++    monkeypatch.setattr(app.state.job_manager, "submit", fake_submit)
++
++    with TestClient(app) as client:
++        too_small = client.post("/api/v1/auto-collect", json={"count": 49})
++        allowed_50 = client.post("/api/v1/auto-collect", json={"count": 50})
++        disallowed_middle = client.post("/api/v1/auto-collect", json={"count": 75})
++        allowed_100 = client.post("/api/v1/auto-collect", json={"count": 100})
++        too_large = client.post("/api/v1/auto-collect", json={"count": 101})
++
++    assert too_small.status_code == 422
++    assert allowed_50.status_code == 200
++    assert disallowed_middle.status_code == 422
++    assert allowed_100.status_code == 200
++    assert too_large.status_code == 422
++
++
++def test_metadata_only_mode_rejects_persistent_downloads(tmp_path):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path), server={"metadata_only": True})
++    app = build_app(config)
++
++    with TestClient(app) as client:
++        health = client.get("/api/v1/health")
++        download = client.post(
++            "/api/v1/download",
++            json={"url": "https://www.douyin.com/video/123"},
++        )
++        crawl = client.post(
++            "/api/v1/crawl",
++            json={
++                "url": "https://www.douyin.com/user/self",
++                "mode": "collection",
++                "count": 50,
++            },
++        )
++        files = client.get("/files/anything.mp4")
++
++    assert health.json()["storage_mode"] == "metadata_only"
++    assert health.json()["max_sync_count"] == 100
++    assert download.status_code == 403
++    assert crawl.status_code == 403
++    assert files.status_code == 404
++
++
++@pytest.mark.asyncio
++async def test_metadata_catalog_is_bounded_and_creates_no_media(tmp_path):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path), server={"metadata_only": True})
++    app = build_app(config)
++    deps = app.state.deps
++    items = [
++        {
++            "aweme_id": str(index),
++            "desc": f"item {index}",
++            "author": {"nickname": "tester"},
++            "video": {"cover": {"url_list": [f"https://example.test/{index}.jpg"]}},
++            "create_time": index,
++        }
++        for index in range(150)
++    ]
++
++    result = await server_app._persist_library_catalog(deps, "collection", items)
++    catalog = json.loads((tmp_path / "library_catalog.json").read_text(encoding="utf-8"))
++    saved = catalog["modes"]["collection"]["items"]
++
++    assert result["count"] == 100
++    assert len(saved) == 100
++    assert [record["source_rank"] for record in saved] == list(range(100))
++    media_suffixes = server_app.PERSISTENT_MEDIA_SUFFIXES
++    assert not [
++        path
++        for path in tmp_path.rglob("*")
++        if path.is_file() and path.suffix.lower() in media_suffixes
++    ]
++
++
+@@ -133,0 +320,96 @@ def test_build_app_shares_deps_across_requests(tmp_path):
 +def test_cookie_status_never_returns_cookie_values(tmp_path):
 +    config = ConfigLoader(None)
 +    config.update(path=str(tmp_path))
@@ -1875,25 +2020,13 @@ index ac06496f4cb2ac2e94327df6cdeaf4f5323adf6c..c1312e65b50b6eb0f2b45c003dbb3fec
 +    assert cropped_matrix.shape[1] < canvas.shape[1]
 +
 +
- @pytest.mark.asyncio
- async def test_job_manager_prunes_by_max_jobs():
-     """max_jobs 超限时应优先淘汰最老的终态 job，保留 in-flight。"""
 diff --git a/tests/test_user_downloader_modes.py b/tests/test_user_downloader_modes.py
 index 4c379eae1ff5e21e42910e5be094022dfbcfecfd..bf09de0050d2c9e72df404f0c3bc9c7584ba8aea 100644
 --- a/tests/test_user_downloader_modes.py
 +++ b/tests/test_user_downloader_modes.py
-@@ -37,6 +37,7 @@ class _NoopRateLimiter:
- class _FakeAPIClient:
-     def __init__(self):
-         self.user_info_calls = []
+@@ -39,0 +40 @@ class _FakeAPIClient:
 +        self.collection_calls = 0
-         self.collect_calls = 0
-         self.collect_mix_calls = 0
- 
-@@ -89,6 +90,20 @@ class _FakeAPIClient:
-             "status_code": 0,
-         }
- 
+@@ -91,0 +93,14 @@ class _FakeAPIClient:
 +    async def get_user_collection(
 +        self,
 +        _sec_uid: str,
@@ -1908,13 +2041,7 @@ index 4c379eae1ff5e21e42910e5be094022dfbcfecfd..bf09de0050d2c9e72df404f0c3bc9c75
 +            "status_code": 0,
 +        }
 +
-     async def get_collect_aweme(self, collects_id: str, max_cursor: int = 0, count: int = 20):
-         assert collects_id == "collect-1"
-         return {
-@@ -101,8 +116,20 @@ class _FakeAPIClient:
- 
- def _build_downloader(tmp_path, mode: List[str]) -> UserDownloader:
-     config_data = {
+@@ -104,2 +119,14 @@ def _build_downloader(tmp_path, mode: List[str]) -> UserDownloader:
 -        "number": {"post": 0, "like": 0, "mix": 0, "music": 0},
 -        "increase": {"post": False, "like": False, "mix": False, "music": False},
 +        "number": {
@@ -1931,13 +2058,7 @@ index 4c379eae1ff5e21e42910e5be094022dfbcfecfd..bf09de0050d2c9e72df404f0c3bc9c75
 +            "music": False,
 +            "collection": False,
 +        },
-         "mode": mode,
-         "thread": 2,
-         "browser_fallback": {"enabled": False},
-@@ -215,6 +242,26 @@ def test_user_downloader_supports_self_collect_mode(tmp_path, monkeypatch):
-     assert downloader.api_client.user_info_calls == []
- 
- 
+@@ -217,0 +245,20 @@ def test_user_downloader_supports_self_collect_mode(tmp_path, monkeypatch):
 +def test_user_downloader_supports_self_default_collection_mode(tmp_path, monkeypatch):
 +    downloader = _build_downloader(tmp_path, mode=["collection"])
 +
@@ -1958,44 +2079,21 @@ index 4c379eae1ff5e21e42910e5be094022dfbcfecfd..bf09de0050d2c9e72df404f0c3bc9c75
 +    assert downloader.api_client.user_info_calls == []
 +
 +
- def test_user_downloader_rejects_non_self_collect_mode(tmp_path, monkeypatch):
-     downloader = _build_downloader(tmp_path, mode=["collect"])
- 
 diff --git a/tests/test_user_mode_registry.py b/tests/test_user_mode_registry.py
 index 7c969998071a27dcb7704002a674b19a5e507b3c..fabb95ca5cf4436c46b7971294a4c2a6975d1912 100644
 --- a/tests/test_user_mode_registry.py
 +++ b/tests/test_user_mode_registry.py
-@@ -1,6 +1,7 @@
- from core.user_mode_registry import UserModeRegistry
- from core.user_modes.collect_mix_strategy import CollectMixUserModeStrategy
- from core.user_modes.collect_strategy import CollectUserModeStrategy
+@@ -3,0 +4 @@ from core.user_modes.collect_strategy import CollectUserModeStrategy
 +from core.user_modes.collection_strategy import CollectionUserModeStrategy
- from core.user_modes.like_strategy import LikeUserModeStrategy
- from core.user_modes.mix_strategy import MixUserModeStrategy
- from core.user_modes.music_strategy import MusicUserModeStrategy
-@@ -15,5 +16,6 @@ def test_user_mode_registry_contains_default_modes():
-     assert registry.get("mix") is MixUserModeStrategy
-     assert registry.get("music") is MusicUserModeStrategy
-     assert registry.get("collect") is CollectUserModeStrategy
+@@ -17,0 +19 @@ def test_user_mode_registry_contains_default_modes():
 +    assert registry.get("collection") is CollectionUserModeStrategy
-     assert registry.get("collectmix") is CollectMixUserModeStrategy
-     assert registry.get("unknown") is None
 diff --git a/tests/test_user_mode_strategies.py b/tests/test_user_mode_strategies.py
 index a2fb8c091b4220b734e6afdc7e69001ab149c0a3..f83e10c04b45cd984eda5e2e3eb55ac375429164 100644
 --- a/tests/test_user_mode_strategies.py
 +++ b/tests/test_user_mode_strategies.py
-@@ -3,6 +3,7 @@ import asyncio
- from core.user_modes import post_strategy as post_strategy_module
- from core.user_modes.collect_mix_strategy import CollectMixUserModeStrategy
- from core.user_modes.collect_strategy import CollectUserModeStrategy
+@@ -5,0 +6 @@ from core.user_modes.collect_strategy import CollectUserModeStrategy
 +from core.user_modes.collection_strategy import CollectionUserModeStrategy
- from core.user_modes.like_strategy import LikeUserModeStrategy
- from core.user_modes.mix_strategy import MixUserModeStrategy
- from core.user_modes.music_strategy import MusicUserModeStrategy
-@@ -52,6 +53,41 @@ def test_like_strategy_collects_items_from_api():
-     assert [item["aweme_id"] for item in items] == ["111"]
- 
- 
+@@ -54,0 +56,35 @@ def test_like_strategy_collects_items_from_api():
 +def test_collection_strategy_collects_default_collection_from_api():
 +    class _API:
 +        async def get_user_collection(self, _sec_uid, max_cursor=0, count=20):
@@ -2031,6 +2129,3 @@ index a2fb8c091b4220b734e6afdc7e69001ab149c0a3..f83e10c04b45cd984eda5e2e3eb55ac3
 +    assert [item["aweme_id"] for item in items] == ["collection-1"]
 +
 +
- def test_like_strategy_increment_stops_at_first_downloaded_aweme():
-     class _API:
-         def __init__(self):

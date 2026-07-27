@@ -6501,7 +6501,7 @@ body::before {
 }
 .library-count-control {
   display: flex;
-  height: 42px;
+  min-height: 42px;
   padding: 0 8px 0 10px;
   border: 1px solid var(--card-border);
   border-radius: 11px;
@@ -6509,6 +6509,29 @@ body::before {
   gap: 7px;
   color: var(--foreground-muted);
   font-size: 0.57rem;
+}
+.library-count-options {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  gap: 2px;
+  background: color-mix(in srgb, var(--foreground) 3%, transparent);
+}
+.library-count-options button {
+  min-width: 48px;
+  min-height: 28px;
+  padding: 0 7px;
+  border-radius: 6px;
+  color: var(--foreground-muted);
+  font-size: 0.61rem;
+  font-weight: 720;
+  transition: color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+.library-count-options button.is-active {
+  color: #052a21;
+  background: var(--accent-emerald);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-emerald) 22%, transparent);
 }
 .library-auto-controls input[type="number"] {
   width: 45px;

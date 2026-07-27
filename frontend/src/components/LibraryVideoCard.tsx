@@ -5,6 +5,7 @@ import {
   ArrowUpRight,
   Check,
   CheckCircle2,
+  CircleMinus,
   FileText,
   LoaderCircle,
   MoreHorizontal,
@@ -21,8 +22,10 @@ interface LibraryVideoCardProps {
   extractState?: LibraryExtractState;
   extractError?: string;
   deleting?: boolean;
+  removing?: boolean;
   onToggle: (awemeId: string) => void;
   onDelete: (item: DouyinLibraryItem) => void;
+  onRemove: (item: DouyinLibraryItem) => void;
 }
 
 function formatCount(value: number): string {
@@ -36,8 +39,10 @@ export default function LibraryVideoCard({
   extractState = 'idle',
   extractError,
   deleting = false,
+  removing = false,
   onToggle,
   onDelete,
+  onRemove,
 }: LibraryVideoCardProps) {
   const isWorking = extractState === 'queued' || extractState === 'extracting';
   const isExtracted = item.extracted || extractState === 'done';
@@ -106,9 +111,39 @@ export default function LibraryVideoCard({
           <p className="library-extract-error" title={extractError}>{extractError}</p>
         )}
 
-        {(!isExtracted || (item.extracted_note_id && selected)) && (
         <div className="library-video-actions">
-          {isExtracted && item.extracted_note_id ? (
+          {!isExtracted ? (
+            <span className={`library-card-hint ${selected ? 'is-selected' : ''}`}>
+              {isWorking ? (
+                <LoaderCircle size={13} className="animate-spin" />
+              ) : (
+                <Check size={13} />
+              )}
+              {extractState === 'queued'
+                ? '等待处理'
+                : extractState === 'extracting'
+                  ? '正在生成文案'
+                  : !item.can_extract
+                    ? '没有可提取视频'
+                    : selected
+                      ? '已加入处理'
+                      : '勾选后统一处理'}
+            </span>
+          ) : null}
+          <button
+            type="button"
+            className="library-remove-card-button"
+            disabled={removing}
+            onClick={() => onRemove(item)}
+          >
+            {removing ? (
+              <LoaderCircle size={13} className="animate-spin" />
+            ) : (
+              <CircleMinus size={13} />
+            )}
+            移出资料库
+          </button>
+          {isExtracted && item.extracted_note_id && selected ? (
             <details className="library-card-menu">
               <summary aria-label={`管理 ${item.title}`}>
                 <MoreHorizontal size={15} />
@@ -129,26 +164,8 @@ export default function LibraryVideoCard({
                 </button>
               </div>
             </details>
-          ) : (
-            <span className={`library-card-hint ${selected ? 'is-selected' : ''}`}>
-              {isWorking ? (
-                <LoaderCircle size={13} className="animate-spin" />
-              ) : (
-                <Check size={13} />
-              )}
-              {extractState === 'queued'
-                ? '等待处理'
-                : extractState === 'extracting'
-                  ? '正在生成文案'
-                  : !item.can_extract
-                    ? '没有可提取视频'
-                    : selected
-                      ? '已加入处理'
-                      : '勾选后统一处理'}
-            </span>
-          )}
+          ) : null}
         </div>
-        )}
         <span className="library-detail-hint" aria-hidden="true">
           打开详情
           <ArrowUpRight size={12} />

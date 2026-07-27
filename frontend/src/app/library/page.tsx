@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   CheckSquare2,
   ChevronDown,
+  CircleMinus,
   Download,
   FileText,
   Grid3X3,
@@ -40,6 +41,7 @@ import {
   getDouyinLoginQr,
   getDouyinLoginStatus,
   listDouyinLibraryItems,
+  removeDouyinLibraryItems,
   startDouyinLogin,
 } from '@/lib/api';
 import type {
@@ -53,6 +55,11 @@ import type {
 interface ExtractProgress {
   state: LibraryExtractState;
   error?: string;
+}
+
+interface LibraryRemovalTarget {
+  awemeIds: string[];
+  title?: string;
 }
 
 const MAX_SELECTION = 50;
@@ -116,6 +123,9 @@ export default function VideoLibraryPage() {
   const [sessionAction, setSessionAction] = useState<DouyinSessionAction | null>(null);
   const [sessionPending, setSessionPending] = useState(false);
   const [sessionError, setSessionError] = useState('');
+  const [removalTarget, setRemovalTarget] = useState<LibraryRemovalTarget | null>(null);
+  const [removalPending, setRemovalPending] = useState(false);
+  const [removalError, setRemovalError] = useState('');
   const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
   const [aiWorkspaceOpen, setAiWorkspaceOpen] = useState(false);
   const [pipelineStage, setPipelineStage] = useState<'idle' | 'collect' | 'extract' | 'done'>('idle');
@@ -124,6 +134,7 @@ export default function VideoLibraryPage() {
   const activeRef = useRef(true);
   const loginPollRef = useRef(0);
   const sessionDialogRef = useRef<HTMLDialogElement | null>(null);
+  const removalDialogRef = useRef<HTMLDialogElement | null>(null);
   const aiLauncherRef = useRef<HTMLButtonElement | null>(null);
   const aiCloseRef = useRef<HTMLButtonElement | null>(null);
   const restoreAiLauncherFocusRef = useRef(false);
@@ -565,6 +576,57 @@ export default function VideoLibraryPage() {
     setNotice('已删除这条文案、知识卡和关联计划；原视频仍在下载器中');
   };
 
+  const openRemovalDialog = (targetItems: DouyinLibraryItem[]) => {
+    if (removalPending || targetItems.length === 0) return;
+    const boundedItems = targetItems.slice(0, MAX_SELECTION);
+    setRemovalTarget({
+      awemeIds: boundedItems.map((item) => item.aweme_id),
+      title: boundedItems.length === 1 ? boundedItems[0].title : undefined,
+    });
+    setRemovalError('');
+    removalDialogRef.current?.showModal();
+  };
+
+  const closeRemovalDialog = () => {
+    if (removalPending) return;
+    removalDialogRef.current?.close();
+    setRemovalTarget(null);
+    setRemovalError('');
+  };
+
+  const confirmRemoval = async () => {
+    if (!removalTarget || removalPending) return;
+    setRemovalPending(true);
+    setRemovalError('');
+    const response = await removeDouyinLibraryItems(removalTarget.awemeIds);
+    if (!response.success || !response.data) {
+      setRemovalPending(false);
+      setRemovalError(response.error || '暂时无法从资料库移除，请稍后重试');
+      return;
+    }
+
+    const removedIds = new Set(response.data.aweme_ids);
+    setItems((current) => current.filter(
+      (item) => !removedIds.has(item.aweme_id),
+    ));
+    setSelected((current) => {
+      const next = new Set(current);
+      removedIds.forEach((awemeId) => next.delete(awemeId));
+      return next;
+    });
+    setExtractProgress((current) => {
+      const next = { ...current };
+      removedIds.forEach((awemeId) => delete next[awemeId]);
+      return next;
+    });
+    setRemovalPending(false);
+    removalDialogRef.current?.close();
+    setRemovalTarget(null);
+    setNotice(
+      `已从资料库移除 ${removedIds.size} 条视频；不会取消抖音收藏，已有文案和计划仍保留`,
+    );
+  };
+
   return (
     <div className={`video-library-page ${aiWorkspaceOpen ? 'is-ai-open' : ''}`}>
       <div className="library-ambient" aria-hidden="true" />
@@ -678,6 +740,62 @@ export default function VideoLibraryPage() {
             >
               {sessionPending && <LoaderCircle size={15} className="animate-spin" />}
               {sessionAction === 'rebind' ? '退出并重新扫码' : '确认退出'}
+            </button>
+          </div>
+        </div>
+      </dialog>
+
+      <dialog
+        ref={removalDialogRef}
+        className="library-session-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="library-removal-dialog-title"
+        aria-describedby="library-removal-dialog-description"
+        onCancel={(event) => {
+          if (removalPending) {
+            event.preventDefault();
+            return;
+          }
+          setRemovalTarget(null);
+          setRemovalError('');
+        }}
+      >
+        <div className="library-session-dialog-card">
+          <div className="library-session-dialog-icon" aria-hidden="true">
+            <CircleMinus size={20} />
+          </div>
+          <div>
+            <h2 id="library-removal-dialog-title">
+              {removalTarget?.awemeIds.length === 1
+                ? '把这条视频移出资料库？'
+                : `移出所选 ${removalTarget?.awemeIds.length || 0} 条视频？`}
+            </h2>
+            <p id="library-removal-dialog-description">
+              只会改变你在知萃中的资料库视图，后续同步也不会再次显示。
+              不会取消抖音收藏，也不会删除已有文案、知识卡和计划。
+            </p>
+            {removalTarget?.title && (
+              <p className="library-removal-target" title={removalTarget.title}>
+                {removalTarget.title}
+              </p>
+            )}
+          </div>
+          {removalError && (
+            <p className="library-session-error" role="alert">{removalError}</p>
+          )}
+          <div className="library-session-dialog-actions">
+            <button type="button" onClick={closeRemovalDialog} disabled={removalPending}>
+              取消
+            </button>
+            <button
+              type="button"
+              className="is-primary"
+              onClick={confirmRemoval}
+              disabled={removalPending}
+            >
+              {removalPending && <LoaderCircle size={15} className="animate-spin" />}
+              确认移出
             </button>
           </div>
         </div>
@@ -924,6 +1042,15 @@ export default function VideoLibraryPage() {
               <span className="library-selected-count">已选 {selected.size}</span>
               <button
                 type="button"
+                className="is-danger"
+                onClick={() => openRemovalDialog(selectedItems)}
+                disabled={removalPending || batchExtracting || refreshing}
+              >
+                <CircleMinus size={15} />
+                批量移出
+              </button>
+              <button
+                type="button"
                 className="library-text-action"
                 onClick={() => setSelected(new Set())}
               >
@@ -1025,8 +1152,13 @@ export default function VideoLibraryPage() {
                   extractState={extractProgress[item.aweme_id]?.state}
                   extractError={extractProgress[item.aweme_id]?.error}
                   deleting={deletingNoteId === item.extracted_note_id}
+                  removing={Boolean(
+                    removalPending
+                    && removalTarget?.awemeIds.includes(item.aweme_id)
+                  )}
                   onToggle={toggleSelection}
                   onDelete={(target) => void deleteExtraction(target)}
+                  onRemove={(target) => openRemovalDialog([target])}
                 />
               ))}
             </div>

@@ -13,7 +13,7 @@ from urllib.parse import unquote
 import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -28,6 +28,7 @@ from app.services import (
     douyin_library,
     error_log_service,
     feedback_service,
+    library_hidden_service,
     llm_usage_service,
     note_service,
     plan_service,
@@ -86,6 +87,34 @@ class LibraryLoginRequest(BaseModel):
 
 class LibraryExtractRequest(BaseModel):
     aweme_id: str = Field(..., min_length=1, max_length=128)
+
+
+class LibraryRemoveRequest(BaseModel):
+    aweme_ids: list[str] = Field(..., min_length=1, max_length=50)
+
+    @field_validator("aweme_ids")
+    @classmethod
+    def validate_aweme_ids(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw_id in value:
+            aweme_id = str(raw_id or "").strip()
+            if not 1 <= len(aweme_id) <= 128:
+                raise ValueError("视频标识长度无效")
+            if any(
+                not (
+                    character.isascii()
+                    and (character.isalnum() or character in {"_", "-"})
+                )
+                for character in aweme_id
+            ):
+                raise ValueError("视频标识格式无效")
+            if aweme_id not in seen:
+                seen.add(aweme_id)
+                normalized.append(aweme_id)
+        if not normalized:
+            raise ValueError("至少选择一条视频")
+        return normalized
 
 
 class LibraryAskRequest(BaseModel):
@@ -1083,9 +1112,21 @@ def list_douyin_library_items(
 ) -> dict:
     """Return downloader items enriched with this user's extraction state."""
     try:
-        items = douyin_library.list_items(limit, mode=mode, sort_by=sort)
+        items = douyin_library.list_items(0, mode=mode, sort_by=sort)
     except douyin_library.DouyinLibraryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    hidden_ids = library_hidden_service.list_hidden_aweme_ids(
+        db,
+        current_user.id,
+        [item["aweme_id"] for item in items],
+    )
+    items = [
+        item for item in items
+        if item["aweme_id"] not in hidden_ids
+    ]
+    if limit > 0:
+        items = items[:limit]
 
     note_map = note_service.get_notes_by_video_ids(
         db,
@@ -1101,6 +1142,24 @@ def list_douyin_library_items(
     return _ok({"items": items, "total": len(items)})
 
 
+@router.post("/api/library/douyin/items/remove")
+def remove_douyin_library_items(
+    body: LibraryRemoveRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Hide selected items for this user without deleting source or knowledge."""
+    try:
+        result = library_hidden_service.hide_aweme_ids(
+            db,
+            current_user.id,
+            body.aweme_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _ok(result)
+
+
 @router.get("/api/library/douyin/items/{aweme_id}")
 def get_douyin_library_item(
     aweme_id: str = Path(
@@ -1113,6 +1172,8 @@ def get_douyin_library_item(
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
     """Compose live downloader media with this user's durable knowledge."""
+    if library_hidden_service.is_hidden(db, current_user.id, aweme_id):
+        raise HTTPException(status_code=404, detail="视频已从当前资料库移除")
     try:
         item = douyin_library.get_item(aweme_id)
     except douyin_library.DouyinLibraryError as exc:

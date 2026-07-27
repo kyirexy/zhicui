@@ -5695,13 +5695,25 @@ body::before {
 .library-session-dialog h2 {
   margin: 1px 0 7px;
   font-size: 1rem;
-  letter-spacing: -0.02em;
+  text-wrap: balance;
 }
 .library-session-dialog p {
   margin: 0;
   color: var(--foreground-muted);
   font-size: 0.72rem;
   line-height: 1.65;
+  text-wrap: pretty;
+}
+.library-session-dialog .library-removal-target {
+  overflow: hidden;
+  margin-top: 9px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  color: var(--foreground-secondary);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .library-session-error {
   grid-column: 1 / -1;
@@ -5960,6 +5972,18 @@ body::before {
 .library-selection-actions button.is-primary:hover:not(:disabled) {
   color: #021c15;
   background: color-mix(in srgb, var(--accent-emerald) 88%, white);
+}
+.library-selection-actions button.is-danger {
+  min-height: 38px;
+  color: var(--accent-rose);
+  border-color: color-mix(in srgb, var(--accent-rose) 30%, var(--card-border));
+  background: color-mix(in srgb, var(--accent-rose) 7%, var(--card-bg));
+}
+.library-selection-actions button.is-danger:hover:not(:disabled) {
+  color: var(--accent-rose);
+  border-color: color-mix(in srgb, var(--accent-rose) 50%, var(--card-border));
+  background: color-mix(in srgb, var(--accent-rose) 11%, var(--card-bg));
+  transform: none;
 }
 
 .library-ai-launcher {
@@ -6252,6 +6276,31 @@ body::before {
   align-items: center;
   gap: 6px;
 }
+.library-remove-card-button {
+  position: relative;
+  z-index: 3;
+  display: inline-flex;
+  min-height: 32px;
+  margin-left: auto;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: var(--foreground-muted);
+  background: transparent;
+  font-size: 0.54rem;
+  font-weight: 680;
+  transition: color 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+.library-remove-card-button:hover:not(:disabled) {
+  color: var(--accent-rose);
+  border-color: color-mix(in srgb, var(--accent-rose) 24%, var(--card-border));
+  background: color-mix(in srgb, var(--accent-rose) 6%, transparent);
+}
+.library-remove-card-button:disabled { opacity: 0.48; cursor: not-allowed; }
+.library-remove-card-button + .library-card-menu { margin-left: 0; }
 .library-card-primary {
   display: flex;
   min-width: 0;
@@ -7177,6 +7226,7 @@ body::before {
     flex-wrap: wrap;
   }
   .library-selection-actions button { padding: 0 8px; }
+  .library-remove-card-button { min-height: 40px; }
   .library-ai-launcher {
     grid-template-columns: auto minmax(0, 1fr);
   }

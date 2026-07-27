@@ -374,6 +374,19 @@ export async function collectDouyinLibrary(
   });
 }
 
+export async function removeDouyinLibraryItems(
+  awemeIds: string[],
+): Promise<ApiResponse<{
+  removed: number;
+  newly_removed: number;
+  aweme_ids: string[];
+}>> {
+  return request('/api/library/douyin/items/remove', {
+    method: 'POST',
+    body: JSON.stringify({ aweme_ids: awemeIds }),
+  });
+}
+
 export async function disconnectDouyinLibrary(
   action: 'logout' | 'rebind' = 'logout',
 ): Promise<ApiResponse<{

@@ -11,6 +11,8 @@ names, api_base URLs) remain plaintext for readability.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -20,9 +22,15 @@ from app.models.system_setting import SystemSetting
 LLM_MODEL_KEY = "llm_model"
 LLM_API_BASE_KEY = "llm_api_base"
 LLM_API_KEY_KEY = "llm_api_key"
+LLM_PROVIDER_KEY = "llm_provider"
 ASR_API_KEY_KEY = "asr_api_key"
 ASR_API_BASE_URL_KEY = "asr_api_base_url"
 ASR_MODEL_KEY = "asr_model"
+
+DEEPSEEK_PROVIDER = "deepseek"
+CUSTOM_PROVIDER = "custom"
+DEEPSEEK_API_BASE = "https://api.deepseek.com"
+DEEPSEEK_MODELS = ("deepseek-v4-flash", "deepseek-v4-pro")
 
 
 def _fernet():
@@ -88,6 +96,41 @@ def get_secret(db: Session, key: str, default: str = "") -> str:
     return _decrypt(raw)
 
 
+def infer_llm_provider(model: str, api_base: str, stored_provider: str = "") -> str:
+    """Infer a provider for installations created before provider was stored."""
+    if stored_provider in {DEEPSEEK_PROVIDER, CUSTOM_PROVIDER}:
+        return stored_provider
+    normalized_base = (api_base or "").rstrip("/")
+    if model in DEEPSEEK_MODELS or normalized_base == DEEPSEEK_API_BASE:
+        return DEEPSEEK_PROVIDER
+    return CUSTOM_PROVIDER
+
+
+def validate_llm_preset(provider: str, model: str, api_base: str) -> dict[str, str]:
+    """Normalize provider values and enforce server-side DeepSeek presets."""
+    safe_provider = provider if provider in {DEEPSEEK_PROVIDER, CUSTOM_PROVIDER} else CUSTOM_PROVIDER
+    safe_model = (model or "").strip()
+    safe_base = (api_base or "").strip().rstrip("/")
+    if safe_provider == DEEPSEEK_PROVIDER:
+        if safe_model not in DEEPSEEK_MODELS:
+            raise ValueError("请选择受支持的 DeepSeek 模型")
+        safe_base = DEEPSEEK_API_BASE
+    elif not safe_model:
+        raise ValueError("自定义模型名称不能为空")
+    return {
+        "provider": safe_provider,
+        "model": safe_model,
+        "api_base": safe_base,
+    }
+
+
+def to_litellm_model(provider: str, model: str) -> str:
+    """Convert a display model into LiteLLM's OpenAI-compatible route."""
+    if provider == DEEPSEEK_PROVIDER and not model.startswith("openai/"):
+        return f"openai/{model}"
+    return model
+
+
 def get_llm_config(db: Session) -> dict[str, str]:
     """Resolve effective LLM config: DB first, fallback to settings (.env).
 
@@ -97,7 +140,17 @@ def get_llm_config(db: Session) -> dict[str, str]:
     model = get_setting(db, LLM_MODEL_KEY) or settings.LLM_MODEL
     api_base = get_setting(db, LLM_API_BASE_KEY) or settings.LLM_API_BASE
     api_key = get_secret(db, LLM_API_KEY_KEY) or settings.LLM_API_KEY or settings.API_KEY
-    return {"model": model, "api_base": api_base, "api_key": api_key}
+    stored_provider = get_setting(db, LLM_PROVIDER_KEY)
+    provider = infer_llm_provider(model, api_base, stored_provider)
+    if provider == DEEPSEEK_PROVIDER:
+        api_base = DEEPSEEK_API_BASE
+    return {
+        "provider": provider,
+        "model": model,
+        "runtime_model": to_litellm_model(provider, model),
+        "api_base": api_base,
+        "api_key": api_key,
+    }
 
 
 def get_asr_config(db: Session) -> dict[str, str]:
@@ -117,13 +170,16 @@ def mask_key(value: str) -> str:
     return "*" * (len(value) - 4) + value[-4:]
 
 
-def get_llm_config_masked(db: Session) -> dict[str, str]:
+def get_llm_config_masked(db: Session) -> dict[str, Any]:
     """LLM config with api_key masked — safe to return to the admin UI."""
     cfg = get_llm_config(db)
     return {
+        "provider": cfg["provider"],
         "model": cfg["model"],
         "api_base": cfg["api_base"],
         "api_key_masked": mask_key(cfg["api_key"]),
+        "api_base_locked": cfg["provider"] == DEEPSEEK_PROVIDER,
+        "available_models": list(DEEPSEEK_MODELS),
     }
 
 

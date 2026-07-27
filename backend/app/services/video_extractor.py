@@ -417,6 +417,112 @@ def extract_transcript(
     return text
 
 
+def extract_media_url_transcript(
+    media_url: str,
+    api_key: str,
+    api_base_url: str | None = None,
+    model: str | None = None,
+    *,
+    max_bytes: int = 800 * 1024 * 1024,
+) -> str:
+    """Transcribe a trusted direct media URL from the companion library.
+
+    The media is streamed into a temporary directory, converted to a compact
+    mono MP3, sent to the configured cloud ASR, and then retried through the
+    existing local ASR stack when available.
+    """
+    import requests as _requests
+
+    clean_url = media_url.strip()
+    if not clean_url.startswith(("http://", "https://")):
+        raise ValueError("媒体地址无效")
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="zhicui-library-"))
+    video_path = temp_dir / "source.mp4"
+    audio_path = temp_dir / "audio.mp3"
+    failures: list[str] = []
+
+    try:
+        with _requests.Session() as session:
+            session.trust_env = False
+            with session.get(clean_url, stream=True, timeout=(10, 300)) as response:
+                response.raise_for_status()
+                content_length = int(response.headers.get("Content-Length") or 0)
+                if content_length > max_bytes:
+                    raise RuntimeError("视频文件过大，暂不支持提取")
+
+                written = 0
+                with open(video_path, "wb") as output:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if not chunk:
+                            continue
+                        written += len(chunk)
+                        if written > max_bytes:
+                            raise RuntimeError("视频文件过大，暂不支持提取")
+                        output.write(chunk)
+        if not video_path.exists() or video_path.stat().st_size == 0:
+            raise RuntimeError("下载器返回了空视频文件")
+
+        ffmpeg_exe = _get_ffmpeg_path()
+        command = [
+            ffmpeg_exe,
+            "-y",
+            "-i",
+            str(video_path),
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-codec:a",
+            "libmp3lame",
+            "-b:a",
+            "64k",
+            str(audio_path),
+        ]
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        if result.returncode != 0 or not audio_path.exists():
+            raise RuntimeError(f"FFmpeg 提取音频失败：{result.stderr[-300:]}")
+
+        if api_key:
+            try:
+                transcript = _asr_audio_file(
+                    str(audio_path),
+                    api_key,
+                    api_base_url,
+                    model,
+                )
+                if transcript and transcript.strip():
+                    return transcript.strip()
+                failures.append("云端 ASR 返回空文案")
+            except Exception as exc:
+                failures.append(f"云端 ASR：{exc}")
+
+        try:
+            from app.services.local_asr import transcribe_file, transcribe_with_whisper
+
+            try:
+                transcript = transcribe_file(audio_path)
+            except Exception as exc:
+                failures.append(f"本地 FunASR：{exc}")
+                transcript = transcribe_with_whisper(str(audio_path), model_size="base")
+            if transcript and transcript.strip():
+                return transcript.strip()
+            failures.append("本地 ASR 返回空文案")
+        except Exception as exc:
+            failures.append(f"本地 ASR：{exc}")
+
+        detail = "；".join(failures[-3:])
+        raise RuntimeError(f"视频文案提取失败{f'：{detail}' if detail else ''}")
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def fallback_local_asr(url: str) -> str:
     """Offline ASR fallback using FunASR (Alibaba DAMO Academy).
 

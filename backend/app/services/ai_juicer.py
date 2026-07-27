@@ -17,7 +17,7 @@ from litellm import completion
 
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.services import settings_service
+from app.services import error_log_service, llm_usage_service, settings_service
 
 
 def _get_llm_config() -> dict[str, str]:
@@ -32,6 +32,37 @@ def _get_llm_config() -> dict[str, str]:
     """
     with SessionLocal() as db:
         return settings_service.get_llm_config(db)
+
+
+def _completion_with_usage(
+    llm_cfg: dict[str, str],
+    kwargs: dict[str, Any],
+    *,
+    operation: str,
+    display_model: str | None = None,
+) -> Any:
+    """Run LiteLLM and persist only provider-reported Token counts."""
+    try:
+        response = completion(**kwargs)
+    except Exception as exc:
+        error_log_service.record_exception_safely(
+            exc,
+            source="llm",
+            status_code=502,
+            metadata={
+                "provider": llm_cfg["provider"],
+                "model": display_model or llm_cfg["model"],
+                "operation": operation,
+            },
+        )
+        raise
+    llm_usage_service.record_response_usage(
+        response,
+        provider=llm_cfg["provider"],
+        model=display_model or llm_cfg["model"],
+        operation=operation,
+    )
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +337,7 @@ def _generate_card_once(
 
     llm_cfg = _get_llm_config()
     llm_kwargs: dict = {
-        "model": llm_cfg["model"],
+        "model": llm_cfg["runtime_model"],
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
@@ -326,7 +357,11 @@ def _generate_card_once(
     if llm_cfg["api_key"]:
         llm_kwargs["api_key"] = llm_cfg["api_key"]
 
-    response = completion(**llm_kwargs)
+    response = _completion_with_usage(
+        llm_cfg,
+        llm_kwargs,
+        operation="card_generation",
+    )
 
     choice = response.choices[0]
     raw: str = choice.message.content or ""
@@ -475,13 +510,18 @@ def _call_llm(
     max_tokens: int = 4096,
     temperature: float = 0.3,
     timeout: int = 60,
+    operation: str = "llm_call",
 ) -> str:
     """Single LLM round-trip. Returns raw text, raises on any failure."""
     import os
 
     llm_cfg = _get_llm_config()
+    display_model = model_override or llm_cfg["model"]
     kwargs: dict = {
-        "model": model_override or llm_cfg["model"],
+        "model": settings_service.to_litellm_model(
+            llm_cfg["provider"],
+            display_model,
+        ),
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -495,7 +535,12 @@ def _call_llm(
     if llm_cfg["api_key"]:
         kwargs["api_key"] = llm_cfg["api_key"]
 
-    response = completion(**kwargs)
+    response = _completion_with_usage(
+        llm_cfg,
+        kwargs,
+        operation=operation,
+        display_model=display_model,
+    )
     choice = response.choices[0]
     raw: str = choice.message.content or ""
     if not raw.strip() and hasattr(choice.message, "reasoning_content"):
@@ -914,6 +959,7 @@ def answer_note_question(
         max_tokens=1600,
         temperature=0.2,
         timeout=60,
+        operation="note_qa",
     )
 
     try:
@@ -951,6 +997,618 @@ def answer_note_question(
         "evidence": evidence,
         # Never trust the model's boolean directly: evidence is grounded only
         # after the quote has been found in the exact context supplied above.
+        "grounded": bool(evidence),
+        "follow_up_questions": _note_follow_up_questions(
+            parsed.get("follow_up_questions")
+        ),
+        "source_context": source_context,
+    }
+
+
+_LIBRARY_CHAT_SYSTEM_PROMPT = """\
+你是知萃的多视频内容研究助手。你只能依据本次提供的多个视频标题、AI 结构化理解和从完整视频文稿中检索出的原文回答。
+
+回答规则：
+1. 先直接回答，再按需要归纳共同点、差异或可执行步骤，默认使用简洁中文。
+2. 不得补造来源中没有出现的数字、人物、产品参数、结论或因果关系。
+3. 如果来源不足，明确说“所选视频没有提供足够信息”，并说明还缺什么。
+4. 可以跨视频综合，但必须区分“原文事实”和“基于所选内容的归纳”。
+5. evidence 中每条 quote 必须逐字复制自对应来源的【文稿上下文】或【AI 结构化理解】。
+6. evidence 中的 note_id 必须使用来源标题前给出的真实 note_id；不得杜撰来源。
+7. 对话历史只用于理解指代，不得作为事实来源。
+8. follow_up_questions 最多 3 个，且应能继续用同一批来源回答。
+
+只输出下面结构的 JSON，不要输出 Markdown 代码围栏或额外解释：
+{
+  "answer": "直接、清晰的中文回答",
+  "evidence": [
+    {
+      "note_id": "来源中给出的 note_id",
+      "quote": "20-180 字的来源原文",
+      "source": "transcript"
+    }
+  ],
+  "grounded": true,
+  "follow_up_questions": ["一个自然的后续问题"]
+}
+
+source 只能是 transcript 或 summary。来源不足时 evidence 返回空数组，grounded 返回 false。
+"""
+
+
+def _validated_library_evidence(
+    raw_evidence: Any,
+    supplied_sources: dict[str, dict[str, str]],
+) -> list[dict[str, Any]]:
+    """Validate every quote against the exact source identified by the model."""
+    if not isinstance(raw_evidence, list):
+        return []
+
+    validated: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in raw_evidence:
+        if not isinstance(item, dict):
+            continue
+        note_id = str(item.get("note_id") or "").strip()
+        quote = str(item.get("quote") or "").strip()
+        source_data = supplied_sources.get(note_id)
+        if not source_data or not quote or (note_id, quote) in seen:
+            continue
+
+        source = ""
+        if quote in source_data["transcript_context"]:
+            source = "transcript"
+        elif quote in source_data["summary_context"]:
+            source = "summary"
+        if not source:
+            continue
+
+        evidence: dict[str, Any] = {
+            "note_id": note_id,
+            "title": source_data["title"],
+            "quote": quote[:360],
+            "source": source,
+        }
+        if source == "transcript":
+            source_index = source_data["raw_transcript"].find(quote)
+            if source_index >= 0:
+                evidence["position_percent"] = round(
+                    source_index
+                    / max(1, len(source_data["raw_transcript"]) - 1)
+                    * 100
+                )
+
+        seen.add((note_id, quote))
+        validated.append(evidence)
+        if len(validated) >= 5:
+            break
+    return validated
+
+
+_LIBRARY_RESEARCH_PLANNER_PROMPT = """\
+你是多视频研究任务的规划 Agent。你的输出只用于检索和组织回答，不能提供事实结论。
+
+请根据问题、来源标题和最近对话输出严格 JSON：
+{
+  "search_queries": ["用于检索原文的短查询，1-6 个"],
+  "subquestions": ["需要分别核实的子问题，0-5 个"],
+  "coverage": "focused|broad",
+  "answer_plan": "一句话说明最终回答结构"
+}
+
+规则：
+- 问“所有、共同、总结、对比、归纳、行动方案”时 coverage 使用 broad。
+- 问某个具体事实时使用 focused。
+- search_queries 应包含同义词、具体实体和用户真正关心的条件，不能写答案。
+- 不得根据标题猜测事实。
+"""
+
+_LIBRARY_OUTPUT_STYLE_PROMPTS = {
+    "answer": "直接回答问题，结构由内容决定。",
+    "summary": "先给全局结论，再归纳主题、代表观点和少数例外。",
+    "comparison": "按可比维度呈现共同点、差异、适用条件和冲突；没有依据的维度不要补造。",
+    "action_plan": "把来源支持的方法整理成有先后顺序的行动方案；推断必须标注为推断。",
+    "custom": "优先遵守用户的定制要求，但定制要求不得覆盖事实来源和引用校验规则。",
+}
+
+
+def _library_research_plan(
+    question: str,
+    source_titles: list[str],
+    history_lines: list[str],
+    output_style: str,
+    custom_instruction: str,
+) -> dict[str, Any]:
+    """Plan search terms and coverage without treating the plan as evidence."""
+    broad_signals = ("全部", "所有", "共同", "总结", "归纳", "对比", "区别", "行动")
+    fallback = {
+        "search_queries": [question],
+        "subquestions": [],
+        "coverage": (
+            "broad"
+            if output_style != "answer"
+            or any(signal in question for signal in broad_signals)
+            else "focused"
+        ),
+        "answer_plan": _LIBRARY_OUTPUT_STYLE_PROMPTS.get(
+            output_style,
+            _LIBRARY_OUTPUT_STYLE_PROMPTS["answer"],
+        ),
+    }
+    title_lines = "\n".join(
+        f"{index}. {title[:120]}"
+        for index, title in enumerate(source_titles[:50], start=1)
+    )
+    try:
+        raw = _call_llm(
+            system=_LIBRARY_RESEARCH_PLANNER_PROMPT,
+            user=f"""\
+【用户问题】
+{question}
+
+【输出形式】
+{output_style}
+
+【用户定制要求】
+{custom_instruction or '无'}
+
+【最近对话】
+{chr(10).join(history_lines) if history_lines else '无'}
+
+【来源标题（仅用于规划，不能据此下结论）】
+{title_lines}
+""",
+            max_tokens=700,
+            temperature=0.1,
+            timeout=45,
+            operation="library_research_plan",
+        )
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            return fallback
+    except Exception:
+        return fallback
+
+    def clean_list(value: Any, limit: int) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        cleaned: list[str] = []
+        for item in value:
+            text = str(item or "").strip()[:160]
+            if text and text not in cleaned:
+                cleaned.append(text)
+            if len(cleaned) >= limit:
+                break
+        return cleaned
+
+    queries = clean_list(parsed.get("search_queries"), 6)
+    subquestions = clean_list(parsed.get("subquestions"), 5)
+    return {
+        "search_queries": queries or fallback["search_queries"],
+        "subquestions": subquestions,
+        "coverage": (
+            parsed.get("coverage")
+            if parsed.get("coverage") in {"focused", "broad"}
+            else fallback["coverage"]
+        ),
+        "answer_plan": str(
+            parsed.get("answer_plan") or fallback["answer_plan"]
+        ).strip()[:500],
+    }
+
+
+def _library_signal_score(text: str, signals: list[tuple[str, int]]) -> int:
+    lowered = text.lower()
+    return sum(lowered.count(signal) * weight for signal, weight in signals)
+
+
+def _build_library_research_context(
+    sources: list[dict[str, Any]],
+    queries: list[str],
+    *,
+    coverage: str,
+    research_mode: str,
+) -> tuple[list[str], dict[str, dict[str, str]], dict[str, Any]]:
+    """Scan every transcript, then globally select diverse source chunks."""
+    max_context_chars = 58_000 if research_mode == "deep" else 44_000
+    max_context_sources = 28 if research_mode == "deep" else 18
+    max_context_chunks = 30 if research_mode == "deep" else 20
+    query_text = "\n".join(queries)
+    signals = _note_query_signals(query_text)
+
+    records: dict[str, dict[str, Any]] = {}
+    candidates: list[dict[str, Any]] = []
+    total_transcript_chars = 0
+    scanned_chunks = 0
+    summary_count = 0
+
+    for source in sources[:50]:
+        note_id = str(source.get("note_id") or "").strip()
+        if not note_id or note_id in records:
+            continue
+        title = str(source.get("title") or "未命名视频").strip()[:512]
+        raw_transcript = str(source.get("transcript") or "").strip()
+        summary_context = _note_ai_summary_context(
+            source.get("ai_summary"),
+            limit=2600,
+        )
+        chunks = _note_transcript_chunks(raw_transcript)
+        total_transcript_chars += len(raw_transcript)
+        scanned_chunks += len(chunks)
+        summary_count += int(bool(summary_context))
+
+        metadata_score = _library_signal_score(
+            f"{title}\n{summary_context}",
+            signals,
+        )
+        record = {
+            "title": title,
+            "raw_transcript": raw_transcript,
+            "summary_context": summary_context,
+            "metadata_score": metadata_score,
+            "best_score": metadata_score,
+        }
+        records[note_id] = record
+        denominator = max(1, len(raw_transcript) - 1)
+        for start, chunk_text in chunks:
+            score = _library_signal_score(chunk_text, signals)
+            # Title/summary matches make a source more likely, but exact
+            # transcript matches remain the strongest signal.
+            score += min(12, metadata_score // 3)
+            record["best_score"] = max(record["best_score"], score)
+            candidates.append({
+                "note_id": note_id,
+                "start": start,
+                "position_percent": round(start / denominator * 100),
+                "text": chunk_text,
+                "score": score,
+            })
+
+    if not records:
+        return [], {}, {
+            "note_count": 0,
+            "transcript_chars": 0,
+            "scanned_chunks": 0,
+            "selected_chunks": 0,
+            "ai_summary_count": 0,
+            "matched_note_count": 0,
+            "context_note_count": 0,
+            "sources": [],
+        }
+
+    candidates.sort(
+        key=lambda item: (-item["score"], item["note_id"], item["start"])
+    )
+    best_by_source: dict[str, dict[str, Any]] = {}
+    for candidate in candidates:
+        best_by_source.setdefault(candidate["note_id"], candidate)
+
+    selected: list[dict[str, Any]] = []
+    selected_keys: set[tuple[str, int]] = set()
+    source_counts: dict[str, int] = {}
+
+    def add_candidate(candidate: dict[str, Any]) -> None:
+        key = (candidate["note_id"], candidate["start"])
+        if key in selected_keys or len(selected) >= max_context_chunks:
+            return
+        if source_counts.get(candidate["note_id"], 0) >= 3:
+            return
+        selected_keys.add(key)
+        selected.append(candidate)
+        source_counts[candidate["note_id"]] = (
+            source_counts.get(candidate["note_id"], 0) + 1
+        )
+
+    source_ranking = sorted(
+        records,
+        key=lambda note_id: (
+            -int(records[note_id]["best_score"]),
+            note_id,
+        ),
+    )
+    # Broad research guarantees source diversity before adding extra highly
+    # relevant chunks. Focused research still samples several top sources.
+    breadth_target = (
+        max_context_sources
+        if coverage == "broad"
+        else min(8, max_context_sources)
+    )
+    for note_id in source_ranking[:breadth_target]:
+        candidate = best_by_source.get(note_id)
+        if candidate:
+            add_candidate(candidate)
+    for candidate in candidates:
+        add_candidate(candidate)
+
+    grouped_chunks: dict[str, list[dict[str, Any]]] = {}
+    for candidate in selected:
+        grouped_chunks.setdefault(candidate["note_id"], []).append(candidate)
+
+    source_blocks: list[str] = []
+    supplied_sources: dict[str, dict[str, str]] = {}
+    consumed_chars = 0
+    for source_index, note_id in enumerate(source_ranking, start=1):
+        record = records[note_id]
+        chunks = sorted(
+            grouped_chunks.get(note_id, []),
+            key=lambda item: item["start"],
+        )
+        if not chunks and not record["summary_context"]:
+            continue
+        if len(supplied_sources) >= max_context_sources:
+            break
+
+        transcript_parts = [
+            f"[原文约 {chunk['position_percent']}% 处]\n{chunk['text']}"
+            for chunk in chunks
+        ]
+        transcript_context = "\n\n".join(transcript_parts)
+        summary_context = str(record["summary_context"])
+        block = f"""【来源 {source_index}】
+note_id：{note_id}
+标题：{record["title"]}
+
+AI 结构化理解：
+{summary_context or '无'}
+
+文稿上下文：
+{transcript_context or '无可用文稿片段'}"""
+        remaining = max_context_chars - consumed_chars
+        if remaining < 900:
+            break
+        if len(block) > remaining:
+            transcript_context = transcript_context[: max(0, remaining - 700)]
+            block = f"""【来源 {source_index}】
+note_id：{note_id}
+标题：{record["title"]}
+
+AI 结构化理解：
+{summary_context[:1200] or '无'}
+
+文稿上下文：
+{transcript_context or '无可用文稿片段'}"""
+        consumed_chars += len(block)
+        supplied_sources[note_id] = {
+            "title": str(record["title"]),
+            "raw_transcript": str(record["raw_transcript"]),
+            "transcript_context": transcript_context,
+            "summary_context": summary_context[:2600],
+        }
+        source_blocks.append(block)
+
+    matched_note_count = sum(
+        1 for record in records.values()
+        if int(record["best_score"]) > 0
+    )
+    context = {
+        "note_count": len(records),
+        "transcript_chars": total_transcript_chars,
+        "scanned_chunks": scanned_chunks,
+        "selected_chunks": sum(len(value) for value in grouped_chunks.values()),
+        "ai_summary_count": summary_count,
+        "matched_note_count": matched_note_count,
+        "context_note_count": len(supplied_sources),
+        "sources": [
+            {"note_id": note_id, "title": data["title"]}
+            for note_id, data in supplied_sources.items()
+        ],
+    }
+    return source_blocks, supplied_sources, context
+
+
+def _deep_library_map(
+    source_blocks: list[str],
+    question: str,
+    subquestions: list[str],
+) -> tuple[list[str], int]:
+    """Map source batches into provisional findings for deep research."""
+    if not source_blocks:
+        return [], 0
+    group_size = 5
+    findings: list[str] = []
+    map_calls = 0
+    for start in range(0, min(len(source_blocks), 30), group_size):
+        group = source_blocks[start:start + group_size]
+        try:
+            mapped = _call_llm(
+                system="""\
+你是多视频研究 Agent 的证据整理阶段。只依据当前批次来源，找出与问题有关的事实、共同点、差异和缺口。
+每条发现必须保留真实 note_id 和逐字原文 quote；不能根据标题猜测。输出简洁 JSON：
+{"findings":[{"claim":"发现","note_id":"真实ID","quote":"逐字原文"}],"gaps":["仍缺少的信息"]}
+""",
+                user=f"""\
+【研究问题】
+{question}
+
+【待核实子问题】
+{json.dumps(subquestions, ensure_ascii=False)}
+
+【当前来源批次】
+{chr(10).join(group)}
+""",
+                max_tokens=1100,
+                temperature=0.1,
+                timeout=60,
+                operation="library_research_map",
+            )
+            findings.append(mapped[:6000])
+            map_calls += 1
+        except Exception as exc:
+            findings.append(
+                json.dumps(
+                    {"findings": [], "gaps": [f"该批次分析失败：{type(exc).__name__}"]},
+                    ensure_ascii=False,
+                )
+            )
+    return findings, map_calls
+
+
+def answer_library_question(
+    sources: list[dict[str, Any]],
+    question: str,
+    history: list[dict[str, str]] | None = None,
+    research_mode: str = "fast",
+    output_style: str = "answer",
+    custom_instruction: str = "",
+) -> dict[str, Any]:
+    """Research up to 50 videos through planning, retrieval and synthesis."""
+    clean_question = question.strip()
+    if not clean_question:
+        raise ValueError("问题不能为空")
+    if not sources:
+        raise ValueError("请至少选择一个已提取文案的视频")
+
+    safe_mode = research_mode if research_mode in {"fast", "deep"} else "fast"
+    safe_style = (
+        output_style
+        if output_style in _LIBRARY_OUTPUT_STYLE_PROMPTS
+        else "answer"
+    )
+    clean_custom = custom_instruction.strip()[:600]
+    bounded_sources = sources[:50]
+    history_lines: list[str] = []
+    retrieval_history: list[str] = []
+    for item in (history or [])[-6:]:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        content = str(item.get("content") or "").strip()[:1000]
+        if role not in {"user", "assistant"} or not content:
+            continue
+        history_lines.append(
+            f"{'用户' if role == 'user' else '助手'}：{content}"
+        )
+        if role == "user":
+            retrieval_history.append(content)
+
+    plan = _library_research_plan(
+        clean_question,
+        [
+            str(source.get("title") or "未命名视频")
+            for source in bounded_sources
+        ],
+        history_lines,
+        safe_style,
+        clean_custom,
+    )
+    queries = [
+        clean_question,
+        *retrieval_history[-3:],
+        *plan["search_queries"],
+        *plan["subquestions"],
+    ]
+    source_blocks, supplied_sources, source_context = (
+        _build_library_research_context(
+            bounded_sources,
+            queries,
+            coverage=plan["coverage"],
+            research_mode=safe_mode,
+        )
+    )
+    if not supplied_sources:
+        raise ValueError("所选视频没有可用内容")
+
+    agent_trace = [
+        {
+            "stage": "plan",
+            "label": "规划问题与检索方向",
+            "detail": (
+                f"{len(plan['search_queries'])} 个检索方向 · "
+                f"{len(plan['subquestions'])} 个子问题"
+            ),
+        },
+        {
+            "stage": "retrieve",
+            "label": "扫描完整文案并全局召回",
+            "detail": (
+                f"扫描 {source_context['note_count']} 条视频、"
+                f"{source_context['scanned_chunks']} 个分块，"
+                f"选取 {source_context['selected_chunks']} 个片段"
+            ),
+        },
+    ]
+    mapped_findings: list[str] = []
+    map_calls = 0
+    if safe_mode == "deep" and len(supplied_sources) >= 6:
+        mapped_findings, map_calls = _deep_library_map(
+            source_blocks,
+            clean_question,
+            plan["subquestions"],
+        )
+        agent_trace.append({
+            "stage": "map",
+            "label": "分批提取跨视频发现",
+            "detail": f"完成 {map_calls} 个来源批次分析",
+        })
+
+    style_instruction = _LIBRARY_OUTPUT_STYLE_PROMPTS[safe_style]
+    raw_answer = _call_llm(
+        system=_LIBRARY_CHAT_SYSTEM_PROMPT,
+        user=f"""\
+【研究计划】
+覆盖方式：{plan["coverage"]}
+回答计划：{plan["answer_plan"]}
+输出要求：{style_instruction}
+用户定制：{clean_custom or '无'}
+
+【深度研究阶段发现】
+{chr(10).join(mapped_findings) if mapped_findings else '快速模式：无分批阶段'}
+
+【所选视频来源】
+{chr(10).join(source_blocks)}
+
+【最近对话】
+{chr(10).join(history_lines) if history_lines else '无'}
+
+【当前问题】
+{clean_question}
+""",
+        max_tokens=3200 if safe_mode == "deep" else 2400,
+        temperature=0.2,
+        timeout=90,
+        operation="library_qa",
+    )
+    agent_trace.append({
+        "stage": "synthesize",
+        "label": "综合回答并校验引用",
+        "detail": f"{'深度' if safe_mode == 'deep' else '快速'}模式综合",
+    })
+    source_context.update({
+        "research_mode": safe_mode,
+        "output_style": safe_style,
+        "coverage": plan["coverage"],
+        "map_calls": map_calls,
+        "agent_trace": agent_trace,
+    })
+    try:
+        parsed = json.loads(raw_answer)
+    except (json.JSONDecodeError, TypeError):
+        return {
+            "answer": raw_answer,
+            "evidence": [],
+            "grounded": False,
+            "follow_up_questions": [],
+            "source_context": source_context,
+        }
+    if not isinstance(parsed, dict):
+        return {
+            "answer": raw_answer,
+            "evidence": [],
+            "grounded": False,
+            "follow_up_questions": [],
+            "source_context": source_context,
+        }
+
+    answer = str(parsed.get("answer") or "").strip()
+    if not answer:
+        answer = "所选视频没有提供足够信息来回答这个问题。"
+    evidence = _validated_library_evidence(
+        parsed.get("evidence"),
+        supplied_sources,
+    )
+    return {
+        "answer": answer,
+        "evidence": evidence,
         "grounded": bool(evidence),
         "follow_up_questions": _note_follow_up_questions(
             parsed.get("follow_up_questions")
@@ -998,6 +1656,7 @@ def classify_intent(transcript: str) -> dict[str, Any]:
             system=_INTENT_CLASSIFIER_PROMPT,
             user=f"视频转录文本：\n\n{snippet}",
             max_tokens=256,
+            operation="intent_classification",
         )
         result = json.loads(raw)
         card_type = result.get("card_type", kw_type)
@@ -1241,6 +1900,7 @@ def generate_plan(transcript: str) -> dict[str, Any] | None:
                 f"视频转录文本：\n\n{transcript[:5000]}"
             ),
             max_tokens=3072,
+            operation="plan_generation",
         )
         plan = json.loads(raw)
         plan.setdefault("goal", "")
@@ -1253,6 +1913,147 @@ def generate_plan(transcript: str) -> dict[str, Any] | None:
         return _normalize_plan_payload(plan)
     except Exception:
         return None
+
+
+_PLAN_AGENT_PROMPT = """\
+你是知萃的行动计划 Agent。你的任务是把一条视频中真正可执行的信息，与用户的明确要求结合，生成一份完整、可落库的计划目标状态。
+
+工作规则：
+1. 视频文稿和 AI 结构化理解是事实来源；用户指令可以改变节奏、日期、次数、任务颗粒度和目标，但不能让你虚构视频中的事实。
+2. 如果提供了现有计划，你是在修订它。保留没有被用户要求改变且仍然合理的内容；相同任务尽量保留原 id。
+3. dynamic_fields、days、tasks 的数量完全由内容和用户需求决定，不设固定字段数或每日任务数。
+4. days 只表示真实执行节点，可以稀疏；每个 day 为正整数。scheduled_at 只使用 YYYY-MM-DD 或 YYYY-MM-DDTHH:MM。
+5. task 必须具体可执行，包含 id、title、done、priority；priority 只能为 low、medium、high。新任务 done 必须为 false。
+6. duration_minutes、frequency、details、date、focus 都是可选字段，没有依据就不要填写。
+7. 不得删除用户已经完成的任务，除非用户明确要求移除或重做；完成状态最终仍会由服务端核对。
+8. 至少输出一个真正可执行的任务。
+
+只输出严格 JSON，不要 Markdown 代码围栏：
+{
+  "change_summary": "一句话说明创建或调整了什么",
+  "plan": {
+    "goal": "计划目标",
+    "duration": "可选周期说明",
+    "dynamic_fields": [
+      {"name": "字段名", "label": "中文标签", "type": "text", "value": "值", "group": "可选分组"}
+    ],
+    "days": [
+      {
+        "day": 1,
+        "label": "阶段或日期标签",
+        "date": "可选 YYYY-MM-DD",
+        "focus": "可选阶段重点",
+        "tasks": [
+          {
+            "id": "t-001",
+            "title": "具体行动",
+            "done": false,
+            "scheduled_at": "可选 YYYY-MM-DDTHH:MM",
+            "duration_minutes": 30,
+            "frequency": "可选频率",
+            "priority": "medium",
+            "details": []
+          }
+        ]
+      }
+    ],
+    "tasks": []
+  }
+}
+"""
+
+
+def generate_or_revise_plan(
+    *,
+    title: str,
+    transcript: str | None,
+    ai_summary: str | dict[str, Any] | None,
+    instruction: str,
+    existing_plan: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create a complete, normalized plan target for one user instruction."""
+    clean_instruction = instruction.strip()
+    if not clean_instruction:
+        raise ValueError("请告诉计划 Agent 你希望怎么安排")
+
+    raw_transcript = (transcript or "").strip()
+    transcript_context, context_details = _build_note_transcript_context_details(
+        raw_transcript,
+        clean_instruction,
+    )
+    summary_context = _note_ai_summary_context(ai_summary, limit=6000)
+    existing_context = (
+        json.dumps(existing_plan, ensure_ascii=False, indent=2)[:14000]
+        if existing_plan
+        else "无，这是首次创建计划"
+    )
+    coverage = (
+        f"完整文稿 {context_details['transcript_chars']} 字已直接加入"
+        if context_details["transcript_mode"] == "full"
+        else (
+            f"已扫描完整文稿 {context_details['transcript_chars']} 字、"
+            f"{context_details['scanned_chunks']} 个分块，并召回 "
+            f"{context_details['selected_chunks']} 个相关片段"
+        )
+    )
+
+    raw = _call_llm(
+        system=_PLAN_AGENT_PROMPT,
+        user=f"""\
+【当前北京时间日期】
+{datetime.now(_PLAN_TIMEZONE).date().isoformat()}
+
+【视频标题】
+{title.strip()[:512] or '未命名视频'}
+
+【用户要求】
+{clean_instruction[:1000]}
+
+【来源覆盖】
+{coverage}
+
+【AI 对视频的结构化理解】
+{summary_context or '无'}
+
+【视频文稿上下文】
+{transcript_context or '无可用文稿'}
+
+【现有计划】
+{existing_context}
+""",
+        max_tokens=3800,
+        temperature=0.2,
+        timeout=90,
+        operation="plan_agent",
+    )
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ValueError("计划 Agent 返回了无法识别的结构，请重试") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("计划 Agent 没有返回有效计划")
+
+    raw_plan = parsed.get("plan")
+    if not isinstance(raw_plan, dict):
+        raise ValueError("计划 Agent 没有返回有效计划")
+    normalized_plan = _normalize_plan_payload(raw_plan)
+    if not normalized_plan.get("tasks"):
+        raise ValueError("计划 Agent 没有生成可执行任务，请补充你的目标")
+
+    goal = str(normalized_plan.get("goal") or "").strip()
+    normalized_plan["goal"] = goal[:256] or f"执行《{title.strip()[:180]}》中的行动"
+    change_summary = str(parsed.get("change_summary") or "").strip()
+    return {
+        "plan": normalized_plan,
+        "change_summary": (
+            change_summary[:240]
+            or ("已根据你的要求调整计划" if existing_plan else "已根据视频内容创建计划")
+        ),
+        "source_context": {
+            **context_details,
+            "ai_summary_used": bool(summary_context),
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1320,7 +2121,7 @@ def generate_card_from_images(
 
         llm_cfg = _get_llm_config()
         kwargs: dict = {
-            "model": llm_cfg["model"],
+            "model": llm_cfg["runtime_model"],
             "messages": [{"role": "user", "content": content}],
             "max_tokens": 4096,
             "timeout": 90,
@@ -1330,7 +2131,11 @@ def generate_card_from_images(
         if llm_cfg["api_key"]:
             kwargs["api_key"] = llm_cfg["api_key"]
 
-        response = completion(**kwargs)
+        response = _completion_with_usage(
+            llm_cfg,
+            kwargs,
+            operation="image_card_generation",
+        )
         choice = response.choices[0]
         raw: str = choice.message.content or ""
         raw = raw.strip()

@@ -67,6 +67,9 @@ class Note(Base):
                 ai = json.loads(self.ai_summary)
             except (json.JSONDecodeError, TypeError):
                 ai = {}
+        source_meta = ai.get("source_meta")
+        if not isinstance(source_meta, dict):
+            source_meta = {}
 
         return {
             "id": self.id,
@@ -74,8 +77,14 @@ class Note(Base):
             "title": self.video_title,
             "video_title": self.video_title,
             "video_url": self.video_url,
-            "source_url": self.video_url,
+            "source_url": source_meta.get("source_url") or self.video_url,
+            "cover_url": source_meta.get("cover_url") or "",
+            "author_name": source_meta.get("author_name") or "",
+            "platform": source_meta.get("platform") or "",
+            "source_kind": source_meta.get("source_kind") or "",
+            "source_recorded_at": source_meta.get("recorded_at") or "",
             "transcript_raw": self.transcript_raw,
+            "transcript_chars": len(self.transcript_raw or ""),
             "card_type": self.card_type,
             "sections": ai.get("sections", []),
             "conclusion": ai.get("conclusion", ""),

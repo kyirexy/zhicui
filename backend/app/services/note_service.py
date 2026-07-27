@@ -17,6 +17,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.models.note import Note
+from app.models.plan import Plan
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +125,45 @@ def get_note_by_slug(db: Session, slug: str, user_id: str = "") -> Note | None:
     return q.first()
 
 
+def get_note_by_video_id(
+    db: Session,
+    video_id: str,
+    user_id: str = "",
+) -> Note | None:
+    """Fetch the newest note for one external video id."""
+    clean_id = video_id.strip()
+    if not clean_id:
+        return None
+    query = db.query(Note).filter(Note.video_id == clean_id)
+    if user_id:
+        query = query.filter(Note.user_id == user_id)
+    return query.order_by(Note.created_at.desc()).first()
+
+
+def get_notes_by_video_ids(
+    db: Session,
+    video_ids: list[str],
+    user_id: str = "",
+) -> dict[str, Note]:
+    """Return the newest user-owned Note keyed by external video id."""
+    clean_ids = list(dict.fromkeys(
+        video_id.strip()
+        for video_id in video_ids
+        if video_id and video_id.strip()
+    ))
+    if not clean_ids:
+        return {}
+
+    query = db.query(Note).filter(Note.video_id.in_(clean_ids))
+    if user_id:
+        query = query.filter(Note.user_id == user_id)
+
+    result: dict[str, Note] = {}
+    for note in query.order_by(Note.created_at.desc()).all():
+        result.setdefault(note.video_id, note)
+    return result
+
+
 def list_notes(
     db: Session,
     page: int = 1,
@@ -186,6 +226,44 @@ def delete_note(db: Session, note_id: str) -> bool:
     db.delete(note)
     db.commit()
     return True
+
+
+def _source_kind(note: Note) -> str:
+    """Read a Note's source kind without trusting malformed legacy JSON."""
+    if not note.ai_summary:
+        return ""
+    try:
+        payload = json.loads(note.ai_summary)
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    source_meta = payload.get("source_meta")
+    if not isinstance(source_meta, dict):
+        return ""
+    return str(source_meta.get("source_kind") or "").strip()
+
+
+def delete_user_library_note(
+    db: Session,
+    note_id: str,
+    user_id: str,
+) -> tuple[bool, int]:
+    """Delete one user-owned video-library Note and its generated plans."""
+    note = (
+        db.query(Note)
+        .filter(Note.id == note_id, Note.user_id == user_id)
+        .first()
+    )
+    if note is None or _source_kind(note) != "douyin-library":
+        return False, 0
+
+    plans_deleted = (
+        db.query(Plan)
+        .filter(Plan.user_id == user_id, Plan.note_id == note.id)
+        .delete(synchronize_session=False)
+    )
+    db.delete(note)
+    db.commit()
+    return True, int(plans_deleted or 0)
 
 
 def update_note_ai(db: Session, note: Note, ai_result: dict[str, Any]) -> Note:

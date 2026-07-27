@@ -1,6 +1,7 @@
 import type { NextConfig } from 'next';
 
 const isCapacitor = process.env.CAPACITOR_BUILD === 'true';
+const backendProxyUrl = process.env.BACKEND_PROXY_URL || 'http://localhost:8000';
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
@@ -14,7 +15,7 @@ const nextConfig: NextConfig = {
           return [
             {
               source: '/api/:path*',
-              destination: 'http://localhost:8000/api/:path*',
+              destination: `${backendProxyUrl}/api/:path*`,
             },
           ];
         },

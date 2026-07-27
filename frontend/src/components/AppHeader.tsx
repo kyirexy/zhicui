@@ -29,6 +29,13 @@ export default function AppHeader() {
 
       <nav className="flex items-center gap-1">
         <a
+          href="/library"
+          className="relative text-foreground-secondary hover:text-foreground transition-all duration-300 text-sm font-medium px-3.5 py-2 rounded-xl hover:bg-white/[0.06] min-h-[40px] flex items-center group/nav"
+        >
+          视频库
+          <span className="absolute bottom-1 left-3.5 right-3.5 h-px bg-accent-emerald scale-x-0 group-hover/nav:scale-x-100 transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] origin-left" />
+        </a>
+        <a
           href="/notes"
           className="relative text-foreground-secondary hover:text-foreground transition-all duration-300 text-sm font-medium px-3.5 py-2 rounded-xl hover:bg-white/[0.06] min-h-[40px] flex items-center group/nav"
         >

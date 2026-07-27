@@ -11,7 +11,7 @@ from typing import Any, Literal
 from urllib.parse import unquote
 
 import requests as http_requests
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -21,7 +21,18 @@ from app.core.database import get_db
 from app.core.auth import get_current_user, get_current_user_optional, get_current_admin
 from app.models.note import Note
 from app.models.user import User as UserModel, list_users, count_users
-from app.services import ai_juicer, note_service, plan_service, video_extractor, settings_service, audit_service
+from app.services import (
+    ai_juicer,
+    activity_service,
+    audit_service,
+    douyin_library,
+    error_log_service,
+    llm_usage_service,
+    note_service,
+    plan_service,
+    settings_service,
+    video_extractor,
+)
 from app.services import auth_service
 from app.services.video_extractor import _detect_platform
 from app.services.wechat_extractor import extract_wechat_article
@@ -56,6 +67,49 @@ class NoteChatHistoryItem(BaseModel):
 class NoteAskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=600)
     history: list[NoteChatHistoryItem] = Field(default_factory=list, max_length=6)
+
+
+class LibraryCollectRequest(BaseModel):
+    count: int = Field(
+        default=50,
+        ge=1,
+        le=500,
+        description="本次同步数量，限制为 1 至 500 条",
+    )
+    mode: Literal["like", "post", "collect"] = "like"
+
+
+class LibraryLoginRequest(BaseModel):
+    browser: Literal["chromium", "firefox", "webkit"] = "chromium"
+
+
+class LibraryExtractRequest(BaseModel):
+    aweme_id: str = Field(..., min_length=1, max_length=128)
+
+
+class LibraryAskRequest(BaseModel):
+    note_ids: list[str] = Field(..., min_length=1, max_length=50)
+    question: str = Field(..., min_length=1, max_length=600)
+    history: list[NoteChatHistoryItem] = Field(default_factory=list, max_length=6)
+    research_mode: Literal["fast", "deep"] = "fast"
+    output_style: Literal[
+        "answer", "summary", "comparison", "action_plan", "custom"
+    ] = "answer"
+    custom_instruction: str = Field(default="", max_length=600)
+
+
+class PlanAgentRequest(BaseModel):
+    instruction: str = Field(..., min_length=2, max_length=1000)
+
+
+class ClientErrorRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=4000)
+    stack: str = Field(default="", max_length=16000)
+    path: str = Field(default="", max_length=512)
+    error_type: str = Field(default="ClientError", max_length=128)
+    environment: Literal["web", "capacitor"] = "web"
+    component: str = Field(default="", max_length=128)
+    digest: str = Field(default="", max_length=128)
 
 
 # ---------------------------------------------------------------------------
@@ -159,19 +213,43 @@ def health_check() -> dict:
 # ---------------------------------------------------------------------------
 
 @router.post("/api/auth/register")
-def auth_register(body: RegisterRequest, db: Session = Depends(get_db)) -> dict:
+def auth_register(
+    body: RegisterRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
     user, error = auth_service.register(db, body.email, body.password, body.username)
     if error:
         return _err(error)
     token = auth_service.create_access_token(user.id, user.email)
+    activity_service.log_activity_safely(
+        user_id=user.id,
+        action="account_register",
+        method="POST",
+        path="/api/auth/register",
+        status_code=200,
+        ip=request.client.host if request.client else None,
+    )
     return _ok({"token": token, "user": user.to_dict()})
 
 
 @router.post("/api/auth/login")
-def auth_login(body: LoginRequest, db: Session = Depends(get_db)) -> dict:
+def auth_login(
+    body: LoginRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
     token, user, error = auth_service.login(db, body.email, body.password)
     if error:
         return _err(error)
+    activity_service.log_activity_safely(
+        user_id=user.id,
+        action="account_login",
+        method="POST",
+        path="/api/auth/login",
+        status_code=200,
+        ip=request.client.host if request.client else None,
+    )
     return _ok({"token": token, "user": user.to_dict()})
 
 
@@ -187,6 +265,14 @@ def auth_dev_session(request: Request, db: Session = Depends(get_db)) -> dict:
 
     user = auth_service.get_or_create_dev_user(db)
     token = auth_service.create_access_token(user.id, user.email)
+    activity_service.log_activity_safely(
+        user_id=user.id,
+        action="account_dev_session",
+        method="POST",
+        path="/api/auth/dev-session",
+        status_code=200,
+        ip=request.client.host if request.client else None,
+    )
     return _ok({"token": token, "user": user.to_dict()})
 
 
@@ -195,6 +281,32 @@ def auth_me(
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
     return _ok(current_user.to_dict())
+
+
+@router.post("/api/client-errors")
+def report_client_error(
+    body: ClientErrorRequest,
+    request: Request,
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Accept bounded runtime diagnostics from authenticated app clients."""
+    error_log_service.record_error_safely(
+        source="frontend",
+        severity="error",
+        error_type=body.error_type,
+        message=body.message,
+        traceback=body.stack or None,
+        method="CLIENT",
+        path=body.path,
+        user_id=current_user.id,
+        ip=request.client.host if request.client else None,
+        metadata={
+            "environment": body.environment,
+            "component": body.component,
+            "digest": body.digest,
+        },
+    )
+    return _ok({"accepted": True})
 
 
 @router.post("/api/video/info")
@@ -734,6 +846,305 @@ def extract_stream(
     )
 
 
+# ---------------------------------------------------------------------------
+# Douyin batch library endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/api/library/douyin/status")
+def get_douyin_library_status(
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Report whether the optional local downloader is ready."""
+    return _ok(douyin_library.connection_status())
+
+
+@router.post("/api/library/douyin/login")
+def start_douyin_library_login(
+    body: LibraryLoginRequest,
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Open the companion browser for QR login."""
+    try:
+        current = douyin_library.login_status()
+        if current["running"]:
+            return _ok({**current, "started": False})
+        return _ok(douyin_library.start_login(body.browser))
+    except douyin_library.DouyinLibraryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/api/library/douyin/login")
+def get_douyin_library_login(
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Return QR-login progress without exposing cookie values."""
+    try:
+        return _ok(douyin_library.login_status())
+    except douyin_library.DouyinLibraryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/api/library/douyin/collect")
+def collect_douyin_library(
+    body: LibraryCollectRequest,
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Ask the companion to refresh the user's Douyin collection."""
+    try:
+        job = douyin_library.trigger_collect(body.count, body.mode)
+    except douyin_library.DouyinLibraryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return _ok(job)
+
+
+@router.get("/api/library/douyin/jobs/{job_id}")
+def get_douyin_library_job(
+    job_id: str,
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Return one downloader collection job."""
+    try:
+        return _ok(douyin_library.get_job(job_id))
+    except douyin_library.DouyinLibraryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/api/library/douyin/items")
+def list_douyin_library_items(
+    limit: int = Query(
+        default=0,
+        ge=0,
+        le=10000,
+        description="返回数量；0 表示返回下载器 manifest 中的全部条目",
+    ),
+    mode: Literal["like", "collect", "post"] | None = Query(default=None),
+    sort: Literal["collection", "published"] = Query(
+        default="collection",
+        description="收藏来源默认按最近收藏；也可切换为发布时间",
+    ),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Return downloader items enriched with this user's extraction state."""
+    try:
+        items = douyin_library.list_items(limit, mode=mode, sort_by=sort)
+    except douyin_library.DouyinLibraryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    note_map = note_service.get_notes_by_video_ids(
+        db,
+        [item["aweme_id"] for item in items],
+        user_id=current_user.id,
+    )
+    for item in items:
+        note = note_map.get(item["aweme_id"])
+        item["extracted"] = note is not None
+        item["extracted_note_id"] = note.id if note else None
+        item["transcript_chars"] = len(note.transcript_raw or "") if note else 0
+        item["card_type"] = note.card_type if note else None
+    return _ok({"items": items, "total": len(items)})
+
+
+@router.get("/api/library/douyin/items/{aweme_id}")
+def get_douyin_library_item(
+    aweme_id: str = Path(
+        ...,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    ),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Compose live downloader media with this user's durable knowledge."""
+    try:
+        item = douyin_library.get_item(aweme_id)
+    except douyin_library.DouyinLibraryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if item is None:
+        raise HTTPException(status_code=404, detail="视频不存在或尚未同步")
+
+    note = note_service.get_note_by_video_id(
+        db,
+        aweme_id,
+        user_id=current_user.id,
+    )
+    plan = (
+        plan_service.get_plan_by_note(db, note.id, user_id=current_user.id)
+        if note is not None
+        else None
+    )
+    item["extracted"] = note is not None
+    item["extracted_note_id"] = note.id if note else None
+    item["transcript_chars"] = len(note.transcript_raw or "") if note else 0
+    item["card_type"] = note.card_type if note else None
+    return _ok({
+        "item": item,
+        "note": note.to_dict() if note else None,
+        "plan": plan.to_dict() if plan else None,
+        "media_storage": {
+            "provider": "douyin-downloader",
+            "mode": "external",
+            "database_stores_media": False,
+        },
+    })
+
+
+@router.post("/api/library/douyin/extract")
+def extract_douyin_library_item(
+    body: LibraryExtractRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Transcribe one downloaded video and persist it as a normal Note."""
+    existing = note_service.get_note_by_video_id(
+        db,
+        body.aweme_id,
+        user_id=current_user.id,
+    )
+    if existing is not None:
+        result = existing.to_dict()
+        result["already_existed"] = True
+        return _ok(result)
+
+    try:
+        item = douyin_library.get_item(body.aweme_id)
+    except douyin_library.DouyinLibraryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if item is None:
+        raise HTTPException(status_code=404, detail="收藏视频不存在或尚未同步")
+    if not item["can_extract"]:
+        raise HTTPException(status_code=422, detail="该作品没有可提取的视频文件")
+
+    try:
+        asr_config = settings_service.get_asr_config(db)
+        transcript = video_extractor.extract_media_url_transcript(
+            item["media_url"],
+            asr_config["api_key"],
+            asr_config["api_base_url"],
+            asr_config["model"],
+        )
+        if not transcript.strip():
+            raise RuntimeError("语音识别没有返回文案")
+
+        intent = ai_juicer.classify_intent(transcript)
+        plan_data = (
+            ai_juicer.generate_plan(transcript)
+            if intent["is_plan"]
+            else None
+        )
+        ai_result = ai_juicer.generate_card(
+            transcript=transcript,
+            content_type=intent["card_type"],
+            video_title=item["title"],
+        )
+        if plan_data:
+            ai_result["plan"] = plan_data
+        ai_result["source_meta"] = {
+            "source_kind": "douyin-library",
+            "platform": "douyin",
+            "source_url": item["source_url"],
+            "cover_url": item["cover_url"],
+            "author_name": item["author_name"],
+            "recorded_at": item["recorded_at"],
+            "caption": item["caption"],
+        }
+        video_info = {
+            "video_id": item["aweme_id"],
+            "title": item["title"],
+            "download_url": item["media_url"],
+            "platform": "douyin",
+        }
+        result, _ = _save_generated_note(
+            db,
+            video_info,
+            transcript,
+            ai_result,
+            current_user.id,
+        )
+        result["already_existed"] = False
+        return _ok(result)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=502,
+            detail=f"视频文案提取失败：{exc}",
+        ) from exc
+
+
+@router.delete("/api/library/douyin/extractions/{note_id}")
+def delete_douyin_library_extraction(
+    note_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Delete one current-user library result, not the downloader media."""
+    deleted, plans_deleted = note_service.delete_user_library_note(
+        db,
+        note_id,
+        current_user.id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="视频知识结果不存在")
+    return _ok({
+        "deleted": True,
+        "plans_deleted": plans_deleted,
+        "media_preserved": True,
+    })
+
+
+@router.post("/api/library/ask")
+def ask_video_library(
+    body: LibraryAskRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Answer using the requested, user-owned video Notes."""
+    note_ids = list(dict.fromkeys(note_id.strip() for note_id in body.note_ids))
+    notes = [
+        note_service.get_note(db, note_id, user_id=current_user.id)
+        for note_id in note_ids
+    ]
+    if any(note is None for note in notes):
+        # Missing and cross-user IDs deliberately share one response.
+        raise HTTPException(status_code=404, detail="所选视频不存在")
+
+    try:
+        result = ai_juicer.answer_library_question(
+            sources=[
+                {
+                    "note_id": note.id,
+                    "title": note.video_title,
+                    "transcript": note.transcript_raw,
+                    "ai_summary": note.ai_summary,
+                }
+                for note in notes
+                if note is not None
+            ],
+            question=body.question,
+            history=[item.model_dump() for item in body.history[-6:]],
+            research_mode=body.research_mode,
+            output_style=body.output_style,
+            custom_instruction=body.custom_instruction,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=502, detail="集合问答暂时不可用，请稍后重试") from exc
+
+    return _ok({
+        "note_ids": note_ids,
+        "answer": result["answer"],
+        "grounded": result["grounded"],
+        "evidence": result["evidence"],
+        "follow_up_questions": result["follow_up_questions"],
+        "source_context": result["source_context"],
+    })
+
+
 @router.get("/api/notes")
 def list_notes(
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
@@ -773,12 +1184,12 @@ def get_note(note_id: str, db: Session = Depends(get_db),
     if note is None:
         raise HTTPException(status_code=404, detail="Note not found")
     result = note.to_dict()
-    # Attach plan_id for plan-type notes so the frontend can show a CTA.
-    if note.card_type == "plan":
-        plan = plan_service.get_plan_by_note(db, note_id)
-        result["plan_id"] = plan.id if plan else None
-    else:
-        result["plan_id"] = None
+    plan = plan_service.get_plan_by_note(
+        db,
+        note_id,
+        user_id=current_user.id,
+    )
+    result["plan_id"] = plan.id if plan else None
     return _ok(result)
 
 
@@ -817,6 +1228,60 @@ def ask_note(
         "evidence": result["evidence"],
         "follow_up_questions": result["follow_up_questions"],
         "source_context": result.get("source_context"),
+    })
+
+
+@router.post("/api/notes/{note_id}/plan-agent")
+def run_note_plan_agent(
+    note_id: str,
+    body: PlanAgentRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Create or revise one note-linked plan through a validated Agent target."""
+    note = note_service.get_note(db, note_id, user_id=current_user.id)
+    if note is None:
+        raise HTTPException(status_code=404, detail="Note not found")
+
+    existing = plan_service.get_plan_by_note(
+        db,
+        note_id,
+        user_id=current_user.id,
+    )
+    try:
+        agent_result = ai_juicer.generate_or_revise_plan(
+            title=note.video_title,
+            transcript=note.transcript_raw,
+            ai_summary=note.ai_summary,
+            instruction=body.instruction,
+            existing_plan=existing.to_dict() if existing else None,
+        )
+        plan_data = agent_result["plan"]
+        fields, tasks, total_days = ai_juicer.plan_to_storage(plan_data)
+        plan, created = plan_service.upsert_agent_plan(
+            db,
+            note_id=note.id,
+            title=plan_data.get("goal") or note.video_title,
+            fields=fields,
+            tasks=tasks,
+            days=plan_data.get("days") or [],
+            total_days=total_days,
+            user_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=502,
+            detail="计划 Agent 暂时不可用，请稍后重试",
+        ) from exc
+
+    return _ok({
+        "plan": plan.to_dict(),
+        "created": created,
+        "change_summary": agent_result["change_summary"],
+        "source_context": agent_result["source_context"],
     })
 
 
@@ -1372,6 +1837,7 @@ def admin_reset_user_password(
 # Admin endpoints — runtime LLM/ASR configuration (no restart needed)
 # ---------------------------------------------------------------------------
 class LlmConfigRequest(BaseModel):
+    provider: Literal["deepseek", "custom"] | None = None
     model: str | None = None
     api_base: str | None = None
     api_key: str | None = None  # None/empty = leave unchanged
@@ -1398,16 +1864,43 @@ def admin_put_llm_config(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_admin),
 ) -> dict:
-    # Validate api_base format before persisting (SSRF guard).
-    if body.api_base:
-        _validate_http_url(body.api_base, "API Base")
+    current = settings_service.get_llm_config(db)
+    provider = body.provider or current["provider"]
+    model = body.model if body.model is not None else current["model"]
+    api_base = body.api_base if body.api_base is not None else current["api_base"]
+    try:
+        normalized = settings_service.validate_llm_preset(
+            provider,
+            model,
+            api_base,
+        )
+    except ValueError as exc:
+        return _err(str(exc))
+    if normalized["api_base"]:
+        _validate_http_url(normalized["api_base"], "API Base")
+
     changed: dict = {}
-    if body.model is not None:
-        settings_service.set_setting(db, settings_service.LLM_MODEL_KEY, body.model)
-        changed["model"] = body.model
-    if body.api_base is not None:
-        settings_service.set_setting(db, settings_service.LLM_API_BASE_KEY, body.api_base)
-        changed["api_base"] = body.api_base
+    if normalized["provider"] != current["provider"]:
+        settings_service.set_setting(
+            db,
+            settings_service.LLM_PROVIDER_KEY,
+            normalized["provider"],
+        )
+        changed["provider"] = normalized["provider"]
+    if normalized["model"] != current["model"]:
+        settings_service.set_setting(
+            db,
+            settings_service.LLM_MODEL_KEY,
+            normalized["model"],
+        )
+        changed["model"] = normalized["model"]
+    if normalized["api_base"] != current["api_base"]:
+        settings_service.set_setting(
+            db,
+            settings_service.LLM_API_BASE_KEY,
+            normalized["api_base"],
+        )
+        changed["api_base"] = normalized["api_base"]
     if body.api_key:  # empty string = leave unchanged
         settings_service.set_secret(db, settings_service.LLM_API_KEY_KEY, body.api_key)
         changed["api_key"] = "***updated***"
@@ -1594,6 +2087,66 @@ def admin_list_audit_logs(
     })
 
 
+@router.get("/api/admin/llm-usage")
+def admin_get_llm_usage(
+    days: int = Query(30, ge=1, le=365),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    model: str | None = Query(None),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    return _ok(llm_usage_service.get_usage_report(
+        db,
+        days=days,
+        page=page,
+        per_page=per_page,
+        model=model,
+    ))
+
+
+@router.get("/api/admin/user-activity")
+def admin_get_user_activity(
+    days: int = Query(30, ge=1, le=365),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    action: str | None = Query(None),
+    user_id: str | None = Query(None),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    return _ok(activity_service.get_activity_report(
+        db,
+        days=days,
+        page=page,
+        per_page=per_page,
+        action=action,
+        user_id=user_id,
+    ))
+
+
+@router.get("/api/admin/error-logs")
+def admin_get_error_logs(
+    days: int = Query(30, ge=1, le=365),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    source: str | None = Query(None),
+    severity: str | None = Query(None),
+    status_code: int | None = Query(None, ge=400, le=599),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    return _ok(error_log_service.get_error_report(
+        db,
+        days=days,
+        page=page,
+        per_page=per_page,
+        source=source,
+        severity=severity,
+        status_code=status_code,
+    ))
+
+
 # ---------------------------------------------------------------------------
 # Admin endpoints — plan management
 # ---------------------------------------------------------------------------
@@ -1673,7 +2226,7 @@ def admin_test_llm_config(
     try:
         from litellm import completion
         kwargs: dict = {
-            "model": cfg["model"],
+            "model": cfg["runtime_model"],
             "messages": [{"role": "user", "content": "请只回复两个字：成功"}],
             "max_tokens": 16,
             "timeout": 20,
@@ -1682,6 +2235,12 @@ def admin_test_llm_config(
             kwargs["api_base"] = cfg["api_base"]
         kwargs["api_key"] = cfg["api_key"]
         resp = completion(**kwargs)
+        llm_usage_service.record_response_usage(
+            resp,
+            provider=cfg["provider"],
+            model=cfg["model"],
+            operation="admin_llm_test",
+        )
         reply = (resp.choices[0].message.content or "").strip()
         audit_service.log_action(
             db, admin_user_id=current_user.id, action="llm_config_test",
@@ -1689,6 +2248,20 @@ def admin_test_llm_config(
         )
         return _ok({"ok": True, "reply": reply[:80], "model": cfg["model"]})
     except Exception as e:
+        error_log_service.record_exception_safely(
+            e,
+            source="llm",
+            status_code=502,
+            method="POST",
+            path="/api/admin/llm-config/test",
+            user_id=current_user.id,
+            ip=_client_ip(request),
+            metadata={
+                "provider": cfg["provider"],
+                "model": cfg["model"],
+                "operation": "admin_llm_test",
+            },
+        )
         return _ok({"ok": False, "error": str(e)[:200]})
 
 
@@ -1729,6 +2302,19 @@ def admin_test_asr_config(
             return _ok({"ok": True, "note": "连接成功", "status": 200})
         return _ok({"ok": False, "error": f"HTTP {r.status_code}: {r.text[:120]}", "status": r.status_code})
     except Exception as e:
+        error_log_service.record_exception_safely(
+            e,
+            source="asr",
+            status_code=502,
+            method="POST",
+            path="/api/admin/asr-config/test",
+            user_id=current_user.id,
+            ip=_client_ip(request),
+            metadata={
+                "model": cfg["model"],
+                "operation": "admin_asr_test",
+            },
+        )
         return _ok({"ok": False, "error": str(e)[:200]})
 
 
@@ -1774,6 +2360,9 @@ def admin_ops(
     """运维概览：各表行数、最近 5 条审计、密钥配置状态。只读，不暴露明文。"""
     from app.models.plan import Plan
     from app.models.admin_audit_log import AdminAuditLog
+    from app.models.llm_usage_log import LlmUsageLog
+    from app.models.user_activity_log import UserActivityLog
+    from app.models.application_error_log import ApplicationErrorLog
 
     llm_cfg = settings_service.get_llm_config_masked(db)
     asr_cfg = settings_service.get_asr_config_masked(db)
@@ -1791,6 +2380,9 @@ def admin_ops(
             "notes": db.query(Note).count(),
             "plans": db.query(Plan).count(),
             "audit_logs": db.query(AdminAuditLog).count(),
+            "llm_usage_logs": db.query(LlmUsageLog).count(),
+            "user_activity_logs": db.query(UserActivityLog).count(),
+            "application_error_logs": db.query(ApplicationErrorLog).count(),
         },
         "recent_audit": recent,
         "keys": {

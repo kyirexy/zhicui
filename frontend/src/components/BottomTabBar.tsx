@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, BookOpen, CheckSquare, Palette, Settings } from 'lucide-react';
+import { Home, BookOpen, CheckSquare, Grid3X3, Settings } from 'lucide-react';
 import { getPlanStats } from '@/lib/api';
 
 interface TabDef {
@@ -16,9 +16,9 @@ interface TabDef {
 
 const ALL_TABS: TabDef[] = [
   { key: 'home', label: '首页', href: '/', Icon: Home, isActive: (p) => p === '/' || p === '' },
+  { key: 'library', label: '视频库', href: '/library', Icon: Grid3X3, isActive: (p) => p.startsWith('/library') },
   { key: 'notes', label: '知识库', href: '/notes', Icon: BookOpen, isActive: (p) => p.startsWith('/notes') },
   { key: 'plans', label: '计划', href: '/plans', Icon: CheckSquare, isActive: (p) => p.startsWith('/plans') },
-  { key: 'style', label: '风格', href: '/style', Icon: Palette, isActive: (p) => p.startsWith('/style') },
   { key: 'settings', label: '设置', href: '/settings', Icon: Settings, isActive: (p) => p.startsWith('/settings') },
 ];
 

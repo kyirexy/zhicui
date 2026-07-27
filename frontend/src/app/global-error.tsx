@@ -1,5 +1,8 @@
 'use client';
 
+import { useEffect } from 'react';
+import { reportBoundaryError } from '@/components/ClientErrorReporter';
+
 export default function GlobalError({
   error,
   reset,
@@ -7,6 +10,10 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  useEffect(() => {
+    reportBoundaryError(error, 'global-error-boundary');
+  }, [error]);
+
   return (
     <html>
       <body

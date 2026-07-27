@@ -1,0 +1,159 @@
+'use client';
+
+import Link from 'next/link';
+import {
+  ArrowUpRight,
+  Check,
+  CheckCircle2,
+  FileText,
+  LoaderCircle,
+  MoreHorizontal,
+  Play,
+  Trash2,
+} from 'lucide-react';
+import type { DouyinLibraryItem } from '@/lib/types';
+
+export type LibraryExtractState = 'idle' | 'queued' | 'extracting' | 'done' | 'error';
+
+interface LibraryVideoCardProps {
+  item: DouyinLibraryItem;
+  selected: boolean;
+  extractState?: LibraryExtractState;
+  extractError?: string;
+  deleting?: boolean;
+  onToggle: (awemeId: string) => void;
+  onDelete: (item: DouyinLibraryItem) => void;
+}
+
+function formatCount(value: number): string {
+  if (value < 1000) return `${value} 字`;
+  return `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k 字`;
+}
+
+export default function LibraryVideoCard({
+  item,
+  selected,
+  extractState = 'idle',
+  extractError,
+  deleting = false,
+  onToggle,
+  onDelete,
+}: LibraryVideoCardProps) {
+  const isWorking = extractState === 'queued' || extractState === 'extracting';
+  const isExtracted = item.extracted || extractState === 'done';
+
+  return (
+    <article className={`library-video-card ${selected ? 'is-selected' : ''}`}>
+      <Link
+        href={`/library/detail?id=${encodeURIComponent(item.aweme_id)}`}
+        className="library-video-detail-link"
+        aria-label={`打开 ${item.title} 的视频知识详情`}
+      >
+        <span className="sr-only">打开视频知识详情</span>
+      </Link>
+      <div className="library-video-cover">
+        {item.cover_url ? (
+          <img src={item.cover_url} alt={`${item.title} 视频封面`} loading="lazy" />
+        ) : (
+          <div className="library-video-cover-fallback" aria-hidden="true">
+            <Play size={26} />
+          </div>
+        )}
+        <button
+          type="button"
+          className="library-select-button"
+          onClick={() => onToggle(item.aweme_id)}
+          aria-label={selected ? `取消选择 ${item.title}` : `选择 ${item.title}`}
+          aria-pressed={selected}
+        >
+          {selected ? <Check size={15} /> : null}
+        </button>
+        {item.media_url && (
+          <a
+            href={item.media_url}
+            target="_blank"
+            rel="noreferrer"
+            className="library-play-button"
+            aria-label={`播放 ${item.title}`}
+          >
+            <Play size={14} fill="currentColor" />
+          </a>
+        )}
+        <span className={`library-copy-badge ${isExtracted ? 'is-ready' : ''}`}>
+          {isExtracted ? <CheckCircle2 size={12} /> : <FileText size={12} />}
+          {isExtracted ? formatCount(item.transcript_chars) : '待提文案'}
+        </span>
+      </div>
+
+      <div className="library-video-body">
+        <div className="library-video-meta">
+          <span>{item.author_name || '未知作者'}</span>
+          <span aria-hidden="true">·</span>
+          <time>{item.date || item.recorded_at?.slice(0, 10) || '已收藏'}</time>
+        </div>
+        <h3 title={item.title}>
+          {item.title}
+        </h3>
+        {item.tags.length > 0 && (
+          <div className="library-video-tags" aria-label="视频标签">
+            {item.tags.slice(0, 2).map((tag) => (
+              <span key={tag}>#{tag}</span>
+            ))}
+          </div>
+        )}
+
+        {extractState === 'error' && extractError && (
+          <p className="library-extract-error" title={extractError}>{extractError}</p>
+        )}
+
+        {(!isExtracted || (item.extracted_note_id && selected)) && (
+        <div className="library-video-actions">
+          {isExtracted && item.extracted_note_id ? (
+            <details className="library-card-menu">
+              <summary aria-label={`管理 ${item.title}`}>
+                <MoreHorizontal size={15} />
+              </summary>
+              <div>
+                <p>只删除知萃中的文案、卡片和关联计划，原视频会保留。</p>
+                <button
+                  type="button"
+                  disabled={deleting}
+                  onClick={() => onDelete(item)}
+                >
+                  {deleting ? (
+                    <LoaderCircle size={13} className="animate-spin" />
+                  ) : (
+                    <Trash2 size={13} />
+                  )}
+                  确认删除
+                </button>
+              </div>
+            </details>
+          ) : (
+            <span className={`library-card-hint ${selected ? 'is-selected' : ''}`}>
+              {isWorking ? (
+                <LoaderCircle size={13} className="animate-spin" />
+              ) : (
+                <Check size={13} />
+              )}
+              {extractState === 'queued'
+                ? '等待处理'
+                : extractState === 'extracting'
+                  ? '正在生成文案'
+                  : !item.can_extract
+                    ? '没有可提取视频'
+                    : selected
+                      ? '已加入处理'
+                      : '勾选后统一处理'}
+            </span>
+          )}
+        </div>
+        )}
+        <span className="library-detail-hint" aria-hidden="true">
+          打开详情
+          <ArrowUpRight size={12} />
+        </span>
+      </div>
+    </article>
+  );
+}

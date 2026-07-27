@@ -260,6 +260,96 @@ def create_plan(
     return plan
 
 
+def _normalized_task_title(value: Any) -> str:
+    """Conservative task identity fallback used for Agent plan revisions."""
+    return "".join(str(value or "").lower().split()).strip("，。！？、,.!?")
+
+
+def _reconcile_agent_tasks(
+    generated_tasks: list[dict[str, Any]],
+    existing_tasks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    done_by_id = {
+        str(task.get("id")): True
+        for task in existing_tasks
+        if task.get("id") and task.get("done") is True
+    }
+    done_by_title = {
+        _normalized_task_title(task.get("title")): True
+        for task in existing_tasks
+        if task.get("done") is True and _normalized_task_title(task.get("title"))
+    }
+    reconciled: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for index, source in enumerate(generated_tasks, start=1):
+        task = dict(source)
+        task_id = str(task.get("id") or "").strip()[:80] or f"t-{index:03d}"
+        if task_id in seen_ids:
+            task_id = f"t-{uuid.uuid4().hex[:8]}"
+        seen_ids.add(task_id)
+        task["id"] = task_id
+        normalized_title = _normalized_task_title(task.get("title"))
+        task["done"] = bool(
+            done_by_id.get(task_id)
+            or (normalized_title and done_by_title.get(normalized_title))
+        )
+        task["priority"] = _normalize_priority(task.get("priority"))
+        reconciled.append(task)
+    return reconciled
+
+
+def upsert_agent_plan(
+    db: Session,
+    *,
+    note_id: str,
+    title: str,
+    fields: list[dict[str, Any]],
+    tasks: list[dict[str, Any]],
+    days: list[dict[str, Any]],
+    total_days: int,
+    user_id: str,
+) -> tuple[Plan, bool]:
+    """Create or replace one note-linked plan with safe progress reconciliation."""
+    if not tasks:
+        raise ValueError("计划至少需要一个可执行任务")
+    clean_title = title.strip()[:256]
+    if not clean_title:
+        raise ValueError("计划标题不能为空")
+
+    existing = get_plan_by_note(db, note_id, user_id=user_id)
+    existing_tasks = _task_state(existing)[0] if existing else []
+    reconciled = _reconcile_agent_tasks(tasks, existing_tasks)
+
+    if existing is None:
+        plan = Plan(
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            note_id=note_id,
+            title=clean_title,
+            schema_version=2,
+            total_days=max(0, int(total_days or 0)),
+            fields=json.dumps(fields or [], ensure_ascii=False),
+            tasks="[]",
+            days_json="[]",
+            status="active",
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(plan)
+        created = True
+    else:
+        plan = existing
+        plan.title = clean_title
+        plan.schema_version = 2
+        plan.total_days = max(0, int(total_days or 0))
+        plan.fields = json.dumps(fields or [], ensure_ascii=False)
+        created = False
+
+    _sync_task_state(plan, reconciled, days or [])
+    _sync_completion_status(plan, reconciled)
+    return _commit_plan(db, plan), created
+
+
 # ---------------------------------------------------------------------------
 # Read
 # ---------------------------------------------------------------------------

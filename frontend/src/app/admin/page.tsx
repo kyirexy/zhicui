@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, Fragment, type CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import { useRouter } from 'next/navigation';
 import {
@@ -16,11 +16,9 @@ import {
   listAdminPlans,
   deleteAdminPlan,
   getLlmConfig,
-  putLlmConfig,
   getAsrConfig,
   putAsrConfig,
   listAdminAuditLogs,
-  testLlmConfig,
   testAsrConfig,
   getSystemInfo,
   getNote,
@@ -40,8 +38,10 @@ import {
   type AdminOps,
 } from '@/lib/api';
 import { getPlanProgress, type NoteDetail, type PlanData } from '@/lib/types';
+import AdminLlmConfigPanel from '@/components/admin/AdminLlmConfigPanel';
+import AdminObservabilityPanel, { ADMIN_ACTION_LABELS } from '@/components/admin/AdminObservabilityPanel';
 
-type Tab = 'dashboard' | 'users' | 'notes' | 'plans' | 'export' | 'ops' | 'llm' | 'asr' | 'audit' | 'settings';
+type Tab = 'dashboard' | 'users' | 'notes' | 'plans' | 'export' | 'ops' | 'llm' | 'asr' | 'observability' | 'settings';
 
 const NAV: { key: Tab; label: string; icon: string }[] = [
   { key: 'dashboard', label: '仪表盘', icon: '📊' },
@@ -52,7 +52,7 @@ const NAV: { key: Tab; label: string; icon: string }[] = [
   { key: 'ops', label: '系统运维', icon: '🩺' },
   { key: 'llm', label: 'LLM 配置', icon: '🤖' },
   { key: 'asr', label: 'ASR 配置', icon: '🎙️' },
-  { key: 'audit', label: '审计日志', icon: '🔒' },
+  { key: 'observability', label: '用量与日志', icon: '📈' },
   { key: 'settings', label: '系统设置', icon: '⚙️' },
 ];
 
@@ -68,16 +68,7 @@ const CARD_TYPE_OPTIONS = [
   { value: 'general', label: '通用' },
 ];
 
-const ACTION_LABELS: Record<string, string> = {
-  user_enable: '启用用户', user_disable: '禁用用户',
-  user_promote: '授权管理员', user_demote: '撤销管理员',
-  user_delete: '删除用户', user_reset_password: '重置密码',
-  user_edit: '编辑用户资料',
-  note_delete: '删除笔记', note_batch_delete: '批量删除笔记',
-  note_reextract: '重新抽取', llm_config_update: '更新 LLM 配置',
-  asr_config_update: '更新 ASR 配置', plan_delete: '删除计划',
-  llm_config_test: '测试 LLM 连接', asr_config_test: '测试 ASR 连接',
-};
+const ACTION_LABELS = ADMIN_ACTION_LABELS;
 
 export default function AdminPage() {
   const { user, loading } = useAuth();
@@ -113,13 +104,6 @@ export default function AdminPage() {
   const [llm, setLlm] = useState<LlmConfig | null>(null);
   const [asr, setAsr] = useState<AsrConfig | null>(null);
 
-  // 审计
-  const [audit, setAudit] = useState<AdminAuditLog[]>([]);
-  const [auditTotal, setAuditTotal] = useState(0);
-  const [auditPage, setAuditPage] = useState(1);
-  const [auditAction, setAuditAction] = useState('');
-  const [expandedAuditId, setExpandedAuditId] = useState<number | null>(null);
-
   // 系统
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
   const [ops, setOps] = useState<AdminOps | null>(null);
@@ -150,11 +134,10 @@ export default function AdminPage() {
     if (tab === 'plans' && plans.length === 0) refreshPlans('');
     if (tab === 'llm' && !llm) refreshLlm();
     if (tab === 'asr' && !asr) refreshAsr();
-    if (tab === 'audit') refreshAudit();
     if (tab === 'settings' && !systemInfo) refreshSystemInfo();
     if (tab === 'ops') refreshOps();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, auditPage, auditAction]);
+  }, [tab]);
 
   async function refreshStats() { const r = await getAdminStats(); if (r.success && r.data) setStats(r.data); }
   async function refreshRecentActivity() {
@@ -178,10 +161,6 @@ export default function AdminPage() {
   }
   async function refreshLlm() { const r = await getLlmConfig(); if (r.success && r.data) setLlm(r.data); }
   async function refreshAsr() { const r = await getAsrConfig(); if (r.success && r.data) setAsr(r.data); }
-  async function refreshAudit() {
-    const r = await listAdminAuditLogs(auditPage, 20, auditAction || undefined);
-    if (r.success && r.data) { setAudit(r.data.items); setAuditTotal(r.data.total); }
-  }
   async function refreshSystemInfo() { const r = await getSystemInfo(); if (r.success && r.data) setSystemInfo(r.data); }
   async function refreshOps() { const r = await getAdminOps(); if (r.success && r.data) setOps(r.data); }
 
@@ -346,7 +325,7 @@ export default function AdminPage() {
           <span className="font-semibold text-foreground">知萃管理端</span>
         </header>
 
-        <div className="p-6 max-w-5xl mx-auto">
+        <div className="mx-auto max-w-6xl p-4 sm:p-6">
           {(err || msg) && (
             <p className={`text-xs rounded-lg px-3 py-2 mb-4 ${err ? 'text-accent-rose bg-accent-rose/5' : 'text-accent-emerald bg-accent-emerald/5'}`}>
               {err || msg}
@@ -667,24 +646,11 @@ export default function AdminPage() {
 
           {/* LLM 配置 */}
           {tab === 'llm' && (
-            <ConfigForm
-              title="LLM 配置"
-              desc={`修改后立即生效，无需重启。API Key 加密存储于数据库（Fernet）。当前 Key: ${llm?.api_key_masked || '未设置'}。留空表示不改。`}
-              fields={[
-                { key: 'model', label: '模型', value: llm?.model ?? '', placeholder: 'deepseek/deepseek-chat' },
-                { key: 'api_base', label: 'API Base', value: llm?.api_base ?? '', placeholder: '留空走官方' },
-                { key: 'api_key', label: 'API Key', value: '', placeholder: '留空不改', secret: true },
-              ]}
-              onSave={async (vals) => {
-                const body: Record<string, string> = {};
-                if (vals.model) body.model = vals.model;
-                if (vals.api_base) body.api_base = vals.api_base;
-                if (vals.api_key) body.api_key = vals.api_key;
-                const r = await putLlmConfig(body);
-                if (r.success && r.data) { setLlm(r.data); flash('LLM 配置已保存'); }
-                else setErr(r.error || '保存失败');
-              }}
-              onTest={async () => testLlmConfig()}
+            <AdminLlmConfigPanel
+              config={llm}
+              onConfigChange={setLlm}
+              onMessage={flash}
+              onError={setErr}
             />
           )}
 
@@ -711,63 +677,8 @@ export default function AdminPage() {
             />
           )}
 
-          {/* 审计日志 */}
-          {tab === 'audit' && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <h1 className="text-2xl font-bold text-foreground">审计日志 <span className="text-sm font-normal text-foreground-muted">共 {auditTotal} 条</span></h1>
-                <select
-                  value={auditAction}
-                  onChange={e => { setAuditAction(e.target.value); setAuditPage(1); }}
-                  className="px-3 py-1.5 rounded-lg bg-[var(--admin-surface-2)] border border-card-border text-sm text-foreground focus:outline-none focus:border-accent-emerald/50"
-                >
-                  <option value="">全部动作</option>
-                  {Object.entries(ACTION_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                </select>
-              </div>
-              <div className="admin-panel overflow-hidden">
-                <table className="admin-table text-sm">
-                  <thead>
-                    <tr className="text-foreground-muted text-xs">
-                      <th className="text-left p-3">时间</th>
-                      <th className="text-left p-3">操作人</th>
-                      <th className="text-left p-3">动作</th>
-                      <th className="text-left p-3">目标</th>
-                      <th className="text-left p-3">IP</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {audit.map(a => (
-                      <Fragment key={a.id}>
-                        <tr className="border-b border-card-border/50 cursor-pointer" onClick={() => setExpandedAuditId(expandedAuditId === a.id ? null : a.id)}>
-                          <td className="p-3 text-foreground-muted text-xs whitespace-nowrap">{a.created_at ? new Date(a.created_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-'}</td>
-                          <td className="p-3 font-medium text-foreground">{a.admin_username || a.admin_user_id.slice(0, 8)}</td>
-                          <td className="p-3"><span className="text-xs px-2 py-0.5 rounded bg-[var(--admin-surface-2)]">{ACTION_LABELS[a.action] || a.action}</span></td>
-                          <td className="p-3 text-foreground-muted text-xs">{a.target_type ? `${a.target_type}${a.target_id ? ':' + a.target_id.slice(0, 8) : ''}` : '-'}</td>
-                          <td className="p-3 text-foreground-muted text-xs">{a.ip || '-'}</td>
-                        </tr>
-                        {expandedAuditId === a.id && a.detail && (
-                          <tr>
-                            <td colSpan={5} className="p-3 bg-[var(--admin-surface-2)]">
-                              <pre className="text-xs text-foreground-muted whitespace-pre-wrap break-all">{JSON.stringify(a.detail, null, 2)}</pre>
-                            </td>
-                          </tr>
-                        )}
-                      </Fragment>
-                    ))}
-                    {audit.length === 0 && <tr><td colSpan={5} className="p-6 text-center text-foreground-muted text-sm">暂无日志</td></tr>}
-                  </tbody>
-                </table>
-              </div>
-              {auditTotal > 20 && (
-                <div className="flex justify-center items-center gap-3">
-                  <button disabled={auditPage <= 1} onClick={() => setAuditPage(p => p - 1)} className="px-3 py-1 rounded bg-[var(--admin-surface-2)] text-sm disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-95">上一页</button>
-                  <span className="text-sm text-foreground-muted">第 {auditPage} 页 / {Math.ceil(auditTotal / 20)} 页</span>
-                  <button disabled={auditPage * 20 >= auditTotal} onClick={() => setAuditPage(p => p + 1)} className="px-3 py-1 rounded bg-[var(--admin-surface-2)] text-sm disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-95">下一页</button>
-                </div>
-              )}
-            </div>
-          )}
+          {/* 用量与日志 */}
+          {tab === 'observability' && <AdminObservabilityPanel />}
 
           {/* 系统设置 */}
           {tab === 'settings' && systemInfo && (

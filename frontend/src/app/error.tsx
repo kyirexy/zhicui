@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
+import { reportBoundaryError } from '@/components/ClientErrorReporter';
 
 export default function Error({
   error,
@@ -11,6 +12,7 @@ export default function Error({
 }) {
   useEffect(() => {
     console.error(error);
+    reportBoundaryError(error, 'route-error-boundary');
   }, [error]);
 
   return (

@@ -9,6 +9,7 @@ import PipelineProgress from '@/components/PipelineProgress';
 import { useExtraction } from '@/lib/hooks/ExtractionContext';
 import { getPlanStats } from '@/lib/api';
 import MobileDownloadButton from '@/components/MobileDownloadButton';
+import ContentModeSwitch from '@/components/ContentModeSwitch';
 import { HOME_CATEGORIES, type HomeCategory } from '@/lib/homeCategories';
 import { X, CheckSquare, Code2, Brain, BookOpen, Target, Lightbulb, TrendingUp, LineChart, Star, FileText } from 'lucide-react';
 
@@ -87,9 +88,13 @@ export default function HomePage() {
         <MobileDownloadButton />
       </div>
 
+      <div className="relative z-10 w-full flex justify-center pt-3 md:pt-8">
+        <ContentModeSwitch />
+      </div>
+
       {/* Hero section */}
       <section className={`relative z-10 text-center px-4 transition-all duration-500 ${
-        isLoading ? 'pt-2 pb-1 md:pt-8 md:pb-6' : 'pt-4 pb-2 md:pt-24 md:pb-16 lg:pt-28 lg:pb-20'
+        isLoading ? 'pt-2 pb-1 md:pt-6 md:pb-6' : 'pt-4 pb-2 md:pt-14 md:pb-16 lg:pt-16 lg:pb-20'
       }`}>
         <div className="animate-fade-up-blur">
           {/* Mobile eyebrow — compact version of the desktop chip */}
@@ -141,7 +146,7 @@ export default function HomePage() {
       {!cardData && !isLoading && (
         <section className="relative z-10 w-full max-w-5xl mx-auto px-2 md:px-0">
           <div className="mb-4 md:mb-6 text-center">
-            <p className="text-[11px] md:text-xs font-medium text-accent-emerald/90">覆盖你收藏夹里的高频内容</p>
+            <p className="text-[11px] md:text-xs font-medium text-accent-emerald/90">覆盖你收藏里的高频内容</p>
             <h2 className="mt-1 md:mt-1.5 text-base md:text-2xl font-bold text-foreground tracking-tight">各类视频，一键萃成可用知识</h2>
             <p className="mt-1 md:mt-2 text-[11px] md:text-sm text-foreground-muted">AI 自动识别内容类型，生成结构化卡片和行动计划</p>
           </div>

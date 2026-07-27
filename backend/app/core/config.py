@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     ASR_API_BASE_URL: str = "https://api.siliconflow.cn/v1/audio/transcriptions"
     ASR_MODEL: str = "FunAudioLLM/SenseVoiceSmall"
 
+    # Optional companion service used by the batch Douyin video library.
+    # The main app stays fully functional when this service is offline.
+    DOUYIN_DOWNLOADER_URL: str = "http://127.0.0.1:9000"
+
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 

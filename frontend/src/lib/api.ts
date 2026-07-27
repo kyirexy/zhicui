@@ -1,4 +1,28 @@
-import type { ApiResponse, CardData, Note, NoteDetail, PaginatedResponse, VideoInfo, PlanData, PlanStats, PlanOverview, PlanPriority, NoteAskResult, NoteChatTurn } from './types';
+import type {
+  ApiResponse,
+  CardData,
+  DouyinCollectionJob,
+  DouyinLibraryItem,
+  DouyinLibrarySort,
+  DouyinLibraryStatus,
+  DouyinLoginStatus,
+  DouyinSourceMode,
+  DouyinVideoWorkspace,
+  LibraryAskResult,
+  LibraryOutputStyle,
+  LibraryResearchMode,
+  Note,
+  NoteAskResult,
+  NoteChatTurn,
+  NoteDetail,
+  PaginatedResponse,
+  PlanData,
+  PlanAgentResult,
+  PlanOverview,
+  PlanPriority,
+  PlanStats,
+  VideoInfo,
+} from './types';
 export type { ApiResponse };
 
 // In Capacitor/static-export mode, NEXT_PUBLIC_API_URL is set explicitly
@@ -51,6 +75,7 @@ async function responseErrorMessage(response: Response): Promise<string> {
 
   if (response.status === 401) return '请先登录';
   if (response.status === 422) {
+    if (typeof data.detail === 'string' && data.detail) return data.detail;
     const locations = validationLocations(data.detail);
     return locations.some((location) => location.includes('url'))
       ? '请输入有效的视频链接'
@@ -270,6 +295,132 @@ export async function askNote(
 }
 
 // ---------------------------------------------------------------------------
+// Douyin batch library API
+// ---------------------------------------------------------------------------
+
+export async function getDouyinLibraryStatus(): Promise<ApiResponse<DouyinLibraryStatus>> {
+  return request<DouyinLibraryStatus>('/api/library/douyin/status');
+}
+
+export async function listDouyinLibraryItems(
+  limit = 0,
+  mode?: DouyinSourceMode,
+  sort: DouyinLibrarySort = 'collection',
+): Promise<ApiResponse<{ items: DouyinLibraryItem[]; total: number }>> {
+  const params = new URLSearchParams({
+    limit: String(Math.max(0, Math.min(limit, 10000))),
+  });
+  if (mode) params.set('mode', mode);
+  params.set('sort', sort);
+  return request<{ items: DouyinLibraryItem[]; total: number }>(
+    `/api/library/douyin/items?${params.toString()}`,
+  );
+}
+
+export async function getDouyinLibraryItem(
+  awemeId: string,
+): Promise<ApiResponse<DouyinVideoWorkspace>> {
+  return request<DouyinVideoWorkspace>(
+    `/api/library/douyin/items/${encodeURIComponent(awemeId)}`,
+  );
+}
+
+export async function collectDouyinLibrary(
+  count = 50,
+  mode: DouyinSourceMode = 'like',
+): Promise<ApiResponse<DouyinCollectionJob>> {
+  return request<DouyinCollectionJob>('/api/library/douyin/collect', {
+    method: 'POST',
+    body: JSON.stringify({
+      count: Math.max(1, Math.min(count, 500)),
+      mode,
+    }),
+  });
+}
+
+export async function startDouyinLogin(): Promise<ApiResponse<DouyinLoginStatus>> {
+  return request<DouyinLoginStatus>('/api/library/douyin/login', {
+    method: 'POST',
+    body: JSON.stringify({ browser: 'chromium' }),
+  });
+}
+
+export async function getDouyinLoginStatus(): Promise<ApiResponse<DouyinLoginStatus>> {
+  return request<DouyinLoginStatus>('/api/library/douyin/login');
+}
+
+export async function getDouyinCollectionJob(
+  jobId: string,
+): Promise<ApiResponse<DouyinCollectionJob>> {
+  return request<DouyinCollectionJob>(
+    `/api/library/douyin/jobs/${encodeURIComponent(jobId)}`,
+  );
+}
+
+export async function extractDouyinLibraryItem(
+  awemeId: string,
+): Promise<ApiResponse<CardData & { already_existed?: boolean }>> {
+  return request<CardData & { already_existed?: boolean }>(
+    '/api/library/douyin/extract',
+    {
+      method: 'POST',
+      body: JSON.stringify({ aweme_id: awemeId }),
+    },
+  );
+}
+
+export async function deleteDouyinLibraryExtraction(
+  noteId: string,
+): Promise<ApiResponse<{
+  deleted: boolean;
+  plans_deleted: number;
+  media_preserved: boolean;
+}>> {
+  return request<{
+    deleted: boolean;
+    plans_deleted: number;
+    media_preserved: boolean;
+  }>(`/api/library/douyin/extractions/${encodeURIComponent(noteId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function askVideoLibrary(
+  noteIds: string[],
+  question: string,
+  history: NoteChatTurn[] = [],
+  signal?: AbortSignal,
+  options?: {
+    researchMode?: LibraryResearchMode;
+    outputStyle?: LibraryOutputStyle;
+    customInstruction?: string;
+  },
+): Promise<ApiResponse<LibraryAskResult>> {
+  return request<LibraryAskResult>('/api/library/ask', {
+    method: 'POST',
+    body: JSON.stringify({
+      note_ids: noteIds.slice(0, 50),
+      question,
+      history: history.slice(-6),
+      research_mode: options?.researchMode || 'fast',
+      output_style: options?.outputStyle || 'answer',
+      custom_instruction: options?.customInstruction?.trim() || '',
+    }),
+    signal,
+  });
+}
+
+export async function runNotePlanAgent(
+  noteId: string,
+  instruction: string,
+): Promise<ApiResponse<PlanAgentResult>> {
+  return request<PlanAgentResult>(`/api/notes/${encodeURIComponent(noteId)}/plan-agent`, {
+    method: 'POST',
+    body: JSON.stringify({ instruction }),
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Plan API
 // ---------------------------------------------------------------------------
 
@@ -368,9 +519,12 @@ export interface AdminNoteItem {
 }
 
 export interface LlmConfig {
+  provider: 'deepseek' | 'custom';
   model: string;
   api_base: string;
   api_key_masked: string;
+  api_base_locked: boolean;
+  available_models: string[];
 }
 
 export interface AsrConfig {
@@ -473,7 +627,7 @@ export async function getLlmConfig(): Promise<ApiResponse<LlmConfig>> {
 }
 
 export async function putLlmConfig(
-  body: { model?: string; api_base?: string; api_key?: string },
+  body: { provider?: 'deepseek' | 'custom'; model?: string; api_base?: string; api_key?: string },
 ): Promise<ApiResponse<LlmConfig>> {
   return request<LlmConfig>('/api/admin/llm-config', { method: 'PUT', body: JSON.stringify(body) });
 }
@@ -508,6 +662,180 @@ export async function listAdminAuditLogs(
   const params = new URLSearchParams({ page: String(page), per_page: String(perPage) });
   if (action) params.set('action', action);
   return request(`/api/admin/audit-logs?${params.toString()}`);
+}
+
+export interface LlmUsageSummary {
+  calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  active_users: number;
+}
+
+export interface LlmUsageModel {
+  provider: string;
+  model: string;
+  calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
+export interface LlmUsageDaily {
+  date: string;
+  calls: number;
+  total_tokens: number;
+}
+
+export interface LlmUsageItem {
+  id: number;
+  user_id: string | null;
+  username: string;
+  provider: string;
+  model: string;
+  operation: string;
+  request_path: string | null;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  created_at: string;
+}
+
+export interface LlmUsageReport {
+  summary: LlmUsageSummary;
+  by_model: LlmUsageModel[];
+  daily: LlmUsageDaily[];
+  items: LlmUsageItem[];
+  total: number;
+  page: number;
+  per_page: number;
+  days: number;
+}
+
+export async function getLlmUsage(
+  days = 30,
+  page = 1,
+  perPage = 20,
+  model?: string,
+): Promise<ApiResponse<LlmUsageReport>> {
+  const params = new URLSearchParams({
+    days: String(days),
+    page: String(page),
+    per_page: String(perPage),
+  });
+  if (model) params.set('model', model);
+  return request<LlmUsageReport>(`/api/admin/llm-usage?${params.toString()}`);
+}
+
+export interface UserActivityItem {
+  id: number;
+  user_id: string | null;
+  username: string;
+  action: string;
+  action_label: string;
+  method: string;
+  path: string;
+  status_code: number;
+  duration_ms: number;
+  ip: string | null;
+  created_at: string;
+}
+
+export interface UserActivityReport {
+  summary: {
+    total: number;
+    today: number;
+    active_users: number;
+    errors: number;
+  };
+  items: UserActivityItem[];
+  actions: { value: string; label: string }[];
+  total: number;
+  page: number;
+  per_page: number;
+  days: number;
+}
+
+export async function getUserActivity(
+  days = 30,
+  page = 1,
+  perPage = 20,
+  action?: string,
+): Promise<ApiResponse<UserActivityReport>> {
+  const params = new URLSearchParams({
+    days: String(days),
+    page: String(page),
+    per_page: String(perPage),
+  });
+  if (action) params.set('action', action);
+  return request<UserActivityReport>(`/api/admin/user-activity?${params.toString()}`);
+}
+
+export interface ApplicationErrorItem {
+  id: number;
+  user_id: string | null;
+  username: string;
+  source: string;
+  severity: 'warning' | 'error' | 'critical';
+  error_type: string;
+  message: string;
+  traceback: string | null;
+  method: string | null;
+  path: string | null;
+  status_code: number | null;
+  ip: string | null;
+  metadata: Record<string, string>;
+  created_at: string;
+}
+
+export interface ApplicationErrorReport {
+  summary: {
+    total: number;
+    today: number;
+    critical: number;
+    server_errors: number;
+    affected_users: number;
+  };
+  by_source: { source: string; count: number }[];
+  items: ApplicationErrorItem[];
+  sources: string[];
+  severities: string[];
+  total: number;
+  page: number;
+  per_page: number;
+  days: number;
+}
+
+export async function getApplicationErrors(
+  days = 30,
+  page = 1,
+  perPage = 20,
+  source?: string,
+  severity?: string,
+): Promise<ApiResponse<ApplicationErrorReport>> {
+  const params = new URLSearchParams({
+    days: String(days),
+    page: String(page),
+    per_page: String(perPage),
+  });
+  if (source) params.set('source', source);
+  if (severity) params.set('severity', severity);
+  return request<ApplicationErrorReport>(`/api/admin/error-logs?${params.toString()}`);
+}
+
+export async function reportClientError(body: {
+  message: string;
+  stack?: string;
+  path?: string;
+  error_type?: string;
+  environment?: 'web' | 'capacitor';
+  component?: string;
+  digest?: string;
+}): Promise<void> {
+  await request<{ accepted: boolean }>('/api/client-errors', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
 }
 
 export interface AdminPlanItem {
@@ -571,7 +899,15 @@ export async function getSystemInfo(): Promise<ApiResponse<SystemInfo>> {
 }
 
 export interface AdminOps {
-  table_counts: { users: number; notes: number; plans: number; audit_logs: number };
+  table_counts: {
+    users: number;
+    notes: number;
+    plans: number;
+    audit_logs: number;
+    llm_usage_logs: number;
+    user_activity_logs: number;
+    application_error_logs: number;
+  };
   recent_audit: AdminAuditLog[];
   keys: {
     llm_key_set: boolean;

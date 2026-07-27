@@ -32,8 +32,14 @@ export interface CardData {
   created_at?: string;
   seo_meta?: string;
   transcript_raw?: string | null;
+  transcript_chars?: number;
   video_title?: string;
   video_id?: string;
+  cover_url?: string;
+  author_name?: string;
+  platform?: string;
+  source_kind?: string;
+  source_recorded_at?: string;
   /** New adaptive-profile fields (server-side defaults keep older cards working). */
   tone?: ContentTone;
   density?: ContentDensity;
@@ -53,6 +59,12 @@ export interface Note {
   excerpt: string;
   created_at: string;
   source_url?: string;
+  cover_url?: string;
+  author_name?: string;
+  platform?: string;
+  source_kind?: string;
+  source_recorded_at?: string;
+  transcript_chars?: number;
   seo_meta?: string;
   tone?: ContentTone;
   density?: ContentDensity;
@@ -116,6 +128,120 @@ export interface NoteAskResult {
   evidence: NoteEvidence[];
   follow_up_questions: string[];
   source_context?: NoteSourceContext | null;
+}
+
+export interface DouyinLibraryStatus {
+  connected: boolean;
+  base_url: string;
+  cookie_valid: boolean;
+  cookie_count: number;
+  error?: string | null;
+}
+
+export type DouyinSourceMode = 'like' | 'collect' | 'post';
+export type DouyinLibrarySort = 'collection' | 'published';
+
+export interface DouyinLoginStatus {
+  running: boolean;
+  message: string;
+  error: string;
+  started?: boolean;
+}
+
+export interface DouyinCollectionJob {
+  job_id: string;
+  url: string;
+  status: 'pending' | 'running' | 'success' | 'failed';
+  created_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  total: number;
+  success: number;
+  failed: number;
+  skipped: number;
+  error?: string | null;
+  mode?: DouyinSourceMode | null;
+}
+
+export interface DouyinLibraryItem {
+  id: string;
+  aweme_id: string;
+  title: string;
+  caption: string;
+  author_name: string;
+  media_type: string;
+  tags: string[];
+  date: string;
+  recorded_at: string;
+  publish_timestamp?: number | null;
+  source_rank?: number | null;
+  source_synced_at?: string;
+  source_mode: DouyinSourceMode | 'unknown';
+  source_url: string;
+  media_url: string;
+  cover_url: string;
+  can_extract: boolean;
+  extracted: boolean;
+  extracted_note_id?: string | null;
+  transcript_chars: number;
+  card_type?: CardType | null;
+}
+
+export interface DouyinVideoWorkspace {
+  item: DouyinLibraryItem;
+  note: NoteDetail | null;
+  plan: PlanData | null;
+  media_storage: {
+    provider: 'douyin-downloader' | string;
+    mode: 'external' | string;
+    database_stores_media: false;
+  };
+}
+
+export interface PlanAgentResult {
+  plan: PlanData;
+  created: boolean;
+  change_summary: string;
+  source_context: NoteSourceContext;
+}
+
+export interface LibraryEvidence extends NoteEvidence {
+  note_id: string;
+  title: string;
+}
+
+export interface LibrarySourceContext {
+  note_count: number;
+  transcript_chars: number;
+  scanned_chunks: number;
+  selected_chunks: number;
+  ai_summary_count: number;
+  matched_note_count: number;
+  context_note_count: number;
+  research_mode: 'fast' | 'deep';
+  output_style: LibraryOutputStyle;
+  coverage: 'focused' | 'broad';
+  map_calls: number;
+  agent_trace: LibraryAgentStage[];
+  sources: Array<{ note_id: string; title: string }>;
+}
+
+export type LibraryResearchMode = 'fast' | 'deep';
+export type LibraryOutputStyle = 'answer' | 'summary' | 'comparison' | 'action_plan' | 'custom';
+
+export interface LibraryAgentStage {
+  stage: 'plan' | 'retrieve' | 'map' | 'synthesize';
+  label: string;
+  detail: string;
+}
+
+export interface LibraryAskResult {
+  note_ids: string[];
+  answer: string;
+  grounded: boolean;
+  evidence: LibraryEvidence[];
+  follow_up_questions: string[];
+  source_context: LibrarySourceContext;
 }
 
 export interface PaginatedResponse<T> {

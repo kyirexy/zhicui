@@ -97,7 +97,7 @@ export default function RootLayout({
 
           {/* Main content — extra bottom padding on mobile so content clears
               the fixed BottomTabBar (60px tabbar + safe-area + breathing room). */}
-          <main className="mx-auto max-w-6xl px-5 pt-6 pb-24 md:px-8 md:py-8 lg:px-12 flex-1 w-full">
+          <main className="mx-auto max-w-[1600px] px-5 pt-6 pb-24 md:px-8 md:py-8 lg:px-12 flex-1 w-full">
             <AuthGuard>
               <GlobalSheetManager />
               {children}

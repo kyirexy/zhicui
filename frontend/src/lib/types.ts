@@ -96,6 +96,28 @@ export interface ApiResponse<T> {
   error?: string;
 }
 
+export type FeedbackCategory = 'bug' | 'suggestion' | 'content' | 'account' | 'other';
+export type FeedbackStatus = 'pending' | 'processing' | 'resolved' | 'closed';
+
+export interface FeedbackItem {
+  id: string;
+  category: FeedbackCategory;
+  subject: string;
+  content: string;
+  page_path?: string | null;
+  status: FeedbackStatus;
+  admin_reply?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FeedbackPage {
+  items: FeedbackItem[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
 export type NoteChatRole = 'user' | 'assistant';
 
 export interface NoteChatTurn {

@@ -42,6 +42,7 @@ export const ADMIN_ACTION_LABELS: Record<string, string> = {
   plan_delete: '删除计划',
   llm_config_test: '测试 LLM 连接',
   asr_config_test: '测试 ASR 连接',
+  feedback_update: '处理用户反馈',
 };
 
 const OPERATION_LABELS: Record<string, string> = {

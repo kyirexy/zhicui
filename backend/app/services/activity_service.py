@@ -32,6 +32,7 @@ ACTION_LABELS: dict[str, str] = {
     "plan_task_add": "新增计划任务",
     "plan_task_delete": "删除计划任务",
     "plan_delete": "删除计划",
+    "feedback_submit": "提交用户反馈",
     "admin_operation": "执行管理操作",
     "api_operation": "执行接口操作",
 }
@@ -55,6 +56,7 @@ def classify_action(method: str, path: str) -> str:
         ("POST", "/api/plans/{plan_id}/tasks"): "plan_task_add",
         ("DELETE", "/api/plans/{plan_id}/tasks/{task_id}"): "plan_task_delete",
         ("DELETE", "/api/plans/{plan_id}"): "plan_delete",
+        ("POST", "/api/feedback"): "feedback_submit",
     }
     if (method, path) in exact:
         return exact[(method, path)]

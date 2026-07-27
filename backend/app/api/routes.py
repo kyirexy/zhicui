@@ -27,6 +27,7 @@ from app.services import (
     audit_service,
     douyin_library,
     error_log_service,
+    feedback_service,
     llm_usage_service,
     note_service,
     plan_service,
@@ -108,6 +109,17 @@ class ClientErrorRequest(BaseModel):
     environment: Literal["web", "capacitor"] = "web"
     component: str = Field(default="", max_length=128)
     digest: str = Field(default="", max_length=128)
+
+
+class FeedbackCreateRequest(BaseModel):
+    category: Literal["bug", "suggestion", "content", "account", "other"]
+    subject: str = Field(..., min_length=2, max_length=160)
+    content: str = Field(..., min_length=5, max_length=2000)
+    page_path: str = Field(default="", max_length=512)
+    platform: Literal["web", "android", "capacitor"] = "web"
+    user_agent: str = Field(default="", max_length=512)
+    viewport: str = Field(default="", max_length=64)
+    app_version: str = Field(default="", max_length=64)
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +317,58 @@ def report_client_error(
         },
     )
     return _ok({"accepted": True})
+
+
+@router.post("/api/feedback")
+def submit_feedback(
+    body: FeedbackCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """提交有边界的文字反馈，不接收文件、页面正文或认证信息。"""
+    if len(body.subject.strip()) < 2:
+        raise HTTPException(status_code=400, detail="反馈主题至少 2 个字符")
+    if len(body.content.strip()) < 5:
+        raise HTTPException(status_code=400, detail="请再具体描述一下问题或建议")
+    if feedback_service.recent_submission_count(db, user_id=current_user.id) >= 5:
+        raise HTTPException(status_code=429, detail="提交得有点频繁，请 10 分钟后再试")
+
+    feedback = feedback_service.create_feedback(
+        db,
+        user_id=current_user.id,
+        category=body.category,
+        subject=body.subject,
+        content=body.content,
+        page_path=body.page_path,
+        client_context={
+            "platform": body.platform,
+            "user_agent": body.user_agent,
+            "viewport": body.viewport,
+            "app_version": body.app_version,
+        },
+    )
+    return _ok(feedback_service.to_dict(feedback))
+
+
+@router.get("/api/feedback")
+def list_my_feedback(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    items, total = feedback_service.list_user_feedback(
+        db,
+        user_id=current_user.id,
+        page=page,
+        per_page=per_page,
+    )
+    return _ok({
+        "items": [feedback_service.to_dict(item) for item in items],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+    })
 
 
 @router.post("/api/video/info")
@@ -1647,6 +1711,11 @@ class AdminUserPatch(BaseModel):
     email: str | None = None
 
 
+class AdminFeedbackUpdateRequest(BaseModel):
+    status: Literal["pending", "processing", "resolved", "closed"] | None = None
+    admin_reply: str | None = Field(default=None, max_length=2000)
+
+
 @router.get("/api/admin/stats")
 def admin_stats(
     db: Session = Depends(get_db),
@@ -2126,6 +2195,87 @@ def admin_batch_delete_notes(
         ip=_client_ip(request),
     )
     return _ok({"deleted": deleted})
+
+
+# ---------------------------------------------------------------------------
+# Admin endpoints — user feedback
+# ---------------------------------------------------------------------------
+@router.get("/api/admin/feedback")
+def admin_list_feedback(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    status: Literal["pending", "processing", "resolved", "closed"] | None = Query(None),
+    category: Literal["bug", "suggestion", "content", "account", "other"] | None = Query(None),
+    q: str | None = Query(None, max_length=160),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    items, total, counts = feedback_service.list_admin_feedback(
+        db,
+        page=page,
+        per_page=per_page,
+        status=status,
+        category=category,
+        q=q,
+    )
+    return _ok({
+        "items": [
+            feedback_service.to_dict(
+                feedback,
+                user=user,
+                include_client_context=True,
+            )
+            for feedback, user in items
+        ],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "counts": counts,
+    })
+
+
+@router.patch("/api/admin/feedback/{feedback_id}")
+def admin_update_feedback(
+    feedback_id: str,
+    body: AdminFeedbackUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    if not body.model_fields_set:
+        raise HTTPException(status_code=400, detail="请至少更新处理状态或回复内容")
+    feedback = feedback_service.get_feedback(db, feedback_id)
+    if not feedback:
+        raise HTTPException(status_code=404, detail="反馈不存在")
+
+    updated = feedback_service.update_feedback(
+        db,
+        feedback,
+        status=body.status,
+        admin_reply=body.admin_reply if "admin_reply" in body.model_fields_set else None,
+        handled_by=current_user.id,
+    )
+    owner = db.query(UserModel).filter(UserModel.id == updated.user_id).first()
+    audit_service.log_action(
+        db,
+        admin_user_id=current_user.id,
+        action="feedback_update",
+        target_type="feedback",
+        target_id=feedback_id,
+        detail={
+            "status": updated.status,
+            "has_reply": bool(updated.admin_reply),
+            "subject": updated.subject[:80],
+        },
+        ip=_client_ip(request),
+    )
+    return _ok(
+        feedback_service.to_dict(
+            updated,
+            user=owner,
+            include_client_context=True,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -28,6 +28,7 @@ from app.models.admin_audit_log import AdminAuditLog  # noqa: F401
 from app.models.llm_usage_log import LlmUsageLog  # noqa: F401
 from app.models.user_activity_log import UserActivityLog  # noqa: F401
 from app.models.application_error_log import ApplicationErrorLog  # noqa: F401
+from app.models.feedback import Feedback  # noqa: F401
 from app.core.request_context import reset_request_context, set_request_context
 from app.services import activity_service, auth_service, error_log_service
 

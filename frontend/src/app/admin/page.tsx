@@ -40,12 +40,14 @@ import {
 import { getPlanProgress, type NoteDetail, type PlanData } from '@/lib/types';
 import AdminLlmConfigPanel from '@/components/admin/AdminLlmConfigPanel';
 import AdminObservabilityPanel, { ADMIN_ACTION_LABELS } from '@/components/admin/AdminObservabilityPanel';
+import AdminFeedbackPanel from '@/components/admin/AdminFeedbackPanel';
 
-type Tab = 'dashboard' | 'users' | 'notes' | 'plans' | 'export' | 'ops' | 'llm' | 'asr' | 'observability' | 'settings';
+type Tab = 'dashboard' | 'users' | 'feedback' | 'notes' | 'plans' | 'export' | 'ops' | 'llm' | 'asr' | 'observability' | 'settings';
 
 const NAV: { key: Tab; label: string; icon: string }[] = [
   { key: 'dashboard', label: '仪表盘', icon: '📊' },
   { key: 'users', label: '用户管理', icon: '👥' },
+  { key: 'feedback', label: '用户反馈', icon: '💬' },
   { key: 'notes', label: '笔记管理', icon: '📝' },
   { key: 'plans', label: '计划管理', icon: '📋' },
   { key: 'export', label: '数据导出', icon: '📤' },
@@ -456,6 +458,9 @@ export default function AdminPage() {
               )}
             </div>
           )}
+
+          {/* 用户反馈 */}
+          {tab === 'feedback' && <AdminFeedbackPanel />}
 
           {/* 笔记管理 */}
           {tab === 'notes' && (

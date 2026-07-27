@@ -8,6 +8,10 @@ import type {
   DouyinLoginStatus,
   DouyinSourceMode,
   DouyinVideoWorkspace,
+  FeedbackCategory,
+  FeedbackItem,
+  FeedbackPage,
+  FeedbackStatus,
   LibraryAskResult,
   LibraryOutputStyle,
   LibraryResearchMode,
@@ -129,6 +133,37 @@ export async function extractVideo(url: string): Promise<ApiResponse<CardData>> 
     method: 'POST',
     body: JSON.stringify({ url }),
   });
+}
+
+export interface SubmitFeedbackBody {
+  category: FeedbackCategory;
+  subject: string;
+  content: string;
+  page_path: string;
+  platform: 'web' | 'android' | 'capacitor';
+  user_agent: string;
+  viewport: string;
+  app_version: string;
+}
+
+export async function submitFeedback(
+  body: SubmitFeedbackBody,
+): Promise<ApiResponse<FeedbackItem>> {
+  return request<FeedbackItem>('/api/feedback', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function listMyFeedback(
+  page = 1,
+  perPage = 10,
+): Promise<ApiResponse<FeedbackPage>> {
+  const params = new URLSearchParams({
+    page: String(page),
+    per_page: String(perPage),
+  });
+  return request<FeedbackPage>(`/api/feedback?${params.toString()}`);
 }
 
 /** Metadata carried by intermediate SSE progress events. */
@@ -528,6 +563,28 @@ export interface AdminNoteItem {
   created_at: string;
 }
 
+export interface AdminFeedbackItem extends FeedbackItem {
+  client_context: {
+    platform?: string | null;
+    user_agent?: string | null;
+    viewport?: string | null;
+    app_version?: string | null;
+  };
+  user: {
+    id: string;
+    username: string | null;
+    email: string;
+  };
+}
+
+export interface AdminFeedbackPage {
+  items: AdminFeedbackItem[];
+  total: number;
+  page: number;
+  per_page: number;
+  counts: Record<FeedbackStatus | 'total', number>;
+}
+
 export interface LlmConfig {
   provider: 'deepseek' | 'custom';
   model: string;
@@ -629,6 +686,35 @@ export async function batchDeleteAdminNotes(ids: string[]): Promise<ApiResponse<
   return request<{ deleted: number }>(`/api/admin/notes/batch-delete`, {
     method: 'POST',
     body: JSON.stringify({ ids }),
+  });
+}
+
+export async function listAdminFeedback(
+  options: {
+    page?: number;
+    perPage?: number;
+    status?: FeedbackStatus | '';
+    category?: FeedbackCategory | '';
+    q?: string;
+  } = {},
+): Promise<ApiResponse<AdminFeedbackPage>> {
+  const params = new URLSearchParams({
+    page: String(options.page || 1),
+    per_page: String(options.perPage || 20),
+  });
+  if (options.status) params.set('status', options.status);
+  if (options.category) params.set('category', options.category);
+  if (options.q) params.set('q', options.q);
+  return request<AdminFeedbackPage>(`/api/admin/feedback?${params.toString()}`);
+}
+
+export async function updateAdminFeedback(
+  id: string,
+  body: { status?: FeedbackStatus; admin_reply?: string },
+): Promise<ApiResponse<AdminFeedbackItem>> {
+  return request<AdminFeedbackItem>(`/api/admin/feedback/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
   });
 }
 

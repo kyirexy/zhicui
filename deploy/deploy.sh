@@ -22,7 +22,13 @@ command -v flock >/dev/null 2>&1 || err "服务器缺少 flock，无法保证部
 command -v rsync >/dev/null 2>&1 || err "服务器缺少 rsync，无法创建隔离构建目录"
 
 # Jenkins 层会排队；此锁同时保护手工执行和其他自动化入口。
-exec 9>"$LOCK_FILE"
+# 锁文件可能由 jenkins 或 ubuntu 首次创建，因此只读打开后再加 flock，
+# 避免第二个系统用户因为文件所有权不同而无法参与同一把锁。
+if [ ! -e "$LOCK_FILE" ]; then
+  (umask 000; : >"$LOCK_FILE") ||
+    err "无法创建部署锁文件：$LOCK_FILE"
+fi
+exec 9<"$LOCK_FILE"
 if ! flock -n 9; then
   warn "已有部署正在执行，等待它完成..."
   flock 9

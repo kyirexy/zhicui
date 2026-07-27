@@ -15,4 +15,4 @@
 
 - [x] 3.1 Run targeted backend regressions for missing facts, example prompts, follow-up corrections, and evidence validation
 - [x] 3.2 Run the frontend production build and inspect the key Q&A screens
-- [ ] 3.3 Commit the scoped change, push it to the deployment branch, and verify the production release
+- [x] 3.3 Commit the scoped change, push it to the deployment branch, and verify the production release

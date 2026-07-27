@@ -1,0 +1,27 @@
+[Unit]
+Description=Zhicui Douyin downloader companion
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/douyin-downloader/current
+Environment=PYTHONUTF8=1
+Environment=PYTHONIOENCODING=utf-8
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/douyin-downloader/ms-playwright
+Environment=DOUYIN_BROWSER_HEADLESS=0
+ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x800x24" /opt/douyin-downloader/.venv/bin/python /opt/douyin-downloader/current/run.py -c /opt/douyin-downloader/config.yml --serve --serve-host 127.0.0.1 --serve-port 9000
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/douyin-downloader
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -34,6 +34,7 @@ import {
   extractDouyinLibraryItem,
   getDouyinCollectionJob,
   getDouyinLibraryStatus,
+  getDouyinLoginQr,
   getDouyinLoginStatus,
   listDouyinLibraryItems,
   startDouyinLogin,
@@ -98,6 +99,8 @@ export default function VideoLibraryPage() {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
+  const [loginQr, setLoginQr] = useState('');
+  const [qrPanelOpen, setQrPanelOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [batchExtracting, setBatchExtracting] = useState(false);
   const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
@@ -106,6 +109,7 @@ export default function VideoLibraryPage() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const activeRef = useRef(true);
+  const loginPollRef = useRef(0);
   const aiLauncherRef = useRef<HTMLButtonElement | null>(null);
   const aiCloseRef = useRef<HTMLButtonElement | null>(null);
   const restoreAiLauncherFocusRef = useRef(false);
@@ -336,23 +340,56 @@ export default function VideoLibraryPage() {
     if (response.success && response.data) setStatus(response.data);
   };
 
+  const closeQrLogin = () => {
+    loginPollRef.current += 1;
+    setScanning(false);
+    setQrPanelOpen(false);
+    setLoginQr('');
+  };
+
   const startQrLogin = async () => {
     if (!connected || scanning) return;
+    const pollId = loginPollRef.current + 1;
+    loginPollRef.current = pollId;
     setScanning(true);
-    setNotice('正在打开抖音扫码窗口…');
+    setQrPanelOpen(true);
+    setLoginQr('');
+    setNotice('正在生成抖音登录二维码…');
     const start = await startDouyinLogin();
     if (!start.success) {
       setScanning(false);
       setNotice(start.error || '扫码登录启动失败');
       return;
     }
-    for (let attempt = 0; attempt < 300 && activeRef.current; attempt += 1) {
+    let currentQrVersion = 0;
+    for (
+      let attempt = 0;
+      attempt < 300 && activeRef.current && loginPollRef.current === pollId;
+      attempt += 1
+    ) {
       await wait(2000);
       const response = await getDouyinLoginStatus();
       if (!response.success || !response.data) continue;
       setNotice(response.data.message || '等待你使用抖音 App 扫码…');
+      if (
+        response.data.qr_ready
+        && response.data.qr_version
+        && response.data.qr_version !== currentQrVersion
+      ) {
+        const qrResponse = await getDouyinLoginQr();
+        const imageDataUrl = qrResponse.data?.image_data_url || '';
+        if (
+          qrResponse.success
+          && imageDataUrl.startsWith('data:image/png;base64,')
+        ) {
+          setLoginQr(imageDataUrl);
+          currentQrVersion = qrResponse.data?.qr_version || 0;
+        }
+      }
       if (!response.data.running) {
         setScanning(false);
+        setQrPanelOpen(false);
+        setLoginQr('');
         await refreshLoginStatus();
         setNotice(
           response.data.error
@@ -362,6 +399,7 @@ export default function VideoLibraryPage() {
         return;
       }
     }
+    if (loginPollRef.current !== pollId) return;
     setScanning(false);
     setNotice('扫码登录等待超时，可以重新发起');
   };
@@ -513,6 +551,41 @@ export default function VideoLibraryPage() {
           </button>
         )}
       </div>
+
+      {qrPanelOpen && (
+        <section className="library-qr-card" aria-live="polite" aria-label="抖音扫码登录">
+          <div className="library-qr-heading">
+            <div>
+              <span className="library-qr-kicker">
+                <QrCode size={15} />
+                扫码连接收藏夹
+              </span>
+              <h2>使用抖音 App 扫码登录</h2>
+              <p>二维码只在当前登录过程中显示，登录凭据不会发送给浏览器。</p>
+            </div>
+            <button type="button" onClick={closeQrLogin} aria-label="关闭扫码登录">
+              <X size={18} />
+            </button>
+          </div>
+          <div className="library-qr-body">
+            <div className="library-qr-frame">
+              {loginQr ? (
+                <img src={loginQr} alt="抖音登录二维码" />
+              ) : (
+                <div className="library-qr-loading">
+                  <LoaderCircle size={28} className="animate-spin" />
+                  <span>正在安全获取二维码…</span>
+                </div>
+              )}
+            </div>
+            <ol>
+              <li>打开抖音 App，点击右上角扫一扫</li>
+              <li>扫描左侧二维码，并在手机上确认登录</li>
+              <li>连接成功后，选择“收藏”并同步需要的数量</li>
+            </ol>
+          </div>
+        </section>
+      )}
 
       {!connected && status && (
         <div className="library-offline-note">

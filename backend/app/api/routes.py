@@ -884,6 +884,17 @@ def get_douyin_library_login(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+@router.get("/api/library/douyin/login/qr")
+def get_douyin_library_login_qr(
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Proxy the QR image without exposing the companion to the public."""
+    try:
+        return _ok(douyin_library.login_qr())
+    except douyin_library.DouyinLibraryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 @router.post("/api/library/douyin/collect")
 def collect_douyin_library(
     body: LibraryCollectRequest,

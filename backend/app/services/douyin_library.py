@@ -6,6 +6,7 @@ consumes its HTTP API and turns selected media into user-scoped Notes.
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
@@ -16,6 +17,7 @@ from app.core.config import settings
 
 _MAX_BOUNDED_LIBRARY_ITEMS = 10000
 _MAX_SYNC_COUNT = 500
+_MAX_QR_IMAGE_BYTES = 512 * 1024
 
 
 class DouyinLibraryError(RuntimeError):
@@ -49,6 +51,38 @@ def _request(
             return response.json()
     except (requests.RequestException, ValueError) as exc:
         raise DouyinLibraryError(f"抖音收藏连接器暂不可用：{exc}") from exc
+
+
+def _request_qr(path: str) -> dict[str, Any]:
+    base_url = _base_url()
+    if not base_url:
+        raise DouyinLibraryError("未配置抖音收藏连接器")
+    try:
+        with requests.Session() as session:
+            session.trust_env = False
+            response = session.get(f"{base_url}{path}", timeout=8.0)
+            response.raise_for_status()
+            content_type = response.headers.get("content-type", "").split(";", 1)[0]
+            if content_type != "image/png":
+                raise DouyinLibraryError("登录二维码格式无效")
+            image = response.content
+            if not image or len(image) > _MAX_QR_IMAGE_BYTES:
+                raise DouyinLibraryError("登录二维码大小无效")
+            try:
+                version = int(response.headers.get("x-qr-version") or 0)
+            except ValueError:
+                version = 0
+            return {
+                "image_data_url": (
+                    "data:image/png;base64,"
+                    + base64.b64encode(image).decode("ascii")
+                ),
+                "qr_version": version,
+            }
+    except DouyinLibraryError:
+        raise
+    except requests.RequestException as exc:
+        raise DouyinLibraryError(f"抖音登录二维码暂不可用：{exc}") from exc
 
 
 def connection_status() -> dict[str, Any]:
@@ -295,7 +329,14 @@ def login_status() -> dict[str, Any]:
         "running": bool(state.get("running")),
         "message": str(state.get("message") or ""),
         "error": str(state.get("error") or ""),
+        "qr_ready": bool(state.get("qr_ready")),
+        "qr_version": int(state.get("qr_version") or 0),
     }
+
+
+def login_qr() -> dict[str, Any]:
+    """Return only the bounded QR PNG as a data URL, never Cookie data."""
+    return _request_qr("/api/v1/fetch-cookie/qr")
 
 
 def get_job(job_id: str) -> dict[str, Any]:

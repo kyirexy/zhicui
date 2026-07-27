@@ -349,6 +349,16 @@ export async function getDouyinLoginStatus(): Promise<ApiResponse<DouyinLoginSta
   return request<DouyinLoginStatus>('/api/library/douyin/login');
 }
 
+export async function getDouyinLoginQr(): Promise<ApiResponse<{
+  image_data_url: string;
+  qr_version: number;
+}>> {
+  return request<{
+    image_data_url: string;
+    qr_version: number;
+  }>('/api/library/douyin/login/qr');
+}
+
 export async function getDouyinCollectionJob(
   jobId: string,
 ): Promise<ApiResponse<DouyinCollectionJob>> {

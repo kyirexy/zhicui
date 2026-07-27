@@ -1,0 +1,30 @@
+path: /opt/douyin-downloader/Downloaded/
+
+music: true
+cover: true
+avatar: true
+json: true
+folderstyle: true
+group_by_mode: true
+download_pinned: false
+
+thread: 5
+retry_times: 3
+rate_limit: 2
+proxy: ""
+database: true
+database_path: /opt/douyin-downloader/dy_downloader.db
+
+progress:
+  quiet_logs: true
+
+browser_fallback:
+  enabled: true
+  headless: false
+  max_scrolls: 240
+  idle_rounds: 8
+  wait_timeout_seconds: 600
+
+server:
+  max_jobs: 500
+  job_ttl_seconds: 86400

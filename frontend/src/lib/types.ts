@@ -146,6 +146,8 @@ export interface DouyinLoginStatus {
   message: string;
   error: string;
   started?: boolean;
+  qr_ready?: boolean;
+  qr_version?: number;
 }
 
 export interface DouyinCollectionJob {

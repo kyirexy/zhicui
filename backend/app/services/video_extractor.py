@@ -427,9 +427,9 @@ def extract_media_url_transcript(
 ) -> str:
     """Transcribe a trusted direct media URL from the companion library.
 
-    The media is streamed into a temporary directory, converted to a compact
-    mono MP3, sent to the configured cloud ASR, and then retried through the
-    existing local ASR stack when available.
+    Video bytes are piped directly into FFmpeg without creating a video file.
+    Only a compact temporary mono MP3 exists during ASR; the temporary
+    directory is removed in ``finally`` on both success and failure.
     """
     import requests as _requests
 
@@ -438,37 +438,19 @@ def extract_media_url_transcript(
         raise ValueError("媒体地址无效")
 
     temp_dir = Path(tempfile.mkdtemp(prefix="zhicui-library-"))
-    video_path = temp_dir / "source.mp4"
     audio_path = temp_dir / "audio.mp3"
     failures: list[str] = []
 
     try:
-        with _requests.Session() as session:
-            session.trust_env = False
-            with session.get(clean_url, stream=True, timeout=(10, 300)) as response:
-                response.raise_for_status()
-                content_length = int(response.headers.get("Content-Length") or 0)
-                if content_length > max_bytes:
-                    raise RuntimeError("视频文件过大，暂不支持提取")
-
-                written = 0
-                with open(video_path, "wb") as output:
-                    for chunk in response.iter_content(chunk_size=1024 * 1024):
-                        if not chunk:
-                            continue
-                        written += len(chunk)
-                        if written > max_bytes:
-                            raise RuntimeError("视频文件过大，暂不支持提取")
-                        output.write(chunk)
-        if not video_path.exists() or video_path.stat().st_size == 0:
-            raise RuntimeError("下载器返回了空视频文件")
-
         ffmpeg_exe = _get_ffmpeg_path()
         command = [
             ffmpeg_exe,
             "-y",
+            "-loglevel",
+            "error",
+            "-nostats",
             "-i",
-            str(video_path),
+            "pipe:0",
             "-vn",
             "-ac",
             "1",
@@ -480,14 +462,53 @@ def extract_media_url_transcript(
             "64k",
             str(audio_path),
         ]
-        result = subprocess.run(
+        process = subprocess.Popen(
             command,
-            capture_output=True,
-            text=True,
-            timeout=600,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         )
-        if result.returncode != 0 or not audio_path.exists():
-            raise RuntimeError(f"FFmpeg 提取音频失败：{result.stderr[-300:]}")
+        try:
+            with _requests.Session() as session:
+                session.trust_env = False
+                with session.get(clean_url, stream=True, timeout=(10, 300)) as response:
+                    response.raise_for_status()
+                    content_length = int(response.headers.get("Content-Length") or 0)
+                    if content_length > max_bytes:
+                        raise RuntimeError("视频文件过大，暂不支持提取")
+
+                    written = 0
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if not chunk:
+                            continue
+                        written += len(chunk)
+                        if written > max_bytes:
+                            raise RuntimeError("视频文件过大，暂不支持提取")
+                        if process.stdin is None:
+                            raise RuntimeError("FFmpeg 输入管道不可用")
+                        process.stdin.write(chunk)
+            if written == 0:
+                raise RuntimeError("下载器返回了空视频流")
+            if process.stdin is not None:
+                process.stdin.close()
+            try:
+                return_code = process.wait(timeout=600)
+            except subprocess.TimeoutExpired as exc:
+                process.kill()
+                process.wait()
+                raise RuntimeError("FFmpeg 提取音频超时") from exc
+            stderr = (
+                process.stderr.read().decode("utf-8", errors="replace")
+                if process.stderr is not None
+                else ""
+            )
+            if return_code != 0 or not audio_path.exists():
+                raise RuntimeError(f"FFmpeg 提取音频失败：{stderr[-300:]}")
+        except Exception:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            raise
 
         if api_key:
             try:

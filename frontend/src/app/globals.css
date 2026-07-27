@@ -5876,9 +5876,15 @@ body::before {
 }
 .library-session-button:disabled { opacity: 0.48; cursor: not-allowed; }
 .library-session-dialog {
+  position: fixed;
+  inset: 0;
   width: min(calc(100% - 32px), 460px);
+  height: fit-content;
   max-width: none;
+  max-height: calc(100dvh - 32px);
+  margin: auto;
   padding: 0;
+  overflow: visible;
   border: 0;
   border-radius: 20px;
   color: var(--foreground);
@@ -5890,7 +5896,10 @@ body::before {
 }
 .library-session-dialog-card {
   display: grid;
+  max-height: calc(100dvh - 32px);
   padding: 22px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--card-border);
   border-radius: 20px;
   grid-template-columns: auto minmax(0, 1fr);
@@ -7388,7 +7397,25 @@ body::before {
   }
   .library-login-actions .library-login-state { margin-right: auto; }
   .library-session-button { min-height: 42px; }
-  .library-session-dialog-card { padding: 18px; }
+  .library-session-dialog {
+    inset:
+      auto
+      max(8px, env(safe-area-inset-right, 0px))
+      max(8px, env(safe-area-inset-bottom, 0px))
+      max(8px, env(safe-area-inset-left, 0px));
+    width: auto;
+    max-height: calc(100dvh - max(16px, env(safe-area-inset-top, 0px)));
+    margin: 0;
+    border-radius: 20px;
+  }
+  .library-session-dialog-card {
+    max-height: calc(
+      100dvh
+      - max(16px, env(safe-area-inset-top, 0px))
+      - max(8px, env(safe-area-inset-bottom, 0px))
+    );
+    padding: 18px;
+  }
   .library-session-dialog-actions button { min-height: 44px; flex: 1; }
   .library-qr-card { padding: 15px; border-radius: 17px; }
   .library-qr-heading { gap: 10px; }

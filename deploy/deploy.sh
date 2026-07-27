@@ -20,6 +20,10 @@ err() { echo -e "${R}[$(date +%H:%M:%S)] 错误:${N} $1"; exit 1; }
 
 command -v flock >/dev/null 2>&1 || err "服务器缺少 flock，无法保证部署串行执行"
 command -v rsync >/dev/null 2>&1 || err "服务器缺少 rsync，无法创建隔离构建目录"
+sudo -n -l /bin/systemctl stop videocapsule-frontend >/dev/null 2>&1 ||
+  err "当前部署用户缺少停止前端服务的免密 sudo 权限，请重新运行 deploy/setup.sh"
+sudo -n -l /bin/systemctl start videocapsule-frontend >/dev/null 2>&1 ||
+  err "当前部署用户缺少启动前端服务的免密 sudo 权限，请重新运行 deploy/setup.sh"
 
 # Jenkins 层会排队；此锁同时保护手工执行和其他自动化入口。
 # 锁文件可能由 jenkins 或 ubuntu 首次创建，因此只读打开后再加 flock，

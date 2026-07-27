@@ -95,10 +95,10 @@ nginx -t && systemctl restart nginx && systemctl enable nginx
 log "=== [8/8] 配置 Jenkins 部署权限 ==="
 if id jenkins >/dev/null 2>&1; then
   usermod -aG ubuntu jenkins
-  echo "jenkins ALL=(ALL) NOPASSWD: /bin/systemctl restart videocapsule-backend, /bin/systemctl restart videocapsule-frontend, /bin/systemctl status videocapsule*" > /etc/sudoers.d/jenkins-videocapsule
+  echo "jenkins ALL=(ALL) NOPASSWD: /bin/systemctl restart videocapsule-backend, /bin/systemctl restart videocapsule-frontend, /bin/systemctl stop videocapsule-frontend, /bin/systemctl start videocapsule-frontend, /bin/systemctl status videocapsule*" > /etc/sudoers.d/jenkins-videocapsule
   chmod 440 /etc/sudoers.d/jenkins-videocapsule
   systemctl restart jenkins 2>/dev/null || true
-  log "jenkins 权限已配置(加入 ubuntu 组 + sudo 免密重启服务)"
+  log "jenkins 权限已配置(加入 ubuntu 组 + sudo 免密启停服务)"
 else
   warn "jenkins 用户不存在,装完 Jenkins 后重跑此脚本以配置权限"
 fi

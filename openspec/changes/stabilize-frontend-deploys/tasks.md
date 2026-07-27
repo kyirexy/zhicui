@@ -2,6 +2,7 @@
 
 - [x] 1.1 Configure Jenkins to prevent concurrent deployments of this job
 - [x] 1.2 Add a host-level deployment lock to `deploy/deploy.sh`
+- [x] 1.3 Provision and preflight Jenkins permissions for the short stop/start switch
 
 ## 2. Isolated frontend release
 

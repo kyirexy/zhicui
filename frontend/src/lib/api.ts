@@ -2,6 +2,7 @@ import type {
   ApiResponse,
   CardData,
   DouyinCollectionJob,
+  DouyinBatchExtractionJob,
   DouyinLibraryItem,
   DouyinLocalHandoff,
   DouyinLibrarySort,
@@ -26,6 +27,7 @@ import type {
   PlanOverview,
   PlanPriority,
   PlanStats,
+  ResearchScope,
   VideoInfo,
 } from './types';
 export type { ApiResponse };
@@ -322,10 +324,15 @@ export async function askNote(
   question: string,
   history: NoteChatTurn[] = [],
   signal?: AbortSignal,
+  researchScope: ResearchScope = 'auto',
 ): Promise<ApiResponse<NoteAskResult>> {
   return request<NoteAskResult>(`/api/notes/${noteId}/ask`, {
     method: 'POST',
-    body: JSON.stringify({ question, history: history.slice(-6) }),
+    body: JSON.stringify({
+      question,
+      history: history.slice(-6),
+      research_scope: researchScope,
+    }),
     signal,
   });
 }
@@ -456,6 +463,26 @@ export async function extractDouyinLibraryItem(
   );
 }
 
+export async function startDouyinBatchExtraction(
+  awemeIds: string[],
+): Promise<ApiResponse<DouyinBatchExtractionJob>> {
+  return request<DouyinBatchExtractionJob>(
+    '/api/library/douyin/extractions/batch',
+    {
+      method: 'POST',
+      body: JSON.stringify({ aweme_ids: awemeIds.slice(0, 50) }),
+    },
+  );
+}
+
+export async function getDouyinBatchExtraction(
+  jobId: string,
+): Promise<ApiResponse<DouyinBatchExtractionJob>> {
+  return request<DouyinBatchExtractionJob>(
+    `/api/library/douyin/extractions/batch/${encodeURIComponent(jobId)}`,
+  );
+}
+
 export async function deleteDouyinLibraryExtraction(
   noteId: string,
 ): Promise<ApiResponse<{
@@ -481,6 +508,7 @@ export async function askVideoLibrary(
     researchMode?: LibraryResearchMode;
     outputStyle?: LibraryOutputStyle;
     customInstruction?: string;
+    webScope?: ResearchScope;
   },
 ): Promise<ApiResponse<LibraryAskResult>> {
   return request<LibraryAskResult>('/api/library/ask', {
@@ -492,6 +520,7 @@ export async function askVideoLibrary(
       research_mode: options?.researchMode || 'fast',
       output_style: options?.outputStyle || 'answer',
       custom_instruction: options?.customInstruction?.trim() || '',
+      web_scope: options?.webScope || 'auto',
     }),
     signal,
   });
@@ -642,6 +671,13 @@ export interface AsrConfig {
   model: string;
 }
 
+export interface ExtractionConfig {
+  asr_concurrency: number;
+  llm_concurrency: number;
+  max_batch_items: number;
+  database_stores_media: false;
+}
+
 export async function getAdminStats(): Promise<ApiResponse<AdminStats>> {
   return request<AdminStats>('/api/admin/stats');
 }
@@ -778,6 +814,19 @@ export async function putAsrConfig(
   body: { api_key?: string; api_base_url?: string; model?: string },
 ): Promise<ApiResponse<AsrConfig>> {
   return request<AsrConfig>('/api/admin/asr-config', { method: 'PUT', body: JSON.stringify(body) });
+}
+
+export async function getExtractionConfig(): Promise<ApiResponse<ExtractionConfig>> {
+  return request<ExtractionConfig>('/api/admin/extraction-config');
+}
+
+export async function putExtractionConfig(
+  body: { asr_concurrency: number; llm_concurrency: number },
+): Promise<ApiResponse<ExtractionConfig>> {
+  return request<ExtractionConfig>('/api/admin/extraction-config', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
 }
 
 export interface AdminAuditLog {

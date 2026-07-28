@@ -30,6 +30,7 @@ from app.services import (
     douyin_library,
     error_log_service,
     feedback_service,
+    library_extraction_service,
     library_hidden_service,
     llm_usage_service,
     note_service,
@@ -71,6 +72,7 @@ class NoteChatHistoryItem(BaseModel):
 class NoteAskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=600)
     history: list[NoteChatHistoryItem] = Field(default_factory=list, max_length=6)
+    research_scope: Literal["auto", "video_only"] = "auto"
 
 
 class LibraryCollectRequest(BaseModel):
@@ -138,6 +140,10 @@ class LibraryRemoveRequest(BaseModel):
         return normalized
 
 
+class LibraryBatchExtractRequest(LibraryRemoveRequest):
+    """Start concurrent transcript/card generation for selected work IDs."""
+
+
 class LibraryAskRequest(BaseModel):
     note_ids: list[str] = Field(..., min_length=1, max_length=50)
     question: str = Field(..., min_length=1, max_length=600)
@@ -147,6 +153,7 @@ class LibraryAskRequest(BaseModel):
         "answer", "summary", "comparison", "action_plan", "custom"
     ] = "answer"
     custom_instruction: str = Field(default="", max_length=600)
+    web_scope: Literal["auto", "video_only"] = "auto"
 
 
 class PlanAgentRequest(BaseModel):
@@ -1409,93 +1416,60 @@ def get_douyin_library_item(
 @router.post("/api/library/douyin/extract")
 def extract_douyin_library_item(
     body: LibraryExtractRequest,
-    db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
     """Temporarily stream one video, transcribe it, then persist text only."""
-    existing = note_service.get_note_by_video_id(
-        db,
-        body.aweme_id,
-        user_id=current_user.id,
-    )
-    if existing is not None:
-        result = existing.to_dict()
-        result["already_existed"] = True
-        return _ok(result)
-
-    binding = douyin_binding_service.get_or_create(db, current_user.id)
     try:
-        item = douyin_library.get_item(
-            binding.session_scope,
-            binding.id,
-            body.aweme_id,
+        result = library_extraction_service.extract_library_item(
+            user_id=current_user.id,
+            aweme_id=body.aweme_id,
         )
-    except douyin_library.DouyinLibraryError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    if item is None:
-        raise HTTPException(status_code=404, detail="收藏视频不存在或尚未同步")
-    if not item["can_extract"]:
-        raise HTTPException(status_code=422, detail="该作品没有可提取的视频文件")
-
-    try:
-        asr_config = settings_service.get_asr_config(db)
-        transcript = video_extractor.extract_media_url_transcript(
-            douyin_library.companion_media_url(item["aweme_id"]),
-            asr_config["api_key"],
-            asr_config["api_base_url"],
-            asr_config["model"],
-            request_headers=douyin_library.companion_headers(
-                binding.session_scope,
-            ),
-        )
-        if not transcript.strip():
-            raise RuntimeError("语音识别没有返回文案")
-
-        intent = ai_juicer.classify_intent(transcript)
-        plan_data = (
-            ai_juicer.generate_plan(transcript)
-            if intent["is_plan"]
-            else None
-        )
-        ai_result = ai_juicer.generate_card(
-            transcript=transcript,
-            content_type=intent["card_type"],
-            video_title=item["title"],
-        )
-        if plan_data:
-            ai_result["plan"] = plan_data
-        ai_result["source_meta"] = {
-            "source_kind": "douyin-library",
-            "platform": "douyin",
-            "source_url": item["source_url"],
-            "cover_url": item["cover_url"],
-            "author_name": item["author_name"],
-            "recorded_at": item["recorded_at"],
-            "caption": item["caption"],
-        }
-        video_info = {
-            "video_id": item["aweme_id"],
-            "title": item["title"],
-            "download_url": item["source_url"],
-            "platform": "douyin",
-        }
-        result, _ = _save_generated_note(
-            db,
-            video_info,
-            transcript,
-            ai_result,
-            current_user.id,
-        )
-        result["already_existed"] = False
         return _ok(result)
-    except HTTPException:
-        raise
+    except (ValueError, douyin_library.DouyinLibraryError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(
             status_code=502,
             detail=f"视频文案提取失败：{exc}",
         ) from exc
+
+
+@router.post("/api/library/douyin/extractions/batch")
+def start_douyin_library_batch_extraction(
+    body: LibraryBatchExtractRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Start all selected items as one concurrent metadata-only job."""
+    concurrency = settings_service.get_extraction_concurrency(db)
+    try:
+        job = library_extraction_service.create_batch_job(
+            user_id=current_user.id,
+            aweme_ids=body.aweme_ids,
+            asr_concurrency=concurrency["asr"],
+            llm_concurrency=concurrency["llm"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _ok(job)
+
+
+@router.get("/api/library/douyin/extractions/batch/{job_id}")
+def get_douyin_library_batch_extraction(
+    job_id: str = Path(
+        ...,
+        min_length=8,
+        max_length=64,
+        pattern=r"^extract-[a-f0-9]+$",
+    ),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Poll one current-user concurrent extraction job."""
+    job = library_extraction_service.get_batch_job(job_id, current_user.id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="批量提取任务不存在")
+    return _ok(job)
 
 
 @router.delete("/api/library/douyin/extractions/{note_id}")
@@ -1552,6 +1526,7 @@ def ask_video_library(
             research_mode=body.research_mode,
             output_style=body.output_style,
             custom_instruction=body.custom_instruction,
+            web_scope=body.web_scope,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1566,6 +1541,8 @@ def ask_video_library(
         "evidence": result["evidence"],
         "follow_up_questions": result["follow_up_questions"],
         "source_context": result["source_context"],
+        "web_sources": result.get("web_sources", []),
+        "web_scope": result.get("web_scope", body.web_scope),
     })
 
 
@@ -1638,6 +1615,7 @@ def ask_note(
             ai_summary=note.ai_summary,
             question=body.question,
             history=[item.model_dump() for item in body.history[-6:]],
+            research_scope=body.research_scope,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1653,6 +1631,9 @@ def ask_note(
         "evidence": result["evidence"],
         "follow_up_questions": result["follow_up_questions"],
         "source_context": result.get("source_context"),
+        "web_sources": result.get("web_sources", []),
+        "research_scope": result.get("research_scope", body.research_scope),
+        "agent_trace": result.get("agent_trace", []),
     })
 
 
@@ -2279,6 +2260,11 @@ class AsrConfigRequest(BaseModel):
     model: str | None = None
 
 
+class ExtractionConfigRequest(BaseModel):
+    asr_concurrency: int = Field(..., ge=1, le=50)
+    llm_concurrency: int = Field(..., ge=1, le=50)
+
+
 @router.get("/api/admin/llm-config")
 def admin_get_llm_config(
     db: Session = Depends(get_db),
@@ -2385,6 +2371,49 @@ def admin_put_asr_config(
             ip=_client_ip(request),
         )
     return _ok(settings_service.get_asr_config_masked(db))
+
+
+@router.get("/api/admin/extraction-config")
+def admin_get_extraction_config(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    values = settings_service.get_extraction_concurrency(db)
+    return _ok({
+        "asr_concurrency": values["asr"],
+        "llm_concurrency": values["llm"],
+        "max_batch_items": 50,
+        "database_stores_media": False,
+    })
+
+
+@router.put("/api/admin/extraction-config")
+def admin_put_extraction_config(
+    body: ExtractionConfigRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    values = settings_service.set_extraction_concurrency(
+        db,
+        asr=body.asr_concurrency,
+        llm=body.llm_concurrency,
+    )
+    audit_service.log_action(
+        db,
+        admin_user_id=current_user.id,
+        action="extraction_config_update",
+        target_type="config",
+        target_id="library-extraction",
+        detail=values,
+        ip=_client_ip(request),
+    )
+    return _ok({
+        "asr_concurrency": values["asr"],
+        "llm_concurrency": values["llm"],
+        "max_batch_items": 50,
+        "database_stores_media": False,
+    })
 
 
 # ---------------------------------------------------------------------------

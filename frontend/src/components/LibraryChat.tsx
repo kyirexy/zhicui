@@ -7,6 +7,8 @@ import {
   CheckSquare2,
   ChevronDown,
   FileSearch,
+  ExternalLink,
+  Globe2,
   Layers3,
   LoaderCircle,
   Send,
@@ -21,6 +23,7 @@ import type {
   LibraryOutputStyle,
   LibraryResearchMode,
   NoteChatTurn,
+  ResearchScope,
 } from '@/lib/types';
 
 export interface LibraryChatSource {
@@ -60,6 +63,7 @@ export default function LibraryChat({
   const [researchMode, setResearchMode] = useState<LibraryResearchMode>('fast');
   const [outputStyle, setOutputStyle] = useState<LibraryOutputStyle>('answer');
   const [customInstruction, setCustomInstruction] = useState('');
+  const [webScope, setWebScope] = useState<ResearchScope>('auto');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const abortRef = useRef<AbortController | null>(null);
@@ -110,6 +114,7 @@ export default function LibraryChat({
         researchMode,
         outputStyle,
         customInstruction,
+        webScope,
       },
     );
     if (controller.signal.aborted) return;
@@ -193,7 +198,7 @@ export default function LibraryChat({
                 : outputStyle === 'comparison' ? '差异对比'
                   : outputStyle === 'action_plan' ? '行动方案'
                     : '自定义'
-          }</small>
+          } · {webScope === 'auto' ? '自动查证' : '仅视频'}</small>
           <ChevronDown size={13} />
         </summary>
         <div className="library-agent-controls">
@@ -220,6 +225,17 @@ export default function LibraryChat({
               <option value="comparison">差异对比</option>
               <option value="action_plan">行动方案</option>
               <option value="custom">自定义</option>
+            </select>
+          </label>
+          <label>
+            <span><Globe2 size={12} />外部查证</span>
+            <select
+              value={webScope}
+              disabled={loading}
+              onChange={(event) => setWebScope(event.target.value as ResearchScope)}
+            >
+              <option value="auto">自动 · 缺信息时联网</option>
+              <option value="video_only">仅视频 · 不访问网页</option>
             </select>
           </label>
           {(outputStyle === 'custom' || customInstruction) && (
@@ -320,6 +336,23 @@ export default function LibraryChat({
                   ))}
                 </div>
               )}
+              {message.result?.web_sources && message.result.web_sources.length > 0 && (
+                <div className="library-web-sources">
+                  <strong><Globe2 size={13} />外部查证</strong>
+                  {message.result.web_sources.map((source) => (
+                    <a
+                      key={`${source.id}-${source.url}`}
+                      href={source.url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <span>{source.title}</span>
+                      <small>{source.domain}</small>
+                      <ExternalLink size={13} />
+                    </a>
+                  ))}
+                </div>
+              )}
               {message.result?.follow_up_questions && (
                 <div className="library-follow-ups">
                   {message.result.follow_up_questions.map((followUp) => (
@@ -340,8 +373,8 @@ export default function LibraryChat({
           <div className="library-chat-thinking">
             <LoaderCircle size={15} className="animate-spin" />
             {researchMode === 'deep'
-              ? '研究 Agent 正在规划、分批阅读并综合…'
-              : '研究 Agent 正在规划并扫描全部所选文案…'}
+              ? `研究 Agent 正在规划、分批阅读${webScope === 'auto' ? '并按需联网查证' : ''}…`
+              : `研究 Agent 正在扫描全部所选文案${webScope === 'auto' ? '，必要时联网查证' : ''}…`}
           </div>
         )}
       </div>
@@ -384,7 +417,9 @@ export default function LibraryChat({
         </button>
       </form>
       <p className="library-chat-note">
-        回答仅依据当前范围内的视频文案与 AI 结构化摘要
+        {webScope === 'auto'
+          ? '优先使用视频文案，缺失的链接或当前信息会单独联网查证'
+          : '回答仅依据当前范围内的视频文案与 AI 结构化摘要'}
       </p>
     </section>
   );

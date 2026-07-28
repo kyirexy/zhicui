@@ -14,7 +14,14 @@ import {
 } from 'lucide-react';
 import type { DouyinLibraryItem } from '@/lib/types';
 
-export type LibraryExtractState = 'idle' | 'queued' | 'extracting' | 'done' | 'error';
+export type LibraryExtractState =
+  | 'idle'
+  | 'queued'
+  | 'extracting'
+  | 'transcribing'
+  | 'analyzing'
+  | 'done'
+  | 'error';
 
 interface LibraryVideoCardProps {
   item: DouyinLibraryItem;
@@ -44,7 +51,7 @@ export default function LibraryVideoCard({
   onDelete,
   onRemove,
 }: LibraryVideoCardProps) {
-  const isWorking = extractState === 'queued' || extractState === 'extracting';
+  const isWorking = ['queued', 'extracting', 'transcribing', 'analyzing'].includes(extractState);
   const isExtracted = item.extracted || extractState === 'done';
 
   return (
@@ -121,7 +128,11 @@ export default function LibraryVideoCard({
               )}
               {extractState === 'queued'
                 ? '等待处理'
-                : extractState === 'extracting'
+                : extractState === 'transcribing'
+                  ? '正在提取文案'
+                  : extractState === 'analyzing'
+                    ? '正在生成知识卡'
+                    : extractState === 'extracting'
                   ? '正在生成文案'
                   : !item.can_extract
                     ? '没有可提取视频'

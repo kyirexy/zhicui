@@ -39,6 +39,7 @@ export const ADMIN_ACTION_LABELS: Record<string, string> = {
   note_reextract: '重新抽取',
   llm_config_update: '更新 LLM 配置',
   asr_config_update: '更新 ASR 配置',
+  extraction_config_update: '更新批量提取并发',
   plan_delete: '删除计划',
   llm_config_test: '测试 LLM 连接',
   asr_config_test: '测试 ASR 连接',

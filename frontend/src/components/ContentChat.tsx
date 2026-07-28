@@ -3,11 +3,13 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import {
   ArrowClockwise,
+  ArrowSquareOut,
   BookOpenText,
   Brain,
   ChatCircleDots,
   CheckCircle,
   FileText,
+  GlobeHemisphereWest,
   LightbulbFilament,
   ListChecks,
   MagnifyingGlass,
@@ -25,6 +27,9 @@ import type {
   NoteChatTurn,
   NoteEvidence,
   NoteSourceContext,
+  ResearchAgentStage,
+  ResearchScope,
+  WebResearchSource,
 } from '@/lib/types';
 
 interface ContentChatProps {
@@ -40,6 +45,9 @@ interface ChatMessage extends NoteChatTurn {
   grounded?: boolean;
   followUps?: string[];
   sourceContext?: NoteSourceContext;
+  webSources?: WebResearchSource[];
+  agentTrace?: ResearchAgentStage[];
+  researchScope?: ResearchScope;
 }
 
 interface ActiveRequest {
@@ -51,8 +59,8 @@ const MAX_STORED_MESSAGES = 18;
 
 const COMMON_QUESTIONS = [
   '基于完整文稿，用三句话概括最重要的信息',
+  '查一下视频提到的项目或工具链接',
   '哪些观点需要我进一步验证？',
-  '把这段内容整理成行动清单',
 ];
 
 const TYPE_QUESTIONS: Partial<Record<CardType, string[]>> = {
@@ -81,6 +89,13 @@ function parseSourceContext(value: unknown): NoteSourceContext | undefined {
     scanned_chunks: Number(context.scanned_chunks),
     selected_chunks: Number(context.selected_chunks),
     ai_summary_used: context.ai_summary_used,
+    research_scope: context.research_scope === 'video_only' ? 'video_only' : 'auto',
+    web_search_used: Boolean(context.web_search_used),
+    web_query_count: Number(context.web_query_count || 0),
+    web_source_count: Number(context.web_source_count || 0),
+    agent_trace: Array.isArray(context.agent_trace)
+      ? context.agent_trace as ResearchAgentStage[]
+      : [],
   };
 }
 
@@ -120,6 +135,13 @@ function parseStoredMessages(value: string): ChatMessage[] {
         ? item.followUps.filter((question): question is string => typeof question === 'string')
         : undefined,
       sourceContext: parseSourceContext(item.sourceContext),
+      webSources: Array.isArray(item.webSources)
+        ? item.webSources as WebResearchSource[]
+        : [],
+      agentTrace: Array.isArray(item.agentTrace)
+        ? item.agentTrace as ResearchAgentStage[]
+        : [],
+      researchScope: item.researchScope === 'video_only' ? 'video_only' : 'auto',
     }));
 }
 
@@ -129,6 +151,7 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const [lastQuestion, setLastQuestion] = useState('');
+  const [researchScope, setResearchScope] = useState<ResearchScope>('auto');
   const [restoredKey, setRestoredKey] = useState<string | null>(null);
   const nextId = useRef(1);
   const requestSequence = useRef(0);
@@ -227,7 +250,13 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
     activeRequest.current = { id: requestId, controller };
 
     try {
-      const response = await askNote(noteId, question, history, controller.signal);
+      const response = await askNote(
+        noteId,
+        question,
+        history,
+        controller.signal,
+        researchScope,
+      );
       if (requestSequence.current !== requestId) return;
 
       const answer = response.data;
@@ -243,6 +272,9 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
             grounded: answer.grounded,
             followUps: answer.follow_up_questions ?? [],
             sourceContext: parseSourceContext(answer.source_context),
+            webSources: answer.web_sources ?? [],
+            agentTrace: answer.agent_trace ?? [],
+            researchScope: answer.research_scope ?? researchScope,
           },
         ]);
         setLastQuestion('');
@@ -320,6 +352,30 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
             AI 卡片理解
           </span>
         </div>
+        <div className="content-chat__research-scope" role="group" aria-label="回答范围">
+          <button
+            type="button"
+            className={researchScope === 'auto' ? 'is-active' : ''}
+            aria-pressed={researchScope === 'auto'}
+            disabled={sending}
+            onClick={() => setResearchScope('auto')}
+          >
+            <GlobeHemisphereWest size={15} weight="duotone" aria-hidden />
+            自动查证
+            <small>缺信息时联网</small>
+          </button>
+          <button
+            type="button"
+            className={researchScope === 'video_only' ? 'is-active' : ''}
+            aria-pressed={researchScope === 'video_only'}
+            disabled={sending}
+            onClick={() => setResearchScope('video_only')}
+          >
+            <FileText size={15} weight="duotone" aria-hidden />
+            仅视频
+            <small>不访问外部网页</small>
+          </button>
+        </div>
       </div>
 
       <div className="content-chat__scroll-region">
@@ -359,6 +415,8 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
                     <div className={`content-chat__answer-state ${
                       message.answerMode === 'creative'
                         ? 'is-creative'
+                        : message.webSources?.length
+                          ? 'is-researched'
                         : message.grounded
                           ? 'is-grounded'
                           : 'is-limited'
@@ -371,10 +429,22 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
                       <span>
                         {message.answerMode === 'creative'
                           ? 'AI 生成示例 · 非原文内容'
+                          : message.webSources?.length
+                            ? `已联网查证 ${message.webSources.length} 个来源`
                           : message.grounded
                             ? '回答依据已核对'
                             : '当前来源的依据不足'}
                       </span>
+                    </div>
+                  )}
+                  {message.role === 'assistant' && message.agentTrace && message.agentTrace.length > 0 && (
+                    <div className="content-chat__agent-trace" aria-label="Agent 执行过程">
+                      {message.agentTrace.map((stage) => (
+                        <span key={`${stage.stage}-${stage.label}`} title={stage.detail}>
+                          <i aria-hidden />
+                          {stage.label}
+                        </span>
+                      ))}
                     </div>
                   )}
                   {message.role === 'assistant' && message.sourceContext && (
@@ -412,13 +482,44 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
                       </div>
                     </details>
                   )}
+                  {message.role === 'assistant' && message.webSources && message.webSources.length > 0 && (
+                    <section className="content-chat__web-sources" aria-label="外部查证来源">
+                      <header>
+                        <GlobeHemisphereWest size={16} weight="duotone" aria-hidden />
+                        <strong>外部查证</strong>
+                        <span>与视频原文分开</span>
+                      </header>
+                      <div>
+                        {message.webSources.map((source) => (
+                          <a
+                            key={`${source.id}-${source.url}`}
+                            href={source.url}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            <span>
+                              <strong>{source.title}</strong>
+                              <small>{source.domain}{source.verified ? ' · 已读取页面' : ' · 搜索摘要'}</small>
+                            </span>
+                            <ArrowSquareOut size={15} weight="bold" aria-hidden />
+                          </a>
+                        ))}
+                      </div>
+                    </section>
+                  )}
                 </div>
               </article>
             ))}
             {sending && (
               <div className="content-chat__thinking" role="status">
-                <span className="content-chat__thinking-icon" aria-hidden><Sparkle size={16} weight="fill" /></span>
-                正在扫描完整文稿，并结合 AI 卡片理解
+                <span className="content-chat__thinking-icon" aria-hidden>
+                  {researchScope === 'auto'
+                    ? <GlobeHemisphereWest size={16} weight="fill" />
+                    : <Sparkle size={16} weight="fill" />}
+                </span>
+                {researchScope === 'auto'
+                  ? '正在阅读文稿，必要时联网查证'
+                  : '正在扫描完整文稿与 AI 卡片理解'}
                 <span className="content-chat__dots" aria-hidden><i /><i /><i /></span>
               </div>
             )}
@@ -469,7 +570,9 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
             <PaperPlaneTilt size={19} weight="fill" aria-hidden />
           </button>
         </form>
-        <p className="content-chat__hint">Enter 发送 · 回答会标明全文覆盖方式和可核对依据</p>
+        <p className="content-chat__hint">
+          Enter 发送 · {researchScope === 'auto' ? '缺失的链接和当前信息会自动查证' : '只使用视频文稿与卡片理解'}
+        </p>
       </div>
     </section>
   );

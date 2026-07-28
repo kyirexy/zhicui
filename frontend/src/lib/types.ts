@@ -126,6 +126,7 @@ export interface NoteChatTurn {
 }
 
 export type NoteEvidenceSource = 'transcript' | 'summary';
+export type ResearchScope = 'auto' | 'video_only';
 
 export interface NoteEvidence {
   quote: string;
@@ -142,6 +143,26 @@ export interface NoteSourceContext {
   scanned_chunks: number;
   selected_chunks: number;
   ai_summary_used: boolean;
+  research_scope?: ResearchScope;
+  web_search_used?: boolean;
+  web_query_count?: number;
+  web_source_count?: number;
+  agent_trace?: ResearchAgentStage[];
+}
+
+export interface WebResearchSource {
+  id: string;
+  title: string;
+  url: string;
+  domain: string;
+  snippet: string;
+  verified: boolean;
+}
+
+export interface ResearchAgentStage {
+  stage: 'plan' | 'retrieve' | 'web' | 'map' | 'synthesize';
+  label: string;
+  detail: string;
 }
 
 export interface NoteAskResult {
@@ -152,6 +173,9 @@ export interface NoteAskResult {
   evidence: NoteEvidence[];
   follow_up_questions: string[];
   source_context?: NoteSourceContext | null;
+  web_sources: WebResearchSource[];
+  research_scope: ResearchScope;
+  agent_trace: ResearchAgentStage[];
 }
 
 export interface DouyinLibraryStatus {
@@ -228,6 +252,40 @@ export interface DouyinLibraryItem {
   card_type?: CardType | null;
 }
 
+export type DouyinBatchExtractionState =
+  | 'queued'
+  | 'transcribing'
+  | 'analyzing'
+  | 'done'
+  | 'error';
+
+export interface DouyinBatchExtractionItem {
+  aweme_id: string;
+  state: DouyinBatchExtractionState;
+  error: string;
+  note_id?: string | null;
+  transcript_chars: number;
+  card_type?: CardType | null;
+  already_existed: boolean;
+  updated_at: string;
+}
+
+export interface DouyinBatchExtractionJob {
+  job_id: string;
+  status: 'running' | 'success' | 'partial' | 'failed';
+  created_at: string;
+  started_at: string;
+  finished_at?: string | null;
+  concurrency: { asr: number; llm: number };
+  total: number;
+  success: number;
+  failed: number;
+  active: number;
+  queued: number;
+  items: DouyinBatchExtractionItem[];
+  database_stores_media: false;
+}
+
 export interface DouyinVideoWorkspace {
   item: DouyinLibraryItem;
   note: NoteDetail | null;
@@ -271,7 +329,7 @@ export type LibraryResearchMode = 'fast' | 'deep';
 export type LibraryOutputStyle = 'answer' | 'summary' | 'comparison' | 'action_plan' | 'custom';
 
 export interface LibraryAgentStage {
-  stage: 'plan' | 'retrieve' | 'map' | 'synthesize';
+  stage: 'plan' | 'retrieve' | 'web' | 'map' | 'synthesize';
   label: string;
   detail: string;
 }
@@ -283,6 +341,8 @@ export interface LibraryAskResult {
   evidence: LibraryEvidence[];
   follow_up_questions: string[];
   source_context: LibrarySourceContext;
+  web_sources: WebResearchSource[];
+  web_scope: ResearchScope;
 }
 
 export interface PaginatedResponse<T> {

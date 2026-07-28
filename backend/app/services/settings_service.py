@@ -26,11 +26,15 @@ LLM_PROVIDER_KEY = "llm_provider"
 ASR_API_KEY_KEY = "asr_api_key"
 ASR_API_BASE_URL_KEY = "asr_api_base_url"
 ASR_MODEL_KEY = "asr_model"
+EXTRACTION_ASR_CONCURRENCY_KEY = "extraction_asr_concurrency"
+EXTRACTION_LLM_CONCURRENCY_KEY = "extraction_llm_concurrency"
 
 DEEPSEEK_PROVIDER = "deepseek"
 CUSTOM_PROVIDER = "custom"
 DEEPSEEK_API_BASE = "https://api.deepseek.com"
 DEEPSEEK_MODELS = ("deepseek-v4-flash", "deepseek-v4-pro")
+DEFAULT_EXTRACTION_ASR_CONCURRENCY = 8
+DEFAULT_EXTRACTION_LLM_CONCURRENCY = 12
 
 
 def _fernet():
@@ -159,6 +163,52 @@ def get_asr_config(db: Session) -> dict[str, str]:
     api_base_url = get_setting(db, ASR_API_BASE_URL_KEY) or settings.ASR_API_BASE_URL
     model = get_setting(db, ASR_MODEL_KEY) or settings.ASR_MODEL
     return {"api_key": api_key, "api_base_url": api_base_url, "model": model}
+
+
+def _bounded_int_setting(
+    db: Session,
+    key: str,
+    default: int,
+    *,
+    minimum: int = 1,
+    maximum: int = 50,
+) -> int:
+    raw = get_setting(db, key, str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(value, maximum))
+
+
+def get_extraction_concurrency(db: Session) -> dict[str, int]:
+    """Return stage limits for newly created concurrent extraction jobs."""
+    return {
+        "asr": _bounded_int_setting(
+            db,
+            EXTRACTION_ASR_CONCURRENCY_KEY,
+            DEFAULT_EXTRACTION_ASR_CONCURRENCY,
+        ),
+        "llm": _bounded_int_setting(
+            db,
+            EXTRACTION_LLM_CONCURRENCY_KEY,
+            DEFAULT_EXTRACTION_LLM_CONCURRENCY,
+        ),
+    }
+
+
+def set_extraction_concurrency(
+    db: Session,
+    *,
+    asr: int,
+    llm: int,
+) -> dict[str, int]:
+    """Persist validated ASR and LLM stage concurrency limits."""
+    safe_asr = max(1, min(int(asr), 50))
+    safe_llm = max(1, min(int(llm), 50))
+    set_setting(db, EXTRACTION_ASR_CONCURRENCY_KEY, str(safe_asr))
+    set_setting(db, EXTRACTION_LLM_CONCURRENCY_KEY, str(safe_llm))
+    return {"asr": safe_asr, "llm": safe_llm}
 
 
 def mask_key(value: str) -> str:

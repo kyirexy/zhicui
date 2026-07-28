@@ -17,7 +17,9 @@ import {
   deleteAdminPlan,
   getLlmConfig,
   getAsrConfig,
+  getExtractionConfig,
   putAsrConfig,
+  putExtractionConfig,
   listAdminAuditLogs,
   testAsrConfig,
   getSystemInfo,
@@ -31,6 +33,7 @@ import {
   type AdminPlanItem,
   type LlmConfig,
   type AsrConfig,
+  type ExtractionConfig,
   type AdminAuditLog,
   type ConfigTestResult,
   type SystemInfo,
@@ -105,6 +108,7 @@ export default function AdminPage() {
   // 配置
   const [llm, setLlm] = useState<LlmConfig | null>(null);
   const [asr, setAsr] = useState<AsrConfig | null>(null);
+  const [extractionConfig, setExtractionConfig] = useState<ExtractionConfig | null>(null);
 
   // 系统
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
@@ -135,7 +139,7 @@ export default function AdminPage() {
     if (tab === 'notes') refreshNotes(1);
     if (tab === 'plans' && plans.length === 0) refreshPlans('');
     if (tab === 'llm' && !llm) refreshLlm();
-    if (tab === 'asr' && !asr) refreshAsr();
+    if (tab === 'asr' && (!asr || !extractionConfig)) refreshAsr();
     if (tab === 'settings' && !systemInfo) refreshSystemInfo();
     if (tab === 'ops') refreshOps();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -162,7 +166,16 @@ export default function AdminPage() {
     if (r.success && r.data) { setPlans(r.data.items); setPlansTotal(r.data.total); }
   }
   async function refreshLlm() { const r = await getLlmConfig(); if (r.success && r.data) setLlm(r.data); }
-  async function refreshAsr() { const r = await getAsrConfig(); if (r.success && r.data) setAsr(r.data); }
+  async function refreshAsr() {
+    const [asrResult, extractionResult] = await Promise.all([
+      getAsrConfig(),
+      getExtractionConfig(),
+    ]);
+    if (asrResult.success && asrResult.data) setAsr(asrResult.data);
+    if (extractionResult.success && extractionResult.data) {
+      setExtractionConfig(extractionResult.data);
+    }
+  }
   async function refreshSystemInfo() { const r = await getSystemInfo(); if (r.success && r.data) setSystemInfo(r.data); }
   async function refreshOps() { const r = await getAdminOps(); if (r.success && r.data) setOps(r.data); }
 
@@ -661,25 +674,46 @@ export default function AdminPage() {
 
           {/* ASR 配置 */}
           {tab === 'asr' && (
-            <ConfigForm
-              title="ASR 配置"
-              desc={`语音转文字服务（SiliconFlow）。API Key 加密存储。当前 Key: ${asr?.api_key_masked || '未设置'}。留空表示不改。`}
-              fields={[
-                { key: 'api_key', label: 'API Key', value: '', placeholder: '留空不改', secret: true },
-                { key: 'api_base_url', label: 'API Base URL', value: asr?.api_base_url ?? '', placeholder: 'https://api.siliconflow.cn/v1/audio/transcriptions' },
-                { key: 'model', label: '模型', value: asr?.model ?? '', placeholder: 'FunAudioLLM/SenseVoiceSmall' },
-              ]}
-              onSave={async (vals) => {
-                const body: Record<string, string> = {};
-                if (vals.api_key) body.api_key = vals.api_key;
-                if (vals.api_base_url) body.api_base_url = vals.api_base_url;
-                if (vals.model) body.model = vals.model;
-                const r = await putAsrConfig(body);
-                if (r.success && r.data) { setAsr(r.data); flash('ASR 配置已保存'); }
-                else setErr(r.error || '保存失败');
-              }}
-              onTest={async () => testAsrConfig()}
-            />
+            <div className="space-y-4">
+              <ConfigForm
+                title="ASR 配置"
+                desc={`语音转文字服务（SiliconFlow）。API Key 加密存储。当前 Key: ${asr?.api_key_masked || '未设置'}。留空表示不改。`}
+                fields={[
+                  { key: 'api_key', label: 'API Key', value: '', placeholder: '留空不改', secret: true },
+                  { key: 'api_base_url', label: 'API Base URL', value: asr?.api_base_url ?? '', placeholder: 'https://api.siliconflow.cn/v1/audio/transcriptions' },
+                  { key: 'model', label: '模型', value: asr?.model ?? '', placeholder: 'FunAudioLLM/SenseVoiceSmall' },
+                ]}
+                onSave={async (vals) => {
+                  const body: Record<string, string> = {};
+                  if (vals.api_key) body.api_key = vals.api_key;
+                  if (vals.api_base_url) body.api_base_url = vals.api_base_url;
+                  if (vals.model) body.model = vals.model;
+                  const r = await putAsrConfig(body);
+                  if (r.success && r.data) { setAsr(r.data); flash('ASR 配置已保存'); }
+                  else setErr(r.error || '保存失败');
+                }}
+                onTest={async () => testAsrConfig()}
+              />
+              {extractionConfig && (
+                <ExtractionConcurrencyPanel
+                  key={`${extractionConfig.asr_concurrency}-${extractionConfig.llm_concurrency}`}
+                  config={extractionConfig}
+                  onSave={async (asrConcurrency, llmConcurrency) => {
+                    const result = await putExtractionConfig({
+                      asr_concurrency: asrConcurrency,
+                      llm_concurrency: llmConcurrency,
+                    });
+                    if (result.success && result.data) {
+                      setExtractionConfig(result.data);
+                      flash('批量并发设置已保存');
+                      return true;
+                    }
+                    setErr(result.error || '并发设置保存失败');
+                    return false;
+                  }}
+                />
+              )}
+            </div>
           )}
 
           {/* 用量与日志 */}
@@ -1036,6 +1070,64 @@ interface ConfigField {
   value: string;
   placeholder?: string;
   secret?: boolean;
+}
+
+function ExtractionConcurrencyPanel({
+  config,
+  onSave,
+}: {
+  config: ExtractionConfig;
+  onSave: (asrConcurrency: number, llmConcurrency: number) => Promise<boolean>;
+}) {
+  const [asrConcurrency, setAsrConcurrency] = useState(config.asr_concurrency);
+  const [llmConcurrency, setLlmConcurrency] = useState(config.llm_concurrency);
+  const [saving, setSaving] = useState(false);
+  const clamp = (value: number) => Math.max(1, Math.min(50, Math.round(value || 1)));
+
+  return (
+    <section className="admin-panel p-5">
+      <h2 className="text-base font-semibold text-foreground">批量文案并发</h2>
+      <p className="mt-1 text-xs leading-6 text-foreground-muted">
+        最多一次提交 {config.max_batch_items} 条。所有视频会立即进入任务，ASR 与 AI 分阶段限流，数据库不保存视频文件。
+      </p>
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <label>
+          <span className="mb-1 block text-xs text-foreground-muted">同时转写视频</span>
+          <input
+            type="number"
+            min={1}
+            max={50}
+            value={asrConcurrency}
+            onChange={(event) => setAsrConcurrency(clamp(Number(event.target.value)))}
+            className="w-full rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 py-2 text-sm text-foreground focus:border-accent-emerald/50 focus:outline-none"
+          />
+        </label>
+        <label>
+          <span className="mb-1 block text-xs text-foreground-muted">同时生成知识卡</span>
+          <input
+            type="number"
+            min={1}
+            max={50}
+            value={llmConcurrency}
+            onChange={(event) => setLlmConcurrency(clamp(Number(event.target.value)))}
+            className="w-full rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 py-2 text-sm text-foreground focus:border-accent-emerald/50 focus:outline-none"
+          />
+        </label>
+      </div>
+      <button
+        type="button"
+        disabled={saving}
+        onClick={async () => {
+          setSaving(true);
+          await onSave(clamp(asrConcurrency), clamp(llmConcurrency));
+          setSaving(false);
+        }}
+        className="mt-4 rounded-lg bg-accent-emerald px-4 py-2 text-sm font-semibold text-white hover:bg-accent-emerald/90 disabled:opacity-50"
+      >
+        {saving ? '保存中…' : '保存并发设置'}
+      </button>
+    </section>
+  );
 }
 
 function ConfigForm({

@@ -38,13 +38,14 @@ import {
   createDouyinLocalHandoff,
   deleteDouyinLibraryExtraction,
   disconnectDouyinLibrary,
-  extractDouyinLibraryItem,
+  getDouyinBatchExtraction,
   getDouyinCollectionJob,
   getDouyinLibraryStatus,
   getDouyinLoginQr,
   getDouyinLoginStatus,
   listDouyinLibraryItems,
   removeDouyinLibraryItems,
+  startDouyinBatchExtraction,
   startDouyinLogin,
   API_BASE,
 } from '@/lib/api';
@@ -53,6 +54,7 @@ import {
 } from '@/lib/douyinNative';
 import type {
   DouyinCollectionJob,
+  DouyinBatchExtractionJob,
   DouyinLibraryItem,
   DouyinLibrarySort,
   DouyinLibraryStatus,
@@ -337,39 +339,55 @@ export default function VideoLibraryPage() {
     });
   };
 
-  const runExtraction = async (item: DouyinLibraryItem): Promise<boolean> => {
-    setExtractProgress((current) => ({
-      ...current,
-      [item.aweme_id]: { state: 'extracting' },
-    }));
-    const response = await extractDouyinLibraryItem(item.aweme_id);
-    if (!response.success || !response.data) {
-      setExtractProgress((current) => ({
-        ...current,
-        [item.aweme_id]: {
-          state: 'error',
-          error: response.error || '提取失败',
-        },
+  const applyExtractionJob = (job: DouyinBatchExtractionJob) => {
+    setExtractProgress((current) => {
+      const next = { ...current };
+      job.items.forEach((item) => {
+        next[item.aweme_id] = {
+          state: item.state,
+          error: item.error || undefined,
+        };
+      });
+      return next;
+    });
+    const completed = new Map(
+      job.items
+        .filter((item) => item.state === 'done')
+        .map((item) => [item.aweme_id, item]),
+    );
+    if (completed.size > 0) {
+      setItems((current) => current.map((item) => {
+        const result = completed.get(item.aweme_id);
+        return result
+          ? {
+              ...item,
+              extracted: true,
+              extracted_note_id: result.note_id || null,
+              transcript_chars: result.transcript_chars,
+              card_type: result.card_type || item.card_type,
+            }
+          : item;
       }));
-      return false;
     }
+  };
 
-    setItems((current) => current.map((currentItem) => (
-      currentItem.aweme_id === item.aweme_id
-        ? {
-            ...currentItem,
-            extracted: true,
-            extracted_note_id: response.data!.id || null,
-            transcript_chars: response.data!.transcript_chars || 0,
-            card_type: response.data!.card_type,
-          }
-        : currentItem
-    )));
-    setExtractProgress((current) => ({
-      ...current,
-      [item.aweme_id]: { state: 'done' },
-    }));
-    return true;
+  const waitForExtractionJob = async (
+    initial: DouyinBatchExtractionJob,
+  ): Promise<DouyinBatchExtractionJob> => {
+    let current = initial;
+    applyExtractionJob(current);
+    for (let attempt = 0; attempt < 2400 && activeRef.current; attempt += 1) {
+      if (current.status !== 'running') return current;
+      setNotice(
+        `并发处理 ${current.total} 条：转写或分析 ${current.active} 条，等待 ${current.queued} 条，已完成 ${current.success} 条`,
+      );
+      await wait(1200);
+      const response = await getDouyinBatchExtraction(current.job_id);
+      if (!response.success || !response.data) continue;
+      current = response.data;
+      applyExtractionJob(current);
+    }
+    return current;
   };
 
   const extractItems = async (targets: DouyinLibraryItem[]): Promise<number> => {
@@ -385,16 +403,32 @@ export default function VideoLibraryPage() {
       return next;
     });
 
-    let succeeded = 0;
-    for (let index = 0; index < pending.length; index += 1) {
-      if (!activeRef.current) break;
-      setNotice(
-        `自动流水线：正在提取第 ${index + 1}/${pending.length} 条完整文案并生成 AI 卡片`,
-      );
-      if (await runExtraction(pending[index])) succeeded += 1;
+    setNotice(`正在同时启动 ${pending.length} 条视频的文案提取`);
+    const response = await startDouyinBatchExtraction(
+      pending.map((item) => item.aweme_id),
+    );
+    if (!response.success || !response.data) {
+      setExtractProgress((current) => {
+        const next = { ...current };
+        pending.forEach((item) => {
+          next[item.aweme_id] = {
+            state: 'error',
+            error: response.error || '批量任务启动失败',
+          };
+        });
+        return next;
+      });
+      setBatchExtracting(false);
+      setNotice(response.error || '批量文案任务启动失败');
+      return 0;
     }
+
+    const finalJob = await waitForExtractionJob(response.data);
     setBatchExtracting(false);
-    return succeeded;
+    if (finalJob.status === 'running') {
+      setNotice('批量任务仍在后台运行，刷新页面后可查看已完成的文案');
+    }
+    return finalJob.success;
   };
 
   const extractSelected = async () => {

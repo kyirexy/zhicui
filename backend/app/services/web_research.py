@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, unquote, urljoin, urlparse
 import requests
 
 _SEARCH_URL = "https://html.duckduckgo.com/html/"
+_BING_SEARCH_URL = "https://www.bing.com/search"
 _GITHUB_SEARCH_URL = "https://api.github.com/search/repositories"
 _USER_AGENT = (
     "Mozilla/5.0 (compatible; ZhicuiResearch/1.0; +https://luxai.cn)"
@@ -124,6 +125,66 @@ class _DuckResultParser(HTMLParser):
         if not self.results or not data.strip():
             return
         if self._active_anchor:
+            self.results[-1]["title"].append(data)
+        elif self._active_snippet:
+            self.results[-1]["snippet"].append(data)
+
+
+class _BingResultParser(HTMLParser):
+    """Extract organic results from Bing's stable ``b_algo`` markup."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.results: list[dict[str, Any]] = []
+        self._inside_result = False
+        self._inside_heading = False
+        self._active_title = False
+        self._active_snippet = False
+
+    @staticmethod
+    def _classes(attrs: list[tuple[str, str | None]]) -> set[str]:
+        value = next((value for key, value in attrs if key == "class"), "") or ""
+        return set(value.split())
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        classes = self._classes(attrs)
+        if tag == "li" and "b_algo" in classes:
+            self.results.append({"url": "", "title": [], "snippet": []})
+            self._inside_result = True
+            return
+        if not self._inside_result or not self.results:
+            return
+        if tag == "h2":
+            self._inside_heading = True
+        elif tag == "a" and self._inside_heading:
+            href = next((value for key, value in attrs if key == "href"), "") or ""
+            self.results[-1]["url"] = href
+            self._active_title = True
+        elif tag == "p":
+            self._active_snippet = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "li" and self._inside_result:
+            self._inside_result = False
+            self._inside_heading = False
+            self._active_title = False
+            self._active_snippet = False
+        elif tag == "h2":
+            self._inside_heading = False
+            self._active_title = False
+        elif tag == "a":
+            self._active_title = False
+        elif tag == "p":
+            self._active_snippet = False
+
+    def handle_data(self, data: str) -> None:
+        if not self._inside_result or not self.results or not data.strip():
+            return
+        if self._active_title:
             self.results[-1]["title"].append(data)
         elif self._active_snippet:
             self.results[-1]["snippet"].append(data)
@@ -282,7 +343,25 @@ def _page_excerpt(url: str) -> tuple[str, str]:
 def _search_github(query: str, remaining: int) -> list[WebSource]:
     if remaining <= 0 or "github" not in query.lower():
         return []
-    github_query = re.sub(r"\bgithub\b", " ", query, flags=re.IGNORECASE).strip()
+    github_query = re.sub(r"\bgithub\b", " ", query, flags=re.IGNORECASE)
+    github_query = re.sub(
+        r"\b\d[\d,.]*\s*(?:k|w|万)?\s*stars?\b",
+        " ",
+        github_query,
+        flags=re.IGNORECASE,
+    )
+    github_query = re.sub(
+        r"[零一二三四五六七八九十百千万\d,.]+(?:多|余)?(?:颗)?星",
+        " ",
+        github_query,
+    )
+    github_query = re.sub(
+        r"(?:仓库|项目|链接|地址|网址|官网|主页|repo(?:sitory)?)",
+        " ",
+        github_query,
+        flags=re.IGNORECASE,
+    )
+    github_query = re.sub(r"\s+", " ", github_query).strip()
     if not github_query:
         return []
     try:
@@ -318,6 +397,38 @@ def _search_github(query: str, remaining: int) -> list[WebSource]:
             query=query,
             verified=True,
         ))
+    return sources
+
+
+def _search_bing(query: str, remaining: int) -> list[WebSource]:
+    if remaining <= 0:
+        return []
+    try:
+        body, _ = _bounded_public_get(
+            _BING_SEARCH_URL,
+            params={"q": query, "setlang": "zh-hans"},
+        )
+    except WebResearchError:
+        return []
+    parser = _BingResultParser()
+    parser.feed(body)
+    sources: list[WebSource] = []
+    for result in parser.results:
+        url = str(result["url"] or "").strip()
+        if not is_public_http_url(url):
+            continue
+        title = _clean_title(" ".join(result["title"]))
+        snippet = _clean_text(" ".join(result["snippet"]), 320)
+        sources.append(WebSource(
+            title=title or urlparse(url).hostname or "网页来源",
+            url=url,
+            domain=(urlparse(url).hostname or "").removeprefix("www."),
+            snippet=snippet,
+            query=query,
+            verified=False,
+        ))
+        if len(sources) >= remaining:
+            break
     return sources
 
 
@@ -367,10 +478,12 @@ def research_web(
     seen_urls: set[str] = set()
 
     for query in clean_queries:
-        candidates = [
-            *_search_github(query, bounded_results - len(collected)),
-            *_search_duckduckgo(query, bounded_results - len(collected)),
-        ]
+        candidates: list[WebSource] = []
+        for searcher in (_search_github, _search_bing, _search_duckduckgo):
+            remaining = bounded_results - len(collected) - len(candidates)
+            if remaining <= 0:
+                break
+            candidates.extend(searcher(query, remaining))
         for source in candidates:
             canonical = source.url.rstrip("/")
             if canonical in seen_urls:

@@ -45,6 +45,9 @@ sudo -u ubuntu git -C "${RELEASE_DIR}" apply --unidiff-zero "${DEPLOY_ROOT}/zhic
 if [[ ! -x "${APP_ROOT}/.venv/bin/python" ]]; then
   sudo -u ubuntu python3 -m venv "${APP_ROOT}/.venv"
 fi
+install -d -o ubuntu -g ubuntu -m 0700 \
+  "${APP_ROOT}/.config" \
+  "${APP_ROOT}/.cache"
 
 sudo -u ubuntu "${APP_ROOT}/.venv/bin/python" -m pip install --upgrade pip
 sudo -u ubuntu "${APP_ROOT}/.venv/bin/python" -m pip install \

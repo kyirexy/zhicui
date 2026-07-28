@@ -283,7 +283,7 @@ index 3b0900b..309d46c 100644
 +# Detect and crop QR codes rendered inside Douyin's closed login component.
 +opencv-python-headless>=4.10,<5
 diff --git a/server/app.py b/server/app.py
-index 418f875..36186a2 100644
+index 418f875..4e84c49 100644
 --- a/server/app.py
 +++ b/server/app.py
 @@ -1,19 +1,37 @@
@@ -403,7 +403,7 @@ index 418f875..36186a2 100644
  
  
  class JobResponse(BaseModel):
-@@ -37,57 +113,690 @@ class JobResponse(BaseModel):
+@@ -37,57 +113,703 @@ class JobResponse(BaseModel):
      url: str
  
  
@@ -437,6 +437,19 @@ index 418f875..36186a2 100644
 +    if raw is None:
 +        return default
 +    return raw.strip().lower() in {"1", "true", "yes", "on"}
++
++
++def _public_login_error(exc: Exception) -> str:
++    """Keep user-facing login errors bounded while logs retain full details."""
++    detail = str(exc).splitlines()[0].strip()
++    if (
++        "BrowserType.launch" in str(exc)
++        or type(exc).__name__ == "TargetClosedError"
++    ):
++        detail = "安全登录浏览器启动失败，请稍后重试"
++    elif not detail:
++        detail = "抖音登录任务失败，请稍后重试"
++    return f"{type(exc).__name__}: {detail[:240]}"
 +
 +
 +def _terminate_login_driver(deps: "_SessionDeps") -> bool:
@@ -660,7 +673,11 @@ index 418f875..36186a2 100644
 +                return candidate
 +    return ""
 +
-+
+ 
+-    REST 服务在进程生命周期内只需要一份 FileManager / RateLimiter / RetryHandler /
+-    QueueManager / CookieManager；每个请求重新构造既浪费又会触发文件系统 mkdir。
+-    DouyinAPIClient 由于持有 aiohttp.ClientSession，依旧按请求创建，避免跨请求泄漏
+-    连接状态或触发 "Session is closed" 错误。
 +def _catalog_record(
 +    item: Dict[str, Any],
 +    *,
@@ -680,11 +697,7 @@ index 418f875..36186a2 100644
 +            break
 +    if not cover_url and images:
 +        cover_url = _first_remote_url(images[0])
- 
--    REST 服务在进程生命周期内只需要一份 FileManager / RateLimiter / RetryHandler /
--    QueueManager / CookieManager；每个请求重新构造既浪费又会触发文件系统 mkdir。
--    DouyinAPIClient 由于持有 aiohttp.ClientSession，依旧按请求创建，避免跨请求泄漏
--    连接状态或触发 "Session is closed" 错误。
++
 +    tags: List[str] = []
 +    text_extra = item.get("text_extra")
 +    if isinstance(text_extra, list):
@@ -940,7 +953,7 @@ index 418f875..36186a2 100644
 +        self.sessions_root.mkdir(parents=True, exist_ok=True)
 +        if os.name != "nt":
 +            os.chmod(self.sessions_root, 0o700)
- 
++
 +        server_config = config.get("server") or {}
 +        if not isinstance(server_config, dict):
 +            server_config = {}
@@ -955,9 +968,7 @@ index 418f875..36186a2 100644
 +            max_workers=int(config.get("thread", 5) or 5)
 +        )
 +        self._sessions: Dict[str, _SessionDeps] = {}
- 
--async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
--    """简化版 download_url：只负责执行并返回成功/失败计数。
++
 +    def session(self, scope: str) -> _SessionDeps:
 +        current = self._sessions.get(scope)
 +        if current is None:
@@ -965,13 +976,15 @@ index 418f875..36186a2 100644
 +            self._sessions[scope] = current
 +        return current
  
+ 
+-async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
+-    """简化版 download_url：只负责执行并返回成功/失败计数。
++async def _resolve_self_sec_uid(api_client) -> str:
++    """用当前 cookie 调 profile/self/ 拿登录用户的真 sec_uid。
+ 
 -    有意不复用 cli.main.download_url —— 后者绑定了 progress_display 的 rich 状态。
 -    API client 仍按请求创建（aiohttp session 不跨请求复用）；其余重量级依赖从
 -    _ServerDeps 共享。
-+
-+async def _resolve_self_sec_uid(api_client) -> str:
-+    """用当前 cookie 调 profile/self/ 拿登录用户的真 sec_uid。
-+
 +    抖音的 favorite（喜欢）和 post（主页发布）API 都要真 sec_uid，
 +    self 链接解析出的 "self" 字符串它们不认；cookie 作用域的 collection
 +    与 collects/list 接受 "self" 上下文。所以 like/post 模式下要先解出真 sec_uid。
@@ -1131,7 +1144,7 @@ index 418f875..36186a2 100644
          if is_short_url(url):
              resolved = await api_client.resolve_short_url(normalize_short_url(url))
              if not resolved:
-@@ -98,9 +807,15 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
+@@ -98,9 +820,15 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
          if not parsed:
              raise RuntimeError(f"Unsupported URL: {url}")
  
@@ -1148,7 +1161,7 @@ index 418f875..36186a2 100644
              api_client,
              deps.file_manager,
              deps.cookie_manager,
-@@ -114,6 +829,16 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
+@@ -114,6 +842,16 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
              raise RuntimeError(f"No downloader for url_type={parsed['type']}")
  
          result = await downloader.download(parsed)
@@ -1165,7 +1178,7 @@ index 418f875..36186a2 100644
          return {
              "total": result.total,
              "success": result.success,
-@@ -122,11 +847,285 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
+@@ -122,11 +860,285 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
          }
  
  
@@ -1453,7 +1466,7 @@ index 418f875..36186a2 100644
  
      server_cfg = config.get("server") or {}
      if not isinstance(server_cfg, dict):
-@@ -148,34 +1147,487 @@ def build_app(config: ConfigLoader) -> FastAPI:
+@@ -148,34 +1160,488 @@ def build_app(config: ConfigLoader) -> FastAPI:
      app = FastAPI(
          title="Douyin Downloader API",
          version="1.0",
@@ -1504,7 +1517,7 @@ index 418f875..36186a2 100644
 +            "count": len(cookies),
 +            "valid": scoped.cookie_manager.validate_cookies(),
 +        }
- 
++
 +    @app.post("/api/v1/cookies")
 +    async def set_cookies(
 +        req: CookieRequest,
@@ -1605,10 +1618,11 @@ index 418f875..36186a2 100644
 +                    )
 +                raise
 +            except Exception as exc:
++                logger.exception("Douyin login task failed")
 +                scoped.fetch_status.update(
 +                    running=False,
 +                    message="",
-+                    error=f"{type(exc).__name__}: {exc}",
++                    error=_public_login_error(exc),
 +                )
 +            finally:
 +                scoped.fetch_task = None
@@ -1666,7 +1680,7 @@ index 418f875..36186a2 100644
 +            "qr_ready": bool(scoped.fetch_qr_image),
 +            "qr_version": scoped.fetch_qr_version,
 +        }
-+
+ 
 +    @app.get("/api/v1/fetch-cookie/qr")
 +    async def fetch_cookie_qr(
 +        scope: str = Depends(_session_scope),
@@ -2080,7 +2094,7 @@ index aaf0b58..16194ce 100644
      return _RecordingAPIClient.seen_proxies
  
 diff --git a/tests/test_server.py b/tests/test_server.py
-index ac06496..e9af4b5 100644
+index ac06496..f360a54 100644
 --- a/tests/test_server.py
 +++ b/tests/test_server.py
 @@ -4,6 +4,7 @@
@@ -2311,7 +2325,7 @@ index ac06496..e9af4b5 100644
  def test_get_unknown_job_returns_404(tmp_path):
      config = ConfigLoader(None)
      config.update(path=str(tmp_path))
-@@ -118,17 +313,382 @@ def test_build_app_shares_deps_across_requests(tmp_path):
+@@ -118,17 +313,396 @@ def test_build_app_shares_deps_across_requests(tmp_path):
      config.update(path=str(tmp_path))
      app = build_app(config)
  
@@ -2613,6 +2627,20 @@ index ac06496..e9af4b5 100644
 +    assert server_app._env_flag("DOUYIN_BROWSER_HEADLESS", False) is False
 +    monkeypatch.setenv("DOUYIN_BROWSER_HEADLESS", "true")
 +    assert server_app._env_flag("DOUYIN_BROWSER_HEADLESS", False) is True
++
++
++def test_browser_launch_error_is_bounded_for_login_client():
++    error = RuntimeError(
++        "BrowserType.launch: Target page has been closed\n"
++        + ("sensitive browser log line\n" * 200)
++    )
++
++    public_error = server_app._public_login_error(error)
++
++    assert public_error == (
++        "RuntimeError: 安全登录浏览器启动失败，请稍后重试"
++    )
++    assert "sensitive browser log line" not in public_error
 +
 +
 +@pytest.mark.asyncio

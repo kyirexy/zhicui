@@ -10,6 +10,9 @@ Group=ubuntu
 WorkingDirectory=/opt/douyin-downloader/current
 Environment=PYTHONUTF8=1
 Environment=PYTHONIOENCODING=utf-8
+Environment=HOME=/opt/douyin-downloader
+Environment=XDG_CONFIG_HOME=/opt/douyin-downloader/.config
+Environment=XDG_CACHE_HOME=/opt/douyin-downloader/.cache
 Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/douyin-downloader/ms-playwright
 Environment=DOUYIN_BROWSER_HEADLESS=0
 Environment=DOUYIN_BROWSER_VISIBLE_TO_USER=0

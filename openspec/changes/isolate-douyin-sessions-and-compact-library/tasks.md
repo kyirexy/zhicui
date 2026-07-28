@@ -73,4 +73,4 @@
 - [x] 12.1 Expose the connector login browser mode through health and backend connection status
 - [x] 12.2 Start login only for a same-device visible Chrome connector and replace remote QR capture with a signed loopback handoff
 - [x] 12.3 Make every service-worker fetch failure resolve with a typed offline response
-- [ ] 12.4 Add coverage, regenerate the sidecar patch, rebuild, restart local services and deploy the verified change
+- [x] 12.4 Add coverage, regenerate the sidecar patch, rebuild, restart local services and deploy the verified change

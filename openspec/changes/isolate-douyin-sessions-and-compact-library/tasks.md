@@ -79,4 +79,4 @@
 
 - [x] 13.1 Remove connector, port and remote-browser terminology from user-facing library UI
 - [x] 13.2 Open Chrome directly, auto-close the temporary launch document and use bounded completion reconciliation
-- [ ] 13.3 Add coverage, rebuild, restart local services and deploy the verified flow
+- [x] 13.3 Add coverage, rebuild, restart local services and deploy the verified flow

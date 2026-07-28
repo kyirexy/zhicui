@@ -52,4 +52,4 @@
 - [x] 9.1 Replace Android and mobile-web QR startup with an explicit same-account desktop-binding guide
 - [x] 9.2 Refresh scoped binding status when the Android App resumes without cancelling or mutating an informational guide
 - [x] 9.3 Distinguish local visible Chrome from production remote QR capture without misleading the user
-- [ ] 9.4 Bump the Android release, build the APK, validate the change and deploy the production revision
+- [x] 9.4 Bump the Android release, build the APK, validate the change and deploy the production revision

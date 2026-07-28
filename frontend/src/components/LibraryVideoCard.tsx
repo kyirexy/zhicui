@@ -54,9 +54,28 @@ export default function LibraryVideoCard({
 }: LibraryVideoCardProps) {
   const isWorking = ['queued', 'extracting', 'transcribing', 'analyzing'].includes(extractState);
   const isExtracted = item.extracted || extractState === 'done';
+  const visualState = extractState === 'error'
+    ? 'has-extract-error'
+    : isWorking
+      ? 'is-extracting'
+      : extractState === 'done'
+        ? 'is-extract-ready'
+        : '';
+  const copyBadgeLabel = extractState === 'queued'
+    ? '等待提取'
+    : ['extracting', 'transcribing'].includes(extractState)
+      ? '正在提取'
+      : extractState === 'analyzing'
+        ? '正在分析'
+        : isExtracted
+          ? formatCount(item.transcript_chars)
+          : '待提文案';
 
   return (
-    <article className={`library-video-card ${selected ? 'is-selected' : ''}`}>
+    <article
+      className={`library-video-card ${selected ? 'is-selected' : ''} ${visualState}`}
+      data-extract-state={extractState}
+    >
       <Link
         href={`/library/detail?id=${encodeURIComponent(item.aweme_id)}`}
         className="library-video-detail-link"
@@ -92,9 +111,16 @@ export default function LibraryVideoCard({
             <Play size={14} fill="currentColor" />
           </a>
         )}
-        <span className={`library-copy-badge ${isExtracted ? 'is-ready' : ''}`}>
-          {isExtracted ? <CheckCircle2 size={12} /> : <FileText size={12} />}
-          {isExtracted ? formatCount(item.transcript_chars) : '待提文案'}
+        <span
+          className={`library-copy-badge ${isExtracted ? 'is-ready' : ''} ${isWorking ? 'is-working' : ''}`}
+          aria-label={`文案状态：${copyBadgeLabel}`}
+        >
+          {isWorking
+            ? <LoaderCircle size={12} className="animate-spin" />
+            : isExtracted
+              ? <CheckCircle2 size={12} />
+              : <FileText size={12} />}
+          {copyBadgeLabel}
         </span>
       </div>
 

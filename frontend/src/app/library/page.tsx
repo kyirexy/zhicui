@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import ContentModeSwitch from '@/components/ContentModeSwitch';
 import LibraryChat, { type LibraryChatSource } from '@/components/LibraryChat';
+import LibraryExtractionLiveProgress from '@/components/LibraryExtractionLiveProgress';
 import LibraryVideoCard, {
   type LibraryExtractState,
 } from '@/components/LibraryVideoCard';
@@ -52,6 +53,7 @@ import {
 import {
   isNativeAndroidApp,
 } from '@/lib/douyinNative';
+import { formatCollectionSyncMessage } from '@/lib/douyinSyncFeedback';
 import type {
   DouyinCollectionJob,
   DouyinBatchExtractionJob,
@@ -139,6 +141,7 @@ export default function VideoLibraryPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [batchExtracting, setBatchExtracting] = useState(false);
   const [activeBatchOperation, setActiveBatchOperation] = useState<DouyinBatchExtractionOperation | null>(null);
+  const [extractionJob, setExtractionJob] = useState<DouyinBatchExtractionJob | null>(null);
   const [sessionAction, setSessionAction] = useState<DouyinSessionAction | null>(null);
   const [sessionPending, setSessionPending] = useState(false);
   const [sessionError, setSessionError] = useState('');
@@ -343,6 +346,7 @@ export default function VideoLibraryPage() {
   };
 
   const applyExtractionJob = (job: DouyinBatchExtractionJob) => {
+    setExtractionJob(job);
     setExtractProgress((current) => {
       const next = { ...current };
       job.items.forEach((item) => {
@@ -387,11 +391,12 @@ export default function VideoLibraryPage() {
           ? `并发提取 ${current.total} 条完整文案：正在转写 ${current.active} 条，等待 ${current.queued} 条，已完成 ${current.success} 条`
           : `AI 初始化 ${current.total} 条：正在分析 ${current.active} 条，等待 ${current.queued} 条，已完成 ${current.success} 条`,
       );
-      await wait(1200);
+      await wait(800);
       const response = await getDouyinBatchExtraction(current.job_id);
       if (!response.success || !response.data) continue;
       current = response.data;
       applyExtractionJob(current);
+      if (current.status !== 'running') return current;
     }
     return current;
   };
@@ -409,6 +414,7 @@ export default function VideoLibraryPage() {
     if (pending.length === 0) return 0;
     setBatchExtracting(true);
     setActiveBatchOperation(operation);
+    setExtractionJob(null);
     setPipelineStage('extract');
     setExtractProgress((current) => {
       const next = { ...current };
@@ -1015,13 +1021,11 @@ export default function VideoLibraryPage() {
       const response = await getDouyinCollectionJob(initial.job_id);
       if (!response.success || !response.data) continue;
       setCollectionJob(response.data);
-      setNotice(
-        response.data.status === 'running'
-          ? response.data.total > 0
-            ? `正在同步${sourceLabel}清单，已处理 ${response.data.success}/${response.data.total}`
-            : `正在同步最近 ${requestedCount} 条${sourceLabel}，已保存 ${response.data.success} 条`
-          : `同步任务：${response.data.status}`,
-      );
+      setNotice(formatCollectionSyncMessage({
+        ...response.data,
+        sourceLabel,
+        requestedCount,
+      }));
       if (response.data.status === 'success' || response.data.status === 'failed') {
         return response.data;
       }
@@ -1034,6 +1038,7 @@ export default function VideoLibraryPage() {
     const requestedCount = clampInteger(syncCount, 1, MAX_SYNC_COUNT);
     setSyncCount(requestedCount);
     setRefreshing(true);
+    setExtractionJob(null);
     setPipelineStage('collect');
     setNotice(`开始同步最近 ${requestedCount} 条${sourceLabel}；同步后自动提取完整文案，不生成 AI 总结`);
     const response = await collectDouyinLibrary(requestedCount, sourceMode);
@@ -1048,7 +1053,27 @@ export default function VideoLibraryPage() {
     setRefreshing(false);
     if (!finalJob || finalJob.status === 'failed') {
       setPipelineStage('idle');
-      setNotice(finalJob?.error || '采集没有完成，请稍后重试');
+      setNotice(
+        finalJob
+          ? formatCollectionSyncMessage({
+              ...finalJob,
+              sourceLabel,
+              requestedCount,
+            })
+          : '同步没有完成，请稍后重试',
+      );
+      return;
+    }
+    setNotice(formatCollectionSyncMessage({
+      ...finalJob,
+      sourceLabel,
+      requestedCount,
+    }));
+    if (
+      Math.max(0, Number(finalJob.total) || 0) === 0
+      && Math.max(0, Number(finalJob.success) || 0) === 0
+    ) {
+      setPipelineStage('done');
       return;
     }
 
@@ -1496,7 +1521,7 @@ export default function VideoLibraryPage() {
 
         {sourceMode === 'collect' && (
           <p className="library-mode-warning">
-            这里读取抖音默认“全部收藏”，但只同步你选择的最近 {syncCount} 条，单次最多 100 条，不会拉取全部收藏。同步后会自动用云端 ASR 提取完整文案，文案就绪即可直接问 AI；DeepSeek 总结与知识卡只在你主动选择后生成。服务器不保存视频文件。
+            每次只同步最近 {syncCount} 条收藏，最多可选 100 条，不会一次搬走整个收藏夹。同步后会自动整理出完整文案，你可以直接提问；知识卡想用时再生成。视频不会保存到知萃服务器。
           </p>
         )}
         {collectionJob && (refreshing || batchExtracting) && (
@@ -1623,6 +1648,13 @@ export default function VideoLibraryPage() {
           <Sparkles size={14} />
           {notice}
         </div>
+      )}
+
+      {batchExtracting && extractionJob && (
+        <LibraryExtractionLiveProgress
+          job={extractionJob}
+          items={items}
+        />
       )}
 
       {!aiWorkspaceOpen && (

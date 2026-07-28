@@ -20,4 +20,4 @@
 
 - [x] 4.1 Add focused backend verification for search safety, research provenance, concurrency, idempotency, and no-media persistence
 - [x] 4.2 Run OpenSpec validation, backend checks, TypeScript production build, and local service smoke tests
-- [ ] 4.3 Build the updated Android package, restart local services, commit to master, deploy, and verify production
+- [x] 4.3 Build the updated Android package, restart local services, commit to master, deploy, and verify production

@@ -283,7 +283,7 @@ index 3b0900b..309d46c 100644
 +# Detect and crop QR codes rendered inside Douyin's closed login component.
 +opencv-python-headless>=4.10,<5
 diff --git a/server/app.py b/server/app.py
-index 418f875..ae94c4b 100644
+index 418f875..36186a2 100644
 --- a/server/app.py
 +++ b/server/app.py
 @@ -1,19 +1,37 @@
@@ -881,7 +881,7 @@ index 418f875..ae94c4b 100644
 +                initial_cookies = owner.config.get_cookies()
 +                if initial_cookies:
 +                    self.cookie_manager.set_cookies(initial_cookies)
- 
++
 +        self.file_manager = FileManager(library_path)
 +        self.source_order_path = (
 +            self.file_manager.base_path / SOURCE_ORDER_FILENAME
@@ -920,13 +920,8 @@ index 418f875..ae94c4b 100644
 +        self.fetch_qr_digest = digest
 +        self.fetch_qr_version += 1
 +        return True
- 
--async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
--    """简化版 download_url：只负责执行并返回成功/失败计数。
- 
--    有意不复用 cli.main.download_url —— 后者绑定了 progress_display 的 rich 状态。
--    API client 仍按请求创建（aiohttp session 不跨请求复用）；其余重量级依赖从
--    _ServerDeps 共享。
++
++
 +class _ServerDeps:
 +    """Process-wide resources plus lazily-created user session namespaces."""
 +
@@ -945,7 +940,7 @@ index 418f875..ae94c4b 100644
 +        self.sessions_root.mkdir(parents=True, exist_ok=True)
 +        if os.name != "nt":
 +            os.chmod(self.sessions_root, 0o700)
-+
+ 
 +        server_config = config.get("server") or {}
 +        if not isinstance(server_config, dict):
 +            server_config = {}
@@ -960,14 +955,19 @@ index 418f875..ae94c4b 100644
 +            max_workers=int(config.get("thread", 5) or 5)
 +        )
 +        self._sessions: Dict[str, _SessionDeps] = {}
-+
+ 
+-async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
+-    """简化版 download_url：只负责执行并返回成功/失败计数。
 +    def session(self, scope: str) -> _SessionDeps:
 +        current = self._sessions.get(scope)
 +        if current is None:
 +            current = _SessionDeps(self, scope)
 +            self._sessions[scope] = current
 +        return current
-+
+ 
+-    有意不复用 cli.main.download_url —— 后者绑定了 progress_display 的 rich 状态。
+-    API client 仍按请求创建（aiohttp session 不跨请求复用）；其余重量级依赖从
+-    _ServerDeps 共享。
 +
 +async def _resolve_self_sec_uid(api_client) -> str:
 +    """用当前 cookie 调 profile/self/ 拿登录用户的真 sec_uid。
@@ -997,10 +997,10 @@ index 418f875..ae94c4b 100644
 +    cursor = 0
 +    has_more = True
 +
-+    async with DouyinAPIClient(
-+        deps.cookie_manager.get_cookies(),
-+        proxy=deps.config.get("proxy"),
-+    ) as api_client:
+     async with DouyinAPIClient(
+         deps.cookie_manager.get_cookies(),
+         proxy=deps.config.get("proxy"),
+     ) as api_client:
 +        while has_more and len(ordered_items) < limit:
 +            await deps.rate_limiter.acquire()
 +            request_cursor = cursor
@@ -1034,10 +1034,10 @@ index 418f875..ae94c4b 100644
 +    cursor = 0
 +    has_more = True
 +
-     async with DouyinAPIClient(
-         deps.cookie_manager.get_cookies(),
-         proxy=deps.config.get("proxy"),
-     ) as api_client:
++    async with DouyinAPIClient(
++        deps.cookie_manager.get_cookies(),
++        proxy=deps.config.get("proxy"),
++    ) as api_client:
 +        sec_uid = "self"
 +        if safe_mode in {"like", "post"}:
 +            sec_uid = await _resolve_self_sec_uid(api_client)
@@ -1165,7 +1165,7 @@ index 418f875..ae94c4b 100644
          return {
              "total": result.total,
              "success": result.success,
-@@ -122,11 +847,266 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
+@@ -122,11 +847,285 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
          }
  
  
@@ -1195,12 +1195,19 @@ index 418f875..ae94c4b 100644
 +        deps.fetch_driver_process = getattr(transport, "_proc", None)
 +        browser_factory = getattr(p, browser, p.chromium)
 +        headless = _env_flag("DOUYIN_BROWSER_HEADLESS", False)
++        browser_user_visible = (
++            not headless
++            and _env_flag(
++                "DOUYIN_BROWSER_VISIBLE_TO_USER",
++                os.name == "nt",
++            )
++        )
 +        deps.fetch_status["message"] = "正在启动抖音安全登录窗口…"
 +        launch_options: Dict[str, Any] = {
 +            "headless": headless,
 +            "timeout": 15000,
 +        }
-+        if browser == "chromium" and not headless:
++        if browser == "chromium" and browser_user_visible:
 +            # The user's installed Chrome is substantially more stable for an
 +            # interactive verification page than Playwright's bundled build.
 +            launch_options["channel"] = "chrome"
@@ -1213,26 +1220,32 @@ index 418f875..ae94c4b 100644
 +        browser_instance = await browser_factory.launch(**launch_options)
 +        try:
 +            deps.fetch_status.update(
-+                browser_opened=not headless,
-+                browser_mode="headless" if headless else "visible_chrome",
++                browser_opened=browser_user_visible,
++                browser_mode=(
++                    "visible_chrome"
++                    if browser_user_visible
++                    else "headless"
++                    if headless
++                    else "remote_capture"
++                ),
 +                message=(
 +                    "Chrome 已弹出，请在窗口中完成验证并使用手机抖音扫码"
-+                    if not headless
-+                    else "正在初始化抖音登录会话…"
++                    if browser_user_visible
++                    else "正在安全生成抖音登录二维码…"
 +                ),
 +            )
 +            context_options: Dict[str, Any] = {"locale": "zh-CN"}
-+            if headless:
-+                context_options["viewport"] = {"width": 1280, "height": 800}
-+            else:
++            if browser_user_visible:
 +                context_options["no_viewport"] = True
++            else:
++                context_options["viewport"] = {"width": 1280, "height": 800}
 +            context = await browser_instance.new_context(**context_options)
 +            deps.fetch_status["message"] = "正在创建抖音登录页面…"
 +            page = await context.new_page()
 +            deps.fetch_status["message"] = (
 +                "Chrome 已弹出，正在打开抖音登录页…"
-+                if not headless
-+                else "正在打开抖音登录页面…"
++                if browser_user_visible
++                else "正在打开抖音登录页面并获取二维码…"
 +            )
 +            open_task = asyncio.create_task(_open_douyin_login(page))
 +            parent_task = asyncio.current_task()
@@ -1257,6 +1270,8 @@ index 418f875..ae94c4b 100644
 +                deps.fetch_status["message"] = (
 +                    "Chrome 已弹出：如窗口显示拼图请先完成，"
 +                    "随后直接使用手机抖音扫描 Chrome 中的二维码"
++                    if browser_user_visible
++                    else "登录页面仍在加载，正在等待可展示的二维码…"
 +                )
 +
 +            navigation_watchdog = asyncio.create_task(_navigation_watchdog())
@@ -1274,6 +1289,8 @@ index 418f875..ae94c4b 100644
 +                deps.fetch_status["message"] = (
 +                    "Chrome 已弹出：如窗口显示拼图请先完成，"
 +                    "随后直接使用手机抖音扫描 Chrome 中的二维码"
++                    if browser_user_visible
++                    else "登录页面仍在加载，正在等待可展示的二维码…"
 +                )
 +                logger.info(
 +                    "Douyin login page kept reloading; continuing with "
@@ -1309,14 +1326,16 @@ index 418f875..ae94c4b 100644
 +                    deps.fetch_status["message"] = (
 +                        "Chrome 已弹出：请在窗口中完成安全验证，"
 +                        "看到二维码后直接用手机抖音扫码"
++                        if browser_user_visible
++                        else "正在等待服务器生成可展示的登录二维码…"
 +                    )
 +                    await asyncio.sleep(QR_REFRESH_SECONDS)
 +                    continue
 +                if await _has_login_challenge(page):
-+                    if headless:
++                    if not browser_user_visible:
 +                        raise RuntimeError(
-+                            "抖音触发了交互式安全验证，当前无界面环境无法完成；"
-+                            "请在桌面端绑定或稍后重试"
++                            "抖音触发了交互式安全验证，服务器无法代替用户完成；"
++                            "请稍后重试桌面端绑定"
 +                        )
 +                    challenge_active = True
 +                    deps.fetch_status["message"] = (
@@ -1336,16 +1355,16 @@ index 418f875..ae94c4b 100644
 +                    if deps.update_qr(qr_image):
 +                        deps.fetch_status["message"] = (
 +                            "二维码已出现，请使用手机抖音扫描 Chrome 窗口中的二维码"
-+                            if not headless
-+                            else "二维码已生成，请使用抖音 App 扫码"
++                            if browser_user_visible
++                            else "二维码已生成，请使用手机抖音扫码"
 +                        )
 +                elif (
 +                    not deps.fetch_qr_image
 +                    and loop.time() >= discovery_deadline
 +                ):
-+                    if headless:
++                    if not browser_user_visible:
 +                        raise RuntimeError(
-+                            "未找到登录二维码，请稍后重试或在桌面端使用 Chrome 绑定"
++                            "未找到可展示的登录二维码，请稍后重试桌面端绑定"
 +                        )
 +                    deps.fetch_status["message"] = (
 +                        "Chrome 已保持打开；请在窗口中完成验证并直接扫描登录二维码"
@@ -1434,7 +1453,7 @@ index 418f875..ae94c4b 100644
  
      server_cfg = config.get("server") or {}
      if not isinstance(server_cfg, dict):
-@@ -148,34 +1128,487 @@ def build_app(config: ConfigLoader) -> FastAPI:
+@@ -148,34 +1147,487 @@ def build_app(config: ConfigLoader) -> FastAPI:
      app = FastAPI(
          title="Douyin Downloader API",
          version="1.0",
@@ -2061,7 +2080,7 @@ index aaf0b58..16194ce 100644
      return _RecordingAPIClient.seen_proxies
  
 diff --git a/tests/test_server.py b/tests/test_server.py
-index ac06496..52e22dd 100644
+index ac06496..e9af4b5 100644
 --- a/tests/test_server.py
 +++ b/tests/test_server.py
 @@ -4,6 +4,7 @@
@@ -2292,7 +2311,7 @@ index ac06496..52e22dd 100644
  def test_get_unknown_job_returns_404(tmp_path):
      config = ConfigLoader(None)
      config.update(path=str(tmp_path))
-@@ -118,17 +313,360 @@ def test_build_app_shares_deps_across_requests(tmp_path):
+@@ -118,17 +313,382 @@ def test_build_app_shares_deps_across_requests(tmp_path):
      config.update(path=str(tmp_path))
      app = build_app(config)
  
@@ -2549,6 +2568,28 @@ index ac06496..52e22dd 100644
 +    assert status.json()["browser_opened"] is True
 +    assert status.json()["browser_mode"] == "visible_chrome"
 +    assert status.json()["qr_ready"] is False
++
++
++def test_remote_capture_state_does_not_claim_user_visible_browser(tmp_path):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path))
++    app = build_app(config)
++    deps = app.state.deps.session(server_app.DEFAULT_SESSION_SCOPE)
++    deps.fetch_status.update(
++        running=True,
++        message="正在安全生成抖音登录二维码…",
++        error="",
++        browser_opened=False,
++        browser_mode="remote_capture",
++    )
++
++    with TestClient(app) as client:
++        status = client.get("/api/v1/fetch-cookie")
++
++    assert status.status_code == 200
++    assert status.json()["browser_opened"] is False
++    assert status.json()["browser_mode"] == "remote_capture"
++    assert status.json()["running"] is True
 +
 +
 +def test_qr_endpoint_rejects_missing_or_oversized_image(tmp_path):

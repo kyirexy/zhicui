@@ -38,6 +38,10 @@ CAPACITOR_BUILD=true NEXT_PUBLIC_API_URL="$API_URL" npx next build
 
 echo "=== [3/5] 同步到 Android ==="
 npx cap sync android
+# `public/download/zhicui.apk` is the website download artifact. Capacitor
+# copies all public files into the native bundle, so remove that copied APK
+# before Gradle packaging to avoid recursively embedding the previous release.
+rm -f "$ROOT/frontend/android/app/src/main/assets/public/download/zhicui.apk"
 
 echo "=== [4/5] Gradle 构建 debug APK ==="
 cd android

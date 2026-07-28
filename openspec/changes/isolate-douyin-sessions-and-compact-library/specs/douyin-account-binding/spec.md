@@ -87,6 +87,14 @@ The system SHALL treat the visible installed Chrome window as the primary deskto
 - **WHEN** the visible Chrome window shows a security challenge before the QR code
 - **THEN** the Zhicui page tells the user to complete the challenge in Chrome and then scan there while the same browser session remains active
 
+#### Scenario: Production browser is not visible to the user
+- **WHEN** the sidecar runs Chrome or Chromium on a remote server or virtual display
+- **THEN** the login API does not claim that Chrome opened on the user's computer and the desktop page displays the mirrored QR image when it becomes available
+
+#### Scenario: Remote production browser receives a security challenge
+- **WHEN** the remote browser receives an interactive challenge that cannot be completed by the user
+- **THEN** the task fails with an honest retry message instead of directing the user to an invisible Chrome window
+
 ### Requirement: Scoped logout and rebinding
 The system SHALL clear only the current user's Douyin Cookie and QR state during logout or rebinding.
 

@@ -129,6 +129,7 @@ export default function VideoLibraryPage() {
   const [qrActionMessage, setQrActionMessage] = useState('');
   const [loginStatusMessage, setLoginStatusMessage] = useState('');
   const [browserOpened, setBrowserOpened] = useState(false);
+  const [browserMode, setBrowserMode] = useState('idle');
   const [bindingClient, setBindingClient] = useState<BindingClient>('desktop-web');
   const [bindingCheckPending, setBindingCheckPending] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -299,6 +300,11 @@ export default function VideoLibraryPage() {
   const extractedCount = items.filter((item) => item.extracted).length;
   const connected = Boolean(status?.connected);
   const loggedIn = Boolean(status?.cookie_valid);
+  const visibleChromeLogin = (
+    bindingClient === 'desktop-web'
+    && browserMode === 'visible_chrome'
+    && browserOpened
+  );
   const sourceLabel = SOURCE_MODES.find((mode) => mode.value === sourceMode)?.label || '视频';
 
   const toggleSelection = (awemeId: string) => {
@@ -413,6 +419,7 @@ export default function VideoLibraryPage() {
     setQrActionMessage('');
     setLoginStatusMessage('');
     setBrowserOpened(false);
+    setBrowserMode('idle');
     if (!shouldCancelLogin) return;
     void cancelDouyinLogin().then((response) => {
       if (!response.success) {
@@ -544,6 +551,7 @@ export default function VideoLibraryPage() {
       setNotice(nextMessage);
       setLoginStatusMessage(nextMessage);
       setBrowserOpened(Boolean(response.data.browser_opened));
+      setBrowserMode(response.data.browser_mode || 'idle');
       if (
         response.data.qr_ready
         && response.data.qr_version
@@ -565,6 +573,7 @@ export default function VideoLibraryPage() {
         setLoginQr('');
         setLoginStatusMessage('');
         setBrowserOpened(false);
+        setBrowserMode('idle');
         const latestStatus = await refreshLoginStatus();
         setNotice(
           response.data.error
@@ -599,6 +608,7 @@ export default function VideoLibraryPage() {
         setQrActionMessage('');
         setLoginStatusMessage('');
         setBrowserOpened(false);
+        setBrowserMode('idle');
         return;
       }
     }
@@ -612,6 +622,7 @@ export default function VideoLibraryPage() {
     setNotice(recoveredMessage);
     setLoginStatusMessage(recoveredMessage);
     setBrowserOpened(Boolean(loginResponse.data.browser_opened));
+    setBrowserMode(loginResponse.data.browser_mode || 'idle');
 
     let qrVersion = loginResponse.data.qr_version || 0;
     if (loginResponse.data.qr_ready) {
@@ -662,6 +673,7 @@ export default function VideoLibraryPage() {
       setLoginQr('');
       setQrActionMessage('');
       setBrowserOpened(false);
+      setBrowserMode('idle');
       setLoginStatusMessage('请在电脑端完成抖音绑定');
       setNotice('手机端请使用同一个知萃账号在电脑完成抖音绑定');
       return;
@@ -673,6 +685,7 @@ export default function VideoLibraryPage() {
     setLoginQr('');
     setQrActionMessage('');
     setBrowserOpened(false);
+    setBrowserMode('starting');
     setLoginStatusMessage('正在弹出 Chrome 抖音登录窗口…');
     setNotice('正在弹出 Chrome，请稍候…');
     const start = await startDouyinLogin();
@@ -680,6 +693,7 @@ export default function VideoLibraryPage() {
       setScanning(false);
       setLoginStatusMessage('');
       setBrowserOpened(false);
+      setBrowserMode('idle');
       setNotice(start.error || '扫码登录启动失败');
       return;
     }
@@ -1061,7 +1075,13 @@ export default function VideoLibraryPage() {
                 <QrCode size={15} />
                 扫码连接收藏夹
               </span>
-              <h2>{bindingClient === 'desktop-web' ? '在 Chrome 中扫码登录' : '请在电脑端绑定抖音'}</h2>
+              <h2>
+                {bindingClient !== 'desktop-web'
+                  ? '请在电脑端绑定抖音'
+                  : visibleChromeLogin
+                    ? '在 Chrome 中扫码登录'
+                    : '使用抖音扫码登录'}
+              </h2>
               <p>每个知萃账号使用独立登录会话；Cookie 不会写入知萃数据库。</p>
             </div>
             <button type="button" onClick={closeQrLogin} aria-label="关闭扫码登录">
@@ -1070,19 +1090,20 @@ export default function VideoLibraryPage() {
           </div>
           <div className="library-qr-body">
             <div className="library-qr-frame">
-              {bindingClient === 'desktop-web' ? (
-                <div className={`library-browser-login ${browserOpened ? 'is-open' : ''}`}>
-                  {browserOpened ? (
-                    <ExternalLink size={30} aria-hidden="true" />
-                  ) : (
-                    <LoaderCircle size={28} className="animate-spin" aria-hidden="true" />
-                  )}
-                  <strong>{browserOpened ? 'Chrome 已弹出' : '正在弹出 Chrome…'}</strong>
+              {visibleChromeLogin ? (
+                <div className="library-browser-login is-open">
+                  <ExternalLink size={30} aria-hidden="true" />
+                  <strong>Chrome 已弹出</strong>
                   <span>
-                    {browserOpened
-                      ? '请切换到 Chrome；完成拼图后，用手机抖音扫描窗口里的二维码。'
-                      : loginStatusMessage || '正在创建独立的抖音登录窗口，请稍候。'}
+                    请切换到 Chrome；完成拼图后，用手机抖音扫描窗口里的二维码。
                   </span>
+                </div>
+              ) : bindingClient === 'desktop-web' && loginQr ? (
+                <img src={loginQr} alt="抖音登录二维码" />
+              ) : bindingClient === 'desktop-web' ? (
+                <div className="library-qr-loading">
+                  <LoaderCircle size={28} className="animate-spin" />
+                  <span>{loginStatusMessage || '正在安全生成抖音登录二维码…'}</span>
                 </div>
               ) : (
                 <div className="library-browser-login is-open">
@@ -1099,13 +1120,24 @@ export default function VideoLibraryPage() {
               >
                 {bindingClient === 'android-app' && 'Android App 暂不直接绑定抖音：生产服务器无法展示抖音的拼图安全验证，请到电脑端完成一次绑定。'}
                 {bindingClient === 'mobile-web' && '手机浏览器暂不直接绑定抖音：请在电脑端使用同一个知萃账号完成一次绑定。'}
-                {bindingClient === 'desktop-web' && '桌面端会自动弹出 Chrome。二维码以 Chrome 窗口为准，知萃无需再复制一份。'}
+                {bindingClient === 'desktop-web' && (
+                  visibleChromeLogin
+                    ? '本地桌面端已弹出 Chrome，二维码以 Chrome 窗口为准。'
+                    : '线上桌面端会把安全生成的二维码显示在本页，请直接使用手机抖音扫描。'
+                )}
               </p>
-              {bindingClient === 'desktop-web' ? (
+              {visibleChromeLogin ? (
                 <ol>
                   <li>切换到自动弹出的 Chrome 登录窗口</li>
                   <li>如有拼图验证请先完成，再打开手机抖音扫一扫</li>
                   <li>扫描 Chrome 窗口里的二维码并在手机上确认</li>
+                  <li>知萃会自动识别登录结果</li>
+                </ol>
+              ) : bindingClient === 'desktop-web' ? (
+                <ol>
+                  <li>等待本页出现抖音登录二维码</li>
+                  <li>打开手机抖音，进入扫一扫</li>
+                  <li>扫描本页二维码并在手机上确认登录</li>
                   <li>知萃会自动识别登录结果</li>
                 </ol>
               ) : (

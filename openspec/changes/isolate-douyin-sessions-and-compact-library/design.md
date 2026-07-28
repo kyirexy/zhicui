@@ -94,6 +94,8 @@ App 监听前后台切换。用户从抖音返回知萃后立即检查当前扫�
 
 For a desktop-capable sidecar, the installed Chrome channel is launched visibly and maximized. Zhicui polls the scoped login result, but the browser window—not the mirrored image—is the primary interaction surface. QR extraction remains an optional convenience for mobile handoff. A headed login therefore keeps waiting when QR extraction fails and tells the user to scan the code shown in Chrome. Headless production behavior remains bounded and honest because it cannot expose that interactive surface.
 
+The production sidecar runs on a remote virtual display, so its browser is not user-visible even when Chromium itself is headed. It explicitly reports `remote_capture` rather than `visible_chrome`; the web client waits for and displays the mirrored QR image. Interactive challenges in this mode fail honestly because there is no supported remote-control surface. Only a browser running on the user's local desktop may report `browser_opened: true`.
+
 ### 9. Android uses a desktop-binding handoff
 
 The native Android App and mobile web no longer initiate the server-side QR task. Douyin frequently requires an interactive security challenge that the production headless sidecar cannot expose, and the Douyin App does not provide a supported Cookie callback to Zhicui. An unbound mobile user therefore receives the desktop URL and same-account steps. When the App returns to the foreground it rechecks the user-scoped binding, so a desktop-completed login becomes available without rebuilding or copying credentials. The existing native QR bridge remains dormant for compatibility but is not presented as the supported binding path.

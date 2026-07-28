@@ -23,6 +23,7 @@ import PlanCard from '@/components/PlanCard';
 import PlanExecutionOverview from '@/components/PlanExecutionOverview';
 import PlanTaskList from '@/components/PlanTaskList';
 import PlanDynamicField from '@/components/PlanDynamicField';
+import PlanDeleteDialog from '@/components/PlanDeleteDialog';
 
 function PlansContent() {
   const searchParams = useSearchParams();
@@ -50,6 +51,9 @@ function PlanList() {
   const [totalPages, setTotalPages] = useState(1);
   const [overview, setOverview] = useState<PlanOverview | null>(null);
   const [filter, setFilter] = useState<'all' | 'today' | 'overdue' | 'done'>('all');
+  const [deleteTarget, setDeleteTarget] = useState<PlanData | null>(null);
+  const [deletePending, setDeletePending] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
 
   const load = useCallback(async (p: number) => {
     setLoading(true);
@@ -69,6 +73,24 @@ function PlanList() {
   }, []);
 
   useEffect(() => { void load(1); }, [load]);
+
+  const confirmDelete = async () => {
+    if (!deleteTarget || deletePending) return;
+    setDeletePending(true);
+    setDeleteError('');
+    const response = await deletePlan(deleteTarget.id);
+    if (response.success) {
+      setPlans(current => current.filter(plan => plan.id !== deleteTarget.id));
+      setDeleteTarget(null);
+      const overviewResponse = await getPlanOverview();
+      if (overviewResponse.success && overviewResponse.data) {
+        setOverview(overviewResponse.data);
+      }
+    } else {
+      setDeleteError(response.error || '计划删除失败，请重试。');
+    }
+    setDeletePending(false);
+  };
 
   if (loading) {
     return (
@@ -108,9 +130,9 @@ function PlanList() {
       {plans.length > 0 && (
         <div className="flex items-center gap-2 mb-5 overflow-x-auto pb-1">
           <FilterTab active={filter === 'all'} onClick={() => setFilter('all')} label="全部" count={plans.length} />
-          <FilterTab active={filter === 'today'} onClick={() => setFilter('today')} label="今日到期" count={todayCount} highlight />
-          <FilterTab active={filter === 'overdue'} onClick={() => setFilter('overdue')} label="已逾期" count={overdueCount} highlight />
-          <FilterTab active={filter === 'done'} onClick={() => setFilter('done')} label="已完成" count={doneCount} />
+          <FilterTab active={filter === 'today'} onClick={() => setFilter('today')} label="今天" count={todayCount} highlight />
+          <FilterTab active={filter === 'overdue'} onClick={() => setFilter('overdue')} label="逾期" count={overdueCount} highlight />
+          <FilterTab active={filter === 'done'} onClick={() => setFilter('done')} label="完成" count={doneCount} />
         </div>
       )}
 
@@ -134,9 +156,16 @@ function PlanList() {
           <button onClick={() => setFilter('all')} className="text-accent-emerald hover:underline text-sm mt-3">查看全部计划</button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
           {visiblePlans.map((plan) => (
-            <PlanCard key={plan.id} plan={plan} />
+            <PlanCard
+              key={plan.id}
+              plan={plan}
+              onDelete={(target) => {
+                setDeleteError('');
+                setDeleteTarget(target);
+              }}
+            />
           ))}
         </div>
       )}
@@ -162,6 +191,17 @@ function PlanList() {
           </button>
         </div>
       )}
+      <PlanDeleteDialog
+        plan={deleteTarget}
+        pending={deletePending}
+        error={deleteError}
+        onClose={() => {
+          if (deletePending) return;
+          setDeleteTarget(null);
+          setDeleteError('');
+        }}
+        onConfirm={() => void confirmDelete()}
+      />
     </div>
   );
 }
@@ -176,6 +216,8 @@ function PlanDetail({ id }: { id: string }) {
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
   const [deleting, setDeleting] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const [savingMetadata, setSavingMetadata] = useState(false);
@@ -199,28 +241,38 @@ function PlanDetail({ id }: { id: string }) {
   // Quick-toggle from the "today" pinned card. Shares plan state with PlanTaskList.
   const handleTodayToggle = async (taskId: string) => {
     if (!plan) return;
-    const prev = plan.days;
-    const newDays = prev.map(d => ({ ...d, tasks: d.tasks.map(t => t.id === taskId ? { ...t, done: !t.done } : t) }));
-    setPlan({ ...plan, days: newDays });
+    const previous = plan;
+    const optimistic = {
+      ...plan,
+      tasks: plan.tasks?.map(task => task.id === taskId ? { ...task, done: !task.done } : task) ?? [],
+      days: plan.days?.map(day => ({
+        ...day,
+        tasks: day.tasks.map(task => task.id === taskId ? { ...task, done: !task.done } : task),
+      })) ?? [],
+    };
+    setPlan(optimistic);
     setTodayMutating(s => new Set(s).add(taskId));
+    setActionError('');
     const res = await togglePlanTask(plan.id, taskId);
     if (res.success && res.data) {
       setPlan(res.data);
     } else {
-      setPlan({ ...plan, days: prev });
+      setPlan(previous);
       setActionError(res.error || '任务状态更新失败，请重试。');
     }
     setTodayMutating(s => { const n = new Set(s); n.delete(taskId); return n; });
   };
 
   const handleDelete = async () => {
-    if (!confirm('确定要删除这个计划吗？此操作不可撤销。')) return;
+    if (deleting) return;
     setDeleting(true);
+    setDeleteError('');
     const res = await deletePlan(id);
     if (res.success) {
+      setDeleteDialogOpen(false);
       router.push('/plans');
     } else {
-      setActionError(res.error || '计划删除失败，请重试。');
+      setDeleteError(res.error || '计划删除失败，请重试。');
       setDeleting(false);
     }
   };
@@ -299,11 +351,17 @@ function PlanDetail({ id }: { id: string }) {
           className="inline-flex items-center gap-1.5 text-foreground-secondary hover:text-foreground transition-colors text-sm px-3 py-2.5 rounded-lg hover:bg-white/5 min-h-[44px]">
           <ArrowLeft size={14} />返回计划列表
         </Link>
-        <button type="button" onClick={handleDelete} disabled={deleting}
-          className="inline-flex items-center gap-1.5 text-foreground-muted/40 hover:text-accent-rose hover:bg-accent-rose/10 transition-colors text-xs px-3 py-2 rounded-lg min-h-[36px]"
+        <button
+          type="button"
+          onClick={() => {
+            setDeleteError('');
+            setDeleteDialogOpen(true);
+          }}
+          disabled={deleting}
+          className="inline-flex items-center gap-1.5 text-foreground-muted hover:text-accent-rose hover:bg-accent-rose/10 transition-colors text-xs px-3 py-2 rounded-lg min-h-[44px]"
           aria-label="删除计划">
           <Trash2 size={13} />
-          <span className="hidden sm:inline">{deleting ? '删除中...' : '删除'}</span>
+          <span>{deleting ? '删除中...' : '删除计划'}</span>
         </button>
       </div>
 
@@ -407,26 +465,34 @@ function PlanDetail({ id }: { id: string }) {
               </button>
             </div>
 
-            {/* Dynamic fields */}
             {fieldGroups.length > 0 && (
-              <div className="plan-field-groups">
-                {fieldGroups.map(group => (
-                  <section key={group.label} className="plan-field-group">
-                    <header>
-                      <h2 className="text-balance">{group.label}</h2>
-                      <span className="tabular-nums">{group.fields.length} 项</span>
-                    </header>
-                    <div className="space-y-3">
-                      {group.fields.map((field, index) => (
-                        <PlanDynamicField
-                          key={`${field.name}-${index}`}
-                          field={field}
-                        />
-                      ))}
-                    </div>
-                  </section>
-                ))}
-              </div>
+              <details className="plan-details-disclosure">
+                <summary>
+                  <span>
+                    <strong>计划细节</strong>
+                    <small>{plan.fields.length} 项 AI 规划信息</small>
+                  </span>
+                  <ChevronDetails />
+                </summary>
+                <div className="plan-field-groups">
+                  {fieldGroups.map(group => (
+                    <section key={group.label} className="plan-field-group">
+                      <header>
+                        <h2 className="text-balance">{group.label}</h2>
+                        <span className="tabular-nums">{group.fields.length} 项</span>
+                      </header>
+                      <div className="space-y-3">
+                        {group.fields.map((field, index) => (
+                          <PlanDynamicField
+                            key={`${field.name}-${index}`}
+                            field={field}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              </details>
             )}
           </div>
         </aside>
@@ -443,7 +509,26 @@ function PlanDetail({ id }: { id: string }) {
           </Link>
         </div>
       )}
+      <PlanDeleteDialog
+        plan={deleteDialogOpen ? plan : null}
+        pending={deleting}
+        error={deleteError}
+        onClose={() => {
+          if (deleting) return;
+          setDeleteDialogOpen(false);
+          setDeleteError('');
+        }}
+        onConfirm={() => void handleDelete()}
+      />
     </div>
+  );
+}
+
+function ChevronDetails() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+      <path d="m9 18 6-6-6-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
   );
 }
 
@@ -482,7 +567,7 @@ function FilterTab({ active, onClick, label, count, highlight }: {
     <button
       type="button"
       onClick={onClick}
-      className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium transition-colors min-h-[36px] ${
+      className={`inline-flex flex-shrink-0 items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-colors min-h-[40px] ${
         active
           ? 'bg-accent-emerald/15 text-accent-emerald border border-accent-emerald/30'
           : 'bg-card-bg text-foreground-muted border border-card-border hover:text-foreground-secondary'
@@ -538,15 +623,18 @@ function TodayCard({ plan, onToggle, mutatingIds }: {
               )) ?? []),
             ].filter(Boolean).join(' · ');
             return (
-              <button key={t.id} type="button" onClick={() => onToggle(t.id)} disabled={busy}
-                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl bg-card-bg/50 hover:bg-card-bg transition-colors text-left min-h-[48px] disabled:opacity-60">
-                <span className={`flex-shrink-0 w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all ${
-                  t.done ? 'bg-accent-emerald border-accent-emerald' : 'border-card-border'
-                }`}>
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => onToggle(t.id)}
+                disabled={busy}
+                className={`plan-today-task ${t.done ? 'is-done' : ''}`}
+              >
+                <span className="plan-today-task__check">
                   {busy ? <Loader2 size={12} className="animate-spin text-accent-emerald" /> : t.done ? <Check size={12} className="text-white" strokeWidth={3} /> : null}
                 </span>
                 <span className="flex-1 min-w-0">
-                  <span className={`block text-sm ${t.done ? 'line-through text-foreground-muted' : 'text-foreground'}`}>{t.title}</span>
+                  <span className="plan-today-task__title">{t.title}</span>
                   {taskMeta && (
                     <small className="mt-0.5 block truncate text-[11px] text-foreground-muted">
                       {taskMeta}

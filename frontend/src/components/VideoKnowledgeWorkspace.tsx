@@ -21,8 +21,6 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import ContentChat from '@/components/ContentChat';
-import PlanDynamicField from '@/components/PlanDynamicField';
-import PlanTaskList from '@/components/PlanTaskList';
 import TranscriptViewer from '@/components/TranscriptViewer';
 import {
   extractDouyinLibraryItem,
@@ -33,7 +31,6 @@ import {
   CARD_TYPE_CONFIG,
   getPlanProgress,
   type DouyinVideoWorkspace,
-  type PlanData,
 } from '@/lib/types';
 
 type WorkspaceTab = 'chat' | 'transcript' | 'plan';
@@ -49,15 +46,15 @@ const TABS: Array<{
 ];
 
 const CREATE_PROMPTS = [
-  '按视频内容生成一份可以从今天开始执行的计划',
-  '只保留最重要的步骤，并给每一步合理的时间',
-  '把内容拆成一周内可以完成的行动安排',
+  { label: '7 天入门', value: '把视频方法整理成 7 天入门计划，每天只安排最关键的行动。' },
+  { label: '每天 30 分钟', value: '按每天 30 分钟安排，写清楚每天具体做什么。' },
+  { label: '只留关键步骤', value: '只保留最重要的步骤，按优先级排成可执行计划。' },
 ];
 
 const REVISE_PROMPTS = [
-  '把计划调整得更轻松，每天控制在 30 分钟以内',
-  '保留已完成任务，把剩余内容排到接下来 7 天',
-  '把任务拆得更细，并标出最优先的三件事',
+  { label: '更轻松', value: '保留已完成任务，把剩余任务调整为每天不超过 30 分钟。' },
+  { label: '改成 7 天', value: '保留已完成任务，把剩余内容重新安排到接下来 7 天。' },
+  { label: '拆得更细', value: '把剩余任务拆得更具体，并标出最优先的三件事。' },
 ];
 
 function formatDate(value: string): string {
@@ -114,6 +111,13 @@ export default function VideoKnowledgeWorkspace() {
     () => plan ? getPlanProgress(plan) : null,
     [plan],
   );
+  const nextPlanTasks = useMemo(() => {
+    if (!plan) return [];
+    const tasks = plan.days?.length
+      ? plan.days.flatMap(day => day.tasks)
+      : plan.tasks ?? [];
+    return tasks.filter(task => !task.done).slice(0, 3);
+  }, [plan]);
 
   const prepareVideo = async () => {
     if (!workspace || extracting) return;
@@ -167,12 +171,6 @@ export default function VideoKnowledgeWorkspace() {
     ));
     setInstruction('');
     setAgentNotice(response.data.change_summary);
-  };
-
-  const updateLocalPlan = (nextPlan: PlanData) => {
-    setWorkspace((current) => (
-      current ? { ...current, plan: nextPlan } : current
-    ));
   };
 
   if (loading) {
@@ -393,8 +391,9 @@ export default function VideoKnowledgeWorkspace() {
                     <Bot size={20} />
                   </span>
                   <div>
-                    <small>{plan ? '调整现有计划' : '从视频创建计划'}</small>
-                    <h2>告诉 Agent 你想怎么执行</h2>
+                    <small>{plan ? '调整计划' : '行动计划'}</small>
+                    <h2>{plan ? '一句话调整节奏' : 'AI 帮你排好下一步'}</h2>
+                    <p>说清周期或每天投入多少时间就可以</p>
                   </div>
                   {plan && (
                     <Link href={`/plans?id=${plan.id}`}>
@@ -407,37 +406,37 @@ export default function VideoKnowledgeWorkspace() {
                 <form onSubmit={(event) => void submitPlanInstruction(event)} className="video-plan-agent-composer">
                   <textarea
                     value={instruction}
-                    onChange={(event) => setInstruction(event.target.value.slice(0, 1000))}
-                    maxLength={1000}
-                    rows={3}
+                    onChange={(event) => setInstruction(event.target.value.slice(0, 500))}
+                    maxLength={500}
+                    rows={2}
                     placeholder={plan
-                      ? '例如：保留已经完成的任务，把剩余内容改成每周三次…'
-                      : '例如：根据视频内容，从明天开始安排一份两周计划…'}
+                      ? '例如：保留已完成内容，剩余任务改成每天 30 分钟'
+                      : '例如：从明天开始，做 7 天，每天 30 分钟'}
                     aria-label="输入对计划 Agent 的要求"
                     disabled={agentRunning}
                   />
                   <div>
-                    <span>{instruction.length}/1000</span>
+                    <span>{instruction.length}/500</span>
                     <button type="submit" disabled={!instruction.trim() || agentRunning}>
                       {agentRunning ? (
                         <LoaderCircle size={16} className="animate-spin" />
                       ) : (
                         <WandSparkles size={16} />
                       )}
-                      {agentRunning ? 'Agent 正在规划' : plan ? '应用调整' : '创建计划'}
+                      {agentRunning ? '正在规划' : plan ? '更新计划' : '生成计划'}
                     </button>
                   </div>
                 </form>
 
-                <div className="video-plan-agent-prompts" aria-label="计划建议">
+                <div className="video-plan-agent-prompts" aria-label="快捷计划模板">
                   {prompts.map((prompt) => (
                     <button
-                      key={prompt}
+                      key={prompt.label}
                       type="button"
-                      onClick={() => setInstruction(prompt)}
+                      onClick={() => setInstruction(prompt.value)}
                       disabled={agentRunning}
                     >
-                      {prompt}
+                      {prompt.label}
                     </button>
                   ))}
                 </div>
@@ -465,20 +464,28 @@ export default function VideoKnowledgeWorkspace() {
                         <span style={{ width: `${progress.pct}%` }} />
                       </div>
                     )}
-                    {plan.fields.length > 0 && (
-                      <div className="video-plan-fields">
-                        {plan.fields.map((field) => (
-                          <PlanDynamicField key={field.name} field={field} />
+                    {nextPlanTasks.length > 0 ? (
+                      <ol className="video-plan-next-tasks">
+                        {nextPlanTasks.map((task, index) => (
+                          <li key={task.id}>
+                            <span>{index + 1}</span>
+                            <p>{task.title}</p>
+                          </li>
                         ))}
-                      </div>
+                      </ol>
+                    ) : (
+                      <p className="video-plan-all-done">当前任务都已完成</p>
                     )}
-                    <PlanTaskList plan={plan} onMutate={updateLocalPlan} />
+                    <Link href={`/plans?id=${plan.id}`} className="video-plan-open-workspace">
+                      查看并打卡
+                      <ChevronRight size={15} />
+                    </Link>
                   </div>
                 ) : (
                   <div className="video-plan-empty">
                     <Clock3 size={22} />
-                    <strong>还没有行动计划</strong>
-                    <p>字段、天数、时间与任务数量都由 Agent 根据视频和你的要求灵活决定。</p>
+                    <strong>写一句要求就能开始</strong>
+                    <p>AI 会结合视频内容，自动安排周期、时间和任务。</p>
                   </div>
                 )}
               </section>

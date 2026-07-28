@@ -1032,7 +1032,21 @@ def get_douyin_library_login(
     """Return QR-login progress without exposing cookie values."""
     binding = douyin_binding_service.get_or_create(db, current_user.id)
     try:
-        return _ok(douyin_library.login_status(binding.session_scope))
+        state = douyin_library.login_status(binding.session_scope)
+        state["cookie_valid"] = False
+        state["cookie_count"] = 0
+        if state["authenticated"] or not state["running"]:
+            connection = douyin_library.connection_status(binding.session_scope)
+            if connection["connected"]:
+                douyin_binding_service.update_connection(
+                    db,
+                    binding,
+                    connected=bool(connection["cookie_valid"]),
+                    cookie_count=int(connection["cookie_count"]),
+                )
+            state["cookie_valid"] = bool(connection["cookie_valid"])
+            state["cookie_count"] = int(connection["cookie_count"])
+        return _ok(state)
     except douyin_library.DouyinLibraryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 

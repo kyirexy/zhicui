@@ -560,6 +560,20 @@ export default function VideoLibraryPage() {
       setBrowserOpened(Boolean(response.data.browser_opened));
       lastBrowserMode = response.data.browser_mode || 'idle';
       setBrowserMode(lastBrowserMode);
+      if (response.data.cookie_valid) {
+        loginPollRef.current += 1;
+        setScanning(false);
+        setQrPanelOpen(false);
+        setLoginQr('');
+        setQrActionMessage('');
+        setLoginStatusMessage('');
+        setBrowserOpened(false);
+        setBrowserMode('idle');
+        setQrFallbackVisible(false);
+        await refreshLoginStatus();
+        setNotice('抖音登录成功，现在可以选择来源并开始自动处理');
+        return;
+      }
       if (
         response.data.qr_ready
         && response.data.qr_version
@@ -595,7 +609,7 @@ export default function VideoLibraryPage() {
       }
       const expectsMirroredQr = (
         bindingClient === 'desktop-web'
-        && lastBrowserMode !== 'visible_chrome'
+        && ['remote_capture', 'headless'].includes(lastBrowserMode)
       );
       if (
         expectsMirroredQr
@@ -666,30 +680,48 @@ export default function VideoLibraryPage() {
     setNotice('扫码登录等待超时，可以重新弹出登录窗口');
   }, [bindingClient, refreshLoginStatus]);
 
-  const recoverQrLogin = useCallback(async () => {
-    const [loginResponse, statusResponse] = await Promise.all([
-      getDouyinLoginStatus(),
-      getDouyinLibraryStatus(),
-    ]);
-    if (!activeRef.current) return;
+  const recoverQrLogin = useCallback(async (confirmCompletion = false) => {
+    let loginResponse: Awaited<ReturnType<typeof getDouyinLoginStatus>> | null = null;
+    const attempts = confirmCompletion ? 6 : 1;
 
-    if (statusResponse.success && statusResponse.data) {
-      setStatus(statusResponse.data);
-      if (statusResponse.data.cookie_valid) {
-        loginPollRef.current += 1;
-        setScanning(false);
-        setQrPanelOpen(false);
-        setLoginQr('');
-        setQrActionMessage('');
-        setLoginStatusMessage('');
-        setBrowserOpened(false);
-        setBrowserMode('idle');
-        setQrFallbackVisible(false);
-        setQrFallbackMode('remote_capture');
-        return;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const [nextLoginResponse, statusResponse] = await Promise.all([
+        getDouyinLoginStatus(),
+        getDouyinLibraryStatus(),
+      ]);
+      if (!activeRef.current) return;
+      loginResponse = nextLoginResponse;
+
+      if (statusResponse.success && statusResponse.data) {
+        setStatus(statusResponse.data);
+        if (
+          statusResponse.data.cookie_valid
+          || nextLoginResponse.data?.cookie_valid
+        ) {
+          loginPollRef.current += 1;
+          setScanning(false);
+          setQrPanelOpen(false);
+          setLoginQr('');
+          setQrActionMessage('');
+          setLoginStatusMessage('');
+          setBrowserOpened(false);
+          setBrowserMode('idle');
+          setQrFallbackVisible(false);
+          setQrFallbackMode('remote_capture');
+          if (confirmCompletion) {
+            setNotice('已确认抖音登录成功，现在可以同步视频');
+          }
+          return;
+        }
+      }
+      if (nextLoginResponse.success && nextLoginResponse.data?.running) break;
+      if (attempt + 1 < attempts) {
+        setNotice('抖音已确认，正在同步登录状态…');
+        await wait(1200);
       }
     }
-    if (!loginResponse.success || !loginResponse.data?.running) return;
+
+    if (!loginResponse?.success || !loginResponse.data?.running) return;
 
     const pollId = loginPollRef.current + 1;
     loginPollRef.current = pollId;
@@ -727,7 +759,7 @@ export default function VideoLibraryPage() {
     let listener: { remove: () => Promise<void> } | null = null;
 
     void App.addListener('appStateChange', ({ isActive }) => {
-      if (isActive && !disposed) void recoverQrLogin();
+      if (isActive && !disposed) void recoverQrLogin(true);
     }).then((handle) => {
       if (disposed) {
         void handle.remove();

@@ -505,6 +505,8 @@ def login_status(session_scope: str) -> dict[str, Any]:
         "browser_mode": str(state.get("browser_mode") or "idle"),
         "qr_ready": bool(state.get("qr_ready")),
         "qr_version": int(state.get("qr_version") or 0),
+        "observed_cookie_count": int(state.get("observed_cookie_count") or 0),
+        "authenticated": bool(state.get("authenticated")),
     }
 
 

@@ -26,5 +26,6 @@ browser_fallback:
 
 server:
   metadata_only: true
+  login_browser_concurrency: 2
   max_jobs: 500
   job_ttl_seconds: 86400

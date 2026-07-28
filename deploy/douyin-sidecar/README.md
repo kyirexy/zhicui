@@ -6,8 +6,8 @@
 - `zhicui-sidecar.patch` 保存知萃需要的 50/100 条元数据同步、Web API、二维码登录与即时媒体流改造；
 - 服务只监听 `127.0.0.1:9000`，Nginx 不对公网暴露；
 - 浏览器运行在 Xvfb 虚拟显示器中，只把裁剪后的二维码交给已登录的知萃用户；
-- Cookie 保存为 `/opt/douyin-downloader/.cookies.json`，权限为 `0600`；
-- 资料库元数据保存在 `/opt/douyin-downloader/Metadata/`；
+- Cookie 按知萃用户作用域保存到 `/opt/douyin-downloader/Metadata/.sessions/<scope>/cookies.json`，目录权限为 `0700`、文件权限为 `0600`；
+- 资料库元数据同样按作用域保存在 `/opt/douyin-downloader/Metadata/.sessions/<scope>/library/`；
 - 生产模式禁止下载持久视频；播放和 ASR 只临时流式读取，响应/处理结束立即释放。
 
 ## 安装或升级
@@ -36,4 +36,4 @@ sudo systemctl restart zhicui-douyin-sidecar
 
 不要把 9000 端口加入公网防火墙或 Nginx。扫码登录应始终通过知萃的鉴权接口 `/api/library/douyin/login*` 发起。
 
-健康接口必须返回 `storage_mode: metadata_only` 和 `max_sync_count: 100`。同步接口接受 1–100 条的精确整数范围；`/download` 与 `/crawl` 在生产模式返回 403。`DELETE /api/v1/cookies` 只清理抖音会话与二维码状态，不删除目录元数据或生成内容。
+健康接口必须返回 `storage_mode: metadata_only`、`max_sync_count: 100` 和当前登录浏览器并发上限。登录默认允许 2 个不同用户并发，更多请求进入独立排队态，可用 `DOUYIN_LOGIN_BROWSER_CONCURRENCY` 在 1–4 之间调整；同一用户重复请求只复用一个任务。同步接口接受 1–100 条的精确整数范围；`/download` 与 `/crawl` 在生产模式返回 403。`DELETE /api/v1/cookies` 只清理当前作用域的抖音会话与二维码状态，不删除目录元数据或生成内容。

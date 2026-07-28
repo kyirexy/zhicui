@@ -120,3 +120,41 @@ The system SHALL recover from a stalled QR discovery without leaving the user on
 #### Scenario: User retries while the previous browser is closing
 - **WHEN** the same user starts login during scoped browser cleanup
 - **THEN** the connector treats the request idempotently or returns a bounded retry state instead of a generic 502 response
+
+### Requirement: Authoritative login completion reconciliation
+The system SHALL recognize current authenticated Douyin session Cookie variants, persist only their safe count outside the sidecar and reconcile a completed desktop login when the same Zhicui account resumes on mobile.
+
+#### Scenario: Current Douyin login returns a session Cookie variant
+- **WHEN** QR confirmation produces any supported authenticated session Cookie such as `sessionid`, `sessionid_ss` or `sid_guard`
+- **THEN** the sidecar saves the complete sanitized Cookie set in the scoped sidecar directory and marks the login complete without requiring an obsolete fixed Cookie pair
+
+#### Scenario: Anonymous browser Cookies exist before confirmation
+- **WHEN** the login page has only anonymous tracking or CSRF Cookies and no authenticated session Cookie
+- **THEN** the sidecar keeps waiting and MUST NOT report the user as bound
+
+#### Scenario: Android App returns after desktop confirmation
+- **WHEN** the same Zhicui account returns to the foreground while its desktop QR task is completing
+- **THEN** the App performs a bounded series of scoped status checks, closes the binding guide and shows a success message as soon as the authoritative Cookie status is valid
+
+#### Scenario: Login status is polled during completion
+- **WHEN** a client polls an active or just-completed login task
+- **THEN** the response includes safe completion and observed-Cookie counts without exposing Cookie names or values
+
+### Requirement: Bounded concurrent login coordination
+The system SHALL isolate concurrent logins by user scope, reuse a single in-flight login for duplicate requests in one scope and bound the number of browser workers running process-wide.
+
+#### Scenario: Same user starts login from two clients
+- **WHEN** two requests start login for the same user scope while one task is already active
+- **THEN** both clients observe the same single-flight task and no second browser worker is created
+
+#### Scenario: Different users start together below capacity
+- **WHEN** different user scopes start login and browser capacity is available
+- **THEN** their independent browser tasks may run concurrently and their QR, Cookie and cancellation state remain isolated
+
+#### Scenario: Browser capacity is full
+- **WHEN** another user starts login after the configured browser-worker limit is reached
+- **THEN** the task enters an explicit queued state and starts automatically when capacity becomes available instead of failing with a gateway error
+
+#### Scenario: One user cancels
+- **WHEN** one scope cancels its queued or running login
+- **THEN** no login task, Cookie or QR state belonging to another scope is changed

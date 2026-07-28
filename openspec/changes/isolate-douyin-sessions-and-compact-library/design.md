@@ -109,3 +109,15 @@ Cancellation is cooperative. The sidecar signals the worker, closes the browser 
 ### 11. Frontend deployments retain bounded chunk compatibility
 
 The isolated frontend build remains atomic, but the deploy switch copies hashed static assets from the current build into the new `.next/static` tree before activation and prunes assets older than a bounded retention window. An already-open document can therefore finish loading after a deployment. A small bootstrap error handler is the final fallback: a failed `/_next/static/` script or stylesheet clears service-worker caches and reloads once, guarded by session storage to prevent loops.
+
+### 12. Login completion follows authenticated session evidence
+
+The sidecar no longer treats one historical pair of Cookie names as the definition of QR success. It distinguishes authenticated session Cookies (`sessionid`, `sessionid_ss`, `sid_guard`) from anonymous page Cookies and completes when at least one authenticated session marker is present. The complete sanitized Cookie set remains in the per-scope sidecar file; public status exposes only counts and booleans. The existing legacy Cookie-validity rule remains a compatibility fallback for manually supplied Cookie sets.
+
+The backend reconciles the binding record from the authoritative sidecar Cookie status whenever login status is read, not only when the separate library-status endpoint happens to be called. Android foreground recovery uses short bounded backoff checks because the Douyin App may report confirmation a few seconds before the browser finishes writing the session.
+
+### 13. Login browser workers are single-flight and globally bounded
+
+Each session scope continues to own one login task. Duplicate starts return that task's current state. A process-wide FIFO-compatible `asyncio.Semaphore` limits active Playwright browser workers; tasks beyond the limit remain cancellable in an explicit `queued` browser mode. The default limit is two and is configurable independently of download-job concurrency.
+
+The semaphore guards only the expensive browser lifetime. QR images, Cookie files, cancellation events and status remain scoped. Releasing or cancelling one slot cannot mutate another session. This permits useful multi-user concurrency without allowing a burst of login attempts to exhaust server memory.

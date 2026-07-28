@@ -60,3 +60,10 @@
 - [x] 10.2 Forward browser mode through the backend and add one automatic QR restart plus an explicit retry fallback
 - [x] 10.3 Retain bounded previous-build chunks and add one-shot stale-chunk recovery in the client bootstrap
 - [x] 10.4 Run sidecar/frontend verification, regenerate the production patch and deploy the repaired flow
+
+## 11. Mobile completion and concurrent login hardening
+
+- [x] 11.1 Recognize current authenticated Douyin Cookie variants and expose only safe completion counters
+- [x] 11.2 Reconcile binding status during login polling and add bounded Android foreground confirmation
+- [x] 11.3 Add per-scope single-flight plus a process-wide bounded login-browser queue
+- [ ] 11.4 Add completion/concurrency coverage, regenerate the sidecar patch and deploy the verified repair

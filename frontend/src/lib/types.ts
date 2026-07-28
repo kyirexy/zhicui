@@ -176,6 +176,10 @@ export interface DouyinLoginStatus {
   browser_mode?: 'starting' | 'visible_chrome' | 'headless' | 'idle' | string;
   qr_ready?: boolean;
   qr_version?: number;
+  observed_cookie_count?: number;
+  authenticated?: boolean;
+  cookie_valid?: boolean;
+  cookie_count?: number;
 }
 
 export interface DouyinCollectionJob {

@@ -1,5 +1,7 @@
 'use client';
 
+import { App } from '@capacitor/app';
+import { Capacitor } from '@capacitor/core';
 import {
   Download,
   RefreshCw,
@@ -74,6 +76,44 @@ export default function AppUpdatePrompt() {
       });
     return () => {
       active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const nativeAndroid = (
+      Capacitor.isNativePlatform()
+      && Capacitor.getPlatform() === 'android'
+    );
+    if (!nativeAndroid) return undefined;
+
+    let disposed = false;
+    let listener: { remove: () => Promise<void> } | null = null;
+    void App.addListener('appStateChange', ({ isActive }) => {
+      if (!isActive || disposed) return;
+      void checkAndroidAppUpdate()
+        .then((result) => {
+          if (disposed || result.status !== 'update-available') return;
+          const dismissedBuild = sessionStorage.getItem(DISMISSED_BUILD_KEY);
+          if (dismissedBuild === String(result.release.build)) return;
+          setAvailable({
+            installed: result.installed,
+            release: result.release,
+          });
+        })
+        .catch(() => {
+          // Returning to the app must stay usable when the update service is offline.
+        });
+    }).then((handle) => {
+      if (disposed) {
+        void handle.remove();
+        return;
+      }
+      listener = handle;
+    });
+
+    return () => {
+      disposed = true;
+      if (listener) void listener.remove();
     };
   }, []);
 

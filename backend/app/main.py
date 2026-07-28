@@ -30,6 +30,7 @@ from app.models.user_activity_log import UserActivityLog  # noqa: F401
 from app.models.application_error_log import ApplicationErrorLog  # noqa: F401
 from app.models.feedback import Feedback  # noqa: F401
 from app.models.library_hidden_item import LibraryHiddenItem  # noqa: F401
+from app.models.douyin_account_binding import DouyinAccountBinding  # noqa: F401
 from app.core.request_context import reset_request_context, set_request_context
 from app.services import activity_service, auth_service, error_log_service
 

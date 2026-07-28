@@ -1,16 +1,16 @@
 {
-  "schema_version": 1,
-  "platform": "android",
-  "version": "1.1.0",
-  "build": 2,
-  "published_at": "2026-07-27T12:58:14.618Z",
-  "download_url": "https://luxai.cn/download/zhicui.apk",
-  "size_bytes": 76715504,
-  "mandatory": false,
-  "release_notes": [
-    "新增应用内版本检查，有新版本时会主动提醒。",
-    "更新提示现在会展示版本号、文件大小和完整更新日志。",
-    "支持从视频资料库单条移除或批量移除不需要的收藏。",
-    "移除只影响知萃资料库，不会取消抖音收藏或删除已有文案与计划。"
-  ]
+    "schema_version":  1,
+    "platform":  "android",
+    "version":  "1.1.1",
+    "build":  3,
+    "published_at":  "2026-07-28T02:37:25.044Z",
+    "download_url":  "https://luxai.cn/download/zhicui.apk",
+    "size_bytes":  82070274,
+    "mandatory":  false,
+    "release_notes":  [
+                          "Android 端未绑定抖音时会明确引导到电脑端完成绑定。",
+                          "电脑端使用同一个知萃账号绑定后，返回 App 会自动刷新登录状态。",
+                          "电脑端抖音绑定现在会直接弹出系统 Chrome，并在 Chrome 中完成验证与扫码。",
+                          "优化批量视频库布局、视频详情问答与用户隔离的抖音同步流程。"
+                      ]
 }

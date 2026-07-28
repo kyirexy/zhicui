@@ -424,6 +424,7 @@ def extract_media_url_transcript(
     model: str | None = None,
     *,
     max_bytes: int = 800 * 1024 * 1024,
+    request_headers: dict[str, str] | None = None,
 ) -> str:
     """Transcribe a trusted direct media URL from the companion library.
 
@@ -471,7 +472,12 @@ def extract_media_url_transcript(
         try:
             with _requests.Session() as session:
                 session.trust_env = False
-                with session.get(clean_url, stream=True, timeout=(10, 300)) as response:
+                with session.get(
+                    clean_url,
+                    headers=request_headers or None,
+                    stream=True,
+                    timeout=(10, 300),
+                ) as response:
                     response.raise_for_status()
                     content_length = int(response.headers.get("Content-Length") or 0)
                     if content_length > max_bytes:

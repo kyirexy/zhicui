@@ -26,6 +26,7 @@ from app.services import (
     activity_service,
     app_release_service,
     audit_service,
+    douyin_binding_service,
     douyin_library,
     error_log_service,
     feedback_service,
@@ -957,67 +958,109 @@ def extract_stream(
 
 @router.get("/api/library/douyin/status")
 def get_douyin_library_status(
+    db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
     """Report whether the optional local downloader is ready."""
-    return _ok(douyin_library.connection_status())
+    binding = douyin_binding_service.get_or_create(db, current_user.id)
+    status = douyin_library.connection_status(binding.session_scope)
+    if status["connected"]:
+        douyin_binding_service.update_connection(
+            db,
+            binding,
+            connected=bool(status["cookie_valid"]),
+            cookie_count=int(status["cookie_count"]),
+        )
+    status["binding"] = binding.safe_dict()
+    return _ok(status)
 
 
 @router.post("/api/library/douyin/login")
 def start_douyin_library_login(
     body: LibraryLoginRequest,
+    db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
     """Open the companion browser for QR login."""
+    binding = douyin_binding_service.get_or_create(db, current_user.id)
     try:
-        current = douyin_library.login_status()
+        current = douyin_library.login_status(binding.session_scope)
         if current["running"]:
             return _ok({**current, "started": False})
-        return _ok(douyin_library.start_login(body.browser))
+        result = douyin_library.start_login(binding.session_scope, body.browser)
+        douyin_binding_service.mark_login_pending(db, binding)
+        return _ok(result)
     except douyin_library.DouyinLibraryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/api/library/douyin/logout")
 def logout_douyin_library(
+    db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
     """Clear the companion login session without deleting library data."""
+    binding = douyin_binding_service.get_or_create(db, current_user.id)
     try:
-        return _ok(douyin_library.clear_session())
+        result = douyin_library.clear_session(binding.session_scope)
+        douyin_binding_service.mark_disconnected(db, binding)
+        return _ok(result)
     except douyin_library.DouyinLibraryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/api/library/douyin/rebind")
 def rebind_douyin_library(
+    db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
     """Clear the current session before the client starts a new QR login."""
+    binding = douyin_binding_service.get_or_create(db, current_user.id)
     try:
-        return _ok(douyin_library.clear_session())
+        result = douyin_library.clear_session(binding.session_scope)
+        douyin_binding_service.mark_disconnected(db, binding)
+        return _ok(result)
     except douyin_library.DouyinLibraryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.get("/api/library/douyin/login")
 def get_douyin_library_login(
+    db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
     """Return QR-login progress without exposing cookie values."""
+    binding = douyin_binding_service.get_or_create(db, current_user.id)
     try:
-        return _ok(douyin_library.login_status())
+        return _ok(douyin_library.login_status(binding.session_scope))
+    except douyin_library.DouyinLibraryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.delete("/api/library/douyin/login")
+def cancel_douyin_library_login(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Cancel only this user's transient browser login task."""
+    binding = douyin_binding_service.get_or_create(db, current_user.id)
+    try:
+        result = douyin_library.cancel_login(binding.session_scope)
+        douyin_binding_service.mark_disconnected(db, binding)
+        return _ok(result)
     except douyin_library.DouyinLibraryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.get("/api/library/douyin/login/qr")
 def get_douyin_library_login_qr(
+    db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
     """Proxy the QR image without exposing the companion to the public."""
+    binding = douyin_binding_service.get_or_create(db, current_user.id)
     try:
-        return _ok(douyin_library.login_qr())
+        return _ok(douyin_library.login_qr(binding.session_scope))
     except douyin_library.DouyinLibraryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -1025,11 +1068,18 @@ def get_douyin_library_login_qr(
 @router.post("/api/library/douyin/collect")
 def collect_douyin_library(
     body: LibraryCollectRequest,
+    db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
     """Ask the companion to refresh the user's Douyin collection."""
+    binding = douyin_binding_service.get_or_create(db, current_user.id)
     try:
-        job = douyin_library.trigger_collect(body.count, body.mode)
+        job = douyin_library.trigger_collect(
+            binding.session_scope,
+            body.count,
+            body.mode,
+        )
+        douyin_binding_service.mark_sync_started(db, binding)
     except douyin_library.DouyinLibraryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return _ok(job)
@@ -1038,11 +1088,13 @@ def collect_douyin_library(
 @router.get("/api/library/douyin/jobs/{job_id}")
 def get_douyin_library_job(
     job_id: str,
+    db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
     """Return one downloader collection job."""
+    binding = douyin_binding_service.get_or_create(db, current_user.id)
     try:
-        return _ok(douyin_library.get_job(job_id))
+        return _ok(douyin_library.get_job(binding.session_scope, job_id))
     except douyin_library.DouyinLibraryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -1058,12 +1110,31 @@ def stream_douyin_library_media(
     ),
     expires: int = Query(..., ge=1),
     signature: str = Query(..., min_length=64, max_length=64),
+    binding: str = Query(
+        ...,
+        min_length=24,
+        max_length=24,
+        pattern=r"^dyb-[0-9a-f]{20}$",
+    ),
+    db: Session = Depends(get_db),
 ):
     """Proxy a short-lived Douyin stream without persisting it on the server."""
-    if not douyin_library.verify_media_signature(aweme_id, expires, signature):
+    if not douyin_library.verify_media_signature(
+        aweme_id,
+        binding,
+        expires,
+        signature,
+    ):
         raise HTTPException(status_code=403, detail="视频播放地址已失效，请刷新页面")
+    account_binding = douyin_binding_service.get_by_id(db, binding)
+    if account_binding is None:
+        raise HTTPException(status_code=404, detail="抖音账号绑定不存在")
     target_url = douyin_library.companion_media_url(aweme_id)
-    request_headers = {"Accept": "*/*", "Accept-Encoding": "identity"}
+    request_headers = {
+        "Accept": "*/*",
+        "Accept-Encoding": "identity",
+        **douyin_library.companion_headers(account_binding.session_scope),
+    }
     range_header = request.headers.get("range")
     if range_header:
         request_headers["Range"] = range_header
@@ -1123,8 +1194,15 @@ def list_douyin_library_items(
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
     """Return downloader items enriched with this user's extraction state."""
+    binding = douyin_binding_service.get_or_create(db, current_user.id)
     try:
-        items = douyin_library.list_items(0, mode=mode, sort_by=sort)
+        items = douyin_library.list_items(
+            binding.session_scope,
+            binding.id,
+            0,
+            mode=mode,
+            sort_by=sort,
+        )
     except douyin_library.DouyinLibraryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -1186,8 +1264,13 @@ def get_douyin_library_item(
     """Compose live downloader media with this user's durable knowledge."""
     if library_hidden_service.is_hidden(db, current_user.id, aweme_id):
         raise HTTPException(status_code=404, detail="视频已从当前资料库移除")
+    binding = douyin_binding_service.get_or_create(db, current_user.id)
     try:
-        item = douyin_library.get_item(aweme_id)
+        item = douyin_library.get_item(
+            binding.session_scope,
+            binding.id,
+            aweme_id,
+        )
     except douyin_library.DouyinLibraryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     if item is None:
@@ -1236,8 +1319,13 @@ def extract_douyin_library_item(
         result["already_existed"] = True
         return _ok(result)
 
+    binding = douyin_binding_service.get_or_create(db, current_user.id)
     try:
-        item = douyin_library.get_item(body.aweme_id)
+        item = douyin_library.get_item(
+            binding.session_scope,
+            binding.id,
+            body.aweme_id,
+        )
     except douyin_library.DouyinLibraryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     if item is None:
@@ -1252,6 +1340,9 @@ def extract_douyin_library_item(
             asr_config["api_key"],
             asr_config["api_base_url"],
             asr_config["model"],
+            request_headers=douyin_library.companion_headers(
+                binding.session_scope,
+            ),
         )
         if not transcript.strip():
             raise RuntimeError("语音识别没有返回文案")

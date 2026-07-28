@@ -172,6 +172,8 @@ export interface DouyinLoginStatus {
   message: string;
   error: string;
   started?: boolean;
+  browser_opened?: boolean;
+  browser_mode?: 'starting' | 'visible_chrome' | 'headless' | 'idle' | string;
   qr_ready?: boolean;
   qr_version?: number;
 }

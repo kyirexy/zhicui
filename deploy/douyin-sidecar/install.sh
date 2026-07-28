@@ -31,6 +31,8 @@ install -d -o ubuntu -g ubuntu -m 0750 \
   "${APP_ROOT}/releases" \
   "${APP_ROOT}/Metadata" \
   "${APP_ROOT}/ms-playwright"
+install -d -o ubuntu -g ubuntu -m 0700 \
+  "${APP_ROOT}/Metadata/.sessions"
 install -d -o ubuntu -g ubuntu -m 0750 "${RELEASE_DIR}"
 
 sudo -u ubuntu git -C "${RELEASE_DIR}" init --quiet
@@ -64,6 +66,7 @@ chown -R ubuntu:ubuntu \
   "${APP_ROOT}/ms-playwright" \
   "${RELEASE_DIR}"
 chmod 0750 "${APP_ROOT}/Metadata" "${APP_ROOT}/ms-playwright"
+chmod 0700 "${APP_ROOT}/Metadata/.sessions"
 
 # Production is metadata-only. Purge media left by older releases before the
 # service may start, while preserving JSON/order/cover metadata.

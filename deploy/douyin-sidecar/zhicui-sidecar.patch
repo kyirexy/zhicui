@@ -1,5 +1,5 @@
 diff --git a/README.md b/README.md
-index 43ac08ab7c75823c341a4051e53da756f1bab94d..0d525011854fa93b31b2ddbbf370a55e78db0c3a 100644
+index 43ac08a..0d52501 100644
 --- a/README.md
 +++ b/README.md
 @@ -46,7 +46,7 @@ _Screenshots were captured from the current desktop `main` build. Demonstration
@@ -62,7 +62,7 @@ index 43ac08ab7c75823c341a4051e53da756f1bab94d..0d525011854fa93b31b2ddbbf370a55e
  | `start_time` / `end_time` | Time filter (format: `YYYY-MM-DD`) |
  | `folderstyle` | Create per-item subdirectories |
 diff --git a/config.example.yml b/config.example.yml
-index ac75464af34be8b76fa9219275ebc617c07489c0..17208c42e16030433c98ecccdc99e312421eabee 100644
+index ac75464..17208c4 100644
 --- a/config.example.yml
 +++ b/config.example.yml
 @@ -39,6 +39,7 @@ number:
@@ -82,7 +82,7 @@ index ac75464af34be8b76fa9219275ebc617c07489c0..17208c42e16030433c98ecccdc99e312
  thread: 5
  retry_times: 3
 diff --git a/config/default_config.py b/config/default_config.py
-index 9961fadd66f4e24218268245a5c04e061fdfd201..8f9735caa024f4765968e08b53f2983879f0ff52 100644
+index 9961fad..8f9735c 100644
 --- a/config/default_config.py
 +++ b/config/default_config.py
 @@ -31,6 +31,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
@@ -102,7 +102,7 @@ index 9961fadd66f4e24218268245a5c04e061fdfd201..8f9735caa024f4765968e08b53f29838
      "thread": 5,
      "retry_times": 3,
 diff --git a/core/api_client.py b/core/api_client.py
-index eefc764e706ff830c5cd67037d1798ac4e209873..23f32fa13fc99e29a6daf1ab76049293d6ac8ce2 100644
+index eefc764..23f32fa 100644
 --- a/core/api_client.py
 +++ b/core/api_client.py
 @@ -291,10 +291,15 @@ class DouyinAPIClient:
@@ -188,7 +188,7 @@ index eefc764e706ff830c5cd67037d1798ac4e209873..23f32fa13fc99e29a6daf1ab76049293
          self, sec_uid: str, max_cursor: int = 0, count: int = 20
      ) -> Dict[str, Any]:
 diff --git a/core/user_downloader.py b/core/user_downloader.py
-index 6b2f38ecaf8c15bc12b1fcbe6b5d9f94898c6882..8da6b9994bb0c15c08f7c3f7b52a5c4df96decb4 100644
+index 6b2f38e..8da6b99 100644
 --- a/core/user_downloader.py
 +++ b/core/user_downloader.py
 @@ -27,7 +27,7 @@ def _user_info_summary(user_info: Dict[str, Any]) -> Dict[str, Any]:
@@ -220,7 +220,7 @@ index 6b2f38ecaf8c15bc12b1fcbe6b5d9f94898c6882..8da6b9994bb0c15c08f7c3f7b52a5c4d
          return True
  
 diff --git a/core/user_mode_registry.py b/core/user_mode_registry.py
-index 9443b6e39eb289a50a1d1e5e0a80db0f15113e9f..2a3ebe62513503879241f58c4bcfbe2aa29a8a74 100644
+index 9443b6e..2a3ebe6 100644
 --- a/core/user_mode_registry.py
 +++ b/core/user_mode_registry.py
 @@ -6,6 +6,7 @@ from core.user_modes import (
@@ -240,7 +240,7 @@ index 9443b6e39eb289a50a1d1e5e0a80db0f15113e9f..2a3ebe62513503879241f58c4bcfbe2a
          }
  
 diff --git a/core/user_modes/__init__.py b/core/user_modes/__init__.py
-index 47f560fb91d4d42aa87c7e57e4d77ad46b2b8c59..3d2f8d1fa05cc3cb17806b4cdcf5e30fb1e3f1fc 100644
+index 47f560f..3d2f8d1 100644
 --- a/core/user_modes/__init__.py
 +++ b/core/user_modes/__init__.py
 @@ -1,6 +1,7 @@
@@ -259,22 +259,8 @@ index 47f560fb91d4d42aa87c7e57e4d77ad46b2b8c59..3d2f8d1fa05cc3cb17806b4cdcf5e30f
      "PostUserModeStrategy",
      "LikeUserModeStrategy",
      "MixUserModeStrategy",
-diff --git a/core/user_modes/collection_strategy.py b/core/user_modes/collection_strategy.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..16ab262466a4b8752c8fe122d100c66464a7165c
---- /dev/null
-+++ b/core/user_modes/collection_strategy.py
-@@ -0,0 +1,8 @@
-+from core.user_modes.base_strategy import BaseUserModeStrategy
-+
-+
-+class CollectionUserModeStrategy(BaseUserModeStrategy):
-+    """Download the logged-in account's default/all collected aweme."""
-+
-+    mode_name = "collection"
-+    api_method_name = "get_user_collection"
 diff --git a/pyproject.toml b/pyproject.toml
-index 17cb6f2ebdfca46489ca42053af0116603be721f..c08fbc26ad325a7002b8b263d86076d54254e252 100644
+index 17cb6f2..c08fbc2 100644
 --- a/pyproject.toml
 +++ b/pyproject.toml
 @@ -38,6 +38,8 @@ dependencies = [
@@ -287,7 +273,7 @@ index 17cb6f2ebdfca46489ca42053af0116603be721f..c08fbc26ad325a7002b8b263d86076d5
  
  [project.optional-dependencies]
 diff --git a/requirements.txt b/requirements.txt
-index 3b0900b675722c3e3045620e89d8e0862b5a428d..309d46cbee1bcb1758520067acf1303426966a5a 100644
+index 3b0900b..309d46c 100644
 --- a/requirements.txt
 +++ b/requirements.txt
 @@ -9,3 +9,5 @@ gmssl>=3.2.2
@@ -297,10 +283,10 @@ index 3b0900b675722c3e3045620e89d8e0862b5a428d..309d46cbee1bcb1758520067acf13034
 +# Detect and crop QR codes rendered inside Douyin's closed login component.
 +opencv-python-headless>=4.10,<5
 diff --git a/server/app.py b/server/app.py
-index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a6273ce66 100644
+index 418f875..ae94c4b 100644
 --- a/server/app.py
 +++ b/server/app.py
-@@ -1,19 +1,33 @@
+@@ -1,19 +1,37 @@
 -"""FastAPI REST 服务入口。
 +"""FastAPI REST 服务入口 + 轻量前端。
  
@@ -323,6 +309,10 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +import hashlib
 +import json
 +import os
++import re
++import signal
++import subprocess
++import threading
  from contextlib import asynccontextmanager
 -from typing import Any, Dict, List
 +from datetime import datetime, timezone
@@ -333,14 +323,14 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 -from pydantic import BaseModel
 +import aiofiles
 +import aiohttp
-+from fastapi import FastAPI, HTTPException, Request
++from fastapi import Depends, FastAPI, Header, HTTPException, Request
 +from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 +from fastapi.staticfiles import StaticFiles
 +from pydantic import BaseModel, Field
  
  from auth import CookieManager
  from config import ConfigLoader
-@@ -21,14 +35,66 @@ from control import QueueManager, RateLimiter, RetryHandler
+@@ -21,14 +39,72 @@ from control import QueueManager, RateLimiter, RetryHandler
  from core import DouyinAPIClient, DownloaderFactory, URLParser
  from server.jobs import JobManager
  from storage import FileManager
@@ -357,6 +347,12 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +MAX_QR_IMAGE_BYTES = 512 * 1024
 +QR_REFRESH_SECONDS = 4
 +QR_DISCOVERY_TIMEOUT_SECONDS = 60
++DEFAULT_SESSION_SCOPE = "default"
++SESSION_SCOPE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{32,64}$")
++LOGIN_CHALLENGE_TITLES = (
++    "验证码中间页",
++    "安全验证",
++)
 +PERSISTENT_MEDIA_SUFFIXES = frozenset(
 +    {
 +        ".mp4",
@@ -407,10 +403,12 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
  
  
  class JobResponse(BaseModel):
-@@ -37,57 +103,584 @@ class JobResponse(BaseModel):
+@@ -37,57 +113,690 @@ class JobResponse(BaseModel):
      url: str
  
  
+-class _ServerDeps:
+-    """跨请求复用的重量级依赖。
 +class CookieRequest(BaseModel):
 +    cookie: Optional[str] = None    # "k=v; k2=v2" 或 JSON dict
 +
@@ -441,26 +439,53 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +    return raw.strip().lower() in {"1", "true", "yes", "on"}
 +
 +
++def _terminate_login_driver(deps: "_SessionDeps") -> bool:
++    """Terminate only the Playwright process tree owned by this login session."""
++    process = deps.fetch_driver_process
++    pid = int(getattr(process, "pid", 0) or 0)
++    if pid <= 0 or pid == os.getpid() or getattr(process, "returncode", None) is not None:
++        return False
++    try:
++        if os.name == "nt":
++            completed = subprocess.run(
++                ["taskkill", "/PID", str(pid), "/T", "/F"],
++                stdout=subprocess.DEVNULL,
++                stderr=subprocess.DEVNULL,
++                timeout=5,
++                check=False,
++                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
++            )
++            return completed.returncode == 0
++        os.kill(pid, signal.SIGTERM)
++        return True
++    except (OSError, subprocess.SubprocessError):
++        return False
++
++
++async def _has_login_challenge(page: Any) -> bool:
++    """Detect Douyin's interactive verification page without solving it."""
++    try:
++        title = (
++            await asyncio.wait_for(page.title(), timeout=3.0)
++        ).strip()
++    except Exception:
++        return False
++    return any(marker in title for marker in LOGIN_CHALLENGE_TITLES)
++
++
 +async def _open_douyin_login(page: Any) -> None:
-+    """打开登录入口，并在页面允许时主动展开登录/扫码面板。"""
++    """Open the login entry and keep the real Chrome window in front."""
++    await page.bring_to_front()
 +    await page.goto(
 +        "https://www.douyin.com/?showLogin=true",
-+        wait_until="domcontentloaded",
-+        timeout=60000,
++        # Douyin's verification intermediate can continuously reload subresources.
++        # Waiting for DOMContentLoaded leaves the user with a flashing window and
++        # prevents the challenge state from reaching the frontend.
++        wait_until="commit",
++        timeout=15000,
 +    )
-+    await page.wait_for_timeout(1200)
-+    for label in ("登录", "扫码登录"):
-+        try:
-+            candidates = page.get_by_text(label, exact=True)
-+            for index in range(min(await candidates.count(), 8)):
-+                candidate = candidates.nth(index)
-+                if not await candidate.is_visible():
-+                    continue
-+                await candidate.click(timeout=3000)
-+                await page.wait_for_timeout(800)
-+                break
-+        except Exception:
-+            continue
++    await page.bring_to_front()
++    await page.wait_for_timeout(1800)
 +
 +
 +async def _capture_qr_png(page: Any) -> Optional[bytes]:
@@ -571,7 +596,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +
 +
 +async def _persist_source_order(
-+    deps: "_ServerDeps",
++    deps: "_SessionDeps",
 +    mode: str,
 +    aweme_ids: List[str],
 +) -> Dict[str, Any]:
@@ -655,7 +680,11 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +            break
 +    if not cover_url and images:
 +        cover_url = _first_remote_url(images[0])
-+
+ 
+-    REST 服务在进程生命周期内只需要一份 FileManager / RateLimiter / RetryHandler /
+-    QueueManager / CookieManager；每个请求重新构造既浪费又会触发文件系统 mkdir。
+-    DouyinAPIClient 由于持有 aiohttp.ClientSession，依旧按请求创建，避免跨请求泄漏
+-    连接状态或触发 "Session is closed" 错误。
 +    tags: List[str] = []
 +    text_extra = item.get("text_extra")
 +    if isinstance(text_extra, list):
@@ -702,7 +731,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +
 +
 +async def _persist_library_catalog(
-+    deps: "_ServerDeps",
++    deps: "_SessionDeps",
 +    mode: str,
 +    items: List[Dict[str, Any]],
 +) -> Dict[str, Any]:
@@ -776,29 +805,58 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +    return cookies
 +
 +
- class _ServerDeps:
-     """跨请求复用的重量级依赖。
- 
--    REST 服务在进程生命周期内只需要一份 FileManager / RateLimiter / RetryHandler /
--    QueueManager / CookieManager；每个请求重新构造既浪费又会触发文件系统 mkdir。
--    DouyinAPIClient 由于持有 aiohttp.ClientSession，依旧按请求创建，避免跨请求泄漏
--    连接状态或触发 "Session is closed" 错误。
-+    REST 服务在进程生命周期内只需要一份 FileManager / RateLimiter /
-+    RetryHandler / QueueManager / CookieManager。DouyinAPIClient 按请求创建，
-+    避免 aiohttp.ClientSession 跨请求泄漏连接状态。
++def _session_scope(
++    value: Optional[str] = Header(default=None, alias="X-Zhicui-Scope"),
++) -> str:
++    """Validate the opaque namespace supplied by the loopback Zhicui backend.
++
++    Header-less requests keep the reference project's standalone Web console
++    working in the legacy ``default`` namespace. Zhicui always sends a random
++    per-user scope.
      """
++    if value is None or not value.strip():
++        return DEFAULT_SESSION_SCOPE
++    scope = value.strip()
++    if not SESSION_SCOPE_PATTERN.fullmatch(scope):
++        raise HTTPException(status_code=400, detail="会话作用域无效")
++    return scope
  
-     def __init__(self, config: ConfigLoader):
-         self.config = config
+-    def __init__(self, config: ConfigLoader):
+-        self.config = config
 -        # Resolve the cookie file path relative to the config file's directory
 -        # so the sidecar can find it regardless of its working directory (which
 -        # on macOS is often '/' when launched by Electron).
-         if config.config_path:
+-        if config.config_path:
 -            from pathlib import Path
--
-             cookie_file = str(Path(config.config_path).resolve().parent / ".cookies.json")
+ 
+-            cookie_file = str(Path(config.config_path).resolve().parent / ".cookies.json")
++class _SessionDeps:
++    """All mutable Douyin state belonging to one opaque Zhicui scope."""
++
++    def __init__(
++        self,
++        owner: "_ServerDeps",
++        scope: str,
++    ):
++        self.scope = scope
++        self.config = owner.config
++        self.metadata_only = owner.metadata_only
++        self.rate_limiter = owner.rate_limiter
++        self.retry_handler = owner.retry_handler
++        self.queue_manager = owner.queue_manager
++
++        if scope == DEFAULT_SESSION_SCOPE:
++            cookie_file = owner.legacy_cookie_file
++            library_path = str(owner.config.get("path") or "./Downloaded")
          else:
-             cookie_file = ".cookies.json"
+-            cookie_file = ".cookies.json"
++            scope_root = owner.sessions_root / scope
++            scope_root.mkdir(parents=True, exist_ok=True)
++            if os.name != "nt":
++                os.chmod(scope_root, 0o700)
++            cookie_file = str(scope_root / "cookies.json")
++            library_path = str(scope_root / "library")
++
          self.cookie_manager = CookieManager(cookie_file=cookie_file)
 -        # Load cookies from the config (env var / YAML cookie key) first, then
 -        # fall back to whatever is already on disk in the cookie file. This
@@ -811,35 +869,47 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 -            # Trigger a load from disk so get_cookies() returns the persisted
 -            # session without requiring a fresh login on every app restart.
 -            self.cookie_manager.get_cookies()
-+        # 优先用 .cookies.json 里的真 cookie；只在它为空时才回退到 config.yml
-+        # 的 cookies 字段。避免重启时把 config.yml 的占位符覆盖到磁盘真 cookie。
-+        disk_cookies = self.cookie_manager.get_cookies()
-+        if not disk_cookies:
-+            initial_cookies = config.get_cookies()
-+            if initial_cookies:
-+                self.cookie_manager.set_cookies(initial_cookies)
-         self.file_manager = FileManager(config.get("path"))
-+        self.source_order_path = self.file_manager.base_path / SOURCE_ORDER_FILENAME
+-        self.file_manager = FileManager(config.get("path"))
+-        self.rate_limiter = RateLimiter(max_per_second=float(config.get("rate_limit", 2) or 2))
+-        self.retry_handler = RetryHandler(max_retries=int(config.get("retry_times", 3) or 3))
+-        self.queue_manager = QueueManager(max_workers=int(config.get("thread", 5) or 5))
++        if scope == DEFAULT_SESSION_SCOPE:
++            # The standalone console preserves its existing config fallback.
++            # Scoped Zhicui users never inherit the legacy/global Cookie.
++            disk_cookies = self.cookie_manager.get_cookies()
++            if not disk_cookies:
++                initial_cookies = owner.config.get_cookies()
++                if initial_cookies:
++                    self.cookie_manager.set_cookies(initial_cookies)
+ 
++        self.file_manager = FileManager(library_path)
++        self.source_order_path = (
++            self.file_manager.base_path / SOURCE_ORDER_FILENAME
++        )
 +        self.source_order_lock = asyncio.Lock()
-+        self.catalog_path = self.file_manager.base_path / LIBRARY_CATALOG_FILENAME
++        self.catalog_path = (
++            self.file_manager.base_path / LIBRARY_CATALOG_FILENAME
++        )
 +        self.catalog_lock = asyncio.Lock()
-+        server_config = config.get("server") or {}
-+        if not isinstance(server_config, dict):
-+            server_config = {}
-+        self.metadata_only = bool(server_config.get("metadata_only", False))
-         self.rate_limiter = RateLimiter(max_per_second=float(config.get("rate_limit", 2) or 2))
-         self.retry_handler = RetryHandler(max_retries=int(config.get("retry_times", 3) or 3))
-         self.queue_manager = QueueManager(max_workers=int(config.get("thread", 5) or 5))
-+        # fetch-cookie 后台任务状态
-+        self.fetch_status: Dict[str, Any] = {"running": False, "message": "", "error": ""}
++        self.fetch_status: Dict[str, Any] = {
++            "running": False,
++            "message": "",
++            "error": "",
++            "browser_opened": False,
++            "browser_mode": "idle",
++        }
 +        self.fetch_qr_image: Optional[bytes] = None
 +        self.fetch_qr_digest = ""
 +        self.fetch_qr_version = 0
++        self.fetch_task: Optional[asyncio.Task] = None
++        self.fetch_cancel_event = threading.Event()
++        self.fetch_worker_running = False
++        self.fetch_driver_process: Any = None
 +
 +    def clear_qr(self) -> None:
 +        self.fetch_qr_image = None
 +        self.fetch_qr_digest = ""
- 
++
 +    def update_qr(self, image: bytes) -> bool:
 +        if not image or len(image) > MAX_QR_IMAGE_BYTES:
 +            return False
@@ -857,6 +927,48 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 -    有意不复用 cli.main.download_url —— 后者绑定了 progress_display 的 rich 状态。
 -    API client 仍按请求创建（aiohttp session 不跨请求复用）；其余重量级依赖从
 -    _ServerDeps 共享。
++class _ServerDeps:
++    """Process-wide resources plus lazily-created user session namespaces."""
++
++    def __init__(self, config: ConfigLoader):
++        self.config = config
++        config_root = (
++            Path(config.config_path).resolve().parent
++            if config.config_path
++            else Path.cwd()
++        )
++        self.legacy_cookie_file = str(config_root / ".cookies.json")
++        storage_root = Path(
++            str(config.get("path") or "./Downloaded")
++        ).resolve()
++        self.sessions_root = storage_root / ".sessions"
++        self.sessions_root.mkdir(parents=True, exist_ok=True)
++        if os.name != "nt":
++            os.chmod(self.sessions_root, 0o700)
++
++        server_config = config.get("server") or {}
++        if not isinstance(server_config, dict):
++            server_config = {}
++        self.metadata_only = bool(server_config.get("metadata_only", False))
++        self.rate_limiter = RateLimiter(
++            max_per_second=float(config.get("rate_limit", 2) or 2)
++        )
++        self.retry_handler = RetryHandler(
++            max_retries=int(config.get("retry_times", 3) or 3)
++        )
++        self.queue_manager = QueueManager(
++            max_workers=int(config.get("thread", 5) or 5)
++        )
++        self._sessions: Dict[str, _SessionDeps] = {}
++
++    def session(self, scope: str) -> _SessionDeps:
++        current = self._sessions.get(scope)
++        if current is None:
++            current = _SessionDeps(self, scope)
++            self._sessions[scope] = current
++        return current
++
++
 +async def _resolve_self_sec_uid(api_client) -> str:
 +    """用当前 cookie 调 profile/self/ 拿登录用户的真 sec_uid。
 +
@@ -876,7 +988,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +
 +
 +async def _fetch_collection_order(
-+    deps: "_ServerDeps",
++    deps: "_SessionDeps",
 +    count: int,
 +) -> Dict[str, Any]:
 +    """只读取收藏分页顺序并持久化排名，不下载任何媒体。"""
@@ -911,7 +1023,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +
 +
 +async def _fetch_library_metadata(
-+    deps: "_ServerDeps",
++    deps: "_SessionDeps",
 +    mode: str,
 +    count: int,
 +) -> Dict[str, int]:
@@ -972,7 +1084,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +
 +async def _execute_download(
 +    url: str,
-+    deps: "_ServerDeps",
++    deps: "_SessionDeps",
 +    *,
 +    mode: Optional[str] = None,
 +    cookie: Optional[str] = None,
@@ -1019,7 +1131,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
          if is_short_url(url):
              resolved = await api_client.resolve_short_url(normalize_short_url(url))
              if not resolved:
-@@ -98,9 +691,15 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
+@@ -98,9 +807,15 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
          if not parsed:
              raise RuntimeError(f"Unsupported URL: {url}")
  
@@ -1036,7 +1148,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
              api_client,
              deps.file_manager,
              deps.cookie_manager,
-@@ -114,6 +713,16 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
+@@ -114,6 +829,16 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
              raise RuntimeError(f"No downloader for url_type={parsed['type']}")
  
          result = await downloader.download(parsed)
@@ -1053,11 +1165,14 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
          return {
              "total": result.total,
              "success": result.success,
-@@ -122,11 +731,81 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
+@@ -122,11 +847,266 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
          }
  
  
-+async def _fetch_cookie_auto(deps: "_ServerDeps", browser: str = "chromium") -> Dict[str, str]:
++async def _fetch_cookie_auto_worker(
++    deps: "_SessionDeps",
++    browser: str = "chromium",
++) -> Dict[str, str]:
 +    """打开抖音登录页，自动检测登录态并提供可远程展示的二维码。
 +
 +    不读 stdin（区别于 tools.cookie_fetcher 的 wait_for_login_confirmation），
@@ -1072,25 +1187,117 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +        ) from exc
 +
 +    async with async_playwright() as p:
++        transport = getattr(
++            getattr(getattr(p, "_impl_obj", None), "_connection", None),
++            "_transport",
++            None,
++        )
++        deps.fetch_driver_process = getattr(transport, "_proc", None)
 +        browser_factory = getattr(p, browser, p.chromium)
 +        headless = _env_flag("DOUYIN_BROWSER_HEADLESS", False)
-+        browser = await browser_factory.launch(headless=headless)
++        deps.fetch_status["message"] = "正在启动抖音安全登录窗口…"
++        launch_options: Dict[str, Any] = {
++            "headless": headless,
++            "timeout": 15000,
++        }
++        if browser == "chromium" and not headless:
++            # The user's installed Chrome is substantially more stable for an
++            # interactive verification page than Playwright's bundled build.
++            launch_options["channel"] = "chrome"
++            launch_options["args"] = [
++                "--start-maximized",
++                "--disable-background-mode",
++                "--no-first-run",
++                "--no-default-browser-check",
++            ]
++        browser_instance = await browser_factory.launch(**launch_options)
 +        try:
-+            context = await browser.new_context(
-+                viewport={"width": 1280, "height": 800},
-+                locale="zh-CN",
++            deps.fetch_status.update(
++                browser_opened=not headless,
++                browser_mode="headless" if headless else "visible_chrome",
++                message=(
++                    "Chrome 已弹出，请在窗口中完成验证并使用手机抖音扫码"
++                    if not headless
++                    else "正在初始化抖音登录会话…"
++                ),
 +            )
++            context_options: Dict[str, Any] = {"locale": "zh-CN"}
++            if headless:
++                context_options["viewport"] = {"width": 1280, "height": 800}
++            else:
++                context_options["no_viewport"] = True
++            context = await browser_instance.new_context(**context_options)
++            deps.fetch_status["message"] = "正在创建抖音登录页面…"
 +            page = await context.new_page()
++            deps.fetch_status["message"] = (
++                "Chrome 已弹出，正在打开抖音登录页…"
++                if not headless
++                else "正在打开抖音登录页面…"
++            )
++            open_task = asyncio.create_task(_open_douyin_login(page))
++            parent_task = asyncio.current_task()
++
++            async def _navigation_watchdog() -> None:
++                await asyncio.sleep(10)
++                if open_task.done() or not deps.fetch_status.get("running"):
++                    return
++                if headless:
++                    deps.fetch_status.update(
++                        running=False,
++                        message="",
++                        error=(
++                            "RuntimeError: 抖音登录页面加载超时或触发了交互式"
++                            "安全验证，当前无界面环境无法完成；"
++                            "请在桌面端绑定或稍后重试"
++                        ),
++                    )
++                    if parent_task is not None:
++                        parent_task.cancel()
++                    return
++                deps.fetch_status["message"] = (
++                    "Chrome 已弹出：如窗口显示拼图请先完成，"
++                    "随后直接使用手机抖音扫描 Chrome 中的二维码"
++                )
++
++            navigation_watchdog = asyncio.create_task(_navigation_watchdog())
 +            try:
-+                await _open_douyin_login(page)
++                await asyncio.wait_for(
++                    asyncio.shield(open_task),
++                    timeout=10.0,
++                )
++            except asyncio.TimeoutError:
++                if headless:
++                    raise RuntimeError(
++                        "抖音登录页面加载超时或触发了交互式安全验证，"
++                        "当前无界面环境无法完成；请在桌面端绑定或稍后重试"
++                    )
++                deps.fetch_status["message"] = (
++                    "Chrome 已弹出：如窗口显示拼图请先完成，"
++                    "随后直接使用手机抖音扫描 Chrome 中的二维码"
++                )
++                logger.info(
++                    "Douyin login page kept reloading; continuing with "
++                    "challenge/QR detection"
++                )
 +            except Exception as exc:
 +                logger.warning("open Douyin login page failed: %s", exc)
 +
 +            cookies: Dict[str, str] = {}
-+            discovery_deadline = asyncio.get_running_loop().time() + QR_DISCOVERY_TIMEOUT_SECONDS
++            loop = asyncio.get_running_loop()
++            discovery_deadline = loop.time() + QR_DISCOVERY_TIMEOUT_SECONDS
++            challenge_active = False
 +            # 最多等 ~10 分钟，每 5s 检测一次登录态
 +            for _ in range(120):
-+                storage = await context.storage_state()
++                if deps.fetch_cancel_event.is_set():
++                    raise asyncio.CancelledError()
++                navigation_pending = not open_task.done()
++                try:
++                    storage = await asyncio.wait_for(
++                        context.storage_state(),
++                        timeout=3.0,
++                    )
++                except Exception:
++                    storage = {}
 +                cookies = {
 +                    c["name"]: c["value"]
 +                    for c in storage.get("cookies", [])
@@ -1098,27 +1305,115 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +                }
 +                if cookies.get("sid_guard") and cookies.get("passport_csrf_token"):
 +                    break
++                if navigation_pending:
++                    deps.fetch_status["message"] = (
++                        "Chrome 已弹出：请在窗口中完成安全验证，"
++                        "看到二维码后直接用手机抖音扫码"
++                    )
++                    await asyncio.sleep(QR_REFRESH_SECONDS)
++                    continue
++                if await _has_login_challenge(page):
++                    if headless:
++                        raise RuntimeError(
++                            "抖音触发了交互式安全验证，当前无界面环境无法完成；"
++                            "请在桌面端绑定或稍后重试"
++                        )
++                    challenge_active = True
++                    deps.fetch_status["message"] = (
++                        "Chrome 正在等待安全验证：请先在窗口中完成拼图，"
++                        "出现二维码后直接使用手机抖音扫码"
++                    )
++                    await asyncio.sleep(QR_REFRESH_SECONDS)
++                    continue
++                if challenge_active:
++                    challenge_active = False
++                    discovery_deadline = loop.time() + QR_DISCOVERY_TIMEOUT_SECONDS
++                    deps.fetch_status["message"] = (
++                        "安全验证已通过，请扫描 Chrome 窗口中的登录二维码"
++                    )
 +                qr_image = await _capture_qr_png(page)
 +                if qr_image:
 +                    if deps.update_qr(qr_image):
-+                        deps.fetch_status["message"] = "二维码已生成，请使用抖音 App 扫码"
++                        deps.fetch_status["message"] = (
++                            "二维码已出现，请使用手机抖音扫描 Chrome 窗口中的二维码"
++                            if not headless
++                            else "二维码已生成，请使用抖音 App 扫码"
++                        )
 +                elif (
 +                    not deps.fetch_qr_image
-+                    and asyncio.get_running_loop().time() >= discovery_deadline
++                    and loop.time() >= discovery_deadline
 +                ):
-+                    raise RuntimeError("未找到登录二维码，请稍后重试或使用手动 Cookie")
++                    if headless:
++                        raise RuntimeError(
++                            "未找到登录二维码，请稍后重试或在桌面端使用 Chrome 绑定"
++                        )
++                    deps.fetch_status["message"] = (
++                        "Chrome 已保持打开；请在窗口中完成验证并直接扫描登录二维码"
++                    )
++                    discovery_deadline = loop.time() + QR_DISCOVERY_TIMEOUT_SECONDS
 +                await asyncio.sleep(QR_REFRESH_SECONDS)
 +        finally:
++            if (
++                "navigation_watchdog" in locals()
++                and not navigation_watchdog.done()
++            ):
++                navigation_watchdog.cancel()
++            if "open_task" in locals() and not open_task.done():
++                open_task.cancel()
 +            try:
 +                await context.close()
 +            except Exception:
 +                pass
-+            await browser.close()
++            await browser_instance.close()
++            deps.fetch_status.update(
++                browser_opened=False,
++                browser_mode="idle",
++            )
 +
 +    cookies = sanitize_cookies(cookies)
 +    if cookies:
 +        deps.cookie_manager.set_cookies(cookies)
 +    return cookies
++
++
++async def _fetch_cookie_auto(
++    deps: "_SessionDeps",
++    browser: str = "chromium",
++) -> Dict[str, str]:
++    """Run Playwright outside the API loop so Douyin reloads cannot freeze status."""
++    loop = asyncio.get_running_loop()
++    deps.fetch_cancel_event.clear()
++    deps.fetch_worker_running = True
++
++    def _runner() -> Dict[str, str]:
++        try:
++            return asyncio.run(_fetch_cookie_auto_worker(deps, browser))
++        finally:
++            deps.fetch_worker_running = False
++            deps.fetch_driver_process = None
++
++    worker = loop.run_in_executor(None, _runner)
++    try:
++        try:
++            return await asyncio.wait_for(
++                asyncio.shield(worker),
++                timeout=10.0,
++            )
++        except asyncio.TimeoutError:
++            if _env_flag("DOUYIN_BROWSER_HEADLESS", False):
++                deps.fetch_cancel_event.set()
++                raise RuntimeError(
++                    "抖音登录页面加载超时或触发了交互式安全验证，"
++                    "当前无界面环境无法完成；请在桌面端绑定或稍后重试"
++                )
++            deps.fetch_status["message"] = (
++                "抖音页面正在加载或要求安全验证："
++                "如弹出的浏览器显示拼图，请完成后等待二维码自动出现"
++            )
++            return await asyncio.shield(worker)
++    except asyncio.CancelledError:
++        deps.fetch_cancel_event.set()
++        raise
 +
 +
  def build_app(config: ConfigLoader) -> FastAPI:
@@ -1127,17 +1422,19 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 -    async def executor(url: str) -> Dict[str, int]:
 -        return await _execute_download(url, deps)
 +    async def executor(url: str, **opts: Any) -> Dict[str, int]:
++        scope = str(opts.pop("scope", DEFAULT_SESSION_SCOPE))
++        scoped = deps.session(scope)
 +        if deps.metadata_only:
 +            return await _fetch_library_metadata(
-+                deps,
++                scoped,
 +                str(opts.get("mode") or "collection"),
 +                _bounded_sync_count(opts.get("count")),
 +            )
-+        return await _execute_download(url, deps, **opts)
++        return await _execute_download(url, scoped, **opts)
  
      server_cfg = config.get("server") or {}
      if not isinstance(server_cfg, dict):
-@@ -148,21 +827,182 @@ def build_app(config: ConfigLoader) -> FastAPI:
+@@ -148,34 +1128,487 @@ def build_app(config: ConfigLoader) -> FastAPI:
      app = FastAPI(
          title="Douyin Downloader API",
          version="1.0",
@@ -1178,30 +1475,40 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +
 +    # ---- cookie 管理 ----
 +    @app.get("/api/v1/cookies")
-+    async def get_cookies() -> Dict[str, Any]:
-+        cookies = deps.cookie_manager.get_cookies()
++    async def get_cookies(
++        scope: str = Depends(_session_scope),
++    ) -> Dict[str, Any]:
++        scoped = deps.session(scope)
++        cookies = scoped.cookie_manager.get_cookies()
 +        return {
 +            "cookie_names": sorted(cookies),
 +            "count": len(cookies),
-+            "valid": deps.cookie_manager.validate_cookies(),
++            "valid": scoped.cookie_manager.validate_cookies(),
 +        }
-+
+ 
 +    @app.post("/api/v1/cookies")
-+    async def set_cookies(req: CookieRequest) -> Dict[str, Any]:
++    async def set_cookies(
++        req: CookieRequest,
++        scope: str = Depends(_session_scope),
++    ) -> Dict[str, Any]:
++        scoped = deps.session(scope)
 +        parsed = _parse_cookie_input(req.cookie)
 +        if not parsed:
 +            raise HTTPException(status_code=400, detail="cookie 为空或格式无法解析")
-+        deps.cookie_manager.set_cookies(parsed)
-+        cookies = deps.cookie_manager.get_cookies()
++        scoped.cookie_manager.set_cookies(parsed)
++        cookies = scoped.cookie_manager.get_cookies()
 +        return {
 +            "cookie_names": sorted(cookies),
 +            "count": len(cookies),
-+            "valid": deps.cookie_manager.validate_cookies(),
++            "valid": scoped.cookie_manager.validate_cookies(),
 +        }
 +
 +    @app.delete("/api/v1/cookies")
-+    async def clear_cookies() -> Dict[str, Any]:
-+        if deps.fetch_status.get("running"):
++    async def clear_cookies(
++        scope: str = Depends(_session_scope),
++    ) -> Dict[str, Any]:
++        scoped = deps.session(scope)
++        if scoped.fetch_status.get("running"):
 +            raise HTTPException(
 +                status_code=409,
 +                detail="扫码登录仍在进行，请先完成或稍后重试",
@@ -1209,6 +1516,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +        active_jobs = [
 +            job
 +            for job in await manager.list_jobs()
++            if str(job.opts.get("scope") or DEFAULT_SESSION_SCOPE) == scope
 +            if job.status in {"pending", "running"}
 +        ]
 +        if active_jobs:
@@ -1216,9 +1524,9 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +                status_code=409,
 +                detail="内容同步仍在进行，请等待完成后再退出或换绑",
 +            )
-+        deps.cookie_manager.clear_cookies()
-+        deps.clear_qr()
-+        deps.fetch_status.update(
++        scoped.cookie_manager.clear_cookies()
++        scoped.clear_qr()
++        scoped.fetch_status.update(
 +            running=False,
 +            message="已退出抖音登录",
 +            error="",
@@ -1231,60 +1539,121 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +
 +    # ---- 自动获取 cookie（扫码登录，自动检测）----
 +    @app.post("/api/v1/fetch-cookie")
-+    async def fetch_cookie(req: FetchCookieRequest) -> Dict[str, Any]:
-+        if deps.fetch_status.get("running"):
++    async def fetch_cookie(
++        req: FetchCookieRequest,
++        scope: str = Depends(_session_scope),
++    ) -> Dict[str, Any]:
++        scoped = deps.session(scope)
++        if (
++            scoped.fetch_status.get("running")
++            or scoped.fetch_worker_running
++            or (
++                scoped.fetch_task is not None
++                and not scoped.fetch_task.done()
++            )
++        ):
 +            raise HTTPException(status_code=409, detail="已有获取任务在跑，请先完成扫码")
-+        deps.clear_qr()
-+        deps.fetch_status.update(
++        scoped.clear_qr()
++        scoped.fetch_status.update(
 +            running=True,
-+            message="正在生成抖音登录二维码…",
++            message="正在弹出 Chrome 抖音登录窗口…",
 +            error="",
++            browser_opened=False,
++            browser_mode="starting",
 +        )
- 
++
 +        async def _bg():
 +            try:
-+                cookies = await _fetch_cookie_auto(deps, req.browser)
++                cookies = await _fetch_cookie_auto(scoped, req.browser)
 +                if cookies:
-+                    deps.fetch_status.update(
++                    scoped.fetch_status.update(
 +                        running=False,
 +                        message=f"成功获取 {len(cookies)} 条 cookie",
 +                        error="",
 +                    )
 +                else:
-+                    deps.fetch_status.update(
++                    scoped.fetch_status.update(
 +                        running=False,
 +                        message="未检测到登录，超时或用户未登录",
 +                        error="no_login",
 +                    )
++            except asyncio.CancelledError:
++                if not scoped.fetch_status.get("error"):
++                    scoped.fetch_status.update(
++                        running=False,
++                        message="扫码登录已取消",
++                        error="",
++                    )
++                raise
 +            except Exception as exc:
-+                deps.fetch_status.update(
++                scoped.fetch_status.update(
 +                    running=False,
 +                    message="",
 +                    error=f"{type(exc).__name__}: {exc}",
 +                )
 +            finally:
-+                if not deps.fetch_status.get("running"):
-+                    deps.clear_qr()
++                scoped.fetch_task = None
++                if not scoped.fetch_status.get("running"):
++                    scoped.clear_qr()
 +
-+        asyncio.create_task(_bg())
++        scoped.fetch_task = asyncio.create_task(_bg())
 +        return {
 +            "started": True,
-+            "message": "登录任务已启动，正在生成二维码",
++            "message": "登录任务已启动，正在弹出 Chrome",
++            "browser_opened": False,
++            "browser_mode": "starting",
 +            "qr_ready": False,
-+            "qr_version": deps.fetch_qr_version,
++            "qr_version": scoped.fetch_qr_version,
++        }
++
++    @app.delete("/api/v1/fetch-cookie")
++    async def cancel_fetch_cookie(
++        scope: str = Depends(_session_scope),
++    ) -> Dict[str, Any]:
++        scoped = deps.session(scope)
++        task = scoped.fetch_task
++        cancelled = False
++        scoped.fetch_cancel_event.set()
++        browser_closed = _terminate_login_driver(scoped)
++        if task is not None and not task.done():
++            cancelled = True
++            task.cancel()
++        scoped.clear_qr()
++        scoped.fetch_status.update(
++            running=False,
++            message="扫码登录已取消",
++            error="",
++            browser_opened=False,
++            browser_mode="idle",
++        )
++        return {
++            "cancelled": cancelled,
++            "browser_closed": browser_closed,
++            "running": False,
++            "message": "扫码登录已取消",
++            "browser_opened": False,
++            "browser_mode": "idle",
++            "qr_ready": False,
++            "qr_version": scoped.fetch_qr_version,
 +        }
 +
 +    @app.get("/api/v1/fetch-cookie")
-+    async def fetch_cookie_status() -> Dict[str, Any]:
++    async def fetch_cookie_status(
++        scope: str = Depends(_session_scope),
++    ) -> Dict[str, Any]:
++        scoped = deps.session(scope)
 +        return {
-+            **deps.fetch_status,
-+            "qr_ready": bool(deps.fetch_qr_image),
-+            "qr_version": deps.fetch_qr_version,
++            **scoped.fetch_status,
++            "qr_ready": bool(scoped.fetch_qr_image),
++            "qr_version": scoped.fetch_qr_version,
 +        }
 +
 +    @app.get("/api/v1/fetch-cookie/qr")
-+    async def fetch_cookie_qr() -> Response:
-+        image = deps.fetch_qr_image
++    async def fetch_cookie_qr(
++        scope: str = Depends(_session_scope),
++    ) -> Response:
++        scoped = deps.session(scope)
++        image = scoped.fetch_qr_image
 +        if not image:
 +            raise HTTPException(status_code=404, detail="二维码尚未生成或已失效")
 +        if len(image) > MAX_QR_IMAGE_BYTES:
@@ -1294,45 +1663,94 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +            media_type="image/png",
 +            headers={
 +                "Cache-Control": "no-store, max-age=0",
-+                "X-QR-Version": str(deps.fetch_qr_version),
++                "X-QR-Version": str(scoped.fetch_qr_version),
 +            },
 +        )
 +
 +    # ---- 下载任务 ----
      @app.post("/api/v1/download", response_model=JobResponse)
-     async def create_job(req: DownloadRequest) -> JobResponse:
-+        if deps.metadata_only:
-+            raise HTTPException(status_code=403, detail="生产元数据模式禁止下载持久视频")
-+        if not req.url:
-+            raise HTTPException(status_code=400, detail="url is required")
-+        job = await manager.submit(req.url, mode=req.mode, cookie=req.cookie, count=req.count)
-+        return JobResponse(job_id=job.job_id, status=job.status, url=job.url)
-+
-+    @app.post("/api/v1/crawl", response_model=JobResponse)
-+    async def crawl(req: DownloadRequest) -> JobResponse:
+-    async def create_job(req: DownloadRequest) -> JobResponse:
++    async def create_job(
++        req: DownloadRequest,
++        scope: str = Depends(_session_scope),
++    ) -> JobResponse:
 +        if deps.metadata_only:
 +            raise HTTPException(status_code=403, detail="生产元数据模式禁止下载持久视频")
          if not req.url:
              raise HTTPException(status_code=400, detail="url is required")
 -        job = await manager.submit(req.url)
++        job = await manager.submit(
++            req.url,
++            mode=req.mode,
++            cookie=req.cookie,
++            count=req.count,
++            scope=scope,
++        )
++        return JobResponse(job_id=job.job_id, status=job.status, url=job.url)
++
++    @app.post("/api/v1/crawl", response_model=JobResponse)
++    async def crawl(
++        req: DownloadRequest,
++        scope: str = Depends(_session_scope),
++    ) -> JobResponse:
++        if deps.metadata_only:
++            raise HTTPException(status_code=403, detail="生产元数据模式禁止下载持久视频")
++        if not req.url:
++            raise HTTPException(status_code=400, detail="url is required")
 +        if not req.mode:
 +            raise HTTPException(
 +                status_code=400,
 +                detail=f"mode is required, one of {', '.join(SUPPORTED_MODES)}",
 +            )
-+        job = await manager.submit(req.url, mode=req.mode, cookie=req.cookie, count=req.count)
++        job = await manager.submit(
++            req.url,
++            mode=req.mode,
++            cookie=req.cookie,
++            count=req.count,
++            scope=scope,
++        )
          return JobResponse(job_id=job.job_id, status=job.status, url=job.url)
  
      @app.get("/api/v1/jobs/{job_id}")
-@@ -177,6 +1017,170 @@ def build_app(config: ConfigLoader) -> FastAPI:
-         jobs = await manager.list_jobs()
-         return {"jobs": [j.to_dict() for j in jobs]}
+-    async def get_job(job_id: str) -> Dict[str, Any]:
++    async def get_job(
++        job_id: str,
++        scope: str = Depends(_session_scope),
++    ) -> Dict[str, Any]:
+         job = await manager.get(job_id)
+-        if job is None:
++        if (
++            job is None
++            or str(job.opts.get("scope") or DEFAULT_SESSION_SCOPE) != scope
++        ):
+             raise HTTPException(status_code=404, detail="job not found")
+         return job.to_dict()
  
+     @app.get("/api/v1/jobs")
+-    async def list_jobs() -> Dict[str, List[Dict[str, Any]]]:
++    async def list_jobs(
++        scope: str = Depends(_session_scope),
++    ) -> Dict[str, List[Dict[str, Any]]]:
+         jobs = await manager.list_jobs()
+-        return {"jobs": [j.to_dict() for j in jobs]}
++        return {
++            "jobs": [
++                job.to_dict()
++                for job in jobs
++                if str(
++                    job.opts.get("scope") or DEFAULT_SESSION_SCOPE
++                ) == scope
++            ]
++        }
++
 +    # ---- 作品列表（读 download_manifest.jsonl，每行一个作品）----
 +    @app.get("/api/v1/items")
-+    async def list_items() -> Dict[str, Any]:
++    async def list_items(
++        scope: str = Depends(_session_scope),
++    ) -> Dict[str, Any]:
++        scoped = deps.session(scope)
 +        if deps.metadata_only:
-+            catalog = await _read_library_catalog(deps.catalog_path)
++            catalog = await _read_library_catalog(scoped.catalog_path)
 +            items: List[Dict[str, Any]] = []
 +            for snapshot in catalog["modes"].values():
 +                if not isinstance(snapshot, dict):
@@ -1342,10 +1760,10 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +                    items.extend(item for item in snapshot_items if isinstance(item, dict))
 +            return {"items": items, "count": len(items), "storage_mode": "metadata_only"}
 +
-+        manifest = app.state.download_root / "download_manifest.jsonl"
++        manifest = scoped.file_manager.base_path / "download_manifest.jsonl"
 +        if not manifest.exists():
 +            return {"items": [], "count": 0}
-+        source_orders = await _read_source_orders(deps.source_order_path)
++        source_orders = await _read_source_orders(scoped.source_order_path)
 +        mode_rank_maps: Dict[str, Dict[str, int]] = {}
 +        mode_synced_at: Dict[str, str] = {}
 +        for source_mode, snapshot in source_orders.get("modes", {}).items():
@@ -1389,17 +1807,26 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +        return {"items": items, "count": len(items)}
 +
 +    @app.post("/api/v1/source-order/refresh")
-+    async def refresh_source_order(req: SourceOrderRequest) -> Dict[str, Any]:
++    async def refresh_source_order(
++        req: SourceOrderRequest,
++        scope: str = Depends(_session_scope),
++    ) -> Dict[str, Any]:
 +        if req.mode != "collection":
 +            raise HTTPException(status_code=400, detail="目前仅支持刷新默认收藏顺序")
 +        try:
-+            return await _fetch_collection_order(deps, req.count)
++            return await _fetch_collection_order(
++                deps.session(scope),
++                req.count,
++            )
 +        except Exception as exc:
 +            raise HTTPException(status_code=502, detail=str(exc)) from exc
 +
 +    # ---- 自动采集（扫码登录后前端自动调）----
 +    @app.post("/api/v1/auto-collect", response_model=JobResponse)
-+    async def auto_collect(req: AutoCollectRequest) -> JobResponse:
++    async def auto_collect(
++        req: AutoCollectRequest,
++        scope: str = Depends(_session_scope),
++    ) -> JobResponse:
 +        mode = req.mode or "collection"
 +        count = _bounded_sync_count(req.count)
 +        if req.url:
@@ -1408,18 +1835,28 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +            url = "https://www.douyin.com/user/self?showTab=favorite_collection"
 +        else:
 +            url = "https://www.douyin.com/user/self"
-+        job = await manager.submit(url, mode=mode, count=count)
++        job = await manager.submit(
++            url,
++            mode=mode,
++            count=count,
++            scope=scope,
++        )
 +        return JobResponse(job_id=job.job_id, status=job.status, url=url)
 +
 +    @app.get("/api/v1/media/{aweme_id}")
-+    async def stream_media(aweme_id: str, request: Request) -> StreamingResponse:
++    async def stream_media(
++        aweme_id: str,
++        request: Request,
++        scope: str = Depends(_session_scope),
++    ) -> StreamingResponse:
 +        """即时代理当前作品；响应结束即释放连接，永不落盘。"""
++        scoped = deps.session(scope)
 +        clean_id = aweme_id.strip()
 +        if not clean_id or len(clean_id) > 128 or not clean_id.replace("_", "").replace("-", "").isalnum():
 +            raise HTTPException(status_code=400, detail="作品标识无效")
 +
 +        async with DouyinAPIClient(
-+            deps.cookie_manager.get_cookies(),
++            scoped.cookie_manager.get_cookies(),
 +            proxy=deps.config.get("proxy"),
 +        ) as api_client:
 +            detail = await api_client.get_video_detail(clean_id)
@@ -1427,14 +1864,14 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +                raise HTTPException(status_code=404, detail="未找到作品")
 +            downloader = DownloaderFactory.create(
 +                "video",
-+                deps.config,
++                scoped.config,
 +                api_client,
-+                deps.file_manager,
-+                deps.cookie_manager,
++                scoped.file_manager,
++                scoped.cookie_manager,
 +                None,
-+                deps.rate_limiter,
-+                deps.retry_handler,
-+                deps.queue_manager,
++                scoped.rate_limiter,
++                scoped.retry_handler,
++                scoped.queue_manager,
 +                progress_reporter=None,
 +            )
 +            media_info = downloader._build_no_watermark_url(detail) if downloader else None
@@ -1491,12 +1928,11 @@ index 418f875d330a45d207dd52428636dedd197e27af..fe02921cf142e2669d72a94037d1093a
 +            media_type=upstream.headers.get("Content-Type", "video/mp4"),
 +            headers=response_headers,
 +        )
-+
+ 
      return app
  
- 
 diff --git a/server/jobs.py b/server/jobs.py
-index 2aed6adacfb3f49d5aa2af749add72ed090d87fe..5571fda4a1683e73658c922a4d5da04dc5928792 100644
+index 2aed6ad..5571fda 100644
 --- a/server/jobs.py
 +++ b/server/jobs.py
 @@ -27,9 +27,12 @@ class JobStatus:
@@ -1551,9 +1987,850 @@ index 2aed6adacfb3f49d5aa2af749add72ed090d87fe..5571fda4a1683e73658c922a4d5da04d
                  job.total = int(counts.get("total", 0))
                  job.success = int(counts.get("success", 0))
                  job.failed = int(counts.get("failed", 0))
+diff --git a/tests/test_api_client.py b/tests/test_api_client.py
+index 8811da2..1f9fd11 100644
+--- a/tests/test_api_client.py
++++ b/tests/test_api_client.py
+@@ -557,6 +557,52 @@ async def test_collect_endpoints_use_expected_paths_and_normalization(monkeypatc
+     assert collect_mix_data["items"] == [{"mix_id": "mix-1"}]
+ 
+ 
++@pytest.mark.asyncio
++async def test_default_collection_uses_cookie_scoped_post_endpoint(monkeypatch):
++    client = DouyinAPIClient({"msToken": "token-1"})
++    captured = {}
++
++    async def _fake_request_json(path, params, **kwargs):
++        captured.update(path=path, params=dict(params), kwargs=kwargs)
++        return {
++            "status_code": 0,
++            "aweme_list": [{"aweme_id": "default-1"}],
++            "has_more": 1,
++            "cursor": 1700000000000000,
++        }
++
++    monkeypatch.setattr(client, "_request_json", _fake_request_json)
++
++    data = await client.get_user_collection("self", max_cursor=0, count=20)
++
++    assert captured["path"] == "/aweme/v1/web/aweme/listcollection/"
++    assert captured["kwargs"]["method"] == "POST"
++    assert captured["kwargs"]["json_body"] == captured["params"]
++    assert captured["params"]["cursor"] == 0
++    assert captured["params"]["count"] == 20
++    assert data["items"] == [{"aweme_id": "default-1"}]
++    assert data["has_more"] is True
++    assert data["max_cursor"] == 1700000000000000
++
++
++@pytest.mark.asyncio
++async def test_default_collection_rejects_non_self_scope(monkeypatch):
++    client = DouyinAPIClient({"msToken": "token-1"})
++    called = False
++
++    async def _unexpected_request(*_args, **_kwargs):
++        nonlocal called
++        called = True
++        return {}
++
++    monkeypatch.setattr(client, "_request_json", _unexpected_request)
++
++    data = await client.get_user_collection("another-user")
++
++    assert data["items"] == []
++    assert called is False
++
++
+ @pytest.mark.asyncio
+ async def test_mix_and_music_endpoints_are_normalized(monkeypatch):
+     client = DouyinAPIClient({"msToken": "token-1"})
+diff --git a/tests/test_download_proxy_passthrough.py b/tests/test_download_proxy_passthrough.py
+index aaf0b58..16194ce 100644
+--- a/tests/test_download_proxy_passthrough.py
++++ b/tests/test_download_proxy_passthrough.py
+@@ -73,7 +73,10 @@ def _run_execute_download(monkeypatch, tmp_path, config_updates: Dict[str, Any])
+     )
+ 
+     asyncio.run(
+-        _execute_download("https://www.douyin.com/video/7000000000000000001", deps)
++        _execute_download(
++            "https://www.douyin.com/video/7000000000000000001",
++            deps.session(server_app.DEFAULT_SESSION_SCOPE),
++        )
+     )
+     return _RecordingAPIClient.seen_proxies
+ 
+diff --git a/tests/test_server.py b/tests/test_server.py
+index ac06496..52e22dd 100644
+--- a/tests/test_server.py
++++ b/tests/test_server.py
+@@ -4,6 +4,7 @@
+ """
+ 
+ import asyncio
++import json
+ from typing import Dict
+ 
+ import pytest
+@@ -15,8 +16,9 @@ except ImportError:  # pragma: no cover
+ 
+ 
+ from config import ConfigLoader
++import server.app as server_app
+ from server.app import build_app
+-from server.jobs import JobManager
++from server.jobs import DownloadJob, JobManager
+ 
+ 
+ @pytest.mark.asyncio
+@@ -59,7 +61,80 @@ def test_health_endpoint(tmp_path):
+     with TestClient(app) as client:
+         resp = client.get("/api/v1/health")
+         assert resp.status_code == 200
+-        assert resp.json() == {"status": "ok"}
++        assert resp.json() == {
++            "status": "ok",
++            "storage_mode": "local_media",
++            "max_sync_count": 100,
++        }
++
++
++def test_items_include_persisted_collection_rank(tmp_path):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path))
++    manifest = tmp_path / "download_manifest.jsonl"
++    records = [
++        {
++            "aweme_id": "older",
++            "file_paths": ["。/collection/older/older.mp4"],
++        },
++        {
++            "aweme_id": "newest",
++            "file_paths": ["。/collection/newest/newest.mp4"],
++        },
++    ]
++    manifest.write_text(
++        "\n".join(json.dumps(record, ensure_ascii=False) for record in records),
++        encoding="utf-8",
++    )
++    (tmp_path / "source_order.json").write_text(
++        json.dumps(
++            {
++                "version": 1,
++                "modes": {
++                    "collection": {
++                        "aweme_ids": ["newest", "older"],
++                        "synced_at": "2026-07-27T00:00:00Z",
++                    }
++                },
++            }
++        ),
++        encoding="utf-8",
++    )
++
++    app = build_app(config)
++    with TestClient(app) as client:
++        response = client.get("/api/v1/items")
++
++    assert response.status_code == 200
++    by_id = {item["aweme_id"]: item for item in response.json()["items"]}
++    assert by_id["newest"]["source_rank"] == 0
++    assert by_id["older"]["source_rank"] == 1
++    assert by_id["newest"]["source_synced_at"] == "2026-07-27T00:00:00Z"
++
++
++def test_refresh_source_order_does_not_submit_download(tmp_path, monkeypatch):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path))
++    app = build_app(config)
++    captured = {}
++
++    async def fake_refresh(deps, count):
++        captured.update(deps=deps, count=count)
++        return {"mode": "collection", "count": count, "total_ranked": count}
++
++    monkeypatch.setattr(server_app, "_fetch_collection_order", fake_refresh)
++    with TestClient(app) as client:
++        response = client.post(
++            "/api/v1/source-order/refresh",
++            json={"mode": "collection", "count": 50},
++        )
++
++    assert response.status_code == 200
++    assert response.json()["count"] == 50
++    assert captured == {
++        "deps": app.state.deps.session(server_app.DEFAULT_SESSION_SCOPE),
++        "count": 50,
++    }
+ 
+ 
+ def test_download_endpoint_creates_job(tmp_path, monkeypatch):
+@@ -103,6 +178,126 @@ def test_download_endpoint_rejects_empty_url(tmp_path):
+         assert resp.status_code == 400
+ 
+ 
++def test_auto_collect_defaults_to_all_collection_mode(tmp_path, monkeypatch):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path))
++    app = build_app(config)
++    captured = {}
++
++    class _FakeJob:
++        job_id = "collection-job"
++        status = "pending"
++        url = "https://www.douyin.com/user/self?showTab=favorite_collection"
++
++    async def fake_submit(url: str, **opts):
++        captured.update(url=url, opts=opts)
++        return _FakeJob()
++
++    monkeypatch.setattr(app.state.job_manager, "submit", fake_submit)
++
++    with TestClient(app) as client:
++        resp = client.post("/api/v1/auto-collect", json={"count": 50})
++
++    assert resp.status_code == 200
++    assert captured["url"].endswith("showTab=favorite_collection")
++    assert captured["opts"] == {
++        "mode": "collection",
++        "count": 50,
++        "scope": server_app.DEFAULT_SESSION_SCOPE,
++    }
++
++
++def test_collect_count_accepts_any_value_from_1_to_100(tmp_path, monkeypatch):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path))
++    app = build_app(config)
++
++    class _FakeJob:
++        job_id = "bounded-job"
++        status = "pending"
++        url = "https://www.douyin.com/user/self?showTab=favorite_collection"
++
++    async def fake_submit(url: str, **opts):
++        return _FakeJob()
++
++    monkeypatch.setattr(app.state.job_manager, "submit", fake_submit)
++
++    with TestClient(app) as client:
++        too_small = client.post("/api/v1/auto-collect", json={"count": 0})
++        allowed_1 = client.post("/api/v1/auto-collect", json={"count": 1})
++        allowed_50 = client.post("/api/v1/auto-collect", json={"count": 50})
++        allowed_75 = client.post("/api/v1/auto-collect", json={"count": 75})
++        allowed_100 = client.post("/api/v1/auto-collect", json={"count": 100})
++        too_large = client.post("/api/v1/auto-collect", json={"count": 101})
++
++    assert too_small.status_code == 422
++    assert allowed_1.status_code == 200
++    assert allowed_50.status_code == 200
++    assert allowed_75.status_code == 200
++    assert allowed_100.status_code == 200
++    assert too_large.status_code == 422
++
++
++def test_metadata_only_mode_rejects_persistent_downloads(tmp_path):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path), server={"metadata_only": True})
++    app = build_app(config)
++
++    with TestClient(app) as client:
++        health = client.get("/api/v1/health")
++        download = client.post(
++            "/api/v1/download",
++            json={"url": "https://www.douyin.com/video/123"},
++        )
++        crawl = client.post(
++            "/api/v1/crawl",
++            json={
++                "url": "https://www.douyin.com/user/self",
++                "mode": "collection",
++                "count": 50,
++            },
++        )
++        files = client.get("/files/anything.mp4")
++
++    assert health.json()["storage_mode"] == "metadata_only"
++    assert health.json()["max_sync_count"] == 100
++    assert download.status_code == 403
++    assert crawl.status_code == 403
++    assert files.status_code == 404
++
++
++@pytest.mark.asyncio
++async def test_metadata_catalog_is_bounded_and_creates_no_media(tmp_path):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path), server={"metadata_only": True})
++    app = build_app(config)
++    deps = app.state.deps.session(server_app.DEFAULT_SESSION_SCOPE)
++    items = [
++        {
++            "aweme_id": str(index),
++            "desc": f"item {index}",
++            "author": {"nickname": "tester"},
++            "video": {"cover": {"url_list": [f"https://example.test/{index}.jpg"]}},
++            "create_time": index,
++        }
++        for index in range(150)
++    ]
++
++    result = await server_app._persist_library_catalog(deps, "collection", items)
++    catalog = json.loads((tmp_path / "library_catalog.json").read_text(encoding="utf-8"))
++    saved = catalog["modes"]["collection"]["items"]
++
++    assert result["count"] == 100
++    assert len(saved) == 100
++    assert [record["source_rank"] for record in saved] == list(range(100))
++    media_suffixes = server_app.PERSISTENT_MEDIA_SUFFIXES
++    assert not [
++        path
++        for path in tmp_path.rglob("*")
++        if path.is_file() and path.suffix.lower() in media_suffixes
++    ]
++
++
+ def test_get_unknown_job_returns_404(tmp_path):
+     config = ConfigLoader(None)
+     config.update(path=str(tmp_path))
+@@ -118,17 +313,360 @@ def test_build_app_shares_deps_across_requests(tmp_path):
+     config.update(path=str(tmp_path))
+     app = build_app(config)
+ 
+-    deps = app.state.deps
++    owner = app.state.deps
++    deps = owner.session(server_app.DEFAULT_SESSION_SCOPE)
+     assert deps.file_manager is not None
+-    assert deps.rate_limiter is not None
+-    assert deps.retry_handler is not None
+-    assert deps.queue_manager is not None
++    assert owner.rate_limiter is not None
++    assert owner.retry_handler is not None
++    assert owner.queue_manager is not None
+     assert deps.cookie_manager is not None
+ 
+     # 构建第二次 app 时应该是完全独立的 deps 实例，但同一 app 内是共享的
+     app2 = build_app(config)
+     assert app2.state.deps is not app.state.deps
+-    assert app.state.deps.file_manager is app.state.deps.file_manager  # identity
++    assert owner.session("a" * 32) is owner.session("a" * 32)
++
++
++def test_cookie_status_never_returns_cookie_values(tmp_path):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path))
++    app = build_app(config)
++    app.state.deps.session(server_app.DEFAULT_SESSION_SCOPE).cookie_manager.cookies = {
++        "ttwid": "private-value",
++        "odin_tt": "private-value",
++        "passport_csrf_token": "private-value",
++    }
++
++    with TestClient(app) as client:
++        response = client.get("/api/v1/cookies")
++
++    assert response.status_code == 200
++    payload = response.json()
++    assert "cookies" not in payload
++    assert payload["cookie_names"] == ["odin_tt", "passport_csrf_token", "ttwid"]
++    assert "private-value" not in response.text
++
++
++def test_cookie_session_can_be_cleared_repeatedly(tmp_path):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path))
++    app = build_app(config)
++    deps = app.state.deps.session(server_app.DEFAULT_SESSION_SCOPE)
++    cookie_file = deps.cookie_manager.cookie_file
++    deps.cookie_manager.set_cookies({
++        "ttwid": "private-value",
++        "odin_tt": "private-value",
++        "passport_csrf_token": "private-value",
++    })
++    deps.fetch_qr_image = b"qr"
++
++    with TestClient(app) as client:
++        first = client.delete("/api/v1/cookies")
++        second = client.delete("/api/v1/cookies")
++
++    assert first.status_code == 200
++    assert first.json() == {"cleared": True, "count": 0, "valid": False}
++    assert second.status_code == 200
++    assert deps.cookie_manager.cookies == {}
++    assert deps.fetch_qr_image is None
++    assert not cookie_file.exists()
++
++
++def test_cookie_session_clear_rejects_active_login(tmp_path):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path))
++    app = build_app(config)
++    app.state.deps.session(
++        server_app.DEFAULT_SESSION_SCOPE
++    ).fetch_status["running"] = True
++
++    with TestClient(app) as client:
++        response = client.delete("/api/v1/cookies")
++
++    assert response.status_code == 409
++    assert "扫码登录仍在进行" in response.json()["detail"]
++
++
++def test_cookie_session_clear_rejects_active_collection(tmp_path):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path))
++    app = build_app(config)
++    job = DownloadJob("active-job", "https://www.douyin.com/user/self")
++    job.status = "running"
++    app.state.job_manager._jobs[job.job_id] = job
++
++    with TestClient(app) as client:
++        response = client.delete("/api/v1/cookies")
++
++    assert response.status_code == 409
++    assert "内容同步仍在进行" in response.json()["detail"]
++
++
++def test_scoped_cookie_sessions_are_independent(tmp_path):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path))
++    app = build_app(config)
++    scope_a = "a" * 32
++    scope_b = "b" * 32
++    cookies = {
++        "ttwid": "private-a",
++        "odin_tt": "private-a",
++        "passport_csrf_token": "private-a",
++    }
++    session_a = app.state.deps.session(scope_a)
++    session_b = app.state.deps.session(scope_b)
++    session_a.cookie_manager.set_cookies(cookies)
++
++    with TestClient(app) as client:
++        status_a = client.get(
++            "/api/v1/cookies",
++            headers={"X-Zhicui-Scope": scope_a},
++        )
++        status_b = client.get(
++            "/api/v1/cookies",
++            headers={"X-Zhicui-Scope": scope_b},
++        )
++        cleared_b = client.delete(
++            "/api/v1/cookies",
++            headers={"X-Zhicui-Scope": scope_b},
++        )
++
++    assert status_a.json()["valid"] is True
++    assert status_b.json()["valid"] is False
++    assert cleared_b.status_code == 200
++    assert session_a.cookie_manager.get_cookies() == cookies
++    assert session_b.cookie_manager.get_cookies() == {}
++    assert session_a.cookie_manager.cookie_file != session_b.cookie_manager.cookie_file
++    assert "private-a" not in status_a.text
++
++
++def test_scoped_job_cannot_be_read_from_another_scope(tmp_path, monkeypatch):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path), server={"metadata_only": True})
++    app = build_app(config)
++    scope_a = "a" * 32
++    scope_b = "b" * 32
++
++    class _FakeJob:
++        job_id = "scoped-job"
++        status = "pending"
++        url = "https://www.douyin.com/user/self"
++        opts = {"scope": scope_a}
++        _task = None
++
++        def to_dict(self):
++            return {"job_id": self.job_id, "status": self.status, "url": self.url}
++
++    async def fake_submit(url: str, **opts):
++        job = _FakeJob()
++        job.opts = opts
++        app.state.job_manager._jobs[job.job_id] = job
++        return job
++
++    monkeypatch.setattr(app.state.job_manager, "submit", fake_submit)
++
++    with TestClient(app) as client:
++        created = client.post(
++            "/api/v1/auto-collect",
++            json={"count": 1},
++            headers={"X-Zhicui-Scope": scope_a},
++        )
++        own = client.get(
++            "/api/v1/jobs/scoped-job",
++            headers={"X-Zhicui-Scope": scope_a},
++        )
++        other = client.get(
++            "/api/v1/jobs/scoped-job",
++            headers={"X-Zhicui-Scope": scope_b},
++        )
++
++    assert created.status_code == 200
++    assert own.status_code == 200
++    assert other.status_code == 404
++
++
++def test_scoped_metadata_catalogs_are_independent(tmp_path):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path), server={"metadata_only": True})
++    app = build_app(config)
++    scope_a = "a" * 32
++    scope_b = "b" * 32
++    session_a = app.state.deps.session(scope_a)
++    session_b = app.state.deps.session(scope_b)
++    asyncio.run(server_app._persist_library_catalog(
++        session_a,
++        "collection",
++        [{"aweme_id": "only-a", "desc": "A"}],
++    ))
++
++    with TestClient(app) as client:
++        items_a = client.get(
++            "/api/v1/items",
++            headers={"X-Zhicui-Scope": scope_a},
++        )
++        items_b = client.get(
++            "/api/v1/items",
++            headers={"X-Zhicui-Scope": scope_b},
++        )
++
++    assert [item["aweme_id"] for item in items_a.json()["items"]] == ["only-a"]
++    assert items_b.json()["items"] == []
++    assert session_a.catalog_path != session_b.catalog_path
++
++
++def test_qr_status_and_binary_endpoint(tmp_path):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path))
++    app = build_app(config)
++    deps = app.state.deps.session(server_app.DEFAULT_SESSION_SCOPE)
++    image = b"\x89PNG\r\n\x1a\n" + (b"safe-qr" * 100)
++
++    assert deps.update_qr(image) is True
++    first_version = deps.fetch_qr_version
++    assert deps.update_qr(image) is False
++    assert deps.fetch_qr_version == first_version
++
++    with TestClient(app) as client:
++        status = client.get("/api/v1/fetch-cookie")
++        qr = client.get("/api/v1/fetch-cookie/qr")
++
++    assert status.status_code == 200
++    assert status.json()["qr_ready"] is True
++    assert status.json()["qr_version"] == first_version
++    assert qr.status_code == 200
++    assert qr.content == image
++    assert qr.headers["content-type"] == "image/png"
++    assert qr.headers["cache-control"] == "no-store, max-age=0"
++    assert qr.headers["x-qr-version"] == str(first_version)
++
++
++def test_visible_chrome_state_is_reported_to_login_client(tmp_path):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path))
++    app = build_app(config)
++    deps = app.state.deps.session(server_app.DEFAULT_SESSION_SCOPE)
++    deps.fetch_status.update(
++        running=True,
++        message="Chrome 已弹出，请在窗口中扫码",
++        error="",
++        browser_opened=True,
++        browser_mode="visible_chrome",
++    )
++
++    with TestClient(app) as client:
++        status = client.get("/api/v1/fetch-cookie")
++
++    assert status.status_code == 200
++    assert status.json()["running"] is True
++    assert status.json()["browser_opened"] is True
++    assert status.json()["browser_mode"] == "visible_chrome"
++    assert status.json()["qr_ready"] is False
++
++
++def test_qr_endpoint_rejects_missing_or_oversized_image(tmp_path):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path))
++    app = build_app(config)
++
++    with TestClient(app) as client:
++        missing = client.get("/api/v1/fetch-cookie/qr")
++        app.state.deps.session(
++            server_app.DEFAULT_SESSION_SCOPE
++        ).fetch_qr_image = b"x" * (server_app.MAX_QR_IMAGE_BYTES + 1)
++        oversized = client.get("/api/v1/fetch-cookie/qr")
++
++    assert missing.status_code == 404
++    assert oversized.status_code == 413
++
++
++def test_headless_flag_is_environment_controlled(monkeypatch):
++    monkeypatch.delenv("DOUYIN_BROWSER_HEADLESS", raising=False)
++    assert server_app._env_flag("DOUYIN_BROWSER_HEADLESS", False) is False
++    monkeypatch.setenv("DOUYIN_BROWSER_HEADLESS", "true")
++    assert server_app._env_flag("DOUYIN_BROWSER_HEADLESS", False) is True
++
++
++@pytest.mark.asyncio
++async def test_login_challenge_title_is_detected():
++    class FakePage:
++        async def title(self):
++            return "验证码中间页"
++
++    assert await server_app._has_login_challenge(FakePage()) is True
++
++
++@pytest.mark.asyncio
++async def test_normal_login_title_is_not_a_challenge():
++    class FakePage:
++        async def title(self):
++            return "抖音-记录美好生活"
++
++    assert await server_app._has_login_challenge(FakePage()) is False
++
++
++def test_cancel_fetch_cookie_stops_only_scoped_task(tmp_path, monkeypatch):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path))
++    app = build_app(config)
++    scope = "cancel-login-scope-123456789012345"
++
++    async def wait_forever(deps, browser):
++        await asyncio.sleep(3600)
++        return {}
++
++    monkeypatch.setattr(server_app, "_fetch_cookie_auto", wait_forever)
++    with TestClient(app) as client:
++        started = client.post(
++            "/api/v1/fetch-cookie",
++            headers={"X-Zhicui-Scope": scope},
++            json={"browser": "chromium"},
++        )
++        cancelled = client.delete(
++            "/api/v1/fetch-cookie",
++            headers={"X-Zhicui-Scope": scope},
++        )
++        status = client.get(
++            "/api/v1/fetch-cookie",
++            headers={"X-Zhicui-Scope": scope},
++        )
++
++    assert started.status_code == 200
++    assert cancelled.status_code == 200
++    assert cancelled.json()["cancelled"] is True
++    assert status.json()["running"] is False
++    assert status.json()["browser_opened"] is False
++    assert status.json()["browser_mode"] == "idle"
++    assert status.json()["qr_ready"] is False
++    assert status.json()["message"] == "扫码登录已取消"
++
++
++def test_qr_crop_returns_only_detected_code():
++    import cv2
++
++    encoder = cv2.QRCodeEncoder_create()
++    qr = encoder.encode("https://login.example.test/short-lived-token")
++    qr = cv2.resize(qr, (240, 240), interpolation=cv2.INTER_NEAREST)
++    canvas = cv2.copyMakeBorder(
++        qr,
++        80,
++        80,
++        120,
++        120,
++        cv2.BORDER_CONSTANT,
++        value=255,
++    )
++    encoded, buffer = cv2.imencode(".png", canvas)
++    assert encoded
++
++    cropped = server_app._crop_qr_from_screenshot(buffer.tobytes())
++
++    assert cropped is not None
++    cropped_matrix = cv2.imdecode(
++        __import__("numpy").frombuffer(cropped, dtype="uint8"),
++        cv2.IMREAD_GRAYSCALE,
++    )
++    assert cropped_matrix.shape[0] < canvas.shape[0]
++    assert cropped_matrix.shape[1] < canvas.shape[1]
+ 
+ 
+ @pytest.mark.asyncio
+diff --git a/tests/test_user_downloader_modes.py b/tests/test_user_downloader_modes.py
+index 4c379ea..bf09de0 100644
+--- a/tests/test_user_downloader_modes.py
++++ b/tests/test_user_downloader_modes.py
+@@ -37,6 +37,7 @@ class _NoopRateLimiter:
+ class _FakeAPIClient:
+     def __init__(self):
+         self.user_info_calls = []
++        self.collection_calls = 0
+         self.collect_calls = 0
+         self.collect_mix_calls = 0
+ 
+@@ -89,6 +90,20 @@ class _FakeAPIClient:
+             "status_code": 0,
+         }
+ 
++    async def get_user_collection(
++        self,
++        _sec_uid: str,
++        max_cursor: int = 0,
++        count: int = 20,
++    ):
++        self.collection_calls += 1
++        return {
++            "items": [_make_aweme("default-collection-1")],
++            "has_more": False,
++            "max_cursor": 0,
++            "status_code": 0,
++        }
++
+     async def get_collect_aweme(self, collects_id: str, max_cursor: int = 0, count: int = 20):
+         assert collects_id == "collect-1"
+         return {
+@@ -101,8 +116,20 @@ class _FakeAPIClient:
+ 
+ def _build_downloader(tmp_path, mode: List[str]) -> UserDownloader:
+     config_data = {
+-        "number": {"post": 0, "like": 0, "mix": 0, "music": 0},
+-        "increase": {"post": False, "like": False, "mix": False, "music": False},
++        "number": {
++            "post": 0,
++            "like": 0,
++            "mix": 0,
++            "music": 0,
++            "collection": 0,
++        },
++        "increase": {
++            "post": False,
++            "like": False,
++            "mix": False,
++            "music": False,
++            "collection": False,
++        },
+         "mode": mode,
+         "thread": 2,
+         "browser_fallback": {"enabled": False},
+@@ -215,6 +242,26 @@ def test_user_downloader_supports_self_collect_mode(tmp_path, monkeypatch):
+     assert downloader.api_client.user_info_calls == []
+ 
+ 
++def test_user_downloader_supports_self_default_collection_mode(tmp_path, monkeypatch):
++    downloader = _build_downloader(tmp_path, mode=["collection"])
++
++    async def _always_true(*_args, **_kwargs):
++        return True
++
++    async def _download_ok(*_args, **_kwargs):
++        return True
++
++    monkeypatch.setattr(downloader, "_should_download", _always_true)
++    monkeypatch.setattr(downloader, "_download_aweme_assets", _download_ok)
++
++    result = asyncio.run(downloader.download({"sec_uid": "self"}))
++
++    assert result.total == 1
++    assert result.success == 1
++    assert downloader.api_client.collection_calls == 1
++    assert downloader.api_client.user_info_calls == []
++
++
+ def test_user_downloader_rejects_non_self_collect_mode(tmp_path, monkeypatch):
+     downloader = _build_downloader(tmp_path, mode=["collect"])
+ 
+diff --git a/tests/test_user_mode_registry.py b/tests/test_user_mode_registry.py
+index 7c96999..fabb95c 100644
+--- a/tests/test_user_mode_registry.py
++++ b/tests/test_user_mode_registry.py
+@@ -1,6 +1,7 @@
+ from core.user_mode_registry import UserModeRegistry
+ from core.user_modes.collect_mix_strategy import CollectMixUserModeStrategy
+ from core.user_modes.collect_strategy import CollectUserModeStrategy
++from core.user_modes.collection_strategy import CollectionUserModeStrategy
+ from core.user_modes.like_strategy import LikeUserModeStrategy
+ from core.user_modes.mix_strategy import MixUserModeStrategy
+ from core.user_modes.music_strategy import MusicUserModeStrategy
+@@ -15,5 +16,6 @@ def test_user_mode_registry_contains_default_modes():
+     assert registry.get("mix") is MixUserModeStrategy
+     assert registry.get("music") is MusicUserModeStrategy
+     assert registry.get("collect") is CollectUserModeStrategy
++    assert registry.get("collection") is CollectionUserModeStrategy
+     assert registry.get("collectmix") is CollectMixUserModeStrategy
+     assert registry.get("unknown") is None
+diff --git a/tests/test_user_mode_strategies.py b/tests/test_user_mode_strategies.py
+index a2fb8c0..f83e10c 100644
+--- a/tests/test_user_mode_strategies.py
++++ b/tests/test_user_mode_strategies.py
+@@ -3,6 +3,7 @@ import asyncio
+ from core.user_modes import post_strategy as post_strategy_module
+ from core.user_modes.collect_mix_strategy import CollectMixUserModeStrategy
+ from core.user_modes.collect_strategy import CollectUserModeStrategy
++from core.user_modes.collection_strategy import CollectionUserModeStrategy
+ from core.user_modes.like_strategy import LikeUserModeStrategy
+ from core.user_modes.mix_strategy import MixUserModeStrategy
+ from core.user_modes.music_strategy import MusicUserModeStrategy
+@@ -52,6 +53,41 @@ def test_like_strategy_collects_items_from_api():
+     assert [item["aweme_id"] for item in items] == ["111"]
+ 
+ 
++def test_collection_strategy_collects_default_collection_from_api():
++    class _API:
++        async def get_user_collection(self, _sec_uid, max_cursor=0, count=20):
++            if max_cursor > 0:
++                return {"items": [], "has_more": False, "max_cursor": max_cursor}
++            return {
++                "items": [_make_aweme("collection-1")],
++                "has_more": False,
++                "max_cursor": 0,
++            }
++
++    class _Downloader:
++        def __init__(self):
++            self.api_client = _API()
++            self.rate_limiter = _NoopRateLimiter()
++            self.config = type(
++                "Cfg",
++                (),
++                {
++                    "get": lambda _self, key, default=None: {
++                        "number": {"collection": 0},
++                        "increase": {"collection": False},
++                    }.get(key, default)
++                },
++            )()
++            self.database = None
++            self._filter_by_time = lambda items: items
++            self._limit_count = lambda items, _mode: items
++
++    strategy = CollectionUserModeStrategy(_Downloader())
++    items = asyncio.run(strategy.collect_items("self", {"uid": "self"}))
++
++    assert [item["aweme_id"] for item in items] == ["collection-1"]
++
++
+ def test_like_strategy_increment_stops_at_first_downloaded_aweme():
+     class _API:
+         def __init__(self):
+diff --git a/core/user_modes/collection_strategy.py b/core/user_modes/collection_strategy.py
+new file mode 100644
+index 0000000..16ab262
+--- /dev/null
++++ b/core/user_modes/collection_strategy.py
+@@ -0,0 +1,8 @@
++from core.user_modes.base_strategy import BaseUserModeStrategy
++
++
++class CollectionUserModeStrategy(BaseUserModeStrategy):
++    """Download the logged-in account's default/all collected aweme."""
++
++    mode_name = "collection"
++    api_method_name = "get_user_collection"
 diff --git a/server/static/index.html b/server/static/index.html
 new file mode 100644
-index 0000000000000000000000000000000000000000..bf5a3b94bb910804517219372f9f4fc8fd8ef2e0
+index 0000000..bf5a3b9
 --- /dev/null
 +++ b/server/static/index.html
 @@ -0,0 +1,383 @@
@@ -1940,596 +3217,3 @@ index 0000000000000000000000000000000000000000..bf5a3b94bb910804517219372f9f4fc8
 +</script>
 +</body>
 +</html>
-diff --git a/tests/test_api_client.py b/tests/test_api_client.py
-index 8811da2871f51307698ef875d1a531fb823f4d11..1f9fd118a69eea7e978229b50ada7b0aecabfd68 100644
---- a/tests/test_api_client.py
-+++ b/tests/test_api_client.py
-@@ -557,6 +557,52 @@ async def test_collect_endpoints_use_expected_paths_and_normalization(monkeypatc
-     assert collect_mix_data["items"] == [{"mix_id": "mix-1"}]
- 
- 
-+@pytest.mark.asyncio
-+async def test_default_collection_uses_cookie_scoped_post_endpoint(monkeypatch):
-+    client = DouyinAPIClient({"msToken": "token-1"})
-+    captured = {}
-+
-+    async def _fake_request_json(path, params, **kwargs):
-+        captured.update(path=path, params=dict(params), kwargs=kwargs)
-+        return {
-+            "status_code": 0,
-+            "aweme_list": [{"aweme_id": "default-1"}],
-+            "has_more": 1,
-+            "cursor": 1700000000000000,
-+        }
-+
-+    monkeypatch.setattr(client, "_request_json", _fake_request_json)
-+
-+    data = await client.get_user_collection("self", max_cursor=0, count=20)
-+
-+    assert captured["path"] == "/aweme/v1/web/aweme/listcollection/"
-+    assert captured["kwargs"]["method"] == "POST"
-+    assert captured["kwargs"]["json_body"] == captured["params"]
-+    assert captured["params"]["cursor"] == 0
-+    assert captured["params"]["count"] == 20
-+    assert data["items"] == [{"aweme_id": "default-1"}]
-+    assert data["has_more"] is True
-+    assert data["max_cursor"] == 1700000000000000
-+
-+
-+@pytest.mark.asyncio
-+async def test_default_collection_rejects_non_self_scope(monkeypatch):
-+    client = DouyinAPIClient({"msToken": "token-1"})
-+    called = False
-+
-+    async def _unexpected_request(*_args, **_kwargs):
-+        nonlocal called
-+        called = True
-+        return {}
-+
-+    monkeypatch.setattr(client, "_request_json", _unexpected_request)
-+
-+    data = await client.get_user_collection("another-user")
-+
-+    assert data["items"] == []
-+    assert called is False
-+
-+
- @pytest.mark.asyncio
- async def test_mix_and_music_endpoints_are_normalized(monkeypatch):
-     client = DouyinAPIClient({"msToken": "token-1"})
-diff --git a/tests/test_server.py b/tests/test_server.py
-index ac06496f4cb2ac2e94327df6cdeaf4f5323adf6c..535856e846d7afb0f5e80d19261659458aa58001 100644
---- a/tests/test_server.py
-+++ b/tests/test_server.py
-@@ -4,6 +4,7 @@
- """
- 
- import asyncio
-+import json
- from typing import Dict
- 
- import pytest
-@@ -15,8 +16,9 @@ except ImportError:  # pragma: no cover
- 
- 
- from config import ConfigLoader
-+import server.app as server_app
- from server.app import build_app
--from server.jobs import JobManager
-+from server.jobs import DownloadJob, JobManager
- 
- 
- @pytest.mark.asyncio
-@@ -59,7 +61,77 @@ def test_health_endpoint(tmp_path):
-     with TestClient(app) as client:
-         resp = client.get("/api/v1/health")
-         assert resp.status_code == 200
--        assert resp.json() == {"status": "ok"}
-+        assert resp.json() == {
-+            "status": "ok",
-+            "storage_mode": "local_media",
-+            "max_sync_count": 100,
-+        }
-+
-+
-+def test_items_include_persisted_collection_rank(tmp_path):
-+    config = ConfigLoader(None)
-+    config.update(path=str(tmp_path))
-+    manifest = tmp_path / "download_manifest.jsonl"
-+    records = [
-+        {
-+            "aweme_id": "older",
-+            "file_paths": ["。/collection/older/older.mp4"],
-+        },
-+        {
-+            "aweme_id": "newest",
-+            "file_paths": ["。/collection/newest/newest.mp4"],
-+        },
-+    ]
-+    manifest.write_text(
-+        "\n".join(json.dumps(record, ensure_ascii=False) for record in records),
-+        encoding="utf-8",
-+    )
-+    (tmp_path / "source_order.json").write_text(
-+        json.dumps(
-+            {
-+                "version": 1,
-+                "modes": {
-+                    "collection": {
-+                        "aweme_ids": ["newest", "older"],
-+                        "synced_at": "2026-07-27T00:00:00Z",
-+                    }
-+                },
-+            }
-+        ),
-+        encoding="utf-8",
-+    )
-+
-+    app = build_app(config)
-+    with TestClient(app) as client:
-+        response = client.get("/api/v1/items")
-+
-+    assert response.status_code == 200
-+    by_id = {item["aweme_id"]: item for item in response.json()["items"]}
-+    assert by_id["newest"]["source_rank"] == 0
-+    assert by_id["older"]["source_rank"] == 1
-+    assert by_id["newest"]["source_synced_at"] == "2026-07-27T00:00:00Z"
-+
-+
-+def test_refresh_source_order_does_not_submit_download(tmp_path, monkeypatch):
-+    config = ConfigLoader(None)
-+    config.update(path=str(tmp_path))
-+    app = build_app(config)
-+    captured = {}
-+
-+    async def fake_refresh(deps, count):
-+        captured.update(deps=deps, count=count)
-+        return {"mode": "collection", "count": count, "total_ranked": count}
-+
-+    monkeypatch.setattr(server_app, "_fetch_collection_order", fake_refresh)
-+    with TestClient(app) as client:
-+        response = client.post(
-+            "/api/v1/source-order/refresh",
-+            json={"mode": "collection", "count": 50},
-+        )
-+
-+    assert response.status_code == 200
-+    assert response.json()["count"] == 50
-+    assert captured == {"deps": app.state.deps, "count": 50}
- 
- 
- def test_download_endpoint_creates_job(tmp_path, monkeypatch):
-@@ -103,6 +175,122 @@ def test_download_endpoint_rejects_empty_url(tmp_path):
-         assert resp.status_code == 400
- 
- 
-+def test_auto_collect_defaults_to_all_collection_mode(tmp_path, monkeypatch):
-+    config = ConfigLoader(None)
-+    config.update(path=str(tmp_path))
-+    app = build_app(config)
-+    captured = {}
-+
-+    class _FakeJob:
-+        job_id = "collection-job"
-+        status = "pending"
-+        url = "https://www.douyin.com/user/self?showTab=favorite_collection"
-+
-+    async def fake_submit(url: str, **opts):
-+        captured.update(url=url, opts=opts)
-+        return _FakeJob()
-+
-+    monkeypatch.setattr(app.state.job_manager, "submit", fake_submit)
-+
-+    with TestClient(app) as client:
-+        resp = client.post("/api/v1/auto-collect", json={"count": 50})
-+
-+    assert resp.status_code == 200
-+    assert captured["url"].endswith("showTab=favorite_collection")
-+    assert captured["opts"] == {"mode": "collection", "count": 50}
-+
-+
-+def test_collect_count_accepts_any_value_from_1_to_100(tmp_path, monkeypatch):
-+    config = ConfigLoader(None)
-+    config.update(path=str(tmp_path))
-+    app = build_app(config)
-+
-+    class _FakeJob:
-+        job_id = "bounded-job"
-+        status = "pending"
-+        url = "https://www.douyin.com/user/self?showTab=favorite_collection"
-+
-+    async def fake_submit(url: str, **opts):
-+        return _FakeJob()
-+
-+    monkeypatch.setattr(app.state.job_manager, "submit", fake_submit)
-+
-+    with TestClient(app) as client:
-+        too_small = client.post("/api/v1/auto-collect", json={"count": 0})
-+        allowed_1 = client.post("/api/v1/auto-collect", json={"count": 1})
-+        allowed_50 = client.post("/api/v1/auto-collect", json={"count": 50})
-+        allowed_75 = client.post("/api/v1/auto-collect", json={"count": 75})
-+        allowed_100 = client.post("/api/v1/auto-collect", json={"count": 100})
-+        too_large = client.post("/api/v1/auto-collect", json={"count": 101})
-+
-+    assert too_small.status_code == 422
-+    assert allowed_1.status_code == 200
-+    assert allowed_50.status_code == 200
-+    assert allowed_75.status_code == 200
-+    assert allowed_100.status_code == 200
-+    assert too_large.status_code == 422
-+
-+
-+def test_metadata_only_mode_rejects_persistent_downloads(tmp_path):
-+    config = ConfigLoader(None)
-+    config.update(path=str(tmp_path), server={"metadata_only": True})
-+    app = build_app(config)
-+
-+    with TestClient(app) as client:
-+        health = client.get("/api/v1/health")
-+        download = client.post(
-+            "/api/v1/download",
-+            json={"url": "https://www.douyin.com/video/123"},
-+        )
-+        crawl = client.post(
-+            "/api/v1/crawl",
-+            json={
-+                "url": "https://www.douyin.com/user/self",
-+                "mode": "collection",
-+                "count": 50,
-+            },
-+        )
-+        files = client.get("/files/anything.mp4")
-+
-+    assert health.json()["storage_mode"] == "metadata_only"
-+    assert health.json()["max_sync_count"] == 100
-+    assert download.status_code == 403
-+    assert crawl.status_code == 403
-+    assert files.status_code == 404
-+
-+
-+@pytest.mark.asyncio
-+async def test_metadata_catalog_is_bounded_and_creates_no_media(tmp_path):
-+    config = ConfigLoader(None)
-+    config.update(path=str(tmp_path), server={"metadata_only": True})
-+    app = build_app(config)
-+    deps = app.state.deps
-+    items = [
-+        {
-+            "aweme_id": str(index),
-+            "desc": f"item {index}",
-+            "author": {"nickname": "tester"},
-+            "video": {"cover": {"url_list": [f"https://example.test/{index}.jpg"]}},
-+            "create_time": index,
-+        }
-+        for index in range(150)
-+    ]
-+
-+    result = await server_app._persist_library_catalog(deps, "collection", items)
-+    catalog = json.loads((tmp_path / "library_catalog.json").read_text(encoding="utf-8"))
-+    saved = catalog["modes"]["collection"]["items"]
-+
-+    assert result["count"] == 100
-+    assert len(saved) == 100
-+    assert [record["source_rank"] for record in saved] == list(range(100))
-+    media_suffixes = server_app.PERSISTENT_MEDIA_SUFFIXES
-+    assert not [
-+        path
-+        for path in tmp_path.rglob("*")
-+        if path.is_file() and path.suffix.lower() in media_suffixes
-+    ]
-+
-+
- def test_get_unknown_job_returns_404(tmp_path):
-     config = ConfigLoader(None)
-     config.update(path=str(tmp_path))
-@@ -131,6 +319,154 @@ def test_build_app_shares_deps_across_requests(tmp_path):
-     assert app.state.deps.file_manager is app.state.deps.file_manager  # identity
- 
- 
-+def test_cookie_status_never_returns_cookie_values(tmp_path):
-+    config = ConfigLoader(None)
-+    config.update(path=str(tmp_path))
-+    app = build_app(config)
-+    app.state.deps.cookie_manager.cookies = {
-+        "ttwid": "private-value",
-+        "odin_tt": "private-value",
-+        "passport_csrf_token": "private-value",
-+    }
-+
-+    with TestClient(app) as client:
-+        response = client.get("/api/v1/cookies")
-+
-+    assert response.status_code == 200
-+    payload = response.json()
-+    assert "cookies" not in payload
-+    assert payload["cookie_names"] == ["odin_tt", "passport_csrf_token", "ttwid"]
-+    assert "private-value" not in response.text
-+
-+
-+def test_cookie_session_can_be_cleared_repeatedly(tmp_path):
-+    config = ConfigLoader(None)
-+    config.update(path=str(tmp_path))
-+    app = build_app(config)
-+    cookie_file = app.state.deps.cookie_manager.cookie_file
-+    app.state.deps.cookie_manager.set_cookies({
-+        "ttwid": "private-value",
-+        "odin_tt": "private-value",
-+        "passport_csrf_token": "private-value",
-+    })
-+    app.state.deps.fetch_qr_image = b"qr"
-+
-+    with TestClient(app) as client:
-+        first = client.delete("/api/v1/cookies")
-+        second = client.delete("/api/v1/cookies")
-+
-+    assert first.status_code == 200
-+    assert first.json() == {"cleared": True, "count": 0, "valid": False}
-+    assert second.status_code == 200
-+    assert app.state.deps.cookie_manager.cookies == {}
-+    assert app.state.deps.fetch_qr_image is None
-+    assert not cookie_file.exists()
-+
-+
-+def test_cookie_session_clear_rejects_active_login(tmp_path):
-+    config = ConfigLoader(None)
-+    config.update(path=str(tmp_path))
-+    app = build_app(config)
-+    app.state.deps.fetch_status["running"] = True
-+
-+    with TestClient(app) as client:
-+        response = client.delete("/api/v1/cookies")
-+
-+    assert response.status_code == 409
-+    assert "扫码登录仍在进行" in response.json()["detail"]
-+
-+
-+def test_cookie_session_clear_rejects_active_collection(tmp_path):
-+    config = ConfigLoader(None)
-+    config.update(path=str(tmp_path))
-+    app = build_app(config)
-+    job = DownloadJob("active-job", "https://www.douyin.com/user/self")
-+    job.status = "running"
-+    app.state.job_manager._jobs[job.job_id] = job
-+
-+    with TestClient(app) as client:
-+        response = client.delete("/api/v1/cookies")
-+
-+    assert response.status_code == 409
-+    assert "内容同步仍在进行" in response.json()["detail"]
-+
-+
-+def test_qr_status_and_binary_endpoint(tmp_path):
-+    config = ConfigLoader(None)
-+    config.update(path=str(tmp_path))
-+    app = build_app(config)
-+    deps = app.state.deps
-+    image = b"\x89PNG\r\n\x1a\n" + (b"safe-qr" * 100)
-+
-+    assert deps.update_qr(image) is True
-+    first_version = deps.fetch_qr_version
-+    assert deps.update_qr(image) is False
-+    assert deps.fetch_qr_version == first_version
-+
-+    with TestClient(app) as client:
-+        status = client.get("/api/v1/fetch-cookie")
-+        qr = client.get("/api/v1/fetch-cookie/qr")
-+
-+    assert status.status_code == 200
-+    assert status.json()["qr_ready"] is True
-+    assert status.json()["qr_version"] == first_version
-+    assert qr.status_code == 200
-+    assert qr.content == image
-+    assert qr.headers["content-type"] == "image/png"
-+    assert qr.headers["cache-control"] == "no-store, max-age=0"
-+    assert qr.headers["x-qr-version"] == str(first_version)
-+
-+
-+def test_qr_endpoint_rejects_missing_or_oversized_image(tmp_path):
-+    config = ConfigLoader(None)
-+    config.update(path=str(tmp_path))
-+    app = build_app(config)
-+
-+    with TestClient(app) as client:
-+        missing = client.get("/api/v1/fetch-cookie/qr")
-+        app.state.deps.fetch_qr_image = b"x" * (server_app.MAX_QR_IMAGE_BYTES + 1)
-+        oversized = client.get("/api/v1/fetch-cookie/qr")
-+
-+    assert missing.status_code == 404
-+    assert oversized.status_code == 413
-+
-+
-+def test_headless_flag_is_environment_controlled(monkeypatch):
-+    monkeypatch.delenv("DOUYIN_BROWSER_HEADLESS", raising=False)
-+    assert server_app._env_flag("DOUYIN_BROWSER_HEADLESS", False) is False
-+    monkeypatch.setenv("DOUYIN_BROWSER_HEADLESS", "true")
-+    assert server_app._env_flag("DOUYIN_BROWSER_HEADLESS", False) is True
-+
-+
-+def test_qr_crop_returns_only_detected_code():
-+    import cv2
-+
-+    encoder = cv2.QRCodeEncoder_create()
-+    qr = encoder.encode("https://login.example.test/short-lived-token")
-+    qr = cv2.resize(qr, (240, 240), interpolation=cv2.INTER_NEAREST)
-+    canvas = cv2.copyMakeBorder(
-+        qr,
-+        80,
-+        80,
-+        120,
-+        120,
-+        cv2.BORDER_CONSTANT,
-+        value=255,
-+    )
-+    encoded, buffer = cv2.imencode(".png", canvas)
-+    assert encoded
-+
-+    cropped = server_app._crop_qr_from_screenshot(buffer.tobytes())
-+
-+    assert cropped is not None
-+    cropped_matrix = cv2.imdecode(
-+        __import__("numpy").frombuffer(cropped, dtype="uint8"),
-+        cv2.IMREAD_GRAYSCALE,
-+    )
-+    assert cropped_matrix.shape[0] < canvas.shape[0]
-+    assert cropped_matrix.shape[1] < canvas.shape[1]
-+
-+
- @pytest.mark.asyncio
- async def test_job_manager_prunes_by_max_jobs():
-     """max_jobs 超限时应优先淘汰最老的终态 job，保留 in-flight。"""
-diff --git a/tests/test_user_downloader_modes.py b/tests/test_user_downloader_modes.py
-index 4c379eae1ff5e21e42910e5be094022dfbcfecfd..bf09de0050d2c9e72df404f0c3bc9c7584ba8aea 100644
---- a/tests/test_user_downloader_modes.py
-+++ b/tests/test_user_downloader_modes.py
-@@ -37,6 +37,7 @@ class _NoopRateLimiter:
- class _FakeAPIClient:
-     def __init__(self):
-         self.user_info_calls = []
-+        self.collection_calls = 0
-         self.collect_calls = 0
-         self.collect_mix_calls = 0
- 
-@@ -89,6 +90,20 @@ class _FakeAPIClient:
-             "status_code": 0,
-         }
- 
-+    async def get_user_collection(
-+        self,
-+        _sec_uid: str,
-+        max_cursor: int = 0,
-+        count: int = 20,
-+    ):
-+        self.collection_calls += 1
-+        return {
-+            "items": [_make_aweme("default-collection-1")],
-+            "has_more": False,
-+            "max_cursor": 0,
-+            "status_code": 0,
-+        }
-+
-     async def get_collect_aweme(self, collects_id: str, max_cursor: int = 0, count: int = 20):
-         assert collects_id == "collect-1"
-         return {
-@@ -101,8 +116,20 @@ class _FakeAPIClient:
- 
- def _build_downloader(tmp_path, mode: List[str]) -> UserDownloader:
-     config_data = {
--        "number": {"post": 0, "like": 0, "mix": 0, "music": 0},
--        "increase": {"post": False, "like": False, "mix": False, "music": False},
-+        "number": {
-+            "post": 0,
-+            "like": 0,
-+            "mix": 0,
-+            "music": 0,
-+            "collection": 0,
-+        },
-+        "increase": {
-+            "post": False,
-+            "like": False,
-+            "mix": False,
-+            "music": False,
-+            "collection": False,
-+        },
-         "mode": mode,
-         "thread": 2,
-         "browser_fallback": {"enabled": False},
-@@ -215,6 +242,26 @@ def test_user_downloader_supports_self_collect_mode(tmp_path, monkeypatch):
-     assert downloader.api_client.user_info_calls == []
- 
- 
-+def test_user_downloader_supports_self_default_collection_mode(tmp_path, monkeypatch):
-+    downloader = _build_downloader(tmp_path, mode=["collection"])
-+
-+    async def _always_true(*_args, **_kwargs):
-+        return True
-+
-+    async def _download_ok(*_args, **_kwargs):
-+        return True
-+
-+    monkeypatch.setattr(downloader, "_should_download", _always_true)
-+    monkeypatch.setattr(downloader, "_download_aweme_assets", _download_ok)
-+
-+    result = asyncio.run(downloader.download({"sec_uid": "self"}))
-+
-+    assert result.total == 1
-+    assert result.success == 1
-+    assert downloader.api_client.collection_calls == 1
-+    assert downloader.api_client.user_info_calls == []
-+
-+
- def test_user_downloader_rejects_non_self_collect_mode(tmp_path, monkeypatch):
-     downloader = _build_downloader(tmp_path, mode=["collect"])
- 
-diff --git a/tests/test_user_mode_registry.py b/tests/test_user_mode_registry.py
-index 7c969998071a27dcb7704002a674b19a5e507b3c..fabb95ca5cf4436c46b7971294a4c2a6975d1912 100644
---- a/tests/test_user_mode_registry.py
-+++ b/tests/test_user_mode_registry.py
-@@ -1,6 +1,7 @@
- from core.user_mode_registry import UserModeRegistry
- from core.user_modes.collect_mix_strategy import CollectMixUserModeStrategy
- from core.user_modes.collect_strategy import CollectUserModeStrategy
-+from core.user_modes.collection_strategy import CollectionUserModeStrategy
- from core.user_modes.like_strategy import LikeUserModeStrategy
- from core.user_modes.mix_strategy import MixUserModeStrategy
- from core.user_modes.music_strategy import MusicUserModeStrategy
-@@ -15,5 +16,6 @@ def test_user_mode_registry_contains_default_modes():
-     assert registry.get("mix") is MixUserModeStrategy
-     assert registry.get("music") is MusicUserModeStrategy
-     assert registry.get("collect") is CollectUserModeStrategy
-+    assert registry.get("collection") is CollectionUserModeStrategy
-     assert registry.get("collectmix") is CollectMixUserModeStrategy
-     assert registry.get("unknown") is None
-diff --git a/tests/test_user_mode_strategies.py b/tests/test_user_mode_strategies.py
-index a2fb8c091b4220b734e6afdc7e69001ab149c0a3..f83e10c04b45cd984eda5e2e3eb55ac375429164 100644
---- a/tests/test_user_mode_strategies.py
-+++ b/tests/test_user_mode_strategies.py
-@@ -3,6 +3,7 @@ import asyncio
- from core.user_modes import post_strategy as post_strategy_module
- from core.user_modes.collect_mix_strategy import CollectMixUserModeStrategy
- from core.user_modes.collect_strategy import CollectUserModeStrategy
-+from core.user_modes.collection_strategy import CollectionUserModeStrategy
- from core.user_modes.like_strategy import LikeUserModeStrategy
- from core.user_modes.mix_strategy import MixUserModeStrategy
- from core.user_modes.music_strategy import MusicUserModeStrategy
-@@ -52,6 +53,41 @@ def test_like_strategy_collects_items_from_api():
-     assert [item["aweme_id"] for item in items] == ["111"]
- 
- 
-+def test_collection_strategy_collects_default_collection_from_api():
-+    class _API:
-+        async def get_user_collection(self, _sec_uid, max_cursor=0, count=20):
-+            if max_cursor > 0:
-+                return {"items": [], "has_more": False, "max_cursor": max_cursor}
-+            return {
-+                "items": [_make_aweme("collection-1")],
-+                "has_more": False,
-+                "max_cursor": 0,
-+            }
-+
-+    class _Downloader:
-+        def __init__(self):
-+            self.api_client = _API()
-+            self.rate_limiter = _NoopRateLimiter()
-+            self.config = type(
-+                "Cfg",
-+                (),
-+                {
-+                    "get": lambda _self, key, default=None: {
-+                        "number": {"collection": 0},
-+                        "increase": {"collection": False},
-+                    }.get(key, default)
-+                },
-+            )()
-+            self.database = None
-+            self._filter_by_time = lambda items: items
-+            self._limit_count = lambda items, _mode: items
-+
-+    strategy = CollectionUserModeStrategy(_Downloader())
-+    items = asyncio.run(strategy.collect_items("self", {"uid": "self"}))
-+
-+    assert [item["aweme_id"] for item in items] == ["collection-1"]
-+
-+
- def test_like_strategy_increment_stops_at_first_downloaded_aweme():
-     class _API:
-         def __init__(self):

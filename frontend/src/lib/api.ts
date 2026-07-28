@@ -410,6 +410,15 @@ export async function getDouyinLoginStatus(): Promise<ApiResponse<DouyinLoginSta
   return request<DouyinLoginStatus>('/api/library/douyin/login');
 }
 
+export async function cancelDouyinLogin(): Promise<ApiResponse<DouyinLoginStatus & {
+  cancelled: boolean;
+}>> {
+  return request<DouyinLoginStatus & { cancelled: boolean }>(
+    '/api/library/douyin/login',
+    { method: 'DELETE' },
+  );
+}
+
 export async function getDouyinLoginQr(): Promise<ApiResponse<{
   image_data_url: string;
   qr_version: number;

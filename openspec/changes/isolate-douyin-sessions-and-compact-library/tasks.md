@@ -74,3 +74,9 @@
 - [x] 12.2 Start login only for a same-device visible Chrome connector and replace remote QR capture with a signed loopback handoff
 - [x] 12.3 Make every service-worker fetch failure resolve with a typed offline response
 - [x] 12.4 Add coverage, regenerate the sidecar patch, rebuild, restart local services and deploy the verified change
+
+## 13. One-action Douyin login
+
+- [x] 13.1 Remove connector, port and remote-browser terminology from user-facing library UI
+- [x] 13.2 Open Chrome directly, auto-close the temporary launch document and use bounded completion reconciliation
+- [ ] 13.3 Add coverage, rebuild, restart local services and deploy the verified flow

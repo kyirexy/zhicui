@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "platform": "android",
-  "version": "1.1.5",
-  "build": 7,
-  "published_at": "2026-07-28T07:06:50.348Z",
+  "version": "1.1.6",
+  "build": 8,
+  "published_at": "2026-07-28T07:30:03.000Z",
   "download_url": "https://luxai.cn/download/zhicui.apk",
-  "size_bytes": 5864466,
+  "size_bytes": 5860799,
   "mandatory": false,
   "release_notes": [
-    "抖音绑定改为打开用户电脑上的本机 Chrome，避免服务器异地登录与会话不一致。",
-    "线上页面通过十分钟短时签名连接 127.0.0.1 本机连接器，扫码结果安全交回当前知萃账号。",
-    "远程服务器二维码已停用；本机连接器未启动时会给出明确提示和重试入口。",
-    "修复 Service Worker 网络失败产生未捕获 Failed to fetch 控制台错误的问题。"
+    "抖音登录入口精简为一个“扫码登录抖音”按钮。",
+    "点击后直接打开 Chrome，临时启动页面会自动关闭。",
+    "扫码确认后自动识别登录结果，不再保留额外的登录面板。",
+    "优化登录结果检查，避免正常同步延迟被误报为登录失败。"
   ]
 }

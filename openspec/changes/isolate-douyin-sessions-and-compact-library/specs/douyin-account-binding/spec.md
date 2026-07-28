@@ -181,3 +181,18 @@ The system SHALL start a Douyin login only when the connector can expose an inte
 #### Scenario: Connector capability is unknown
 - **WHEN** the connector cannot report its login browser mode
 - **THEN** the client does not claim that a local Chrome window opened and presents a retryable unavailable state
+
+### Requirement: One-action Douyin login presentation
+The system SHALL present desktop binding as a single user action without exposing connector names, ports, loopback addresses, remote-browser modes or handoff implementation details.
+
+#### Scenario: Desktop user starts binding
+- **WHEN** the user clicks `扫码登录抖音`
+- **THEN** the installed Chrome login surface opens directly, the temporary launch window closes automatically and the library page uses only compact progress feedback
+
+#### Scenario: Login confirmation is still propagating
+- **WHEN** the user asks to check immediately after confirming in Douyin
+- **THEN** the client performs bounded follow-up checks before reporting that no login result was detected
+
+#### Scenario: Handoff completes
+- **WHEN** authenticated session evidence has reached the scoped production session
+- **THEN** the library changes to the logged-in state automatically and removes all temporary login guidance

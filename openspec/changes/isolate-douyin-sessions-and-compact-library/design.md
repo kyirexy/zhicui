@@ -131,3 +131,9 @@ This deliberately removes the misleading production QR fallback. A normal web pa
 ### 15. Service-worker failures always settle
 
 The service worker remains cache-first for immutable client assets and network-first for navigations and API requests. Every network branch now terminates in a cached response or a typed `503` response. This prevents rejected `fetch()` promises from surfacing as uncaught console errors while keeping offline behavior explicit. Localhost bootstrap continues to unregister stale workers and clear their named caches.
+
+### 16. Desktop binding is one visible action
+
+The loopback handoff remains an internal transport, not a product concept. Desktop UI exposes only `扫码登录抖音`, opens the Chrome login surface and shows compact progress in the existing status strip. The temporary browser launch document closes itself immediately after starting Chrome. User-facing copy does not mention sidecars, downloader processes, ports, loopback addresses, server browser modes or signed callbacks.
+
+The frontend polls the authoritative scoped binding while login is active. A manual confirmation check uses a short bounded retry window so the normal delay between Douyin confirmation, Cookie persistence, HTTPS callback and production-sidecar import is not misreported as failure.

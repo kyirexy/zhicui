@@ -50,8 +50,6 @@ import {
 } from '@/lib/api';
 import {
   isNativeAndroidApp,
-  openDouyinFromAndroidApp,
-  saveDouyinLoginQrToGallery,
 } from '@/lib/douyinNative';
 import type {
   DouyinCollectionJob,
@@ -127,14 +125,14 @@ export default function VideoLibraryPage() {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
-  const [loginQr, setLoginQr] = useState('');
+  const [, setLoginQr] = useState('');
   const [qrPanelOpen, setQrPanelOpen] = useState(false);
   const [qrActionMessage, setQrActionMessage] = useState('');
-  const [loginStatusMessage, setLoginStatusMessage] = useState('');
-  const [browserOpened, setBrowserOpened] = useState(false);
-  const [browserMode, setBrowserMode] = useState('idle');
-  const [qrFallbackVisible, setQrFallbackVisible] = useState(false);
-  const [qrFallbackMode, setQrFallbackMode] = useState('remote_capture');
+  const [, setLoginStatusMessage] = useState('');
+  const [, setBrowserOpened] = useState(false);
+  const [, setBrowserMode] = useState('idle');
+  const [, setQrFallbackVisible] = useState(false);
+  const [, setQrFallbackMode] = useState('remote_capture');
   const [bindingClient, setBindingClient] = useState<BindingClient>('desktop-web');
   const [bindingCheckPending, setBindingCheckPending] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -310,15 +308,6 @@ export default function VideoLibraryPage() {
     bindingClient === 'desktop-web'
     && loginBrowserMode === 'visible_chrome'
   );
-  const localConnectorUnavailable = (
-    bindingClient === 'desktop-web'
-    && !localBrowserAvailable
-  );
-  const visibleChromeLogin = (
-    localBrowserAvailable
-    && browserMode === 'visible_chrome'
-    && browserOpened
-  );
   const sourceLabel = SOURCE_MODES.find((mode) => mode.value === sourceMode)?.label || '视频';
 
   const toggleSelection = (awemeId: string) => {
@@ -460,97 +449,19 @@ export default function VideoLibraryPage() {
   const checkDesktopBinding = async () => {
     if (bindingCheckPending) return;
     setBindingCheckPending(true);
-    const latest = await refreshLoginStatus();
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const latest = await refreshLoginStatus();
+      if (latest?.cookie_valid) {
+        setBindingCheckPending(false);
+        setQrPanelOpen(false);
+        setScanning(false);
+        setNotice('抖音登录成功，现在可以同步视频');
+        return;
+      }
+      if (attempt < 7) await wait(1200);
+    }
     setBindingCheckPending(false);
-    if (latest?.cookie_valid) {
-      setQrPanelOpen(false);
-      setNotice('已检测到电脑端完成抖音绑定，现在可以同步视频');
-      return;
-    }
-    setQrActionMessage('暂未检测到绑定。请确认电脑端登录的是同一个知萃账号，并已完成抖音扫码。');
-  };
-
-  const downloadLoginQr = () => {
-    if (!loginQr) return;
-    const link = document.createElement('a');
-    link.href = loginQr;
-    link.download = 'zhicui-douyin-login-qr.png';
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setQrActionMessage('二维码已下载；打开抖音扫一扫，从相册选择这张图。');
-  };
-
-  const saveOrShareLoginQr = async () => {
-    if (!loginQr) return;
-    if (bindingClient === 'android-app') {
-      try {
-        const saved = await saveDouyinLoginQrToGallery(loginQr);
-        setQrActionMessage(
-          `已保存到系统相册 ${saved.album}/${saved.fileName}；现在打开抖音扫一扫并从相册选择。`,
-        );
-      } catch (saveError) {
-        setQrActionMessage(
-          saveError instanceof Error
-            ? saveError.message
-            : '保存二维码失败，可改用另一台设备扫码或在桌面端绑定。',
-        );
-      }
-      return;
-    }
-    try {
-      const response = await fetch(loginQr);
-      const image = await response.blob();
-      const file = new File(
-        [image],
-        'zhicui-douyin-login-qr.png',
-        { type: 'image/png' },
-      );
-      const shareData: ShareData = {
-        title: '知萃抖音登录二维码',
-        text: '保存二维码后，在抖音扫一扫中从相册选择。',
-        files: [file],
-      };
-      if (navigator.canShare?.(shareData)) {
-        await navigator.share(shareData);
-        setQrActionMessage('系统分享面板已打开；请把二维码保存到相册。');
-        return;
-      }
-      downloadLoginQr();
-    } catch (shareError) {
-      if (
-        shareError instanceof DOMException
-        && shareError.name === 'AbortError'
-      ) {
-        return;
-      }
-      downloadLoginQr();
-    }
-  };
-
-  const openDouyinApp = async () => {
-    setQrActionMessage('已尝试打开抖音；进入扫一扫后从相册选择刚保存的二维码，再返回知萃。');
-    if (bindingClient === 'android-app') {
-      try {
-        const result = await openDouyinFromAndroidApp();
-        if (!result.installed) {
-          setQrActionMessage(
-            '未检测到已安装的抖音，已打开抖音网页。你也可以安装抖音后重试，或用另一台设备扫码。',
-          );
-        }
-      } catch (openError) {
-        setQrActionMessage(
-          openError instanceof Error
-            ? openError.message
-            : '暂时无法打开抖音，请手动打开抖音扫一扫。',
-        );
-      }
-      return;
-    }
-    const isAndroid = /Android/i.test(navigator.userAgent);
-    window.location.href = isAndroid
-      ? 'intent://#Intent;scheme=snssdk1128;package=com.ss.android.ugc.aweme;S.browser_fallback_url=https%3A%2F%2Fwww.douyin.com%2F;end'
-      : 'snssdk1128://';
+    setQrActionMessage('暂未收到登录结果，请确认已在手机抖音中点击“确认登录”，然后重试。');
   };
 
   const pollQrLogin = useCallback(async (
@@ -739,7 +650,7 @@ export default function VideoLibraryPage() {
           setLoginQr('');
           setBrowserOpened(false);
           setBrowserMode('idle');
-          setNotice('已停止异地服务器登录，请改用本机 Chrome 连接器完成绑定');
+          setNotice('旧的登录任务已停止，请重新扫码登录抖音');
           return;
         }
       }
@@ -818,19 +729,19 @@ export default function VideoLibraryPage() {
       setQrPanelOpen(true);
       setLoginQr('');
       setQrActionMessage(
-        '线上服务器无法弹出你电脑上的 Chrome。请在本机启动知萃与 douyin-downloader 连接器后再绑定。',
+        '登录窗口暂时无法打开，请稍后重试。',
       );
       setBrowserOpened(false);
       setBrowserMode(loginBrowserMode);
       setQrFallbackVisible(false);
       setLoginStatusMessage('异地服务器二维码已停用');
-      setNotice('为避免登录位置和会话不一致，请改用本机 Chrome 完成抖音绑定');
+      setNotice('登录窗口暂时无法打开，请稍后重试');
       return;
     }
     const pollId = loginPollRef.current + 1;
     loginPollRef.current = pollId;
     setScanning(true);
-    setQrPanelOpen(true);
+    setQrPanelOpen(false);
     setLoginQr('');
     setQrActionMessage('');
     setBrowserOpened(false);
@@ -887,29 +798,33 @@ export default function VideoLibraryPage() {
       'popup=yes,width=720,height=640',
     );
     if (!connectorWindow) {
-      setQrPanelOpen(true);
-      setLoginStatusMessage('浏览器阻止了本机连接器窗口');
-      setQrActionMessage('请允许 luxai.cn 打开弹出式窗口，然后点击“重新打开本机连接器”。');
-      setNotice('请先允许浏览器弹出窗口');
+      setScanning(false);
+      setQrPanelOpen(false);
+      setLoginStatusMessage('浏览器阻止了登录窗口');
+      setQrActionMessage('');
+      setNotice('请允许浏览器打开登录窗口，然后重新点击“扫码登录抖音”');
       return;
     }
-    connectorWindow.document.title = '正在打开知萃本机连接器';
-    connectorWindow.document.body.textContent = '正在连接这台电脑上的知萃连接器…';
+    connectorWindow.document.title = '正在打开抖音登录';
+    connectorWindow.document.body.textContent = '正在打开抖音登录，请稍候…';
 
-    setQrPanelOpen(true);
+    setScanning(true);
+    setQrPanelOpen(false);
     setLoginQr('');
     setQrActionMessage('');
     setBrowserOpened(false);
     setBrowserMode('local_handoff');
     setQrFallbackVisible(false);
-    setLoginStatusMessage('正在打开这台电脑的本地连接器…');
+    setLoginStatusMessage('正在打开 Chrome…');
+    setNotice('正在打开 Chrome，请稍候…');
 
     const handoff = await createDouyinLocalHandoff();
     if (!handoff.success || !handoff.data) {
       connectorWindow.close();
-      setLoginStatusMessage('无法创建本机登录交接');
-      setQrActionMessage(handoff.error || '请刷新页面后重试。');
-      setNotice(handoff.error || '本机登录交接创建失败');
+      setScanning(false);
+      setLoginStatusMessage('登录窗口打开失败');
+      setQrActionMessage('');
+      setNotice(handoff.error || '登录窗口打开失败，请重试');
       return;
     }
 
@@ -928,9 +843,8 @@ export default function VideoLibraryPage() {
 
     const pollId = loginPollRef.current + 1;
     loginPollRef.current = pollId;
-    setScanning(true);
-    setLoginStatusMessage('本机连接器已打开，等待 Chrome 扫码确认…');
-    setNotice('请在自动弹出的本机 Chrome 中完成抖音登录');
+    setLoginStatusMessage('等待扫码确认…');
+    setNotice('请在弹出的 Chrome 中使用手机抖音扫码');
 
     for (
       let attempt = 0;
@@ -946,18 +860,16 @@ export default function VideoLibraryPage() {
         setLoginStatusMessage('');
         setQrActionMessage('');
         setBrowserMode('idle');
-        setNotice('本机 Chrome 登录成功，当前知萃账号已完成抖音绑定');
+        setNotice('抖音登录成功，现在可以同步视频');
         await loadItems(true);
         return;
       }
     }
     if (loginPollRef.current !== pollId) return;
     setScanning(false);
-    setLoginStatusMessage('尚未收到本机连接器的登录结果');
-    setQrActionMessage(
-      '请确认 127.0.0.1:9000 连接器仍在运行；如已完成扫码，可点击下方按钮重新检查。',
-    );
-    setNotice('本机登录等待超时，可以重新打开连接器');
+    setLoginStatusMessage('尚未收到登录结果');
+    setQrActionMessage('');
+    setNotice('登录等待超时，请确认手机端已点击“确认登录”后重试');
   };
 
   const startQrLogin = async () => {
@@ -972,31 +884,14 @@ export default function VideoLibraryPage() {
       setBrowserMode('idle');
       setQrFallbackVisible(false);
       setQrActionMessage('');
-      setLoginStatusMessage('请在装有本地连接器的电脑端完成抖音绑定');
-      setNotice('手机端请使用同一个知萃账号，在本机连接器中完成抖音绑定');
+      setLoginStatusMessage('请在电脑端扫码登录抖音');
+      setNotice('请在电脑端登录同一个知萃账号，再扫码登录抖音');
       return;
     }
     if (!localBrowserAvailable) {
       await beginLocalHandoff();
       return;
     }
-    await beginDesktopQrLogin();
-  };
-
-  const retryQrLogin = async () => {
-    if (
-      !connected
-      || scanning
-      || bindingClient !== 'desktop-web'
-      || !localBrowserAvailable
-    ) return;
-    loginPollRef.current += 1;
-    setScanning(true);
-    setQrFallbackVisible(false);
-    setLoginStatusMessage('正在关闭旧窗口并重新启动…');
-    const cancelled = await cancelDouyinLogin();
-    await wait(cancelled.data?.browser_mode === 'closing' ? 1600 : 500);
-    setScanning(false);
     await beginDesktopQrLogin();
   };
 
@@ -1144,7 +1039,7 @@ export default function VideoLibraryPage() {
       delete next[item.aweme_id];
       return next;
     });
-    setNotice('已删除这条文案、知识卡和关联计划；原视频仍在下载器中');
+    setNotice('已删除这条文案、知识卡和关联计划；抖音原视频不会受影响');
   };
 
   const openRemovalDialog = (targetItems: DouyinLibraryItem[]) => {
@@ -1207,11 +1102,11 @@ export default function VideoLibraryPage() {
         <div className="library-status-strip">
           <div className="library-status-copy">
             <span className={`library-status-dot ${connected ? 'is-online' : ''}`} />
-            <strong>{connected ? '下载器已连接' : '下载器未连接'}</strong>
+            <strong>{connected ? '抖音服务正常' : '抖音服务暂不可用'}</strong>
             <span>
               {connected
                 ? `${loggedIn ? '抖音已登录' : '等待扫码登录'} · ${items.length} 条${sourceLabel} · ${extractedCount} 条已有文案`
-                : '请先在本机启动 douyin-downloader :9000'}
+                : '抖音登录服务暂不可用，请稍后重试'}
             </span>
           </div>
           {loggedIn ? (
@@ -1252,11 +1147,9 @@ export default function VideoLibraryPage() {
                 <QrCode size={15} />
               )}
               {scanning
-                ? '等待扫码'
+                ? '正在登录'
                 : bindingClient === 'desktop-web'
-                  ? localBrowserAvailable
-                    ? '打开本机 Chrome'
-                    : '需要本机连接器'
+                  ? '扫码登录抖音'
                   : '去电脑端绑定'}
             </button>
           )}
@@ -1369,24 +1262,16 @@ export default function VideoLibraryPage() {
         </div>
       </dialog>
 
-      {qrPanelOpen && (
+      {qrPanelOpen && bindingClient !== 'desktop-web' && (
         <section className="library-qr-card" aria-live="polite" aria-label="抖音扫码登录">
           <div className="library-qr-heading">
             <div>
               <span className="library-qr-kicker">
                 <QrCode size={15} />
-                扫码连接收藏夹
+                登录抖音
               </span>
-              <h2>
-                {bindingClient !== 'desktop-web'
-                  ? '请在电脑端绑定抖音'
-                  : localConnectorUnavailable
-                    ? '请使用本机 Chrome 绑定'
-                  : visibleChromeLogin
-                    ? '在 Chrome 中扫码登录'
-                    : '正在打开本机 Chrome'}
-              </h2>
-              <p>每个知萃账号使用独立登录会话；Cookie 不会写入知萃数据库。</p>
+              <h2>请在电脑端扫码登录抖音</h2>
+              <p>登录信息会按知萃账号独立保存，不会与其他用户混用。</p>
             </div>
             <button type="button" onClick={closeQrLogin} aria-label="关闭扫码登录">
               <X size={18} />
@@ -1394,163 +1279,46 @@ export default function VideoLibraryPage() {
           </div>
           <div className="library-qr-body">
             <div className="library-qr-frame">
-              {localConnectorUnavailable ? (
-                <div className="library-browser-login is-open">
-                  <ExternalLink size={30} aria-hidden="true" />
-                  <strong>{scanning ? '本机连接器已打开' : '异地二维码已停用'}</strong>
-                  <span>
-                    {loginStatusMessage
-                      || '当前连接器运行在服务器，不能代表你电脑的位置和浏览器会话。'}
-                  </span>
-                </div>
-              ) : qrFallbackVisible ? (
-                <div className="library-browser-login is-open">
-                  <RefreshCw size={30} aria-hidden="true" />
-                  <strong>二维码暂时没有出现</strong>
-                  <span>
-                    {qrFallbackMode === 'visible_chrome'
-                      ? 'Chrome 没有正常弹出，可以立即重新打开登录窗口。'
-                      : '自动恢复已经尝试过一次，可以立即重新生成一张二维码。'}
-                  </span>
-                </div>
-              ) : visibleChromeLogin ? (
-                <div className="library-browser-login is-open">
-                  <ExternalLink size={30} aria-hidden="true" />
-                  <strong>Chrome 已弹出</strong>
-                  <span>
-                    请切换到 Chrome；完成拼图后，用手机抖音扫描窗口里的二维码。
-                  </span>
-                </div>
-              ) : bindingClient === 'desktop-web' && loginQr ? (
-                <img src={loginQr} alt="抖音登录二维码" />
-              ) : bindingClient === 'desktop-web' ? (
-                <div className="library-qr-loading">
-                  <LoaderCircle size={28} className="animate-spin" />
-                  <span>{loginStatusMessage || '正在安全生成抖音登录二维码…'}</span>
-                </div>
-              ) : (
-                <div className="library-browser-login is-open">
-                  <ExternalLink size={30} aria-hidden="true" />
-                  <strong>需要一台电脑</strong>
-                  <span>电脑访问 luxai.cn/library，登录同一个知萃账号后完成抖音扫码。</span>
-                </div>
-              )}
+              <div className="library-browser-login is-open">
+                <ExternalLink size={30} aria-hidden="true" />
+                <strong>需要一台电脑</strong>
+                <span>在电脑打开知萃视频库，登录同一个账号后点击“扫码登录抖音”。</span>
+              </div>
             </div>
             <div className="library-qr-guide">
               <p
                 className={`library-qr-capability is-${bindingClient}`}
                 role={bindingClient === 'mobile-web' ? 'note' : undefined}
               >
-                {bindingClient === 'android-app' && 'Android App 暂不直接绑定抖音：生产服务器无法展示抖音的拼图安全验证，请到电脑端完成一次绑定。'}
-                {bindingClient === 'mobile-web' && '手机浏览器暂不直接绑定抖音：请在电脑端使用同一个知萃账号完成一次绑定。'}
-                {bindingClient === 'desktop-web' && (
-                  localConnectorUnavailable
-                    ? '远程二维码已停用；点击后会通过短时签名交接到这台电脑的本地连接器，再弹出本机 Chrome。'
-                    : visibleChromeLogin
-                    ? '本地桌面端已弹出 Chrome，二维码以 Chrome 窗口为准。'
-                    : '本机连接器已就绪，登录只会在这台电脑的 Chrome 中进行。'
-                )}
+                {bindingClient === 'android-app' && '手机端暂不直接发起抖音登录，请在电脑端完成一次扫码。'}
+                {bindingClient === 'mobile-web' && '手机浏览器暂不直接发起抖音登录，请在电脑端使用同一个知萃账号完成一次扫码。'}
               </p>
-              {localConnectorUnavailable ? (
-                <ol>
-                  <li>启动 douyin-downloader 本地连接器（端口 9000）</li>
-                  <li>点击“打开本机连接器”，浏览器会访问 127.0.0.1:9000</li>
-                  <li>在自动弹出的本机 Chrome 中完成验证并扫码</li>
-                  <li>连接器通过 HTTPS 交回登录结果，本页会自动显示成功</li>
-                </ol>
-              ) : qrFallbackVisible ? (
-                <ol>
-                  <li>系统已停止旧任务，不会一直占用登录浏览器</li>
-                  <li>点击下方按钮会创建一个全新的独立登录会话</li>
-                  <li>二维码出现后，直接使用手机抖音扫一扫</li>
-                  <li>仍失败时可以关闭面板，稍后再次尝试</li>
-                </ol>
-              ) : visibleChromeLogin ? (
-                <ol>
-                  <li>切换到自动弹出的 Chrome 登录窗口</li>
-                  <li>如有拼图验证请先完成，再打开手机抖音扫一扫</li>
-                  <li>扫描 Chrome 窗口里的二维码并在手机上确认</li>
-                  <li>知萃会自动识别登录结果</li>
-                </ol>
-              ) : bindingClient === 'desktop-web' ? (
-                <ol>
-                  <li>等待本机 Chrome 登录窗口自动弹出</li>
-                  <li>如有拼图验证请先在 Chrome 中完成</li>
-                  <li>打开手机抖音，扫描 Chrome 窗口里的二维码</li>
-                  <li>知萃会自动识别登录结果</li>
-                </ol>
-              ) : (
-                <ol>
-                  <li>在电脑启动 douyin-downloader 本地连接器</li>
-                  <li>登录与当前 App 完全相同的知萃账号</li>
-                  <li>打开 https://luxai.cn/library，点击“打开本机连接器”</li>
-                  <li>回到 App，系统会自动检查；也可以点击下方刷新</li>
-                </ol>
-              )}
-              {localConnectorUnavailable && (
-                <div className="library-qr-actions">
-                  <button
-                    type="button"
-                    className="is-primary"
-                    onClick={() => void startQrLogin()}
-                    disabled={scanning}
-                  >
-                    {scanning
-                      ? <LoaderCircle size={17} className="animate-spin" />
-                      : <ExternalLink size={17} />}
-                    {scanning ? '等待本机登录' : '打开本机连接器'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void checkDesktopBinding()}
-                    disabled={bindingCheckPending}
-                  >
-                    {bindingCheckPending
-                      ? <LoaderCircle size={17} className="animate-spin" />
-                      : <RefreshCw size={17} />}
-                    检查登录结果
-                  </button>
-                </div>
-              )}
-              {localBrowserAvailable && qrFallbackVisible && (
-                <div className="library-qr-actions">
-                  <button
-                    type="button"
-                    className="is-primary"
-                    onClick={() => void retryQrLogin()}
-                    disabled={scanning}
-                  >
-                    {scanning
-                      ? <LoaderCircle size={17} className="animate-spin" />
-                      : <RefreshCw size={17} />}
-                    {qrFallbackMode === 'visible_chrome'
-                      ? '重新弹出 Chrome'
-                      : '重新生成二维码'}
-                  </button>
-                </div>
-              )}
-              {bindingClient !== 'desktop-web' && (
-                <div className="library-qr-actions">
-                  <button
-                    type="button"
-                    onClick={() => void copyDesktopBindingLink()}
-                  >
-                    <Download size={17} />
-                    复制电脑端地址
-                  </button>
-                  <button
-                    type="button"
-                    className="is-primary"
-                    onClick={() => void checkDesktopBinding()}
-                    disabled={bindingCheckPending}
-                  >
-                    {bindingCheckPending
-                      ? <LoaderCircle size={17} className="animate-spin" />
-                      : <RefreshCw size={17} />}
-                    我已绑定，刷新
-                  </button>
-                </div>
-              )}
+              <ol>
+                <li>在电脑打开 https://luxai.cn/library</li>
+                <li>登录与当前 App 完全相同的知萃账号</li>
+                <li>点击“扫码登录抖音”，在弹出的 Chrome 中扫码确认</li>
+                <li>回到 App，系统会自动检查登录结果</li>
+              </ol>
+              <div className="library-qr-actions">
+                <button
+                  type="button"
+                  onClick={() => void copyDesktopBindingLink()}
+                >
+                  <Download size={17} />
+                  复制电脑端地址
+                </button>
+                <button
+                  type="button"
+                  className="is-primary"
+                  onClick={() => void checkDesktopBinding()}
+                  disabled={bindingCheckPending}
+                >
+                  {bindingCheckPending
+                    ? <LoaderCircle size={17} className="animate-spin" />
+                    : <RefreshCw size={17} />}
+                  检查登录结果
+                </button>
+              </div>
               {qrActionMessage && (
                 <p className="library-qr-action-message" role="status">
                   {qrActionMessage}
@@ -1565,8 +1333,8 @@ export default function VideoLibraryPage() {
         <div className="library-offline-note">
           <ServerOff size={17} />
           <div>
-            <strong>批量视频库需要本机下载器</strong>
-            <p>{status.error || '连接 http://127.0.0.1:9000 失败。单条链接提取仍可正常使用。'}</p>
+            <strong>抖音视频库暂时无法连接</strong>
+            <p>请稍后重试；单条链接提取仍可正常使用。</p>
           </div>
         </div>
       )}
@@ -1846,7 +1614,7 @@ export default function VideoLibraryPage() {
             <div className="library-loading">
               <LoaderCircle size={22} className="animate-spin" />
               <strong>正在读取{sourceLabel}</strong>
-              <span>连接下载器并整理本地作品清单…</span>
+              <span>正在整理视频列表…</span>
             </div>
           ) : error ? (
             <div className="library-empty-state">

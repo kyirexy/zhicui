@@ -119,8 +119,6 @@ export default function VideoLibraryPage() {
   const [sourceMode, setSourceMode] = useState<DouyinSourceMode>('collect');
   const [collectionSort, setCollectionSort] = useState<DouyinLibrarySort>('collection');
   const [syncCount, setSyncCount] = useState(50);
-  const [processCount, setProcessCount] = useState(20);
-  const [autoProcess, setAutoProcess] = useState(true);
   const [items, setItems] = useState<DouyinLibraryItem[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [extractProgress, setExtractProgress] = useState<Record<string, ExtractProgress>>({});
@@ -403,7 +401,7 @@ export default function VideoLibraryPage() {
       return next;
     });
 
-    setNotice(`正在同时启动 ${pending.length} 条视频的文案提取`);
+    setNotice(`正在同时启动 ${pending.length} 条视频的文案与知识卡处理`);
     const response = await startDouyinBatchExtraction(
       pending.map((item) => item.aweme_id),
     );
@@ -419,7 +417,7 @@ export default function VideoLibraryPage() {
         return next;
       });
       setBatchExtracting(false);
-      setNotice(response.error || '批量文案任务启动失败');
+      setNotice(response.error || '批量处理任务启动失败');
       return 0;
     }
 
@@ -435,7 +433,7 @@ export default function VideoLibraryPage() {
     if (pendingSelected.length === 0 || batchExtracting) return;
     const succeeded = await extractItems(pendingSelected);
     setPipelineStage('done');
-    setNotice(`文案与总结完成：${succeeded}/${pendingSelected.length} 条成功`);
+    setNotice(`文案与知识卡完成：${succeeded}/${pendingSelected.length} 条成功`);
   };
 
   const refreshLoginStatus = useCallback(async (): Promise<DouyinLibraryStatus | null> => {
@@ -982,9 +980,9 @@ export default function VideoLibraryPage() {
       setNotice(
         response.data.status === 'running'
           ? response.data.total > 0
-            ? `自动流水线：正在同步${sourceLabel}，已处理 ${response.data.success}/${response.data.total}`
-            : `自动流水线：正在同步最近 ${requestedCount} 条${sourceLabel}，已保存 ${response.data.success} 条`
-          : `采集任务：${response.data.status}`,
+            ? `正在同步${sourceLabel}清单，已处理 ${response.data.success}/${response.data.total}`
+            : `正在同步最近 ${requestedCount} 条${sourceLabel}，已保存 ${response.data.success} 条`
+          : `同步任务：${response.data.status}`,
       );
       if (response.data.status === 'success' || response.data.status === 'failed') {
         return response.data;
@@ -996,12 +994,10 @@ export default function VideoLibraryPage() {
   const syncCollection = async () => {
     if (refreshing || batchExtracting || !loggedIn) return;
     const requestedCount = clampInteger(syncCount, 1, MAX_SYNC_COUNT);
-    const requestedProcessCount = clampInteger(processCount, 0, requestedCount);
     setSyncCount(requestedCount);
-    setProcessCount(requestedProcessCount);
     setRefreshing(true);
     setPipelineStage('collect');
-    setNotice(`自动流水线：开始同步最近 ${requestedCount} 条${sourceLabel}`);
+    setNotice(`开始同步最近 ${requestedCount} 条${sourceLabel}，不会自动运行 AI`);
     const response = await collectDouyinLibrary(requestedCount, sourceMode);
     if (!response.success || !response.data) {
       setRefreshing(false);
@@ -1019,26 +1015,9 @@ export default function VideoLibraryPage() {
     }
 
     const refreshed = await loadItems(true);
-    const targets = refreshed
-      .filter((item) => item.can_extract)
-      .slice(0, requestedProcessCount);
-    setSelected(new Set(
-      targets.slice(0, MAX_SELECTION).map((item) => item.aweme_id),
-    ));
-    if (!autoProcess || requestedProcessCount === 0) {
-      setPipelineStage('done');
-      setNotice(`同步完成：资料库现有 ${refreshed.length} 条${sourceLabel}，未运行 AI 处理`);
-      return;
-    }
-
-    const pendingTargets = targets.filter((item) => !item.extracted);
-    const succeeded = await extractItems(pendingTargets);
+    setSelected(new Set());
     setPipelineStage('done');
-    setNotice(
-      pendingTargets.length > 0
-        ? `自动流水线完成：资料库现有 ${refreshed.length} 条${sourceLabel}，新增文案与 AI 总结 ${succeeded}/${pendingTargets.length} 条`
-        : `自动流水线完成：资料库现有 ${refreshed.length} 条${sourceLabel}；最近 ${targets.length} 条文案均已存在`,
-    );
+    setNotice(`同步完成：资料库现有 ${refreshed.length} 条${sourceLabel}。勾选需要的视频后，再生成文案与知识卡`);
   };
 
   const deleteExtraction = async (item: DouyinLibraryItem) => {
@@ -1409,11 +1388,7 @@ export default function VideoLibraryPage() {
                   ? '正在生成文案'
                   : `从抖音同步${sourceLabel}`}
             </button>
-            <small>
-              {autoProcess
-                ? `同步最近 ${syncCount} 条；自动处理 ${processCount} 条`
-                : `同步最近 ${syncCount} 条；不运行 AI 处理`}
-            </small>
+            <small>同步最近 {syncCount} 条视频清单，不自动运行 AI</small>
           </div>
         </div>
 
@@ -1421,9 +1396,9 @@ export default function VideoLibraryPage() {
           <div className="library-processing-heading">
             <span id="library-processing-title">
               <SlidersHorizontal size={14} />
-              处理设置
+              同步设置
             </span>
-            <small>同步 {syncCount} 条 · {autoProcess ? `处理 ${processCount} 条` : '不运行 AI'}</small>
+            <small>只更新视频清单</small>
           </div>
           <div className="library-advanced-body">
             <div className="library-auto-controls">
@@ -1437,10 +1412,7 @@ export default function VideoLibraryPage() {
                         key={count}
                         className={syncCount === count ? 'is-active' : ''}
                         aria-pressed={syncCount === count}
-                        onClick={() => {
-                          setSyncCount(count);
-                          setProcessCount((current) => Math.min(current, count));
-                        }}
+                        onClick={() => setSyncCount(count)}
                       >
                         {count} 条
                       </button>
@@ -1462,44 +1434,19 @@ export default function VideoLibraryPage() {
                           MAX_SYNC_COUNT,
                         );
                         setSyncCount(nextCount);
-                        setProcessCount((current) => Math.min(current, nextCount));
                       }}
                     />
                     <small>条</small>
                   </label>
                 </div>
               </div>
-              <label className="library-count-control">
-                <span>自动处理数量</span>
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min={0}
-                  max={syncCount}
-                  value={processCount}
-                  onChange={(event) => setProcessCount(
-                    clampInteger(Number(event.target.value), 0, syncCount),
-                  )}
-                />
-              </label>
-              <label className="library-auto-toggle">
-                <input
-                  type="checkbox"
-                  checked={autoProcess}
-                  onChange={(event) => setAutoProcess(event.target.checked)}
-                />
-                <span>
-                  <strong>同步后生成文案与知识卡</strong>
-                  <small>处理数量不会超过本次同步数量</small>
-                </span>
-              </label>
             </div>
           </div>
         </section>
 
         {sourceMode === 'collect' && (
           <p className="library-mode-warning">
-            这里读取抖音默认“全部收藏”，但只同步你选择的最近 {syncCount} 条，单次最多 100 条，不会拉取全部收藏。服务器不保存视频文件，仅保存必要元数据、文案与 AI 结果；处理时临时拉流并在结束后立即清理。
+            这里读取抖音默认“全部收藏”，但只同步你选择的最近 {syncCount} 条，单次最多 100 条，不会拉取全部收藏。同步不会调用 ASR 或 DeepSeek；主动生成时服务器也不保存视频文件，只保留必要元数据、文案与 AI 结果。
           </p>
         )}
         {collectionJob && (refreshing || batchExtracting) && (
@@ -1598,9 +1545,9 @@ export default function VideoLibraryPage() {
               {batchExtracting ? (
                 <LoaderCircle size={15} className="animate-spin" />
               ) : (
-                <Download size={15} />
+                <Sparkles size={15} />
               )}
-              生成文案 {pendingSelected.length}
+              生成文案与知识卡 · {pendingSelected.length}
             </button>
           )}
         </div>
@@ -1631,8 +1578,8 @@ export default function VideoLibraryPage() {
               {allChatSources.length > 0
                 ? `无需勾选，已准备 ${allChatSources.length} 条完整文案；也可只问勾选视频`
                 : selectedItems.length > 0
-                  ? '所选视频还需要先生成文案，也可以打开工作台查看'
-                  : '生成文案后，无需勾选即可向当前视频库提问'}
+                  ? '所选视频还需要主动生成文案与知识卡'
+                  : '勾选需要的视频生成文案后，即可向视频库提问'}
             </small>
           </span>
           <span className="library-ai-launcher-action">
@@ -1668,7 +1615,7 @@ export default function VideoLibraryPage() {
                 {search
                   ? '换个关键词试试。'
                   : loggedIn
-                    ? `点击“从抖音同步${sourceLabel}”，拉取视频并生成文案与知识卡。`
+                    ? `点击“从抖音同步${sourceLabel}”更新视频清单，再勾选需要的视频生成文案与知识卡。`
                     : '先扫码登录抖音，再开始采集。'}
               </p>
             </div>

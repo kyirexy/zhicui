@@ -10,6 +10,7 @@ import {
   LoaderCircle,
   MoreHorizontal,
   Play,
+  Sparkles,
   Trash2,
 } from 'lucide-react';
 import type { DouyinLibraryItem } from '@/lib/types';
@@ -139,6 +140,17 @@ export default function LibraryVideoCard({
                     : selected
                       ? '已加入处理'
                       : '勾选后统一处理'}
+            </span>
+          ) : !item.ai_initialized ? (
+            <span className={`library-card-hint ${selected ? 'is-selected' : ''}`}>
+              {isWorking ? (
+                <LoaderCircle size={13} className="animate-spin" />
+              ) : (
+                <Sparkles size={13} />
+              )}
+              {extractState === 'analyzing'
+                ? '正在生成 AI 总结'
+                : '文案已就绪 · 可直接问 AI'}
             </span>
           ) : null}
           <button

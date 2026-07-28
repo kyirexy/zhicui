@@ -78,6 +78,7 @@ export default function VideoKnowledgeWorkspace() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('chat');
   const [loading, setLoading] = useState(true);
   const [extracting, setExtracting] = useState(false);
+  const [initializingAi, setInitializingAi] = useState(false);
   const [agentRunning, setAgentRunning] = useState(false);
   const [instruction, setInstruction] = useState('');
   const [agentNotice, setAgentNotice] = useState('');
@@ -118,10 +119,29 @@ export default function VideoKnowledgeWorkspace() {
     if (!workspace || extracting) return;
     setExtracting(true);
     setError('');
-    const response = await extractDouyinLibraryItem(workspace.item.aweme_id);
+    const response = await extractDouyinLibraryItem(
+      workspace.item.aweme_id,
+      'transcript',
+    );
     setExtracting(false);
     if (!response.success) {
-      setError(response.error || '文案与知识卡生成失败，请稍后重试');
+      setError(response.error || '完整文案提取失败，请稍后重试');
+      return;
+    }
+    await loadWorkspace();
+  };
+
+  const initializeAi = async () => {
+    if (!workspace || !note || note.ai_initialized || initializingAi) return;
+    setInitializingAi(true);
+    setError('');
+    const response = await extractDouyinLibraryItem(
+      workspace.item.aweme_id,
+      'ai',
+    );
+    setInitializingAi(false);
+    if (!response.success) {
+      setError(response.error || 'AI 总结与知识卡生成失败，请稍后重试');
       return;
     }
     await loadWorkspace();
@@ -259,17 +279,37 @@ export default function VideoKnowledgeWorkspace() {
                 ? `${(note.transcript_raw?.length || 0).toLocaleString('zh-CN')} 字完整文案`
                 : '等待生成完整文案'}
             </span>
-            {note && (
+            {note?.ai_initialized ? (
               <span>
                 <Sparkles size={14} />
                 {cardConfig.label} · 已完成 AI 理解
               </span>
-            )}
+            ) : note ? (
+              <span>
+                <Sparkles size={14} />
+                文案已就绪 · 可直接问 AI
+              </span>
+            ) : null}
             {plan && progress && (
               <span>
                 <CalendarCheck2 size={14} />
                 计划进度 {progress.done}/{progress.total}
               </span>
+            )}
+            {note && !note.ai_initialized && (
+              <button
+                type="button"
+                className="video-knowledge-ai-init"
+                onClick={() => void initializeAi()}
+                disabled={initializingAi}
+              >
+                {initializingAi ? (
+                  <LoaderCircle size={14} className="animate-spin" />
+                ) : (
+                  <Sparkles size={14} />
+                )}
+                {initializingAi ? 'AI 正在整理' : '生成 AI 总结与知识卡'}
+              </button>
             )}
           </div>
         </div>
@@ -303,10 +343,10 @@ export default function VideoKnowledgeWorkspace() {
                 <span className="video-knowledge-prepare-mark" aria-hidden>
                   <WandSparkles size={28} />
                 </span>
-                <small>先让 AI 读懂这条视频</small>
-                <h2>生成完整文案后，就能提问和创建计划</h2>
+                <small>先补齐这条视频的完整文案</small>
+                <h2>文案就绪后，就能直接提问和创建计划</h2>
                 <p>
-                  系统会临时读取视频完成语音识别，处理结束立即清理，只把文案、知识卡和计划保存到知萃。
+                  系统会临时读取视频完成云端语音识别，处理结束立即清理，只保存完整文案；AI 总结与知识卡由你之后按需生成。
                 </p>
                 <button
                   type="button"
@@ -318,7 +358,7 @@ export default function VideoKnowledgeWorkspace() {
                   ) : (
                     <Sparkles size={17} />
                   )}
-                  {extracting ? '正在生成完整文案与 AI 理解' : '生成文案并开启工作区'}
+                  {extracting ? '正在提取完整文案' : '补提文案并开启工作区'}
                 </button>
                 {!item.can_extract && <span>请先在视频资料库重新同步这条视频</span>}
               </div>

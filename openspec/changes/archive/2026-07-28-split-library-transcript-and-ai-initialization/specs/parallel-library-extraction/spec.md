@@ -1,10 +1,4 @@
-# parallel-library-extraction Specification
-
-## Purpose
-
-Define concurrent, user-scoped, text-only extraction for batches of library videos.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Concurrent batch start
 The system SHALL accept 1–100 videos for a transcript-only synchronization job, SHALL accept 1–50 user-selected videos for an AI-initialization or full extraction job, and SHALL submit every eligible item to the job without a sequential client-side request loop.
@@ -36,28 +30,6 @@ The library SHALL automatically transcribe every eligible video in the selected 
 - **WHEN** the user selects transcript-ready videos and activates “AI 总结与知识卡”
 - **THEN** the system runs classification, card generation, and optional plan generation for those videos and marks AI initialization complete
 
-### Requirement: Stage-aware concurrency limits
-The system SHALL apply independently configurable limits to media transcription and LLM processing while allowing all selected items to enter the job immediately.
-
-#### Scenario: More items than an API stage can safely run
-- **WHEN** the number of active items exceeds the configured ASR or LLM stage limit
-- **THEN** excess items wait at that stage without blocking unrelated stages or causing the client to submit items sequentially
-
-#### Scenario: Administrator changes a concurrency value
-- **WHEN** an administrator updates a supported concurrency setting
-- **THEN** newly created jobs use the new bounded value without requiring code changes
-
-### Requirement: Per-item progress and partial success
-The batch API SHALL expose job totals and per-item states for queued, transcribing, analyzing, complete, and failed work.
-
-#### Scenario: Some items fail
-- **WHEN** one or more videos cannot be transcribed or analyzed
-- **THEN** successful items remain saved, failed items expose a safe error, and the overall job reports partial completion instead of discarding the batch
-
-#### Scenario: Client reconnects while a job runs
-- **WHEN** the page refreshes or temporarily loses its connection
-- **THEN** the client can poll the job identifier and reconstruct current per-item progress while the server process remains active
-
 ### Requirement: Idempotent extraction
 The batch orchestrator SHALL reuse an existing user-owned Note and its completed transcript or AI stage, SHALL update a transcript-only Note in place during AI initialization, and SHALL prevent duplicate Notes when the same video and stage are submitted concurrently.
 
@@ -87,10 +59,3 @@ The system SHALL default ASR extraction concurrency to 200, SHALL let an adminis
 #### Scenario: Admin client renders concurrency controls
 - **WHEN** the admin client loads extraction configuration
 - **THEN** it uses the server-provided maximum of 200 for ASR, keeps the server-provided maximum of 50 for LLM, and explains that each transcript batch is still limited to 100 videos
-
-### Requirement: No durable video storage
-The system MUST NOT store video binary content in PostgreSQL or other application database tables while processing concurrent extraction jobs.
-
-#### Scenario: A concurrent transcription completes or fails
-- **WHEN** temporary media has been consumed by ASR or an error stops processing
-- **THEN** task-scoped temporary media is released and only metadata, transcript text, AI output, progress, and safe diagnostics may remain

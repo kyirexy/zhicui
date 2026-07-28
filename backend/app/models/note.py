@@ -5,7 +5,7 @@ Note ORM model -- the core entity that stores a video-to-card result.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -36,6 +36,12 @@ class Note(Base):
 
     # JSON-encoded structured card content produced by the AI.
     ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Transcript extraction and AI card initialization are independent stages.
+    # Existing rows and non-library extraction paths remain fully initialized.
+    ai_initialized: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true", nullable=False
+    )
 
     card_type: Mapped[str] = mapped_column(
         String(32), default="general", nullable=False
@@ -85,6 +91,7 @@ class Note(Base):
             "source_recorded_at": source_meta.get("recorded_at") or "",
             "transcript_raw": self.transcript_raw,
             "transcript_chars": len(self.transcript_raw or ""),
+            "ai_initialized": bool(self.ai_initialized),
             "card_type": self.card_type,
             "sections": ai.get("sections", []),
             "conclusion": ai.get("conclusion", ""),

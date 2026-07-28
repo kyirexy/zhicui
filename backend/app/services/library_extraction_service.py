@@ -5,7 +5,7 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from app.core.database import SessionLocal
 from app.services import (
@@ -19,10 +19,13 @@ from app.services import (
 )
 
 ProgressCallback = Callable[[str], None]
+LibraryExtractionOperation = Literal["transcript", "ai", "full"]
 
-_MAX_BATCH_ITEMS = 50
+_MAX_BATCH_ITEMS = 100
+_MAX_AI_BATCH_ITEMS = 50
+_MAX_EXECUTION_WORKERS = settings_service.MAX_EXTRACTION_ASR_CONCURRENCY
 _EXECUTOR = ThreadPoolExecutor(
-    max_workers=_MAX_BATCH_ITEMS,
+    max_workers=_MAX_EXECUTION_WORKERS,
     thread_name_prefix="zhicui-extract",
 )
 _JOBS_LOCK = threading.RLock()
@@ -70,11 +73,32 @@ def _persist_generated_note(
         ai_result,
         user_id,
     )
+    plan_id = _persist_generated_plan(db, note, ai_result, user_id)
+    result = note.to_dict()
+    result["plan_id"] = plan_id
+    result["already_existed"] = False
+    return result
+
+
+def _persist_generated_plan(
+    db,
+    note,
+    ai_result: dict[str, Any],
+    user_id: str,
+) -> str | None:
+    """Persist a generated plan once for a newly initialized Note."""
     plan_id: str | None = None
     plan = ai_result.get("plan")
     if isinstance(plan, dict) and plan.get("tasks"):
+        existing_plan = plan_service.get_plan_by_note(
+            db,
+            note.id,
+            user_id=user_id,
+        )
+        if existing_plan is not None:
+            return existing_plan.id
         fields, tasks, total_days = ai_juicer.plan_to_storage(plan)
-        plan_obj = plan_service.create_plan(
+        plan_id = plan_service.create_plan(
             db=db,
             note_id=note.id,
             title=plan.get("goal") or note.video_title,
@@ -83,12 +107,58 @@ def _persist_generated_note(
             tasks=tasks,
             total_days=total_days,
             days=plan.get("days") or [],
+        ).id
+    return plan_id
+
+
+def _source_meta(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source_kind": "douyin-library",
+        "platform": "douyin",
+        "source_url": item["source_url"],
+        "cover_url": item["cover_url"],
+        "author_name": item["author_name"],
+        "recorded_at": item["recorded_at"],
+        "caption": item["caption"],
+    }
+
+
+def _video_info(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "video_id": item["aweme_id"],
+        "title": item["title"],
+        "download_url": item["source_url"],
+        "platform": "douyin",
+    }
+
+
+def _generate_ai_result(
+    *,
+    transcript: str,
+    item: dict[str, Any],
+    llm_gate: threading.Semaphore | None,
+    progress: ProgressCallback | None,
+) -> dict[str, Any]:
+    gate = llm_gate or threading.Semaphore(1)
+    with gate:
+        if progress:
+            progress("analyzing")
+        intent = ai_juicer.classify_intent(transcript)
+        plan_data = (
+            ai_juicer.generate_plan(transcript)
+            if intent["is_plan"]
+            else None
         )
-        plan_id = plan_obj.id
-    result = note.to_dict()
-    result["plan_id"] = plan_id
-    result["already_existed"] = False
-    return result
+        ai_result = ai_juicer.generate_card(
+            transcript=transcript,
+            content_type=intent["card_type"],
+            video_title=item["title"],
+        )
+        if plan_data:
+            ai_result["plan"] = plan_data
+    ai_result["ai_initialized"] = True
+    ai_result["source_meta"] = _source_meta(item)
+    return ai_result
 
 
 def extract_library_item(
@@ -98,11 +168,14 @@ def extract_library_item(
     asr_gate: threading.Semaphore | None = None,
     llm_gate: threading.Semaphore | None = None,
     progress: ProgressCallback | None = None,
+    operation: LibraryExtractionOperation = "full",
 ) -> dict[str, Any]:
-    """Extract one item idempotently using text-only durable persistence."""
+    """Run one idempotent transcript or AI stage with text-only persistence."""
     clean_id = aweme_id.strip()
     if not clean_id:
         raise ValueError("视频标识不能为空")
+    if operation not in {"transcript", "ai", "full"}:
+        raise ValueError("不支持的资料库处理类型")
 
     with _item_lock(user_id, clean_id):
         # Keep database connections short-lived. External ASR/LLM calls can
@@ -114,10 +187,29 @@ def extract_library_item(
                 clean_id,
                 user_id=user_id,
             )
-            if existing is not None:
+            existing_transcript = (
+                (existing.transcript_raw or "").strip()
+                if existing is not None
+                else ""
+            )
+            if (
+                existing is not None
+                and operation == "transcript"
+                and existing_transcript
+            ):
                 result = existing.to_dict()
                 result["already_existed"] = True
                 return result
+            if (
+                existing is not None
+                and operation in {"ai", "full"}
+                and existing.ai_initialized
+            ):
+                result = existing.to_dict()
+                result["already_existed"] = True
+                return result
+            if operation == "ai" and not existing_transcript:
+                raise ValueError("完整文案尚未就绪，请先完成文案提取")
 
             binding = douyin_binding_service.get_or_create(db, user_id)
             item = douyin_library.get_item(
@@ -129,52 +221,59 @@ def extract_library_item(
                 raise ValueError("收藏视频不存在或尚未同步")
             if not item.get("can_extract"):
                 raise ValueError("该作品没有可提取的视频文件")
-            asr_config = settings_service.get_asr_config(db)
+            asr_config = (
+                settings_service.get_asr_config(db)
+                if not existing_transcript
+                else None
+            )
             session_scope = binding.session_scope
 
-        gate = asr_gate or threading.Semaphore(1)
-        with gate:
-            if progress:
-                progress("transcribing")
-            transcript = video_extractor.extract_media_url_transcript(
-                douyin_library.companion_media_url(item["aweme_id"]),
-                asr_config["api_key"],
-                asr_config["api_base_url"],
-                asr_config["model"],
-                request_headers=douyin_library.companion_headers(
-                    session_scope,
-                ),
-            )
+        transcript = existing_transcript
+        if not transcript:
+            gate = asr_gate or threading.Semaphore(1)
+            with gate:
+                if progress:
+                    progress("transcribing")
+                transcript = video_extractor.extract_media_url_transcript(
+                    douyin_library.companion_media_url(item["aweme_id"]),
+                    asr_config["api_key"],
+                    asr_config["api_base_url"],
+                    asr_config["model"],
+                    request_headers=douyin_library.companion_headers(
+                        session_scope,
+                    ),
+                )
         if not transcript.strip():
             raise RuntimeError("语音识别没有返回文案")
 
-        gate = llm_gate or threading.Semaphore(1)
-        with gate:
-            if progress:
-                progress("analyzing")
-            intent = ai_juicer.classify_intent(transcript)
-            plan_data = (
-                ai_juicer.generate_plan(transcript)
-                if intent["is_plan"]
-                else None
-            )
-            ai_result = ai_juicer.generate_card(
-                transcript=transcript,
-                content_type=intent["card_type"],
-                video_title=item["title"],
-            )
-            if plan_data:
-                ai_result["plan"] = plan_data
+        if operation == "transcript":
+            with SessionLocal() as db:
+                current = note_service.get_note_by_video_id(
+                    db,
+                    clean_id,
+                    user_id=user_id,
+                )
+                if current is not None and (current.transcript_raw or "").strip():
+                    result = current.to_dict()
+                    result["already_existed"] = True
+                    return result
+                note = note_service.create_transcript_note(
+                    db,
+                    video_info=_video_info(item),
+                    transcript=transcript,
+                    source_meta=_source_meta(item),
+                    user_id=user_id,
+                )
+                result = note.to_dict()
+                result["already_existed"] = False
+                return result
 
-        ai_result["source_meta"] = {
-            "source_kind": "douyin-library",
-            "platform": "douyin",
-            "source_url": item["source_url"],
-            "cover_url": item["cover_url"],
-            "author_name": item["author_name"],
-            "recorded_at": item["recorded_at"],
-            "caption": item["caption"],
-        }
+        ai_result = _generate_ai_result(
+            transcript=transcript,
+            item=item,
+            llm_gate=llm_gate,
+            progress=progress,
+        )
         with SessionLocal() as db:
             # Recheck inside the per-user/video lock immediately before the
             # write so concurrent single and batch callers cannot duplicate.
@@ -184,8 +283,21 @@ def extract_library_item(
                 user_id=user_id,
             )
             if existing is not None:
-                result = existing.to_dict()
-                result["already_existed"] = True
+                if existing.ai_initialized:
+                    result = existing.to_dict()
+                    result["already_existed"] = True
+                    return result
+                existing.transcript_raw = transcript
+                note = note_service.update_note_ai(db, existing, ai_result)
+                plan_id = _persist_generated_plan(
+                    db,
+                    note,
+                    ai_result,
+                    user_id,
+                )
+                result = note.to_dict()
+                result["plan_id"] = plan_id
+                result["already_existed"] = False
                 return result
             return _persist_generated_note(
                 db,
@@ -218,6 +330,7 @@ def _snapshot(job: dict[str, Any]) -> dict[str, Any]:
     counts = _job_counts(job)
     return {
         "job_id": job["job_id"],
+        "operation": job["operation"],
         "status": job["status"],
         "created_at": job["created_at"],
         "started_at": job["started_at"],
@@ -232,6 +345,7 @@ def _snapshot(job: dict[str, Any]) -> dict[str, Any]:
                 "note_id": item["note_id"],
                 "transcript_chars": item["transcript_chars"],
                 "card_type": item["card_type"],
+                "ai_initialized": item["ai_initialized"],
                 "already_existed": item["already_existed"],
                 "updated_at": item["updated_at"],
             }
@@ -274,6 +388,7 @@ def _run_job_item(
     job_id: str,
     user_id: str,
     aweme_id: str,
+    operation: LibraryExtractionOperation,
     asr_gate: threading.Semaphore,
     llm_gate: threading.Semaphore,
 ) -> None:
@@ -287,6 +402,7 @@ def _run_job_item(
             asr_gate=asr_gate,
             llm_gate=llm_gate,
             progress=progress,
+            operation=operation,
         )
         _update_item(
             job_id,
@@ -296,6 +412,7 @@ def _run_job_item(
             note_id=result.get("id"),
             transcript_chars=int(result.get("transcript_chars") or 0),
             card_type=result.get("card_type"),
+            ai_initialized=bool(result.get("ai_initialized")),
             already_existed=bool(result.get("already_existed")),
         )
     except Exception as exc:
@@ -330,6 +447,7 @@ def create_batch_job(
     *,
     user_id: str,
     aweme_ids: list[str],
+    operation: LibraryExtractionOperation = "full",
     asr_concurrency: int,
     llm_concurrency: int,
 ) -> dict[str, Any]:
@@ -339,15 +457,35 @@ def create_batch_job(
         for aweme_id in aweme_ids
         if str(aweme_id or "").strip()
     ))
-    if not 1 <= len(clean_ids) <= _MAX_BATCH_ITEMS:
-        raise ValueError("每次请选择 1–50 条视频")
-    safe_asr = max(1, min(int(asr_concurrency), _MAX_BATCH_ITEMS))
-    safe_llm = max(1, min(int(llm_concurrency), _MAX_BATCH_ITEMS))
+    if operation not in {"transcript", "ai", "full"}:
+        raise ValueError("不支持的资料库处理类型")
+    max_items = (
+        _MAX_BATCH_ITEMS
+        if operation == "transcript"
+        else _MAX_AI_BATCH_ITEMS
+    )
+    if not 1 <= len(clean_ids) <= max_items:
+        raise ValueError(f"本次{operation}任务请选择 1–{max_items} 条视频")
+    safe_asr = max(
+        1,
+        min(
+            int(asr_concurrency),
+            settings_service.MAX_EXTRACTION_ASR_CONCURRENCY,
+        ),
+    )
+    safe_llm = max(
+        1,
+        min(
+            int(llm_concurrency),
+            settings_service.MAX_EXTRACTION_LLM_CONCURRENCY,
+        ),
+    )
     now = _iso_now()
     job_id = f"extract-{uuid.uuid4().hex[:20]}"
     job = {
         "job_id": job_id,
         "user_id": user_id,
+        "operation": operation,
         "status": "running",
         "created_at": now,
         "started_at": now,
@@ -360,6 +498,7 @@ def create_batch_job(
                 "note_id": None,
                 "transcript_chars": 0,
                 "card_type": None,
+                "ai_initialized": False,
                 "already_existed": False,
                 "updated_at": now,
             }
@@ -378,6 +517,7 @@ def create_batch_job(
             job_id,
             user_id,
             aweme_id,
+            operation,
             asr_gate,
             llm_gate,
         )

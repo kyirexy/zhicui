@@ -169,16 +169,22 @@ def create_app() -> FastAPI:
 
 
 def _migrate_db() -> None:
-    """Add username/is_admin columns to existing users table (SQLite ALTER TABLE)."""
+    """Apply small cross-dialect additive migrations without Alembic."""
     insp = inspect(engine)
-    if not insp.has_table("users"):
-        return
-    cols = {c["name"] for c in insp.get_columns("users")}
     with engine.begin() as conn:
-        if "username" not in cols:
-            conn.execute(text("ALTER TABLE users ADD COLUMN username VARCHAR NULL"))
-        if "is_admin" not in cols:
-            conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT FALSE"))
+        if insp.has_table("users"):
+            user_cols = {c["name"] for c in insp.get_columns("users")}
+            if "username" not in user_cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN username VARCHAR NULL"))
+            if "is_admin" not in user_cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT FALSE"))
+        if insp.has_table("notes"):
+            note_cols = {c["name"] for c in insp.get_columns("notes")}
+            if "ai_initialized" not in note_cols:
+                conn.execute(text(
+                    "ALTER TABLE notes ADD COLUMN "
+                    "ai_initialized BOOLEAN NOT NULL DEFAULT TRUE"
+                ))
 
 
 app = create_app()

@@ -110,6 +110,7 @@ class LibraryHandoffCompleteRequest(BaseModel):
 
 class LibraryExtractRequest(BaseModel):
     aweme_id: str = Field(..., min_length=1, max_length=128)
+    operation: Literal["transcript", "ai", "full"] = "full"
 
 
 class LibraryRemoveRequest(BaseModel):
@@ -142,6 +143,8 @@ class LibraryRemoveRequest(BaseModel):
 
 class LibraryBatchExtractRequest(LibraryRemoveRequest):
     """Start concurrent transcript/card generation for selected work IDs."""
+    aweme_ids: list[str] = Field(..., min_length=1, max_length=100)
+    operation: Literal["transcript", "ai", "full"] = "full"
 
 
 class LibraryAskRequest(BaseModel):
@@ -1339,6 +1342,7 @@ def list_douyin_library_items(
         item["extracted"] = note is not None
         item["extracted_note_id"] = note.id if note else None
         item["transcript_chars"] = len(note.transcript_raw or "") if note else 0
+        item["ai_initialized"] = bool(note.ai_initialized) if note else False
         item["card_type"] = note.card_type if note else None
     return _ok({"items": items, "total": len(items)})
 
@@ -1400,6 +1404,7 @@ def get_douyin_library_item(
     item["extracted"] = note is not None
     item["extracted_note_id"] = note.id if note else None
     item["transcript_chars"] = len(note.transcript_raw or "") if note else 0
+    item["ai_initialized"] = bool(note.ai_initialized) if note else False
     item["card_type"] = note.card_type if note else None
     return _ok({
         "item": item,
@@ -1423,6 +1428,7 @@ def extract_douyin_library_item(
         result = library_extraction_service.extract_library_item(
             user_id=current_user.id,
             aweme_id=body.aweme_id,
+            operation=body.operation,
         )
         return _ok(result)
     except (ValueError, douyin_library.DouyinLibraryError) as exc:
@@ -1447,6 +1453,7 @@ def start_douyin_library_batch_extraction(
         job = library_extraction_service.create_batch_job(
             user_id=current_user.id,
             aweme_ids=body.aweme_ids,
+            operation=body.operation,
             asr_concurrency=concurrency["asr"],
             llm_concurrency=concurrency["llm"],
         )
@@ -2261,8 +2268,16 @@ class AsrConfigRequest(BaseModel):
 
 
 class ExtractionConfigRequest(BaseModel):
-    asr_concurrency: int = Field(..., ge=1, le=50)
-    llm_concurrency: int = Field(..., ge=1, le=50)
+    asr_concurrency: int = Field(
+        ...,
+        ge=1,
+        le=settings_service.MAX_EXTRACTION_ASR_CONCURRENCY,
+    )
+    llm_concurrency: int = Field(
+        ...,
+        ge=1,
+        le=settings_service.MAX_EXTRACTION_LLM_CONCURRENCY,
+    )
 
 
 @router.get("/api/admin/llm-config")
@@ -2382,7 +2397,10 @@ def admin_get_extraction_config(
     return _ok({
         "asr_concurrency": values["asr"],
         "llm_concurrency": values["llm"],
-        "max_batch_items": 50,
+        "max_asr_concurrency": settings_service.MAX_EXTRACTION_ASR_CONCURRENCY,
+        "max_llm_concurrency": settings_service.MAX_EXTRACTION_LLM_CONCURRENCY,
+        "max_batch_items": 100,
+        "max_ai_batch_items": 50,
         "database_stores_media": False,
     })
 
@@ -2411,7 +2429,10 @@ def admin_put_extraction_config(
     return _ok({
         "asr_concurrency": values["asr"],
         "llm_concurrency": values["llm"],
-        "max_batch_items": 50,
+        "max_asr_concurrency": settings_service.MAX_EXTRACTION_ASR_CONCURRENCY,
+        "max_llm_concurrency": settings_service.MAX_EXTRACTION_LLM_CONCURRENCY,
+        "max_batch_items": 100,
+        "max_ai_batch_items": 50,
         "database_stores_media": False,
     })
 

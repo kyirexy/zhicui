@@ -4564,6 +4564,26 @@ body::before {
   white-space: nowrap;
 }
 .video-knowledge-facts svg { color: var(--accent-emerald); }
+.video-knowledge-ai-init {
+  display: inline-flex;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--accent-emerald) 38%, var(--card-border));
+  border-radius: 8px;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent-emerald);
+  background: color-mix(in srgb, var(--accent-emerald) 9%, transparent);
+  font-size: 0.58rem;
+  font-weight: 760;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.video-knowledge-ai-init:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent-emerald) 62%, var(--card-border));
+  background: color-mix(in srgb, var(--accent-emerald) 15%, transparent);
+}
+.video-knowledge-ai-init:disabled { opacity: 0.58; cursor: wait; }
 
 .video-knowledge-panel {
   position: relative;

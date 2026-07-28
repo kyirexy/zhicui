@@ -142,7 +142,7 @@ export default function LibraryChat({
         </span>
         <div>
           <h2>基于文案问 AI</h2>
-          <p>从完整文案检索，再结合 AI 卡片理解回答</p>
+          <p>完整文案就能直接提问；已有知识卡时再辅助理解</p>
         </div>
       </header>
 
@@ -281,9 +281,9 @@ export default function LibraryChat({
             </h3>
             <p>
               {scope === 'all'
-                ? '先从抖音同步视频并生成文案，研究 Agent 最多扫描当前来源的 50 条文案。'
+                ? '从抖音同步后会自动提取文案，研究 Agent 最多扫描当前来源的 50 条文案。'
                 : selectedCount > 0
-                  ? '你勾选的视频还没有文案，先点击“生成文案”。'
+                  ? '你勾选的视频文案还没准备好，可以点击“补提完整文案”。'
                   : '在左侧勾选视频，问答只会使用其中已有完整文案的条目。'}
             </p>
           </div>
@@ -419,7 +419,7 @@ export default function LibraryChat({
       <p className="library-chat-note">
         {webScope === 'auto'
           ? '优先使用视频文案，缺失的链接或当前信息会单独联网查证'
-          : '回答仅依据当前范围内的视频文案与 AI 结构化摘要'}
+          : '回答以当前范围内的完整文案为准；已有 AI 摘要时才辅助使用'}
       </p>
     </section>
   );

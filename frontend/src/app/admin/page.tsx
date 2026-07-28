@@ -1082,34 +1082,44 @@ function ExtractionConcurrencyPanel({
   const [asrConcurrency, setAsrConcurrency] = useState(config.asr_concurrency);
   const [llmConcurrency, setLlmConcurrency] = useState(config.llm_concurrency);
   const [saving, setSaving] = useState(false);
-  const clamp = (value: number) => Math.max(1, Math.min(50, Math.round(value || 1)));
+  const clamp = (value: number, maximum: number) => (
+    Math.max(1, Math.min(maximum, Math.round(value || 1)))
+  );
 
   return (
     <section className="admin-panel p-5">
       <h2 className="text-base font-semibold text-foreground">批量文案并发</h2>
       <p className="mt-1 text-xs leading-6 text-foreground-muted">
-        最多一次提交 {config.max_batch_items} 条。所有视频会立即进入任务，ASR 与 AI 分阶段限流，数据库不保存视频文件。
+        自动转写单批最多 {config.max_batch_items} 条，系统可同时承载最多 {config.max_asr_concurrency} 个 ASR 执行任务，适合多个用户并行使用。AI 初始化单批最多 {config.max_ai_batch_items} 条并独立限流；数据库不保存视频文件。
       </p>
       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label>
-          <span className="mb-1 block text-xs text-foreground-muted">同时转写视频</span>
+          <span className="mb-1 block text-xs text-foreground-muted">
+            ASR 同时执行（1–{config.max_asr_concurrency}）
+          </span>
           <input
             type="number"
             min={1}
-            max={50}
+            max={config.max_asr_concurrency}
             value={asrConcurrency}
-            onChange={(event) => setAsrConcurrency(clamp(Number(event.target.value)))}
+            onChange={(event) => setAsrConcurrency(
+              clamp(Number(event.target.value), config.max_asr_concurrency),
+            )}
             className="w-full rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 py-2 text-sm text-foreground focus:border-accent-emerald/50 focus:outline-none"
           />
         </label>
         <label>
-          <span className="mb-1 block text-xs text-foreground-muted">同时生成知识卡</span>
+          <span className="mb-1 block text-xs text-foreground-muted">
+            AI 同时执行（1–{config.max_llm_concurrency}）
+          </span>
           <input
             type="number"
             min={1}
-            max={50}
+            max={config.max_llm_concurrency}
             value={llmConcurrency}
-            onChange={(event) => setLlmConcurrency(clamp(Number(event.target.value)))}
+            onChange={(event) => setLlmConcurrency(
+              clamp(Number(event.target.value), config.max_llm_concurrency),
+            )}
             className="w-full rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 py-2 text-sm text-foreground focus:border-accent-emerald/50 focus:outline-none"
           />
         </label>
@@ -1119,7 +1129,10 @@ function ExtractionConcurrencyPanel({
         disabled={saving}
         onClick={async () => {
           setSaving(true);
-          await onSave(clamp(asrConcurrency), clamp(llmConcurrency));
+          await onSave(
+            clamp(asrConcurrency, config.max_asr_concurrency),
+            clamp(llmConcurrency, config.max_llm_concurrency),
+          );
           setSaving(false);
         }}
         className="mt-4 rounded-lg bg-accent-emerald px-4 py-2 text-sm font-semibold text-white hover:bg-accent-emerald/90 disabled:opacity-50"

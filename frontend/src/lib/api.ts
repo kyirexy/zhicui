@@ -3,6 +3,7 @@ import type {
   CardData,
   DouyinCollectionJob,
   DouyinBatchExtractionJob,
+  DouyinBatchExtractionOperation,
   DouyinLibraryItem,
   DouyinLocalHandoff,
   DouyinLibrarySort,
@@ -453,24 +454,29 @@ export async function getDouyinCollectionJob(
 
 export async function extractDouyinLibraryItem(
   awemeId: string,
+  operation: DouyinBatchExtractionOperation = 'full',
 ): Promise<ApiResponse<CardData & { already_existed?: boolean }>> {
   return request<CardData & { already_existed?: boolean }>(
     '/api/library/douyin/extract',
     {
       method: 'POST',
-      body: JSON.stringify({ aweme_id: awemeId }),
+      body: JSON.stringify({ aweme_id: awemeId, operation }),
     },
   );
 }
 
 export async function startDouyinBatchExtraction(
   awemeIds: string[],
+  operation: DouyinBatchExtractionOperation = 'full',
 ): Promise<ApiResponse<DouyinBatchExtractionJob>> {
   return request<DouyinBatchExtractionJob>(
     '/api/library/douyin/extractions/batch',
     {
       method: 'POST',
-      body: JSON.stringify({ aweme_ids: awemeIds.slice(0, 50) }),
+      body: JSON.stringify({
+        aweme_ids: awemeIds.slice(0, operation === 'transcript' ? 100 : 50),
+        operation,
+      }),
     },
   );
 }
@@ -674,7 +680,10 @@ export interface AsrConfig {
 export interface ExtractionConfig {
   asr_concurrency: number;
   llm_concurrency: number;
+  max_asr_concurrency: number;
+  max_llm_concurrency: number;
   max_batch_items: number;
+  max_ai_batch_items: number;
   database_stores_media: false;
 }
 

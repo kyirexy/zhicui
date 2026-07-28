@@ -817,6 +817,12 @@ def _note_ai_summary_context(
     if not isinstance(parsed, dict):
         return raw_fallback[:limit]
 
+    # A transcript-only library Note intentionally stores source metadata but
+    # has no generated understanding. Do not expose that bookkeeping JSON as
+    # if it were an AI summary.
+    if parsed.get("ai_initialized") is False:
+        return ""
+
     parts: list[str] = []
 
     def add(label: str, value: Any) -> None:

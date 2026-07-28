@@ -33,7 +33,9 @@ DEEPSEEK_PROVIDER = "deepseek"
 CUSTOM_PROVIDER = "custom"
 DEEPSEEK_API_BASE = "https://api.deepseek.com"
 DEEPSEEK_MODELS = ("deepseek-v4-flash", "deepseek-v4-pro")
-DEFAULT_EXTRACTION_ASR_CONCURRENCY = 8
+MAX_EXTRACTION_ASR_CONCURRENCY = 200
+MAX_EXTRACTION_LLM_CONCURRENCY = 50
+DEFAULT_EXTRACTION_ASR_CONCURRENCY = 200
 DEFAULT_EXTRACTION_LLM_CONCURRENCY = 12
 
 
@@ -188,11 +190,13 @@ def get_extraction_concurrency(db: Session) -> dict[str, int]:
             db,
             EXTRACTION_ASR_CONCURRENCY_KEY,
             DEFAULT_EXTRACTION_ASR_CONCURRENCY,
+            maximum=MAX_EXTRACTION_ASR_CONCURRENCY,
         ),
         "llm": _bounded_int_setting(
             db,
             EXTRACTION_LLM_CONCURRENCY_KEY,
             DEFAULT_EXTRACTION_LLM_CONCURRENCY,
+            maximum=MAX_EXTRACTION_LLM_CONCURRENCY,
         ),
     }
 
@@ -204,8 +208,8 @@ def set_extraction_concurrency(
     llm: int,
 ) -> dict[str, int]:
     """Persist validated ASR and LLM stage concurrency limits."""
-    safe_asr = max(1, min(int(asr), 50))
-    safe_llm = max(1, min(int(llm), 50))
+    safe_asr = max(1, min(int(asr), MAX_EXTRACTION_ASR_CONCURRENCY))
+    safe_llm = max(1, min(int(llm), MAX_EXTRACTION_LLM_CONCURRENCY))
     set_setting(db, EXTRACTION_ASR_CONCURRENCY_KEY, str(safe_asr))
     set_setting(db, EXTRACTION_LLM_CONCURRENCY_KEY, str(safe_llm))
     return {"asr": safe_asr, "llm": safe_llm}

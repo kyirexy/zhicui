@@ -60,6 +60,8 @@ def create_note(
     transcript: str,
     ai_result: dict[str, Any],
     user_id: str = "",
+    *,
+    ai_initialized: bool = True,
 ) -> Note:
     """Persist a new note from extraction results.
 
@@ -94,6 +96,7 @@ def create_note(
         video_url=video_url,
         transcript_raw=transcript,
         ai_summary=json.dumps(ai_result, ensure_ascii=False),
+        ai_initialized=ai_initialized,
         card_type=card_type,
         seo_title=generate_seo_title(video_title),
         seo_slug=generate_slug(video_info.get("video_id", "")),
@@ -107,6 +110,28 @@ def create_note(
     db.commit()
     db.refresh(note)
     return note
+
+
+def create_transcript_note(
+    db: Session,
+    *,
+    video_info: dict[str, Any],
+    transcript: str,
+    source_meta: dict[str, Any],
+    user_id: str,
+) -> Note:
+    """Persist a transcript-ready library Note without inventing AI output."""
+    return create_note(
+        db,
+        video_info,
+        transcript,
+        {
+            "ai_initialized": False,
+            "source_meta": source_meta,
+        },
+        user_id,
+        ai_initialized=False,
+    )
 
 
 def get_note(db: Session, note_id: str, user_id: str = "") -> Note | None:
@@ -192,6 +217,9 @@ def list_notes(
     query = db.query(Note)
     if user_id:
         query = query.filter(Note.user_id == user_id)
+    # Transcript-ready library records live in the library workspace until the
+    # user explicitly initializes a card; do not render them as empty cards.
+    query = query.filter(Note.ai_initialized.is_(True))
     clean_search = (search or "").strip()
     if clean_search:
         escaped_search = (
@@ -271,7 +299,9 @@ def update_note_ai(db: Session, note: Note, ai_result: dict[str, Any]) -> Note:
 
     Updates ai_summary, card_type, pitfall_rating, updated_at.
     """
-    note.ai_summary = json.dumps(ai_result, ensure_ascii=False)
+    initialized_result = {**ai_result, "ai_initialized": True}
+    note.ai_summary = json.dumps(initialized_result, ensure_ascii=False)
+    note.ai_initialized = True
     note.card_type = ai_result.get("card_type", note.card_type)
     note.pitfall_rating = int(ai_result.get("pitfall_rating", note.pitfall_rating))
     note.updated_at = datetime.now(timezone.utc)
@@ -317,6 +347,7 @@ def list_notes_admin(
             "id": note.id,
             "video_title": note.video_title,
             "card_type": note.card_type,
+            "ai_initialized": bool(note.ai_initialized),
             "author": username or "-",
             "has_transcript": bool(note.transcript_raw),
             "created_at": note.created_at.isoformat() if note.created_at else None,

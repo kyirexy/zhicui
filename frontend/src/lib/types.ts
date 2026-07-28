@@ -33,6 +33,7 @@ export interface CardData {
   seo_meta?: string;
   transcript_raw?: string | null;
   transcript_chars?: number;
+  ai_initialized?: boolean;
   video_title?: string;
   video_id?: string;
   cover_url?: string;
@@ -65,6 +66,7 @@ export interface Note {
   source_kind?: string;
   source_recorded_at?: string;
   transcript_chars?: number;
+  ai_initialized: boolean;
   seo_meta?: string;
   tone?: ContentTone;
   density?: ContentDensity;
@@ -249,8 +251,11 @@ export interface DouyinLibraryItem {
   extracted: boolean;
   extracted_note_id?: string | null;
   transcript_chars: number;
+  ai_initialized: boolean;
   card_type?: CardType | null;
 }
+
+export type DouyinBatchExtractionOperation = 'transcript' | 'ai' | 'full';
 
 export type DouyinBatchExtractionState =
   | 'queued'
@@ -265,6 +270,7 @@ export interface DouyinBatchExtractionItem {
   error: string;
   note_id?: string | null;
   transcript_chars: number;
+  ai_initialized: boolean;
   card_type?: CardType | null;
   already_existed: boolean;
   updated_at: string;
@@ -272,6 +278,7 @@ export interface DouyinBatchExtractionItem {
 
 export interface DouyinBatchExtractionJob {
   job_id: string;
+  operation: DouyinBatchExtractionOperation;
   status: 'running' | 'success' | 'partial' | 'failed';
   created_at: string;
   started_at: string;

@@ -6,7 +6,6 @@ import { useSearchParams } from 'next/navigation';
 import { ArrowLeft, Calendar, CheckSquare, Target, CalendarDays, Trash2, Check, Loader2, Sun, Pencil, RotateCcw } from 'lucide-react';
 import { ListChecks } from '@phosphor-icons/react';
 import { listPlans, getPlan, getPlanOverview, deletePlan, togglePlanTask, updatePlan } from '@/lib/api';
-import { useRouter } from 'next/navigation';
 import type { PlanData, PlanDay, PlanField, PlanOverview } from '@/lib/types';
 import {
   formatPlanDuration,
@@ -28,7 +27,18 @@ import PlanDeleteDialog from '@/components/PlanDeleteDialog';
 function PlansContent() {
   const searchParams = useSearchParams();
   const planId = searchParams.get('id');
-  return planId ? <PlanDetail id={planId} /> : <PlanList />;
+  const showPlanList = useCallback(() => {
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.delete('id');
+    window.history.replaceState(
+      null,
+      '',
+      `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`,
+    );
+    window.scrollTo({ top: 0, behavior: 'auto' });
+  }, []);
+
+  return planId ? <PlanDetail id={planId} onBack={showPlanList} /> : <PlanList />;
 }
 
 function groupPlanFields(fields: PlanField[]): { label: string; fields: PlanField[] }[] {
@@ -210,7 +220,7 @@ function PlanList() {
 /* Detail view                                                        */
 /* ------------------------------------------------------------------ */
 
-function PlanDetail({ id }: { id: string }) {
+function PlanDetail({ id, onBack }: { id: string; onBack: () => void }) {
   const [plan, setPlan] = useState<PlanData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -222,8 +232,6 @@ function PlanDetail({ id }: { id: string }) {
   const [titleDraft, setTitleDraft] = useState('');
   const [savingMetadata, setSavingMetadata] = useState(false);
   const [todayMutating, setTodayMutating] = useState<Set<string>>(new Set());
-  const router = useRouter();
-
   useEffect(() => {
     getPlan(id).then((res) => {
       if (res.success && res.data) {
@@ -270,7 +278,7 @@ function PlanDetail({ id }: { id: string }) {
     const res = await deletePlan(id);
     if (res.success) {
       setDeleteDialogOpen(false);
-      router.push('/plans');
+      onBack();
     } else {
       setDeleteError(res.error || '计划删除失败，请重试。');
       setDeleting(false);
@@ -325,9 +333,13 @@ function PlanDetail({ id }: { id: string }) {
       <div className="min-h-[40vh] flex flex-col items-center justify-center text-center">
         <p className="text-4xl mb-4">😕</p>
         <p className="text-foreground-secondary mb-4">{error || '计划不存在'}</p>
-        <Link href="/plans" className="text-accent-emerald hover:underline text-sm">
+        <button
+          type="button"
+          onClick={onBack}
+          className="text-accent-emerald hover:underline text-sm"
+        >
           ← 返回计划列表
-        </Link>
+        </button>
       </div>
     );
   }
@@ -347,10 +359,13 @@ function PlanDetail({ id }: { id: string }) {
   return (
     <div className="max-w-5xl mx-auto pb-24">
       <div className="mb-6 flex items-center justify-between">
-        <Link href="/plans"
-          className="inline-flex items-center gap-1.5 text-foreground-secondary hover:text-foreground transition-colors text-sm px-3 py-2.5 rounded-lg hover:bg-white/5 min-h-[44px]">
+        <button
+          type="button"
+          onClick={onBack}
+          className="inline-flex items-center gap-1.5 text-foreground-secondary hover:text-foreground transition-colors text-sm px-3 py-2.5 rounded-lg hover:bg-white/5 min-h-[44px]"
+        >
           <ArrowLeft size={14} />返回计划列表
-        </Link>
+        </button>
         <button
           type="button"
           onClick={() => {

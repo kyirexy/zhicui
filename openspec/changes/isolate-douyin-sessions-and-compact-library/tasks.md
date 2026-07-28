@@ -59,4 +59,4 @@
 - [x] 10.1 Make scoped login cancellation await browser-worker cleanup and make duplicate starts idempotent
 - [x] 10.2 Forward browser mode through the backend and add one automatic QR restart plus an explicit retry fallback
 - [x] 10.3 Retain bounded previous-build chunks and add one-shot stale-chunk recovery in the client bootstrap
-- [ ] 10.4 Run sidecar/frontend verification, regenerate the production patch and deploy the repaired flow
+- [x] 10.4 Run sidecar/frontend verification, regenerate the production patch and deploy the repaired flow

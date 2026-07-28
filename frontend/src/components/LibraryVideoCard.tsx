@@ -6,6 +6,7 @@ import {
   Check,
   CheckCircle2,
   CircleMinus,
+  EyeOff,
   FileText,
   LoaderCircle,
   MoreHorizontal,
@@ -34,6 +35,7 @@ interface LibraryVideoCardProps {
   onToggle: (awemeId: string) => void;
   onDelete: (item: DouyinLibraryItem) => void;
   onRemove: (item: DouyinLibraryItem) => void;
+  onHidePermanently: (item: DouyinLibraryItem) => void;
 }
 
 function formatCount(value: number): string {
@@ -51,6 +53,7 @@ export default function LibraryVideoCard({
   onToggle,
   onDelete,
   onRemove,
+  onHidePermanently,
 }: LibraryVideoCardProps) {
   const isWorking = ['queued', 'extracting', 'transcribing', 'analyzing'].includes(extractState);
   const isExtracted = item.extracted || extractState === 'done';
@@ -192,13 +195,26 @@ export default function LibraryVideoCard({
             )}
             移出资料库
           </button>
-          {isExtracted && item.extracted_note_id && selected ? (
-            <details className="library-card-menu">
-              <summary aria-label={`管理 ${item.title}`}>
-                <MoreHorizontal size={15} />
-              </summary>
-              <div>
-                <p>只删除知萃中的文案、卡片和关联计划，原视频会保留。</p>
+          <details className="library-card-menu">
+            <summary aria-label={`更多管理 ${item.title}`}>
+              <MoreHorizontal size={15} />
+            </summary>
+            <div>
+              <p>永久隐藏后，同步也不会再次显示；可以在“已永久隐藏”中恢复。</p>
+              <button
+                type="button"
+                className="is-permanent"
+                disabled={removing}
+                onClick={() => onHidePermanently(item)}
+              >
+                <EyeOff size={13} />
+                永久隐藏
+              </button>
+              {isExtracted && item.extracted_note_id && selected ? (
+                <>
+                  <p className="library-card-menu-divider">
+                    只删除知萃中的文案、卡片和关联计划，原视频会保留。
+                  </p>
                 <button
                   type="button"
                   disabled={deleting}
@@ -211,9 +227,10 @@ export default function LibraryVideoCard({
                   )}
                   确认删除
                 </button>
-              </div>
-            </details>
-          ) : null}
+                </>
+              ) : null}
+            </div>
+          </details>
         </div>
         <span className="library-detail-hint" aria-hidden="true">
           打开详情

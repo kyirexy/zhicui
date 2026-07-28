@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import time
 import traceback
+from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib.parse import unquote
 
@@ -115,6 +116,7 @@ class LibraryExtractRequest(BaseModel):
 
 class LibraryRemoveRequest(BaseModel):
     aweme_ids: list[str] = Field(..., min_length=1, max_length=50)
+    mode: Literal["temporary", "permanent"] = "temporary"
 
     @field_validator("aweme_ids")
     @classmethod
@@ -1208,9 +1210,32 @@ def get_douyin_library_job(
     """Return one downloader collection job."""
     binding = douyin_binding_service.get_or_create(db, current_user.id)
     try:
-        return _ok(douyin_library.get_job(binding.session_scope, job_id))
+        job = douyin_library.get_job(binding.session_scope, job_id)
     except douyin_library.DouyinLibraryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    restored = 0
+    if job.get("status") == "success":
+        raw_finished_at = job.get("finished_at")
+        completed_at: datetime | None = None
+        if isinstance(raw_finished_at, (int, float)):
+            completed_at = datetime.fromtimestamp(
+                raw_finished_at,
+                tz=timezone.utc,
+            )
+        elif isinstance(raw_finished_at, str) and raw_finished_at.strip():
+            try:
+                completed_at = datetime.fromisoformat(
+                    raw_finished_at.strip().replace("Z", "+00:00")
+                )
+            except ValueError:
+                completed_at = None
+        if completed_at is not None:
+            restored = library_hidden_service.clear_temporary_hidden(
+                db,
+                current_user.id,
+                completed_at,
+            )
+    return _ok({**job, "temporary_restored": restored})
 
 
 @router.get("/api/library/douyin/media/{aweme_id}")
@@ -1320,14 +1345,15 @@ def list_douyin_library_items(
     except douyin_library.DouyinLibraryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    hidden_ids = library_hidden_service.list_hidden_aweme_ids(
+    source_total = len(items)
+    hidden_modes = library_hidden_service.list_hidden_modes(
         db,
         current_user.id,
         [item["aweme_id"] for item in items],
     )
     items = [
         item for item in items
-        if item["aweme_id"] not in hidden_ids
+        if item["aweme_id"] not in hidden_modes
     ]
     if limit > 0:
         items = items[:limit]
@@ -1344,7 +1370,24 @@ def list_douyin_library_items(
         item["transcript_chars"] = len(note.transcript_raw or "") if note else 0
         item["ai_initialized"] = bool(note.ai_initialized) if note else False
         item["card_type"] = note.card_type if note else None
-    return _ok({"items": items, "total": len(items)})
+    return _ok({
+        "items": items,
+        "total": len(items),
+        "source_total": source_total,
+        "hidden": {
+            "temporary": sum(
+                1 for value in hidden_modes.values() if value == "temporary"
+            ),
+            "permanent": sum(
+                1 for value in hidden_modes.values() if value == "permanent"
+            ),
+        },
+        "permanent_hidden_total": library_hidden_service.count_hidden(
+            db,
+            current_user.id,
+            "permanent",
+        ),
+    })
 
 
 @router.post("/api/library/douyin/items/remove")
@@ -1356,6 +1399,74 @@ def remove_douyin_library_items(
     """Hide selected items for this user without deleting source or knowledge."""
     try:
         result = library_hidden_service.hide_aweme_ids(
+            db,
+            current_user.id,
+            body.aweme_ids,
+            body.mode,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _ok(result)
+
+
+@router.get("/api/library/douyin/hidden-items")
+def list_permanently_hidden_douyin_items(
+    limit: int = Query(default=100, ge=1, le=1000),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """List permanent visibility records, even if the catalog is unavailable."""
+    binding = douyin_binding_service.get_or_create(db, current_user.id)
+    records = library_hidden_service.list_hidden_records(
+        db,
+        current_user.id,
+        "permanent",
+        limit,
+    )
+    catalog: dict[str, dict[str, Any]] = {}
+    try:
+        catalog = {
+            item["aweme_id"]: item
+            for item in douyin_library.list_items(
+                binding.session_scope,
+                binding.id,
+                0,
+            )
+        }
+    except douyin_library.DouyinLibraryError:
+        pass
+
+    items: list[dict[str, Any]] = []
+    for record in records:
+        source = catalog.get(record.aweme_id, {})
+        items.append({
+            "aweme_id": record.aweme_id,
+            "title": source.get("title") or f"抖音作品 {record.aweme_id}",
+            "cover_url": source.get("cover_url") or "",
+            "author_name": source.get("author_name") or "",
+            "source_mode": source.get("source_mode") or "unknown",
+            "hidden_mode": "permanent",
+            "hidden_at": record.created_at.isoformat(),
+        })
+    return _ok({
+        "items": items,
+        "total": library_hidden_service.count_hidden(
+            db,
+            current_user.id,
+            "permanent",
+        ),
+    })
+
+
+@router.post("/api/library/douyin/hidden-items/restore")
+def restore_permanently_hidden_douyin_items(
+    body: LibraryRemoveRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Restore selected permanent visibility records without touching knowledge."""
+    try:
+        result = library_hidden_service.restore_permanent_aweme_ids(
             db,
             current_user.id,
             body.aweme_ids,

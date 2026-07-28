@@ -185,6 +185,15 @@ def _migrate_db() -> None:
                     "ALTER TABLE notes ADD COLUMN "
                     "ai_initialized BOOLEAN NOT NULL DEFAULT TRUE"
                 ))
+        if insp.has_table("library_hidden_items"):
+            hidden_cols = {
+                c["name"] for c in insp.get_columns("library_hidden_items")
+            }
+            if "hide_mode" not in hidden_cols:
+                conn.execute(text(
+                    "ALTER TABLE library_hidden_items ADD COLUMN "
+                    "hide_mode VARCHAR(16) NOT NULL DEFAULT 'permanent'"
+                ))
 
 
 app = create_app()

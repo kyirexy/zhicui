@@ -1,4 +1,4 @@
-"""User-scoped tombstones for videos removed from the Douyin library view."""
+"""User-scoped visibility records for Douyin library items."""
 
 from datetime import datetime, timezone
 
@@ -30,6 +30,13 @@ class LibraryHiddenItem(Base):
         index=True,
     )
     aweme_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    hide_mode: Mapped[str] = mapped_column(
+        String(16),
+        default="permanent",
+        server_default="permanent",
+        nullable=False,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=_utcnow,

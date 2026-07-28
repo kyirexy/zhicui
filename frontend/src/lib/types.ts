@@ -228,6 +228,7 @@ export interface DouyinCollectionJob {
   skipped: number;
   error?: string | null;
   mode?: DouyinSourceMode | null;
+  temporary_restored?: number;
 }
 
 export interface DouyinLibraryItem {
@@ -253,6 +254,27 @@ export interface DouyinLibraryItem {
   transcript_chars: number;
   ai_initialized: boolean;
   card_type?: CardType | null;
+}
+
+export interface DouyinLibraryListResult {
+  items: DouyinLibraryItem[];
+  total: number;
+  source_total: number;
+  hidden: {
+    temporary: number;
+    permanent: number;
+  };
+  permanent_hidden_total: number;
+}
+
+export interface DouyinPermanentHiddenItem {
+  aweme_id: string;
+  title: string;
+  cover_url: string;
+  author_name: string;
+  source_mode: DouyinSourceMode | 'unknown';
+  hidden_mode: 'permanent';
+  hidden_at: string;
 }
 
 export type DouyinBatchExtractionOperation = 'transcript' | 'ai' | 'full';

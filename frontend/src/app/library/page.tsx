@@ -11,6 +11,7 @@ import {
   ChevronDown,
   CircleMinus,
   Download,
+  EyeOff,
   ExternalLink,
   FileText,
   Heart,
@@ -19,6 +20,7 @@ import {
   QrCode,
   RefreshCw,
   Repeat2,
+  RotateCcw,
   Search,
   ServerOff,
   SlidersHorizontal,
@@ -45,7 +47,9 @@ import {
   getDouyinLoginQr,
   getDouyinLoginStatus,
   listDouyinLibraryItems,
+  listPermanentlyHiddenDouyinItems,
   removeDouyinLibraryItems,
+  restorePermanentlyHiddenDouyinItems,
   startDouyinBatchExtraction,
   startDouyinLogin,
   API_BASE,
@@ -59,8 +63,10 @@ import type {
   DouyinBatchExtractionJob,
   DouyinBatchExtractionOperation,
   DouyinLibraryItem,
+  DouyinLibraryListResult,
   DouyinLibrarySort,
   DouyinLibraryStatus,
+  DouyinPermanentHiddenItem,
   DouyinSourceMode,
 } from '@/lib/types';
 
@@ -72,6 +78,7 @@ interface ExtractProgress {
 interface LibraryRemovalTarget {
   awemeIds: string[];
   title?: string;
+  mode: 'temporary' | 'permanent';
 }
 
 const MAX_SELECTION = 50;
@@ -148,6 +155,15 @@ export default function VideoLibraryPage() {
   const [removalTarget, setRemovalTarget] = useState<LibraryRemovalTarget | null>(null);
   const [removalPending, setRemovalPending] = useState(false);
   const [removalError, setRemovalError] = useState('');
+  const [libraryOverview, setLibraryOverview] = useState({
+    sourceTotal: 0,
+    temporaryHidden: 0,
+    permanentHidden: 0,
+  });
+  const [permanentHiddenItems, setPermanentHiddenItems] = useState<DouyinPermanentHiddenItem[]>([]);
+  const [hiddenManagerLoading, setHiddenManagerLoading] = useState(false);
+  const [hiddenManagerError, setHiddenManagerError] = useState('');
+  const [restorePending, setRestorePending] = useState(false);
   const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
   const [aiWorkspaceOpen, setAiWorkspaceOpen] = useState(false);
   const [pipelineStage, setPipelineStage] = useState<'idle' | 'collect' | 'extract' | 'done'>('idle');
@@ -157,6 +173,7 @@ export default function VideoLibraryPage() {
   const loginPollRef = useRef(0);
   const sessionDialogRef = useRef<HTMLDialogElement | null>(null);
   const removalDialogRef = useRef<HTMLDialogElement | null>(null);
+  const hiddenManagerDialogRef = useRef<HTMLDialogElement | null>(null);
   const aiLauncherRef = useRef<HTMLButtonElement | null>(null);
   const aiCloseRef = useRef<HTMLButtonElement | null>(null);
   const restoreAiLauncherFocusRef = useRef(false);
@@ -164,7 +181,9 @@ export default function VideoLibraryPage() {
     ? collectionSort
     : 'published';
 
-  const loadItems = useCallback(async (silent = false): Promise<DouyinLibraryItem[]> => {
+  const loadItems = useCallback(async (
+    silent = false,
+  ): Promise<DouyinLibraryListResult | null> => {
     if (!silent) setLoading(true);
     const response = await listDouyinLibraryItems(
       ALL_LIBRARY_ITEMS,
@@ -173,15 +192,20 @@ export default function VideoLibraryPage() {
     );
     if (response.success && response.data) {
       setItems(response.data.items);
+      setLibraryOverview({
+        sourceTotal: response.data.source_total,
+        temporaryHidden: response.data.hidden.temporary,
+        permanentHidden: response.data.permanent_hidden_total,
+      });
       setError('');
       if (!silent) setLoading(false);
-      return response.data.items;
+      return response.data;
     }
     if (!silent) {
       setError(response.error || '无法读取视频来源');
       setLoading(false);
     }
-    return [];
+    return null;
   }, [activeSort, sourceMode]);
 
   const loadLibrary = useCallback(async () => {
@@ -195,6 +219,11 @@ export default function VideoLibraryPage() {
     }
     if (itemsResponse.success && itemsResponse.data) {
       setItems(itemsResponse.data.items);
+      setLibraryOverview({
+        sourceTotal: itemsResponse.data.source_total,
+        temporaryHidden: itemsResponse.data.hidden.temporary,
+        permanentHidden: itemsResponse.data.permanent_hidden_total,
+      });
       setError('');
     } else {
       setError(itemsResponse.error || '无法读取视频来源');
@@ -1077,14 +1106,28 @@ export default function VideoLibraryPage() {
       return;
     }
 
-    const refreshed = await loadItems(true);
+    const refreshedResult = await loadItems(true);
+    const refreshed = refreshedResult?.items || [];
     setSelected(new Set());
     const transcriptTargets = refreshed
       .slice(0, requestedCount)
       .filter((item) => item.can_extract && !item.extracted);
     if (transcriptTargets.length === 0) {
       setPipelineStage('done');
-      setNotice(`同步完成：资料库现有 ${refreshed.length} 条${sourceLabel}，本次范围内的完整文案均已就绪`);
+      const permanentHidden = refreshedResult?.permanent_hidden_total || 0;
+      const sourceTotal = refreshedResult?.source_total || finalJob.success || 0;
+      if (refreshed.length === 0 && sourceTotal > 0 && permanentHidden > 0) {
+        setNotice(
+          `已同步 ${sourceTotal} 条${sourceLabel}，其中 ${permanentHidden} 条在“已永久隐藏”中；可以打开并恢复`,
+        );
+      } else {
+        const restoredCopy = finalJob.temporary_restored
+          ? `，${finalJob.temporary_restored} 条之前移出的视频已重新显示`
+          : '';
+        setNotice(
+          `同步完成：资料库现有 ${refreshed.length} 条${sourceLabel}${restoredCopy}，本次范围内的完整文案均已就绪`,
+        );
+      }
       return;
     }
 
@@ -1128,12 +1171,16 @@ export default function VideoLibraryPage() {
     setNotice('已删除这条文案、知识卡和关联计划；抖音原视频不会受影响');
   };
 
-  const openRemovalDialog = (targetItems: DouyinLibraryItem[]) => {
+  const openRemovalDialog = (
+    targetItems: DouyinLibraryItem[],
+    mode: 'temporary' | 'permanent' = 'temporary',
+  ) => {
     if (removalPending || targetItems.length === 0) return;
     const boundedItems = targetItems.slice(0, MAX_SELECTION);
     setRemovalTarget({
       awemeIds: boundedItems.map((item) => item.aweme_id),
       title: boundedItems.length === 1 ? boundedItems[0].title : undefined,
+      mode,
     });
     setRemovalError('');
     removalDialogRef.current?.showModal();
@@ -1150,7 +1197,10 @@ export default function VideoLibraryPage() {
     if (!removalTarget || removalPending) return;
     setRemovalPending(true);
     setRemovalError('');
-    const response = await removeDouyinLibraryItems(removalTarget.awemeIds);
+    const response = await removeDouyinLibraryItems(
+      removalTarget.awemeIds,
+      removalTarget.mode,
+    );
     if (!response.success || !response.data) {
       setRemovalPending(false);
       setRemovalError(response.error || '暂时无法从资料库移除，请稍后重试');
@@ -1171,12 +1221,69 @@ export default function VideoLibraryPage() {
       removedIds.forEach((awemeId) => delete next[awemeId]);
       return next;
     });
+    const completedMode = removalTarget.mode;
     setRemovalPending(false);
     removalDialogRef.current?.close();
     setRemovalTarget(null);
+    await loadItems(true);
     setNotice(
-      `已从资料库移除 ${removedIds.size} 条视频；不会取消抖音收藏，已有文案和计划仍保留`,
+      completedMode === 'permanent'
+        ? `已永久隐藏 ${removedIds.size} 条视频；可从“已永久隐藏”中恢复，抖音收藏和已有文案不受影响`
+        : `已移出 ${removedIds.size} 条视频；下次同步会重新显示，抖音收藏和已有文案不受影响`,
     );
+  };
+
+  const loadPermanentHiddenItems = useCallback(async () => {
+    setHiddenManagerLoading(true);
+    setHiddenManagerError('');
+    const response = await listPermanentlyHiddenDouyinItems(100);
+    setHiddenManagerLoading(false);
+    if (!response.success || !response.data) {
+      setHiddenManagerError(response.error || '暂时无法读取已永久隐藏的视频');
+      return;
+    }
+    setPermanentHiddenItems(response.data.items);
+    setLibraryOverview((current) => ({
+      ...current,
+      permanentHidden: response.data?.total || 0,
+    }));
+  }, []);
+
+  const openHiddenManager = () => {
+    setHiddenManagerError('');
+    hiddenManagerDialogRef.current?.showModal();
+    void loadPermanentHiddenItems();
+  };
+
+  const closeHiddenManager = () => {
+    if (restorePending) return;
+    hiddenManagerDialogRef.current?.close();
+    setHiddenManagerError('');
+  };
+
+  const restorePermanentItems = async (awemeIds: string[]) => {
+    if (restorePending || awemeIds.length === 0) return;
+    setRestorePending(true);
+    setHiddenManagerError('');
+    const targetIds = awemeIds.slice(0, MAX_SELECTION);
+    const response = await restorePermanentlyHiddenDouyinItems(targetIds);
+    if (!response.success || !response.data) {
+      setRestorePending(false);
+      setHiddenManagerError(response.error || '恢复失败，请稍后重试');
+      return;
+    }
+    const restoredCount = response.data.restored;
+    const restoredIds = new Set(response.data.aweme_ids);
+    setPermanentHiddenItems((current) => current.filter(
+      (item) => !restoredIds.has(item.aweme_id),
+    ));
+    setLibraryOverview((current) => ({
+      ...current,
+      permanentHidden: Math.max(0, current.permanentHidden - restoredCount),
+    }));
+    setRestorePending(false);
+    await loadItems(true);
+    setNotice(`已恢复 ${restoredCount} 条视频；如果它仍在同步范围内，现在会重新显示`);
   };
 
   return (
@@ -1309,18 +1416,30 @@ export default function VideoLibraryPage() {
         }}
       >
         <div className="library-session-dialog-card">
-          <div className="library-session-dialog-icon" aria-hidden="true">
-            <CircleMinus size={20} />
+          <div
+            className={`library-session-dialog-icon ${
+              removalTarget?.mode === 'permanent' ? 'is-permanent' : 'is-temporary'
+            }`}
+            aria-hidden="true"
+          >
+            {removalTarget?.mode === 'permanent'
+              ? <EyeOff size={20} />
+              : <CircleMinus size={20} />}
           </div>
           <div>
             <h2 id="library-removal-dialog-title">
-              {removalTarget?.awemeIds.length === 1
-                ? '把这条视频移出资料库？'
-                : `移出所选 ${removalTarget?.awemeIds.length || 0} 条视频？`}
+              {removalTarget?.mode === 'permanent'
+                ? removalTarget.awemeIds.length === 1
+                  ? '永久隐藏这条视频？'
+                  : `永久隐藏所选 ${removalTarget.awemeIds.length} 条视频？`
+                : removalTarget?.awemeIds.length === 1
+                  ? '把这条视频移出资料库？'
+                  : `移出所选 ${removalTarget?.awemeIds.length || 0} 条视频？`}
             </h2>
             <p id="library-removal-dialog-description">
-              只会改变你在知萃中的资料库视图，后续同步也不会再次显示。
-              不会取消抖音收藏，也不会删除已有文案、知识卡和计划。
+              {removalTarget?.mode === 'permanent'
+                ? '以后同步也不会再显示这些视频，除非你从“已永久隐藏”中恢复。不会取消抖音收藏，也不会删除已有文案、知识卡和计划。'
+                : '只从当前资料库移出，下次同步时会重新出现。不会取消抖音收藏，也不会删除已有文案、知识卡和计划。'}
             </p>
             {removalTarget?.title && (
               <p className="library-removal-target" title={removalTarget.title}>
@@ -1337,13 +1456,110 @@ export default function VideoLibraryPage() {
             </button>
             <button
               type="button"
-              className="is-primary"
+              className={removalTarget?.mode === 'permanent' ? 'is-danger' : 'is-confirm'}
               onClick={confirmRemoval}
               disabled={removalPending}
             >
               {removalPending && <LoaderCircle size={15} className="animate-spin" />}
-              确认移出
+              {removalTarget?.mode === 'permanent' ? '确认永久隐藏' : '确认移出'}
             </button>
+          </div>
+        </div>
+      </dialog>
+
+      <dialog
+        ref={hiddenManagerDialogRef}
+        className="library-session-dialog library-hidden-dialog"
+        aria-modal="true"
+        aria-labelledby="library-hidden-dialog-title"
+        onCancel={(event) => {
+          if (restorePending) {
+            event.preventDefault();
+            return;
+          }
+          setHiddenManagerError('');
+        }}
+      >
+        <div className="library-session-dialog-card library-hidden-dialog-card">
+          <div className="library-session-dialog-icon is-permanent" aria-hidden="true">
+            <EyeOff size={20} />
+          </div>
+          <div className="library-hidden-dialog-heading">
+            <span className="library-hidden-kicker">单独管理</span>
+            <h2 id="library-hidden-dialog-title">
+              已永久隐藏 · {libraryOverview.permanentHidden}
+            </h2>
+            <p>这些视频不会在同步后自动出现，但抖音收藏、已有文案、知识卡和计划都还在。</p>
+          </div>
+
+          <div className="library-hidden-list">
+            {hiddenManagerLoading ? (
+              <div className="library-hidden-state">
+                <LoaderCircle size={20} className="animate-spin" />
+                正在读取…
+              </div>
+            ) : hiddenManagerError ? (
+              <p className="library-session-error" role="alert">{hiddenManagerError}</p>
+            ) : permanentHiddenItems.length === 0 ? (
+              <div className="library-hidden-state">
+                <CheckCircle2 size={22} />
+                <strong>没有永久隐藏的视频</strong>
+                <span>普通“移出资料库”的视频会在下次同步时重新出现。</span>
+              </div>
+            ) : (
+              permanentHiddenItems.map((item) => (
+                <article className="library-hidden-item" key={item.aweme_id}>
+                  {item.cover_url ? (
+                    <img src={item.cover_url} alt="" loading="lazy" />
+                  ) : (
+                    <div className="library-hidden-cover-fallback" aria-hidden="true">
+                      <FileText size={18} />
+                    </div>
+                  )}
+                  <div>
+                    <span className="library-hidden-badge">
+                      <EyeOff size={11} />
+                      永久隐藏
+                    </span>
+                    <h3 title={item.title}>{item.title}</h3>
+                    <p>
+                      {item.author_name || '作者信息暂不可用'}
+                      {' · '}
+                      {new Date(item.hidden_at).toLocaleDateString('zh-CN')}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void restorePermanentItems([item.aweme_id])}
+                    disabled={restorePending}
+                  >
+                    <RotateCcw size={14} />
+                    恢复
+                  </button>
+                </article>
+              ))
+            )}
+          </div>
+
+          <div className="library-session-dialog-actions">
+            <button type="button" onClick={closeHiddenManager} disabled={restorePending}>
+              完成
+            </button>
+            {permanentHiddenItems.length > 0 && (
+              <button
+                type="button"
+                className="is-confirm"
+                onClick={() => void restorePermanentItems(
+                  permanentHiddenItems.slice(0, MAX_SELECTION).map((item) => item.aweme_id),
+                )}
+                disabled={restorePending}
+              >
+                {restorePending
+                  ? <LoaderCircle size={15} className="animate-spin" />
+                  : <RotateCcw size={15} />}
+                恢复{permanentHiddenItems.length > MAX_SELECTION ? '前 50 条' : '全部'}
+              </button>
+            )}
           </div>
         </div>
       </dialog>
@@ -1582,6 +1798,16 @@ export default function VideoLibraryPage() {
           )}
           <button
             type="button"
+            className="library-hidden-manager-button"
+            onClick={openHiddenManager}
+            aria-label={`管理已永久隐藏的 ${libraryOverview.permanentHidden} 条视频`}
+          >
+            <EyeOff size={15} />
+            已永久隐藏
+            <span>{libraryOverview.permanentHidden}</span>
+          </button>
+          <button
+            type="button"
             className="library-text-action"
             onClick={selectVisible}
             disabled={filteredItems.length === 0}
@@ -1600,6 +1826,15 @@ export default function VideoLibraryPage() {
               >
                 <CircleMinus size={15} />
                 批量移出
+              </button>
+              <button
+                type="button"
+                className="is-danger is-permanent"
+                onClick={() => openRemovalDialog(selectedItems, 'permanent')}
+                disabled={removalPending || batchExtracting || refreshing}
+              >
+                <EyeOff size={15} />
+                永久隐藏
               </button>
               <button
                 type="button"
@@ -1706,15 +1941,31 @@ export default function VideoLibraryPage() {
             </div>
           ) : filteredItems.length === 0 ? (
             <div className="library-empty-state">
-              <FileText size={28} />
-              <h2>{search ? '没有匹配的视频' : `还没有同步${sourceLabel}`}</h2>
+              {libraryOverview.permanentHidden > 0 && !search
+                ? <EyeOff size={28} />
+                : <FileText size={28} />}
+              <h2>
+                {search
+                  ? '没有匹配的视频'
+                  : libraryOverview.sourceTotal > 0 && libraryOverview.permanentHidden > 0
+                    ? '同步的视频都在“已永久隐藏”中'
+                    : `还没有同步${sourceLabel}`}
+              </h2>
               <p>
                 {search
                   ? '换个关键词试试。'
+                  : libraryOverview.sourceTotal > 0 && libraryOverview.permanentHidden > 0
+                    ? `已同步 ${libraryOverview.sourceTotal} 条${sourceLabel}，你可以打开列表选择恢复。`
                   : loggedIn
                     ? `点击“从抖音同步${sourceLabel}”更新清单并自动提取完整文案。`
                     : '先扫码登录抖音，再开始采集。'}
               </p>
+              {!search && libraryOverview.permanentHidden > 0 && (
+                <button type="button" onClick={openHiddenManager}>
+                  <EyeOff size={15} />
+                  查看已永久隐藏
+                </button>
+              )}
             </div>
           ) : (
             <div className="library-video-grid">
@@ -1733,6 +1984,7 @@ export default function VideoLibraryPage() {
                   onToggle={toggleSelection}
                   onDelete={(target) => void deleteExtraction(target)}
                   onRemove={(target) => openRemovalDialog([target])}
+                  onHidePermanently={(target) => openRemovalDialog([target], 'permanent')}
                 />
               ))}
             </div>

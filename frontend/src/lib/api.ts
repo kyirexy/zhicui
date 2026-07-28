@@ -5,7 +5,9 @@ import type {
   DouyinBatchExtractionJob,
   DouyinBatchExtractionOperation,
   DouyinLibraryItem,
+  DouyinLibraryListResult,
   DouyinLocalHandoff,
+  DouyinPermanentHiddenItem,
   DouyinLibrarySort,
   DouyinLibraryStatus,
   DouyinLoginStatus,
@@ -350,13 +352,13 @@ export async function listDouyinLibraryItems(
   limit = 0,
   mode?: DouyinSourceMode,
   sort: DouyinLibrarySort = 'collection',
-): Promise<ApiResponse<{ items: DouyinLibraryItem[]; total: number }>> {
+): Promise<ApiResponse<DouyinLibraryListResult>> {
   const params = new URLSearchParams({
     limit: String(Math.max(0, Math.min(limit, 10000))),
   });
   if (mode) params.set('mode', mode);
   params.set('sort', sort);
-  return request<{ items: DouyinLibraryItem[]; total: number }>(
+  return request<DouyinLibraryListResult>(
     `/api/library/douyin/items?${params.toString()}`,
   );
 }
@@ -385,12 +387,36 @@ export async function collectDouyinLibrary(
 
 export async function removeDouyinLibraryItems(
   awemeIds: string[],
+  mode: 'temporary' | 'permanent' = 'temporary',
 ): Promise<ApiResponse<{
   removed: number;
   newly_removed: number;
+  promoted: number;
+  mode: 'temporary' | 'permanent';
   aweme_ids: string[];
 }>> {
   return request('/api/library/douyin/items/remove', {
+    method: 'POST',
+    body: JSON.stringify({ aweme_ids: awemeIds, mode }),
+  });
+}
+
+export async function listPermanentlyHiddenDouyinItems(
+  limit = 100,
+): Promise<ApiResponse<{
+  items: DouyinPermanentHiddenItem[];
+  total: number;
+}>> {
+  return request(`/api/library/douyin/hidden-items?limit=${Math.max(1, Math.min(limit, 1000))}`);
+}
+
+export async function restorePermanentlyHiddenDouyinItems(
+  awemeIds: string[],
+): Promise<ApiResponse<{
+  restored: number;
+  aweme_ids: string[];
+}>> {
+  return request('/api/library/douyin/hidden-items/restore', {
     method: 'POST',
     body: JSON.stringify({ aweme_ids: awemeIds }),
   });

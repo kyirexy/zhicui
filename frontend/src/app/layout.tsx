@@ -57,6 +57,63 @@ export default function RootLayout({
                   }
                 } catch (e) {}
               })();
+              // A page that was already open during an atomic deployment can
+              // still request an immediately previous Next.js chunk. The
+              // server retains those assets for a bounded window; this is the
+              // last-resort recovery if a chunk is unavailable or a stale
+              // service worker cache survived. Reload at most once per minute.
+              (function () {
+                var recoveryKey = 'zhicui_chunk_recovery_at';
+                var recovering = false;
+                function isNextAsset(value) {
+                  return typeof value === 'string' && value.indexOf('/_next/static/') !== -1;
+                }
+                function recoverFromStaleChunk() {
+                  if (recovering) return;
+                  var now = Date.now();
+                  var previous = Number(sessionStorage.getItem(recoveryKey) || 0);
+                  if (now - previous < 60000) return;
+                  recovering = true;
+                  sessionStorage.setItem(recoveryKey, String(now));
+                  var cleanup = [];
+                  if ('serviceWorker' in navigator) {
+                    cleanup.push(
+                      navigator.serviceWorker.getRegistrations().then(function (regs) {
+                        return Promise.all(regs.map(function (registration) {
+                          return registration.unregister();
+                        }));
+                      }).catch(function () {}),
+                    );
+                  }
+                  if (window.caches) {
+                    cleanup.push(
+                      caches.keys().then(function (keys) {
+                        return Promise.all(keys.map(function (key) {
+                          return caches.delete(key);
+                        }));
+                      }).catch(function () {}),
+                    );
+                  }
+                  Promise.all(cleanup).finally(function () {
+                    location.reload();
+                  });
+                }
+                window.addEventListener('error', function (event) {
+                  var target = event.target;
+                  var source = target && (target.src || target.href);
+                  if (isNextAsset(source)) recoverFromStaleChunk();
+                }, true);
+                window.addEventListener('unhandledrejection', function (event) {
+                  var message = String(event.reason && (event.reason.message || event.reason) || '');
+                  if (
+                    message.indexOf('ChunkLoadError') !== -1 ||
+                    message.indexOf('Loading chunk') !== -1 ||
+                    message.indexOf('dynamically imported module') !== -1
+                  ) {
+                    recoverFromStaleChunk();
+                  }
+                });
+              })();
               // Service Worker is production-only. In dev (localhost / 127.0.0.1
               // / *.local), Turbopack rotates chunk hashes on every edit, but a
               // cache-first SW keeps serving stale chunks → 404 → Next refresh

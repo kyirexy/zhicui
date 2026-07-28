@@ -99,3 +99,13 @@ The production sidecar runs on a remote virtual display, so its browser is not u
 ### 9. Android uses a desktop-binding handoff
 
 The native Android App and mobile web no longer initiate the server-side QR task. Douyin frequently requires an interactive security challenge that the production headless sidecar cannot expose, and the Douyin App does not provide a supported Cookie callback to Zhicui. An unbound mobile user therefore receives the desktop URL and same-account steps. When the App returns to the foreground it rechecks the user-scoped binding, so a desktop-completed login becomes available without rebuilding or copying credentials. The existing native QR bridge remains dormant for compatibility but is not presented as the supported binding path.
+
+### 10. QR discovery has one automatic recovery and a manual fallback
+
+Remote production QR discovery gets a bounded grace period. If no QR is available, the client cancels only its scoped browser, waits for the sidecar worker to finish and starts one new capture. It never loops indefinitely. A second stall keeps the panel visible and changes the spinner into an explicit fallback: local desktop users can reopen visible Chrome, while production users can regenerate the mirrored QR. The backend forwards `browser_mode` and `browser_opened` on every status response so the client never guesses which surface is actually available.
+
+Cancellation is cooperative. The sidecar signals the worker, closes the browser process and awaits cleanup before returning; a start received during the final cleanup window is idempotent instead of becoming a connector 409 that the public API mislabels as 502.
+
+### 11. Frontend deployments retain bounded chunk compatibility
+
+The isolated frontend build remains atomic, but the deploy switch copies hashed static assets from the current build into the new `.next/static` tree before activation and prunes assets older than a bounded retention window. An already-open document can therefore finish loading after a deployment. A small bootstrap error handler is the final fallback: a failed `/_next/static/` script or stylesheet clears service-worker caches and reloads once, guarded by session storage to prevent loops.

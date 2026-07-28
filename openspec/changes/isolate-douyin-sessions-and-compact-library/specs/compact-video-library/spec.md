@@ -28,3 +28,14 @@ The system SHALL present the QR image, progress, same-device instructions and lo
 #### Scenario: Mobile panel is open
 - **WHEN** a user opens QR login on a narrow viewport
 - **THEN** the panel fits within dynamic viewport and safe-area bounds while keeping its close and action buttons reachable
+
+### Requirement: Deploy-safe client assets
+The production deployment SHALL avoid stranding an already-open page on removed Next.js chunks.
+
+#### Scenario: A deployment replaces the active frontend
+- **WHEN** a browser still references chunk hashes from the immediately previous production build
+- **THEN** those assets remain available during a bounded compatibility window
+
+#### Scenario: A chunk is no longer available
+- **WHEN** the browser receives a load error for a Next.js JavaScript or CSS asset
+- **THEN** the client clears stale service-worker caches and performs at most one controlled reload

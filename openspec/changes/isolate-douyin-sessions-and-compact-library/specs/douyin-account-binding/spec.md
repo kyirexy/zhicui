@@ -105,3 +105,18 @@ The system SHALL clear only the current user's Douyin Cookie and QR state during
 #### Scenario: One user rebinds
 - **WHEN** an authenticated user confirms rebinding
 - **THEN** only that user's current session is cleared before a new QR task starts in the same scope
+
+### Requirement: Bounded QR recovery
+The system SHALL recover from a stalled QR discovery without leaving the user on an indefinite spinner or surfacing a normal browser-cleanup race as a generic gateway failure.
+
+#### Scenario: Production QR does not appear promptly
+- **WHEN** a remote-capture login remains active without a QR image for the bounded discovery period
+- **THEN** the client cancels that scoped browser, waits for cleanup and starts one fresh capture automatically
+
+#### Scenario: Automatic recovery still has no QR
+- **WHEN** the fresh capture also does not produce a QR image
+- **THEN** the login panel stays open with an honest explanation and an explicit action to reopen Chrome locally or regenerate the production QR
+
+#### Scenario: User retries while the previous browser is closing
+- **WHEN** the same user starts login during scoped browser cleanup
+- **THEN** the connector treats the request idempotently or returns a bounded retry state instead of a generic 502 response

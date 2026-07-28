@@ -136,6 +136,14 @@ npm ci --silent || {
 log "在隔离目录构建前端..."
 npm run build
 
+if [ -d "$FRONTEND_DIR/.next/static" ]; then
+  log "保留上一版哈希静态资源，兼容部署期间已打开的页面..."
+  rsync -a --ignore-existing \
+    "$FRONTEND_DIR/.next/static/" \
+    "$STAGING_DIR/.next/static/"
+  find "$STAGING_DIR/.next/static" -type f -mtime +14 -delete
+fi
+
 log "验证暂存构建产物..."
 [ -s "$STAGING_DIR/.next/BUILD_ID" ] ||
   err "暂存构建缺少 .next/BUILD_ID"

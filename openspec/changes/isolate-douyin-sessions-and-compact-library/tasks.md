@@ -53,3 +53,10 @@
 - [x] 9.2 Refresh scoped binding status when the Android App resumes without cancelling or mutating an informational guide
 - [x] 9.3 Distinguish local visible Chrome from production remote QR capture without misleading the user
 - [x] 9.4 Bump the Android release, build the APK, validate the change and deploy the production revision
+
+## 10. Production login and deploy recovery
+
+- [x] 10.1 Make scoped login cancellation await browser-worker cleanup and make duplicate starts idempotent
+- [x] 10.2 Forward browser mode through the backend and add one automatic QR restart plus an explicit retry fallback
+- [x] 10.3 Retain bounded previous-build chunks and add one-shot stale-chunk recovery in the client bootstrap
+- [ ] 10.4 Run sidecar/frontend verification, regenerate the production patch and deploy the repaired flow

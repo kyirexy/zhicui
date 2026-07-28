@@ -501,6 +501,8 @@ def login_status(session_scope: str) -> dict[str, Any]:
         "running": bool(state.get("running")),
         "message": str(state.get("message") or ""),
         "error": str(state.get("error") or ""),
+        "browser_opened": bool(state.get("browser_opened")),
+        "browser_mode": str(state.get("browser_mode") or "idle"),
         "qr_ready": bool(state.get("qr_ready")),
         "qr_version": int(state.get("qr_version") or 0),
     }
@@ -518,6 +520,9 @@ def cancel_login(session_scope: str) -> dict[str, Any]:
         "cancelled": bool(state.get("cancelled")),
         "running": bool(state.get("running")),
         "message": str(state.get("message") or "扫码登录已取消"),
+        "error": str(state.get("error") or ""),
+        "browser_opened": bool(state.get("browser_opened")),
+        "browser_mode": str(state.get("browser_mode") or "idle"),
         "qr_ready": bool(state.get("qr_ready")),
         "qr_version": int(state.get("qr_version") or 0),
     }

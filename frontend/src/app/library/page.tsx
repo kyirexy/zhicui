@@ -73,6 +73,7 @@ const MAX_SELECTION = 50;
 const MAX_SYNC_COUNT = 100;
 const ALL_LIBRARY_ITEMS = 0;
 const SYNC_COUNT_OPTIONS = [50, 100] as const;
+const QR_AUTO_RECOVERY_ATTEMPTS = 15;
 type DouyinSessionAction = 'logout' | 'rebind';
 type BindingClient = 'desktop-web' | 'mobile-web' | 'android-app';
 const SOURCE_MODES: Array<{
@@ -130,6 +131,8 @@ export default function VideoLibraryPage() {
   const [loginStatusMessage, setLoginStatusMessage] = useState('');
   const [browserOpened, setBrowserOpened] = useState(false);
   const [browserMode, setBrowserMode] = useState('idle');
+  const [qrFallbackVisible, setQrFallbackVisible] = useState(false);
+  const [qrFallbackMode, setQrFallbackMode] = useState('remote_capture');
   const [bindingClient, setBindingClient] = useState<BindingClient>('desktop-web');
   const [bindingCheckPending, setBindingCheckPending] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -420,6 +423,8 @@ export default function VideoLibraryPage() {
     setLoginStatusMessage('');
     setBrowserOpened(false);
     setBrowserMode('idle');
+    setQrFallbackVisible(false);
+    setQrFallbackMode('remote_capture');
     if (!shouldCancelLogin) return;
     void cancelDouyinLogin().then((response) => {
       if (!response.success) {
@@ -537,8 +542,10 @@ export default function VideoLibraryPage() {
     pollId: number,
     initialQrVersion = 0,
   ) => {
-    let currentQrVersion = 0;
-    currentQrVersion = initialQrVersion;
+    let currentQrVersion = initialQrVersion;
+    let hasQrImage = initialQrVersion > 0;
+    let automaticRecoveryUsed = false;
+    let lastBrowserMode = 'starting';
     for (
       let attempt = 0;
       attempt < 300 && activeRef.current && loginPollRef.current === pollId;
@@ -551,7 +558,8 @@ export default function VideoLibraryPage() {
       setNotice(nextMessage);
       setLoginStatusMessage(nextMessage);
       setBrowserOpened(Boolean(response.data.browser_opened));
-      setBrowserMode(response.data.browser_mode || 'idle');
+      lastBrowserMode = response.data.browser_mode || 'idle';
+      setBrowserMode(lastBrowserMode);
       if (
         response.data.qr_ready
         && response.data.qr_version
@@ -565,6 +573,7 @@ export default function VideoLibraryPage() {
         ) {
           setLoginQr(imageDataUrl);
           currentQrVersion = qrResponse.data?.qr_version || 0;
+          hasQrImage = true;
         }
       }
       if (!response.data.running) {
@@ -584,12 +593,78 @@ export default function VideoLibraryPage() {
         );
         return;
       }
+      const expectsMirroredQr = (
+        bindingClient === 'desktop-web'
+        && lastBrowserMode !== 'visible_chrome'
+      );
+      if (
+        expectsMirroredQr
+        && !hasQrImage
+        && attempt + 1 >= QR_AUTO_RECOVERY_ATTEMPTS
+      ) {
+        if (!automaticRecoveryUsed) {
+          automaticRecoveryUsed = true;
+          setQrActionMessage('二维码生成较慢，正在自动重开一次安全登录浏览器…');
+          setLoginStatusMessage('正在自动恢复二维码，请稍候…');
+          const cancelled = await cancelDouyinLogin();
+          if (loginPollRef.current !== pollId) return;
+          await wait(cancelled.data?.browser_mode === 'closing' ? 1600 : 500);
+
+          let restarted = await startDouyinLogin();
+          if (
+            restarted.success
+            && restarted.data?.error === 'browser_cleanup_pending'
+          ) {
+            await wait(1600);
+            restarted = await startDouyinLogin();
+          }
+          const restartAccepted = Boolean(
+            restarted.success
+            && restarted.data
+            && (
+              restarted.data.started === true
+              || restarted.data.running === true
+            )
+          );
+          if (restartAccepted) {
+            currentQrVersion = restarted.data?.qr_version || 0;
+            hasQrImage = Boolean(restarted.data?.qr_ready);
+            lastBrowserMode = restarted.data?.browser_mode || 'starting';
+            setBrowserOpened(Boolean(restarted.data?.browser_opened));
+            setBrowserMode(lastBrowserMode);
+            setQrActionMessage('已自动重开登录浏览器，正在获取新的二维码…');
+            attempt = -1;
+            continue;
+          }
+          setNotice(restarted.error || restarted.data?.message || '二维码自动恢复失败');
+        }
+
+        await cancelDouyinLogin();
+        if (loginPollRef.current !== pollId) return;
+        setScanning(false);
+        setLoginQr('');
+        setBrowserOpened(false);
+        setQrFallbackMode(lastBrowserMode);
+        setQrFallbackVisible(true);
+        setLoginStatusMessage('二维码仍未出现，请使用下方按钮重新尝试');
+        setQrActionMessage(
+          lastBrowserMode === 'visible_chrome'
+            ? 'Chrome 未能正常弹出，请点击“重新弹出 Chrome”。'
+            : '服务器未能生成二维码，请点击“重新生成二维码”。',
+        );
+        setNotice('二维码生成超时，已停止等待；你可以立即重新尝试');
+        return;
+      }
     }
     if (loginPollRef.current !== pollId) return;
+    await cancelDouyinLogin();
+    if (loginPollRef.current !== pollId) return;
     setScanning(false);
-    setLoginStatusMessage('扫码登录等待超时，可以关闭后重新发起');
-    setNotice('扫码登录等待超时，可以重新发起');
-  }, [refreshLoginStatus]);
+    setQrFallbackMode(lastBrowserMode);
+    setQrFallbackVisible(true);
+    setLoginStatusMessage('扫码登录等待超时，请使用下方按钮重新尝试');
+    setNotice('扫码登录等待超时，可以重新弹出登录窗口');
+  }, [bindingClient, refreshLoginStatus]);
 
   const recoverQrLogin = useCallback(async () => {
     const [loginResponse, statusResponse] = await Promise.all([
@@ -609,6 +684,8 @@ export default function VideoLibraryPage() {
         setLoginStatusMessage('');
         setBrowserOpened(false);
         setBrowserMode('idle');
+        setQrFallbackVisible(false);
+        setQrFallbackMode('remote_capture');
         return;
       }
     }
@@ -618,6 +695,7 @@ export default function VideoLibraryPage() {
     loginPollRef.current = pollId;
     setScanning(true);
     setQrPanelOpen(true);
+    setQrFallbackVisible(false);
     const recoveredMessage = loginResponse.data.message || '等待你使用抖音 App 扫码…';
     setNotice(recoveredMessage);
     setLoginStatusMessage(recoveredMessage);
@@ -664,6 +742,60 @@ export default function VideoLibraryPage() {
     };
   }, [bindingClient, recoverQrLogin]);
 
+  const beginDesktopQrLogin = async () => {
+    const pollId = loginPollRef.current + 1;
+    loginPollRef.current = pollId;
+    setScanning(true);
+    setQrPanelOpen(true);
+    setLoginQr('');
+    setQrActionMessage('');
+    setBrowserOpened(false);
+    setBrowserMode('starting');
+    setQrFallbackVisible(false);
+    setQrFallbackMode('remote_capture');
+    setLoginStatusMessage('正在弹出 Chrome 抖音登录窗口…');
+    setNotice('正在弹出 Chrome，请稍候…');
+    let start = await startDouyinLogin();
+    if (
+      start.success
+      && start.data?.error === 'browser_cleanup_pending'
+    ) {
+      setLoginStatusMessage('上一次登录窗口正在关闭，马上重试…');
+      await wait(1600);
+      start = await startDouyinLogin();
+    }
+    if (!start.success) {
+      setScanning(false);
+      setQrFallbackVisible(true);
+      setQrFallbackMode('starting');
+      setLoginStatusMessage('登录浏览器启动失败，请使用下方按钮重试');
+      setBrowserOpened(false);
+      setBrowserMode('idle');
+      setNotice(start.error || '扫码登录启动失败');
+      return;
+    }
+    const accepted = Boolean(
+      start.data
+      && (
+        start.data.started === true
+        || start.data.running === true
+      )
+    );
+    if (!accepted) {
+      setScanning(false);
+      setQrFallbackVisible(true);
+      setQrFallbackMode(start.data?.browser_mode || 'starting');
+      setLoginStatusMessage(
+        start.data?.message || '登录窗口仍在清理，请使用下方按钮重试',
+      );
+      setQrActionMessage('上一次浏览器尚未完全退出，稍等片刻后重新尝试即可。');
+      return;
+    }
+    setBrowserOpened(Boolean(start.data?.browser_opened));
+    setBrowserMode(start.data?.browser_mode || 'starting');
+    await pollQrLogin(pollId);
+  };
+
   const startQrLogin = async () => {
     if (!connected || scanning) return;
     if (bindingClient !== 'desktop-web') {
@@ -674,30 +806,24 @@ export default function VideoLibraryPage() {
       setQrActionMessage('');
       setBrowserOpened(false);
       setBrowserMode('idle');
+      setQrFallbackVisible(false);
       setLoginStatusMessage('请在电脑端完成抖音绑定');
       setNotice('手机端请使用同一个知萃账号在电脑完成抖音绑定');
       return;
     }
-    const pollId = loginPollRef.current + 1;
-    loginPollRef.current = pollId;
+    await beginDesktopQrLogin();
+  };
+
+  const retryQrLogin = async () => {
+    if (!connected || scanning || bindingClient !== 'desktop-web') return;
+    loginPollRef.current += 1;
     setScanning(true);
-    setQrPanelOpen(true);
-    setLoginQr('');
-    setQrActionMessage('');
-    setBrowserOpened(false);
-    setBrowserMode('starting');
-    setLoginStatusMessage('正在弹出 Chrome 抖音登录窗口…');
-    setNotice('正在弹出 Chrome，请稍候…');
-    const start = await startDouyinLogin();
-    if (!start.success) {
-      setScanning(false);
-      setLoginStatusMessage('');
-      setBrowserOpened(false);
-      setBrowserMode('idle');
-      setNotice(start.error || '扫码登录启动失败');
-      return;
-    }
-    await pollQrLogin(pollId);
+    setQrFallbackVisible(false);
+    setLoginStatusMessage('正在关闭旧窗口并重新启动…');
+    const cancelled = await cancelDouyinLogin();
+    await wait(cancelled.data?.browser_mode === 'closing' ? 1600 : 500);
+    setScanning(false);
+    await beginDesktopQrLogin();
   };
 
   const openSessionDialog = (action: DouyinSessionAction) => {
@@ -1090,7 +1216,17 @@ export default function VideoLibraryPage() {
           </div>
           <div className="library-qr-body">
             <div className="library-qr-frame">
-              {visibleChromeLogin ? (
+              {qrFallbackVisible ? (
+                <div className="library-browser-login is-open">
+                  <RefreshCw size={30} aria-hidden="true" />
+                  <strong>二维码暂时没有出现</strong>
+                  <span>
+                    {qrFallbackMode === 'visible_chrome'
+                      ? 'Chrome 没有正常弹出，可以立即重新打开登录窗口。'
+                      : '自动恢复已经尝试过一次，可以立即重新生成一张二维码。'}
+                  </span>
+                </div>
+              ) : visibleChromeLogin ? (
                 <div className="library-browser-login is-open">
                   <ExternalLink size={30} aria-hidden="true" />
                   <strong>Chrome 已弹出</strong>
@@ -1126,7 +1262,14 @@ export default function VideoLibraryPage() {
                     : '线上桌面端会把安全生成的二维码显示在本页，请直接使用手机抖音扫描。'
                 )}
               </p>
-              {visibleChromeLogin ? (
+              {qrFallbackVisible ? (
+                <ol>
+                  <li>系统已停止旧任务，不会一直占用登录浏览器</li>
+                  <li>点击下方按钮会创建一个全新的独立登录会话</li>
+                  <li>二维码出现后，直接使用手机抖音扫一扫</li>
+                  <li>仍失败时可以关闭面板，稍后再次尝试</li>
+                </ol>
+              ) : visibleChromeLogin ? (
                 <ol>
                   <li>切换到自动弹出的 Chrome 登录窗口</li>
                   <li>如有拼图验证请先完成，再打开手机抖音扫一扫</li>
@@ -1147,6 +1290,23 @@ export default function VideoLibraryPage() {
                   <li>点击“扫码登录抖音”，在弹出的 Chrome 中完成扫码</li>
                   <li>回到 App，系统会自动检查；也可以点击下方刷新</li>
                 </ol>
+              )}
+              {bindingClient === 'desktop-web' && qrFallbackVisible && (
+                <div className="library-qr-actions">
+                  <button
+                    type="button"
+                    className="is-primary"
+                    onClick={() => void retryQrLogin()}
+                    disabled={scanning}
+                  >
+                    {scanning
+                      ? <LoaderCircle size={17} className="animate-spin" />
+                      : <RefreshCw size={17} />}
+                    {qrFallbackMode === 'visible_chrome'
+                      ? '重新弹出 Chrome'
+                      : '重新生成二维码'}
+                  </button>
+                </div>
               )}
               {bindingClient !== 'desktop-web' && (
                 <div className="library-qr-actions">

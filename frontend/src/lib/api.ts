@@ -3,6 +3,7 @@ import type {
   CardData,
   DouyinCollectionJob,
   DouyinLibraryItem,
+  DouyinLocalHandoff,
   DouyinLibrarySort,
   DouyinLibraryStatus,
   DouyinLoginStatus,
@@ -403,6 +404,12 @@ export async function startDouyinLogin(): Promise<ApiResponse<DouyinLoginStatus>
   return request<DouyinLoginStatus>('/api/library/douyin/login', {
     method: 'POST',
     body: JSON.stringify({ browser: 'chromium' }),
+  });
+}
+
+export async function createDouyinLocalHandoff(): Promise<ApiResponse<DouyinLocalHandoff>> {
+  return request<DouyinLocalHandoff>('/api/library/douyin/local-handoff', {
+    method: 'POST',
   });
 }
 

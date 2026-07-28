@@ -87,6 +87,25 @@ class LibraryLoginRequest(BaseModel):
     browser: Literal["chromium", "firefox", "webkit"] = "chromium"
 
 
+class LibraryHandoffCompleteRequest(BaseModel):
+    token: str = Field(..., min_length=32, max_length=4096)
+    cookies: dict[str, str]
+
+    @field_validator("cookies")
+    @classmethod
+    def validate_cookies(cls, value: dict[str, str]) -> dict[str, str]:
+        if not 1 <= len(value) <= 100:
+            raise ValueError("登录 Cookie 数量无效")
+        normalized: dict[str, str] = {}
+        for raw_name, raw_value in value.items():
+            name = str(raw_name or "").strip()
+            cookie_value = str(raw_value or "")
+            if not name or len(name) > 128 or len(cookie_value) > 8192:
+                raise ValueError("登录 Cookie 格式无效")
+            normalized[name] = cookie_value
+        return normalized
+
+
 class LibraryExtractRequest(BaseModel):
     aweme_id: str = Field(..., min_length=1, max_length=128)
 
@@ -981,9 +1000,18 @@ def start_douyin_library_login(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
-    """Open the companion browser for QR login."""
+    """Open Chrome only when the connector is visible on this desktop."""
     binding = douyin_binding_service.get_or_create(db, current_user.id)
     try:
+        connection = douyin_library.connection_status(binding.session_scope)
+        if connection.get("login_browser_mode") != "visible_chrome":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "异地服务器二维码已停用。请在这台电脑启动本地连接器，"
+                    "再使用本机 Chrome 完成抖音绑定。"
+                ),
+            )
         current = douyin_library.login_status(binding.session_scope)
         if current["running"]:
             return _ok({**current, "started": False})
@@ -1022,6 +1050,68 @@ def rebind_douyin_library(
         return _ok(result)
     except douyin_library.DouyinLibraryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/api/library/douyin/local-handoff")
+def create_douyin_local_handoff(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Issue a short-lived handoff for a connector on the user's computer."""
+    binding = douyin_binding_service.get_or_create(db, current_user.id)
+    token = douyin_library.create_local_handoff_token(
+        binding.id,
+        current_user.id,
+        binding.session_scope,
+    )
+    douyin_binding_service.mark_login_pending(db, binding)
+    return _ok(
+        {
+            "token": token,
+            "connector_url": "http://127.0.0.1:9000/api/v1/local-handoff",
+            "expires_in": 600,
+        }
+    )
+
+
+@router.post("/api/library/douyin/local-handoff/complete")
+def complete_douyin_local_handoff(
+    body: LibraryHandoffCompleteRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Accept a local Chrome result and forward it to the scoped sidecar."""
+    payload = douyin_library.verify_local_handoff_token(body.token)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="本机登录交接已失效，请重新发起")
+    binding = douyin_binding_service.get_by_id(db, str(payload["binding_id"]))
+    if (
+        binding is None
+        or binding.user_id != str(payload["user_id"])
+        or binding.session_scope != str(payload["session_scope"])
+    ):
+        raise HTTPException(status_code=403, detail="本机登录交接与当前账号不匹配")
+    try:
+        result = douyin_library.import_session_cookies(
+            binding.session_scope,
+            body.cookies,
+        )
+    except douyin_library.DouyinLibraryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if not result.get("valid"):
+        douyin_binding_service.mark_disconnected(db, binding)
+        raise HTTPException(status_code=400, detail="抖音未返回真实登录会话，请重新扫码")
+    douyin_binding_service.update_connection(
+        db,
+        binding,
+        connected=True,
+        cookie_count=int(result.get("count") or 0),
+    )
+    return _ok(
+        {
+            "connected": True,
+            "cookie_count": int(result.get("count") or 0),
+        }
+    )
 
 
 @router.get("/api/library/douyin/login")

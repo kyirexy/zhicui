@@ -160,6 +160,7 @@ export interface DouyinLibraryStatus {
   cookie_valid: boolean;
   cookie_count: number;
   storage_mode?: 'metadata_only' | 'local_media' | 'unknown';
+  login_browser_mode?: 'visible_chrome' | 'remote_capture' | 'headless' | 'unavailable' | string;
   max_sync_count?: number;
   error?: string | null;
 }
@@ -180,6 +181,12 @@ export interface DouyinLoginStatus {
   authenticated?: boolean;
   cookie_valid?: boolean;
   cookie_count?: number;
+}
+
+export interface DouyinLocalHandoff {
+  token: string;
+  connector_url: string;
+  expires_in: number;
 }
 
 export interface DouyinCollectionJob {

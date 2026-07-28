@@ -39,3 +39,18 @@ The production deployment SHALL avoid stranding an already-open page on removed 
 #### Scenario: A chunk is no longer available
 - **WHEN** the browser receives a load error for a Next.js JavaScript or CSS asset
 - **THEN** the client clears stale service-worker caches and performs at most one controlled reload
+
+### Requirement: Bounded service-worker network failures
+The service worker SHALL resolve failed fetch handling with a typed fallback response instead of leaving an unhandled rejected promise.
+
+#### Scenario: A cached static asset is unavailable offline
+- **WHEN** neither the cache nor the network can provide a requested static asset
+- **THEN** the service worker returns a bounded `503` response and no uncaught `Failed to fetch` promise is emitted
+
+#### Scenario: A navigation or API request fails
+- **WHEN** a controlled navigation or API fetch cannot reach the network and has no cached response
+- **THEN** the service worker returns an appropriate HTML or JSON offline response with status `503`
+
+#### Scenario: Local development has a stale worker
+- **WHEN** the application runs on localhost
+- **THEN** existing service-worker registrations and their caches are removed so development requests are not intercepted by an old production worker

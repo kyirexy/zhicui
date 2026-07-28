@@ -9,7 +9,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import re
+import secrets
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -23,6 +25,7 @@ _MAX_BOUNDED_LIBRARY_ITEMS = 10000
 _MAX_SYNC_COUNT = 100
 _MAX_QR_IMAGE_BYTES = 512 * 1024
 _MEDIA_URL_TTL_SECONDS = 60 * 60
+_HANDOFF_TOKEN_TTL_SECONDS = 10 * 60
 _SESSION_SCOPE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{32,64}$")
 _BINDING_REF_PATTERN = re.compile(r"^dyb-[0-9a-f]{20}$")
 
@@ -135,6 +138,9 @@ def connection_status(session_scope: str) -> dict[str, Any]:
             "cookie_valid": bool(cookie_state.get("valid")),
             "cookie_count": int(cookie_state.get("count") or 0),
             "storage_mode": str(health.get("storage_mode") or "unknown"),
+            "login_browser_mode": str(
+                health.get("login_browser_mode") or "unavailable"
+            ),
             "max_sync_count": min(
                 int(health.get("max_sync_count") or _MAX_SYNC_COUNT),
                 _MAX_SYNC_COUNT,
@@ -148,6 +154,7 @@ def connection_status(session_scope: str) -> dict[str, Any]:
             "cookie_valid": False,
             "cookie_count": 0,
             "storage_mode": "unknown",
+            "login_browser_mode": "unavailable",
             "max_sync_count": _MAX_SYNC_COUNT,
             "error": str(exc),
         }
@@ -204,6 +211,83 @@ def verify_media_signature(
         return False
     expected = _media_signature(aweme_id, binding_ref, expires)
     return hmac.compare_digest(expected, signature)
+
+
+def create_local_handoff_token(
+    binding_id: str,
+    user_id: str,
+    session_scope: str,
+) -> str:
+    """Create a short-lived capability for a local connector callback."""
+    payload = {
+        "binding_id": str(binding_id),
+        "user_id": str(user_id),
+        "session_scope": str(session_scope),
+        "expires": int(time.time()) + _HANDOFF_TOKEN_TTL_SECONDS,
+        "nonce": secrets.token_urlsafe(12),
+    }
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    signature = hmac.new(
+        settings.JWT_SECRET.encode("utf-8"),
+        encoded.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{encoded}.{signature}"
+
+
+def verify_local_handoff_token(token: str) -> dict[str, Any] | None:
+    """Validate a local-connector callback without exposing the JWT session."""
+    try:
+        encoded, signature = str(token or "").split(".", 1)
+        expected = hmac.new(
+            settings.JWT_SECRET.encode("utf-8"),
+            encoded.encode("ascii"),
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(expected, signature):
+            return None
+        padding = "=" * (-len(encoded) % 4)
+        payload = json.loads(
+            base64.urlsafe_b64decode(encoded + padding).decode("utf-8")
+        )
+        expires = int(payload.get("expires") or 0)
+        now = int(time.time())
+        if expires < now or expires > now + _HANDOFF_TOKEN_TTL_SECONDS + 60:
+            return None
+        if not _SESSION_SCOPE_PATTERN.fullmatch(
+            str(payload.get("session_scope") or "")
+        ):
+            return None
+        if not str(payload.get("binding_id") or ""):
+            return None
+        if not str(payload.get("user_id") or ""):
+            return None
+        return payload
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def import_session_cookies(
+    session_scope: str,
+    cookies: dict[str, str],
+) -> dict[str, Any]:
+    """Send handoff cookies straight to the scoped sidecar, never the DB."""
+    normalized = {
+        str(name).strip(): str(value)
+        for name, value in cookies.items()
+        if str(name).strip() and str(value)
+    }
+    if not normalized:
+        raise DouyinLibraryError("本机连接器没有返回有效登录会话")
+    return _request(
+        "POST",
+        "/api/v1/cookies",
+        session_scope=session_scope,
+        json_body={"cookie": json.dumps(normalized, ensure_ascii=False)},
+        timeout=8.0,
+    )
 
 
 def _pick_path(paths: list[str], suffixes: tuple[str, ...]) -> str:

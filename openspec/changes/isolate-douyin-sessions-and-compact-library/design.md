@@ -121,3 +121,13 @@ The backend reconciles the binding record from the authoritative sidecar Cookie 
 Each session scope continues to own one login task. Duplicate starts return that task's current state. A process-wide FIFO-compatible `asyncio.Semaphore` limits active Playwright browser workers; tasks beyond the limit remain cancellable in an explicit `queued` browser mode. The default limit is two and is configurable independently of download-job concurrency.
 
 The semaphore guards only the expensive browser lifetime. QR images, Cookie files, cancellation events and status remain scoped. Releasing or cancelling one slot cannot mutate another session. This permits useful multi-user concurrency without allowing a burst of login attempts to exhaust server memory.
+
+### 14. Binding authority stays on the user's local desktop
+
+A remote production Playwright instance cannot open Chrome on the visitor's computer and its QR challenge is evaluated from the server's IP and location. The connector therefore exposes a stable `login_browser_mode` capability through health and the backend connection status. Only `visible_chrome` is allowed to start an interactive login directly. `remote_capture`, `headless` and unknown modes never start a remote browser task.
+
+This deliberately removes the misleading production QR fallback. A normal web page also cannot read or transfer `douyin.com` cookies because of origin and browser-cookie isolation, so production creates a ten-minute HMAC-signed handoff capability and opens the user's loopback connector in a separate window. The connector launches installed Chrome, observes authenticated Cookie evidence itself, and posts the session to the signed HTTPS callback. The backend validates binding id, user id, scope and expiry, then forwards the Cookie directly into that user's production sidecar scope. Cookie values are transient request data and are never stored in the Zhicui database. Android continues to reuse the resulting user-scoped server binding after completion.
+
+### 15. Service-worker failures always settle
+
+The service worker remains cache-first for immutable client assets and network-first for navigations and API requests. Every network branch now terminates in a cached response or a typed `503` response. This prevents rejected `fetch()` promises from surfacing as uncaught console errors while keeping offline behavior explicit. Localhost bootstrap continues to unregister stale workers and clear their named caches.

@@ -67,3 +67,10 @@
 - [x] 11.2 Reconcile binding status during login polling and add bounded Android foreground confirmation
 - [x] 11.3 Add per-scope single-flight plus a process-wide bounded login-browser queue
 - [x] 11.4 Add completion/concurrency coverage, regenerate the sidecar patch and deploy the verified repair
+
+## 12. Local-browser binding authority and offline recovery
+
+- [x] 12.1 Expose the connector login browser mode through health and backend connection status
+- [x] 12.2 Start login only for a same-device visible Chrome connector and replace remote QR capture with a signed loopback handoff
+- [x] 12.3 Make every service-worker fetch failure resolve with a typed offline response
+- [ ] 12.4 Add coverage, regenerate the sidecar patch, rebuild, restart local services and deploy the verified change

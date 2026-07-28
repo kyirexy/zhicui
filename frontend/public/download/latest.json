@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "platform": "android",
-  "version": "1.1.4",
-  "build": 6,
-  "published_at": "2026-07-28T06:25:42.059Z",
+  "version": "1.1.5",
+  "build": 7,
+  "published_at": "2026-07-28T07:06:50.348Z",
   "download_url": "https://luxai.cn/download/zhicui.apk",
-  "size_bytes": 5861594,
+  "size_bytes": 5864466,
   "mandatory": false,
   "release_notes": [
-    "修复手机抖音已确认登录，但知萃仍持续显示等待扫码的问题。",
-    "返回知萃 App 后会连续确认登录状态，成功后自动关闭引导并开放同步。",
-    "同一账号重复发起登录会复用现有任务，不再重复打开浏览器。",
-    "不同用户登录会话完全隔离，并采用有上限的并发排队保护服务器。"
+    "抖音绑定改为打开用户电脑上的本机 Chrome，避免服务器异地登录与会话不一致。",
+    "线上页面通过十分钟短时签名连接 127.0.0.1 本机连接器，扫码结果安全交回当前知萃账号。",
+    "远程服务器二维码已停用；本机连接器未启动时会给出明确提示和重试入口。",
+    "修复 Service Worker 网络失败产生未捕获 Failed to fetch 控制台错误的问题。"
   ]
 }

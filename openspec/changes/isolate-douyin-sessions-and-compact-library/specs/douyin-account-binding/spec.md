@@ -158,3 +158,26 @@ The system SHALL isolate concurrent logins by user scope, reuse a single in-flig
 #### Scenario: One user cancels
 - **WHEN** one scope cancels its queued or running login
 - **THEN** no login task, Cookie or QR state belonging to another scope is changed
+
+### Requirement: Local browser authority
+The system SHALL start a Douyin login only when the connector can expose an interactive Chrome window on the same device as the desktop user, and SHALL reject remote-server browser capture as a supported binding surface.
+
+#### Scenario: Local connector exposes installed Chrome
+- **WHEN** the scoped connector reports `visible_chrome`
+- **THEN** starting login opens the installed Chrome on that desktop and the page polls the same scoped task until authenticated session evidence is persisted
+
+#### Scenario: Production connector runs on another machine
+- **WHEN** the scoped connector reports `remote_capture` or `headless`
+- **THEN** the web client does not start a remote QR task and instead opens a short-lived signed handoff on the user's loopback connector so the installed Chrome performs the login from the user's device
+
+#### Scenario: Local Chrome completes a production-account handoff
+- **WHEN** the loopback connector observes authenticated session Cookie evidence
+- **THEN** it sends that session over HTTPS using the short-lived handoff capability, the backend forwards it directly to the user's scoped production sidecar session and no Cookie value is written to the Zhicui database
+
+#### Scenario: Local connector is not installed or running
+- **WHEN** the loopback handoff URL cannot be opened
+- **THEN** the production page keeps the binding panel available, explains how to start the connector and allows the user to retry without falling back to a remote QR
+
+#### Scenario: Connector capability is unknown
+- **WHEN** the connector cannot report its login browser mode
+- **THEN** the client does not claim that a local Chrome window opened and presents a retryable unavailable state

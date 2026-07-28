@@ -282,7 +282,12 @@ def _bounded_public_get(
             current_url = urljoin(current_url, location)
             continue
         try:
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except requests.RequestException as exc:
+                raise WebResearchError(
+                    f"外部资料返回 HTTP {response.status_code}"
+                ) from exc
             content_length = response.headers.get("Content-Length")
             if content_length and int(content_length) > _MAX_RESPONSE_BYTES:
                 raise WebResearchError("外部资料页面过大")

@@ -54,6 +54,34 @@ def verify_search_safety_and_provenance() -> None:
             f"不安全地址未被拦截：{url}",
         )
 
+    class RateLimitedResponse:
+        is_redirect = False
+        is_permanent_redirect = False
+        status_code = 429
+        headers: dict[str, str] = {}
+        url = "https://example.com/search"
+
+        def raise_for_status(self) -> None:
+            raise web_research.requests.HTTPError("rate limited")
+
+        def close(self) -> None:
+            return None
+
+    with (
+        patch.object(web_research, "is_public_http_url", return_value=True),
+        patch.object(
+            web_research.requests,
+            "get",
+            return_value=RateLimitedResponse(),
+        ),
+    ):
+        try:
+            web_research._bounded_public_get("https://example.com/search")
+        except web_research.WebResearchError:
+            pass
+        else:
+            raise AssertionError("搜索源 HTTP 限流没有被安全降级")
+
     searched_source = {
         "title": "ayghri/i-have-adhd",
         "url": "https://github.com/ayghri/i-have-adhd",

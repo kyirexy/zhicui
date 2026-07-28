@@ -66,4 +66,4 @@
 - [x] 11.1 Recognize current authenticated Douyin Cookie variants and expose only safe completion counters
 - [x] 11.2 Reconcile binding status during login polling and add bounded Android foreground confirmation
 - [x] 11.3 Add per-scope single-flight plus a process-wide bounded login-browser queue
-- [ ] 11.4 Add completion/concurrency coverage, regenerate the sidecar patch and deploy the verified repair
+- [x] 11.4 Add completion/concurrency coverage, regenerate the sidecar patch and deploy the verified repair

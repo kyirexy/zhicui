@@ -721,7 +721,16 @@ export default function VideoLibraryPage() {
       }
     }
 
-    if (!loginResponse?.success || !loginResponse.data?.running) return;
+    if (!loginResponse?.success || !loginResponse.data?.running) {
+      if (confirmCompletion) {
+        setNotice(
+          loginResponse?.data?.error
+            ? `抖音绑定未完成：${loginResponse.data.error}`
+            : '尚未检测到真实登录会话，请确认在抖音中点击了“确认登录”，然后重新扫码',
+        );
+      }
+      return;
+    }
 
     const pollId = loginPollRef.current + 1;
     loginPollRef.current = pollId;

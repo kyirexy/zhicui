@@ -283,7 +283,7 @@ index 3b0900b..309d46c 100644
 +# Detect and crop QR codes rendered inside Douyin's closed login component.
 +opencv-python-headless>=4.10,<5
 diff --git a/server/app.py b/server/app.py
-index 418f875..8d28732 100644
+index 418f875..27603fc 100644
 --- a/server/app.py
 +++ b/server/app.py
 @@ -1,19 +1,37 @@
@@ -330,7 +330,7 @@ index 418f875..8d28732 100644
 
  from auth import CookieManager
  from config import ConfigLoader
-@@ -21,14 +39,81 @@ from control import QueueManager, RateLimiter, RetryHandler
+@@ -21,14 +39,86 @@ from control import QueueManager, RateLimiter, RetryHandler
  from core import DouyinAPIClient, DownloaderFactory, URLParser
  from server.jobs import JobManager
  from storage import FileManager
@@ -353,9 +353,14 @@ index 418f875..8d28732 100644
 +SESSION_SCOPE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{32,64}$")
 +AUTHENTICATED_SESSION_COOKIE_NAMES = frozenset(
 +    {
++        "passport_auth_status",
++        "passport_auth_status_ss",
 +        "sessionid",
 +        "sessionid_ss",
 +        "sid_guard",
++        "sid_tt",
++        "uid_tt",
++        "uid_tt_ss",
 +    }
 +)
 +LOGIN_CHALLENGE_TITLES = (
@@ -412,7 +417,7 @@ index 418f875..8d28732 100644
 
 
  class JobResponse(BaseModel):
-@@ -37,57 +122,739 @@ class JobResponse(BaseModel):
+@@ -37,57 +127,747 @@ class JobResponse(BaseModel):
      url: str
 
 
@@ -439,7 +444,11 @@ index 418f875..8d28732 100644
 +
 +def _now_utc_iso() -> str:
 +    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-+
+
+-    REST 服务在进程生命周期内只需要一份 FileManager / RateLimiter / RetryHandler /
+-    QueueManager / CookieManager；每个请求重新构造既浪费又会触发文件系统 mkdir。
+-    DouyinAPIClient 由于持有 aiohttp.ClientSession，依旧按请求创建，避免跨请求泄漏
+-    连接状态或触发 "Session is closed" 错误。
 +
 +def _env_flag(name: str, default: bool = False) -> bool:
 +    raw = os.environ.get(name)
@@ -456,15 +465,31 @@ index 418f875..8d28732 100644
 +    )
 +
 +
-+def _cookie_state_is_valid(cookie_manager: CookieManager) -> bool:
-+    """Keep legacy manually supplied sets valid while accepting current sessions."""
++def _cookie_state_is_valid(
++    cookie_manager: CookieManager,
++    *,
++    allow_legacy: bool = False,
++) -> bool:
++    """Require authenticated evidence for scoped users.
++
++    The standalone reference console keeps its historical manual-Cookie
++    validation, but a Zhicui scope must never treat anonymous tracking/CSRF
++    Cookies as an authenticated account.
+     """
 +    cookies = cookie_manager.get_cookies()
-+    return (
-+        _has_authenticated_session(cookies)
-+        or cookie_manager.validate_cookies()
-+    )
-+
-+
++    if _has_authenticated_session(cookies):
++        return True
++    return allow_legacy and cookie_manager.validate_cookies()
+
+-    def __init__(self, config: ConfigLoader):
+-        self.config = config
+-        # Resolve the cookie file path relative to the config file's directory
+-        # so the sidecar can find it regardless of its working directory (which
+-        # on macOS is often '/' when launched by Electron).
+-        if config.config_path:
+-            from pathlib import Path
+
+-            cookie_file = str(Path(config.config_path).resolve().parent / ".cookies.json")
 +def _public_login_error(exc: Exception) -> str:
 +    """Keep user-facing login errors bounded while logs retain full details."""
 +    detail = str(exc).splitlines()[0].strip()
@@ -685,11 +710,7 @@ index 418f875..8d28732 100644
 +    except (TypeError, ValueError):
 +        return 50
 +    return max(1, min(parsed, MAX_SYNC_COUNT))
-
--    REST 服务在进程生命周期内只需要一份 FileManager / RateLimiter / RetryHandler /
--    QueueManager / CookieManager；每个请求重新构造既浪费又会触发文件系统 mkdir。
--    DouyinAPIClient 由于持有 aiohttp.ClientSession，依旧按请求创建，避免跨请求泄漏
--    连接状态或触发 "Session is closed" 错误。
++
 +
 +def _first_remote_url(value: Any) -> str:
 +    if isinstance(value, str):
@@ -852,23 +873,15 @@ index 418f875..8d28732 100644
 +    Header-less requests keep the reference project's standalone Web console
 +    working in the legacy ``default`` namespace. Zhicui always sends a random
 +    per-user scope.
-     """
++    """
 +    if value is None or not value.strip():
 +        return DEFAULT_SESSION_SCOPE
 +    scope = value.strip()
 +    if not SESSION_SCOPE_PATTERN.fullmatch(scope):
 +        raise HTTPException(status_code=400, detail="会话作用域无效")
 +    return scope
-
--    def __init__(self, config: ConfigLoader):
--        self.config = config
--        # Resolve the cookie file path relative to the config file's directory
--        # so the sidecar can find it regardless of its working directory (which
--        # on macOS is often '/' when launched by Electron).
--        if config.config_path:
--            from pathlib import Path
-
--            cookie_file = str(Path(config.config_path).resolve().parent / ".cookies.json")
++
++
 +class _SessionDeps:
 +    """All mutable Douyin state belonging to one opaque Zhicui scope."""
 +
@@ -951,7 +964,7 @@ index 418f875..8d28732 100644
 +    def clear_qr(self) -> None:
 +        self.fetch_qr_image = None
 +        self.fetch_qr_digest = ""
-+
+
 +    def update_qr(self, image: bytes) -> bool:
 +        if not image or len(image) > MAX_QR_IMAGE_BYTES:
 +            return False
@@ -963,9 +976,12 @@ index 418f875..8d28732 100644
 +        self.fetch_qr_version += 1
 +        return True
 
-
 -async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
 -    """简化版 download_url：只负责执行并返回成功/失败计数。
+
+-    有意不复用 cli.main.download_url —— 后者绑定了 progress_display 的 rich 状态。
+-    API client 仍按请求创建（aiohttp session 不跨请求复用）；其余重量级依赖从
+-    _ServerDeps 共享。
 +class _ServerDeps:
 +    """Process-wide resources plus lazily-created user session namespaces."""
 +
@@ -984,10 +1000,7 @@ index 418f875..8d28732 100644
 +        self.sessions_root.mkdir(parents=True, exist_ok=True)
 +        if os.name != "nt":
 +            os.chmod(self.sessions_root, 0o700)
-
--    有意不复用 cli.main.download_url —— 后者绑定了 progress_display 的 rich 状态。
--    API client 仍按请求创建（aiohttp session 不跨请求复用）；其余重量级依赖从
--    _ServerDeps 共享。
++
 +        server_config = config.get("server") or {}
 +        if not isinstance(server_config, dict):
 +            server_config = {}
@@ -1189,7 +1202,7 @@ index 418f875..8d28732 100644
          if is_short_url(url):
              resolved = await api_client.resolve_short_url(normalize_short_url(url))
              if not resolved:
-@@ -98,9 +865,15 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
+@@ -98,9 +878,15 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
          if not parsed:
              raise RuntimeError(f"Unsupported URL: {url}")
 
@@ -1206,7 +1219,7 @@ index 418f875..8d28732 100644
              api_client,
              deps.file_manager,
              deps.cookie_manager,
-@@ -114,6 +887,16 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
+@@ -114,6 +900,16 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
              raise RuntimeError(f"No downloader for url_type={parsed['type']}")
 
          result = await downloader.download(parsed)
@@ -1223,7 +1236,7 @@ index 418f875..8d28732 100644
          return {
              "total": result.total,
              "success": result.success,
-@@ -122,11 +905,308 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
+@@ -122,11 +918,309 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
          }
 
 
@@ -1453,8 +1466,9 @@ index 418f875..8d28732 100644
 +            )
 +
 +    cookies = sanitize_cookies(cookies)
-+    if cookies:
-+        deps.cookie_manager.set_cookies(cookies)
++    if not _has_authenticated_session(cookies):
++        return {}
++    deps.cookie_manager.set_cookies(cookies)
 +    return cookies
 +
 +
@@ -1534,7 +1548,7 @@ index 418f875..8d28732 100644
 
      server_cfg = config.get("server") or {}
      if not isinstance(server_cfg, dict):
-@@ -148,34 +1228,531 @@ def build_app(config: ConfigLoader) -> FastAPI:
+@@ -148,34 +1242,544 @@ def build_app(config: ConfigLoader) -> FastAPI:
      app = FastAPI(
          title="Douyin Downloader API",
          version="1.0",
@@ -1584,7 +1598,10 @@ index 418f875..8d28732 100644
 +        return {
 +            "cookie_names": sorted(cookies),
 +            "count": len(cookies),
-+            "valid": _cookie_state_is_valid(scoped.cookie_manager),
++            "valid": _cookie_state_is_valid(
++                scoped.cookie_manager,
++                allow_legacy=scope == DEFAULT_SESSION_SCOPE,
++            ),
 +        }
 +
 +    @app.post("/api/v1/cookies")
@@ -1601,7 +1618,10 @@ index 418f875..8d28732 100644
 +        return {
 +            "cookie_names": sorted(cookies),
 +            "count": len(cookies),
-+            "valid": _cookie_state_is_valid(scoped.cookie_manager),
++            "valid": _cookie_state_is_valid(
++                scoped.cookie_manager,
++                allow_legacy=scope == DEFAULT_SESSION_SCOPE,
++            ),
 +        }
 +
 +    @app.delete("/api/v1/cookies")
@@ -1667,6 +1687,13 @@ index 418f875..8d28732 100644
 +                "qr_ready": False,
 +                "qr_version": scoped.fetch_qr_version,
 +            }
++        existing_cookies = scoped.cookie_manager.get_cookies()
++        if (
++            scope != DEFAULT_SESSION_SCOPE
++            and existing_cookies
++            and not _has_authenticated_session(existing_cookies)
++        ):
++            scoped.cookie_manager.clear_cookies()
 +        scoped.clear_qr()
 +        scoped.fetch_status.update(
 +            running=True,
@@ -2205,7 +2232,7 @@ index aaf0b58..16194ce 100644
      return _RecordingAPIClient.seen_proxies
 
 diff --git a/tests/test_server.py b/tests/test_server.py
-index ac06496..d6db6b2 100644
+index ac06496..3035e2e 100644
 --- a/tests/test_server.py
 +++ b/tests/test_server.py
 @@ -4,6 +4,8 @@
@@ -2438,7 +2465,7 @@ index ac06496..d6db6b2 100644
  def test_get_unknown_job_returns_404(tmp_path):
      config = ConfigLoader(None)
      config.update(path=str(tmp_path))
-@@ -118,17 +315,583 @@ def test_build_app_shares_deps_across_requests(tmp_path):
+@@ -118,17 +315,606 @@ def test_build_app_shares_deps_across_requests(tmp_path):
      config.update(path=str(tmp_path))
      app = build_app(config)
 
@@ -2522,6 +2549,28 @@ index ac06496..d6db6b2 100644
 +    assert response.json()["valid"] is False
 +
 +
++def test_scoped_user_rejects_legacy_anonymous_cookie_triple(tmp_path):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path))
++    app = build_app(config)
++    scope = "strict-cookie-scope-12345678901234"
++    app.state.deps.session(scope).cookie_manager.cookies = {
++        "passport_csrf_token": "anonymous-value",
++        "ttwid": "anonymous-value",
++        "odin_tt": "anonymous-value",
++    }
++
++    with TestClient(app) as client:
++        response = client.get(
++            "/api/v1/cookies",
++            headers={"X-Zhicui-Scope": scope},
++        )
++
++    assert response.status_code == 200
++    assert response.json()["count"] == 3
++    assert response.json()["valid"] is False
++
++
 +def test_cookie_session_can_be_cleared_repeatedly(tmp_path):
 +    config = ConfigLoader(None)
 +    config.update(path=str(tmp_path))
@@ -2587,6 +2636,7 @@ index ac06496..d6db6b2 100644
 +        "ttwid": "private-a",
 +        "odin_tt": "private-a",
 +        "passport_csrf_token": "private-a",
++        "sessionid": "private-a",
 +    }
 +    session_a = app.state.deps.session(scope_a)
 +    session_b = app.state.deps.session(scope_b)

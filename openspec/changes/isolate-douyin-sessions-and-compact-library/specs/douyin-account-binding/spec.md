@@ -130,7 +130,7 @@ The system SHALL recognize current authenticated Douyin session Cookie variants,
 
 #### Scenario: Anonymous browser Cookies exist before confirmation
 - **WHEN** the login page has only anonymous tracking or CSRF Cookies and no authenticated session Cookie
-- **THEN** the sidecar keeps waiting and MUST NOT report the user as bound
+- **THEN** the sidecar keeps waiting and MUST NOT persist that set or report the user as bound
 
 #### Scenario: Android App returns after desktop confirmation
 - **WHEN** the same Zhicui account returns to the foreground while its desktop QR task is completing

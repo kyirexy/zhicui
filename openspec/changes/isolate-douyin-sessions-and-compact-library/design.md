@@ -112,7 +112,7 @@ The isolated frontend build remains atomic, but the deploy switch copies hashed 
 
 ### 12. Login completion follows authenticated session evidence
 
-The sidecar no longer treats one historical pair of Cookie names as the definition of QR success. It distinguishes authenticated session Cookies (`sessionid`, `sessionid_ss`, `sid_guard`) from anonymous page Cookies and completes when at least one authenticated session marker is present. The complete sanitized Cookie set remains in the per-scope sidecar file; public status exposes only counts and booleans. The existing legacy Cookie-validity rule remains a compatibility fallback for manually supplied Cookie sets.
+The sidecar no longer treats one historical pair of Cookie names as the definition of QR success. It distinguishes authenticated session Cookies (`sessionid`, `sessionid_ss`, `sid_guard`, `sid_tt`, `uid_tt` and current passport-auth variants) from anonymous page Cookies and completes when at least one authenticated session marker is present. The complete sanitized Cookie set remains in the per-scope sidecar file; public status exposes only counts and booleans. The existing legacy Cookie-validity rule remains available only to the reference project's standalone default scope. Zhicui user scopes reject and clear legacy anonymous Cookie triples so a timed-out QR page cannot become a false binding.
 
 The backend reconciles the binding record from the authoritative sidecar Cookie status whenever login status is read, not only when the separate library-status endpoint happens to be called. Android foreground recovery uses short bounded backoff checks because the Douyin App may report confirmation a few seconds before the browser finishes writing the session.
 

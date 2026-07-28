@@ -3,9 +3,9 @@
   "platform": "android",
   "version": "1.1.4",
   "build": 6,
-  "published_at": "2026-07-28T06:11:26.590Z",
+  "published_at": "2026-07-28T06:25:42.059Z",
   "download_url": "https://luxai.cn/download/zhicui.apk",
-  "size_bytes": 5860379,
+  "size_bytes": 5861594,
   "mandatory": false,
   "release_notes": [
     "修复手机抖音已确认登录，但知萃仍持续显示等待扫码的问题。",

@@ -362,6 +362,22 @@ def _search_github(query: str, remaining: int) -> list[WebSource]:
         flags=re.IGNORECASE,
     )
     github_query = re.sub(r"\s+", " ", github_query).strip()
+    github_terms = github_query.split()
+    focused_terms = [
+        term
+        for term in github_terms
+        if term.lower() not in {
+            "ai",
+            "agent",
+            "agents",
+            "project",
+            "projects",
+            "tool",
+            "tools",
+        }
+    ]
+    if len(focused_terms) >= 2:
+        github_query = " ".join(focused_terms)
     if not github_query:
         return []
     try:

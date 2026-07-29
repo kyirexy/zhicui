@@ -8,12 +8,20 @@ interface InputBarProps {
   onSubmit: (url: string) => void;
   isLoading?: boolean;
   error?: string | null;
+  showPlatformHint?: boolean;
   /** External URL to fill into the input (e.g. from sample links). Cleared after fill. */
   fillUrl?: string | null;
   onFillComplete?: () => void;
 }
 
-export default function InputBar({ onSubmit, isLoading = false, error, fillUrl, onFillComplete }: InputBarProps) {
+export default function InputBar({
+  onSubmit,
+  isLoading = false,
+  error,
+  showPlatformHint = true,
+  fillUrl,
+  onFillComplete,
+}: InputBarProps) {
   const [url, setUrl] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
@@ -180,10 +188,11 @@ export default function InputBar({ onSubmit, isLoading = false, error, fillUrl, 
         </div>
       )}
 
-      {/* Supported platforms hint */}
-      <p className="mt-4 md:mt-5 text-center text-foreground-muted text-xs tracking-wide">
-        支持 YouTube、Bilibili、抖音、小红书等主流视频平台
-      </p>
+      {showPlatformHint && (
+        <p className="mt-4 text-center text-xs tracking-wide text-foreground-muted md:mt-5">
+          支持多种常见视频链接
+        </p>
+      )}
     </div>
   );
 }

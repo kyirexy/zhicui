@@ -25,8 +25,8 @@ export const viewport: Viewport = {
 
 export const metadata: Metadata = {
   title: '知萃 · 视频知识萃取工具',
-  description: 'AI 驱动的视频知识萃取工具。粘贴视频链接，自动生成结构化知识卡片、任务计划和行动清单。',
-  keywords: ['知萃', '视频知识萃取', 'AI知识卡片', '视频笔记', '哔哩哔哩', 'YouTube', 'KnowBrew'],
+  description: '把抖音收藏、喜欢和个人作品整理成可提问的视频知识库，自动生成完整文案、知识卡片与行动计划。',
+  keywords: ['知萃', '抖音收藏整理', '批量视频文案', 'AI视频问答', '知识卡片', '行动计划'],
   manifest: '/manifest.json',
 };
 

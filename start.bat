@@ -1,6 +1,6 @@
 @echo off
 REM VideoCapsule 本地启动脚本 (Windows)
-REM 同时启动后端 (FastAPI) 和前端 (Next.js)
+REM 同时启动抖音连接服务、后端 (FastAPI) 和前端 (Next.js)
 
 echo.
 echo  ========================================
@@ -31,15 +31,22 @@ if errorlevel 1 (
     echo        Install: winget install Gyan.FFmpeg
 )
 
-echo [1/3] Installing backend dependencies...
+echo [1/4] Checking local Douyin service...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-douyin-sidecar.ps1"
+if errorlevel 1 (
+    echo [WARN] Local Douyin service could not be started.
+    echo        Single-link extraction can still be used.
+)
+
+echo [2/4] Installing backend dependencies...
 cd /d "%~dp0backend"
 pip install -r requirements.txt -q
 
-echo [2/3] Installing frontend dependencies...
+echo [3/4] Installing frontend dependencies...
 cd /d "%~dp0frontend"
 call npm install --silent
 
-echo [3/3] Starting services...
+echo [4/4] Starting services...
 echo.
 echo  Backend:  http://localhost:8000
 echo  Frontend: http://localhost:3000
@@ -63,4 +70,5 @@ pause >nul
 REM Cleanup
 taskkill /FI "WindowTitle eq VideoCapsule Backend*" /F >nul 2>&1
 taskkill /FI "WindowTitle eq VideoCapsule Frontend*" /F >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-douyin-sidecar.ps1" -Stop >nul 2>&1
 echo Services stopped.

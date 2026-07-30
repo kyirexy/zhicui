@@ -126,27 +126,6 @@ def connection_status(session_scope: str) -> dict[str, Any]:
     base_url = _base_url()
     try:
         health = _request("GET", "/api/v1/health", timeout=3.0)
-        cookie_state = _request(
-            "GET",
-            "/api/v1/cookies",
-            session_scope=session_scope,
-            timeout=3.0,
-        )
-        return {
-            "connected": health.get("status") == "ok",
-            "base_url": base_url,
-            "cookie_valid": bool(cookie_state.get("valid")),
-            "cookie_count": int(cookie_state.get("count") or 0),
-            "storage_mode": str(health.get("storage_mode") or "unknown"),
-            "login_browser_mode": str(
-                health.get("login_browser_mode") or "unavailable"
-            ),
-            "max_sync_count": min(
-                int(health.get("max_sync_count") or _MAX_SYNC_COUNT),
-                _MAX_SYNC_COUNT,
-            ),
-            "error": None,
-        }
     except DouyinLibraryError as exc:
         return {
             "connected": False,
@@ -158,6 +137,42 @@ def connection_status(session_scope: str) -> dict[str, Any]:
             "max_sync_count": _MAX_SYNC_COUNT,
             "error": str(exc),
         }
+
+    connected = health.get("status") == "ok"
+    cookie_valid = False
+    cookie_count = 0
+    cookie_error: str | None = None
+    if connected:
+        try:
+            cookie_state = _request(
+                "GET",
+                "/api/v1/cookies",
+                session_scope=session_scope,
+                timeout=3.0,
+            )
+            cookie_valid = bool(cookie_state.get("valid"))
+            cookie_count = int(cookie_state.get("count") or 0)
+        except DouyinLibraryError as exc:
+            # 连接器健康与某个账号的会话读取是两件事。会话目录刚创建、
+            # 正在换绑或短暂被占用时，仍应允许用户继续扫码，而不是把整套
+            # 抖音视频库误报为离线。
+            cookie_error = str(exc)
+
+    return {
+        "connected": connected,
+        "base_url": base_url,
+        "cookie_valid": cookie_valid,
+        "cookie_count": cookie_count,
+        "storage_mode": str(health.get("storage_mode") or "unknown"),
+        "login_browser_mode": str(
+            health.get("login_browser_mode") or "unavailable"
+        ),
+        "max_sync_count": min(
+            int(health.get("max_sync_count") or _MAX_SYNC_COUNT),
+            _MAX_SYNC_COUNT,
+        ),
+        "error": cookie_error,
+    }
 
 
 def _local_media_url(path: str) -> str:

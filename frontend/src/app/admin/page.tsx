@@ -124,6 +124,7 @@ export default function AdminPage() {
 
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState('');
+  const [exportingKind, setExportingKind] = useState<'users' | 'notes' | 'plans' | null>(null);
 
   useEffect(() => {
     if (loading) return;
@@ -209,32 +210,59 @@ export default function AdminPage() {
     setErr(r.error || '更新失败'); return false;
   };
 
-  // 导出 CSV：拉全量后转 Blob 下载
+  async function fetchAllPages<T>(
+    fetchPage: (page: number, perPage: number) => Promise<ApiResponse<{ items: T[]; total: number }>>,
+  ): Promise<T[]> {
+    const perPage = 100;
+    const allItems: T[] = [];
+    let page = 1;
+
+    while (true) {
+      const result = await fetchPage(page, perPage);
+      if (!result.success || !result.data) {
+        throw new Error(result.error || '导出失败');
+      }
+
+      allItems.push(...result.data.items);
+      if (allItems.length >= result.data.total || result.data.items.length === 0) {
+        return allItems;
+      }
+      page += 1;
+    }
+  }
+
+  // 导出 CSV：按后端允许的分页大小拉取全量数据，再转 Blob 下载
   async function exportCsv(kind: 'users' | 'notes' | 'plans') {
+    if (exportingKind) return;
+    setExportingKind(kind);
+    setErr('');
     try {
       let rows: string[][] = [];
       let filename = '';
       if (kind === 'users') {
-        const r = await listAdminUsers(1, 10000, userQ || undefined);
-        if (!r.success || !r.data) { setErr(r.error || '导出失败'); return; }
+        const items = await fetchAllPages<AdminUser>((page, perPage) => (
+          listAdminUsers(page, perPage, userQ || undefined)
+        ));
         filename = `users-${new Date().toISOString().slice(0, 10)}.csv`;
-        rows = [['用户名', '邮箱', '角色', '状态', '注册时间'], ...r.data.items.map(u => [
+        rows = [['用户名', '邮箱', '角色', '状态', '注册时间'], ...items.map(u => [
           u.username || '', u.email, u.is_admin ? '管理员' : '用户', u.is_active ? '正常' : '禁用',
           u.created_at ? new Date(u.created_at).toLocaleString('zh-CN') : '',
         ])];
       } else if (kind === 'notes') {
-        const r = await listAdminNotes(1, 10000, noteSearch || undefined, noteCardType || undefined);
-        if (!r.success || !r.data) { setErr(r.error || '导出失败'); return; }
+        const items = await fetchAllPages<AdminNoteItem>((page, perPage) => (
+          listAdminNotes(page, perPage, noteSearch || undefined, noteCardType || undefined)
+        ));
         filename = `notes-${new Date().toISOString().slice(0, 10)}.csv`;
-        rows = [['标题', '类型', '作者', '有转录', '创建时间'], ...r.data.items.map(n => [
+        rows = [['标题', '类型', '作者', '有转录', '创建时间'], ...items.map(n => [
           n.video_title, CARD_TYPE_LABELS[n.card_type] || n.card_type, n.author,
           n.has_transcript ? '是' : '否', n.created_at ? new Date(n.created_at).toLocaleString('zh-CN') : '',
         ])];
       } else {
-        const r = await listAdminPlans(1, 10000, planQ || undefined);
-        if (!r.success || !r.data) { setErr(r.error || '导出失败'); return; }
+        const items = await fetchAllPages<AdminPlanItem>((page, perPage) => (
+          listAdminPlans(page, perPage, planQ || undefined)
+        ));
         filename = `plans-${new Date().toISOString().slice(0, 10)}.csv`;
-        rows = [['标题', '作者', '状态', '天数', '创建时间'], ...r.data.items.map(p => [
+        rows = [['标题', '作者', '状态', '天数', '创建时间'], ...items.map(p => [
           p.title || '', p.author || '', p.status === 'done' ? '已完成' : '进行中',
           String(p.total_days || 0), p.created_at ? new Date(p.created_at).toLocaleString('zh-CN') : '',
         ])];
@@ -248,6 +276,8 @@ export default function AdminPage() {
       flash(`已导出 ${rows.length - 1} 条`);
     } catch (e) {
       setErr(e instanceof Error ? e.message : '导出失败');
+    } finally {
+      setExportingKind(null);
     }
   }
 
@@ -610,9 +640,9 @@ export default function AdminPage() {
               <h1 className="text-2xl font-bold text-foreground">数据导出</h1>
               <p className="text-xs text-foreground-muted">导出当前筛选条件下的全量数据为 CSV（含 BOM，Excel 直接可读）。</p>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <ExportCard title="用户列表" desc="用户名、邮箱、角色、状态、注册时间" icon="👥" onClick={() => exportCsv('users')} />
-                <ExportCard title="笔记列表" desc="标题、类型、作者、转录标记、创建时间" icon="📝" onClick={() => exportCsv('notes')} />
-                <ExportCard title="计划列表" desc="标题、作者、状态、天数、创建时间" icon="📋" onClick={() => exportCsv('plans')} />
+                <ExportCard title="用户列表" desc="用户名、邮箱、角色、状态、注册时间" icon="👥" onClick={() => exportCsv('users')} loading={exportingKind === 'users'} disabled={exportingKind !== null} />
+                <ExportCard title="笔记列表" desc="标题、类型、作者、转录标记、创建时间" icon="📝" onClick={() => exportCsv('notes')} loading={exportingKind === 'notes'} disabled={exportingKind !== null} />
+                <ExportCard title="计划列表" desc="标题、作者、状态、天数、创建时间" icon="📋" onClick={() => exportCsv('plans')} loading={exportingKind === 'plans'} disabled={exportingKind !== null} />
               </div>
             </div>
           )}
@@ -947,13 +977,33 @@ function StatCard({ label, value, icon, color = 'var(--accent-emerald)' }: { lab
   );
 }
 
-function ExportCard({ title, desc, icon, onClick }: { title: string; desc: string; icon: string; onClick: () => void }) {
+function ExportCard({
+  title,
+  desc,
+  icon,
+  onClick,
+  loading,
+  disabled,
+}: {
+  title: string;
+  desc: string;
+  icon: string;
+  onClick: () => void;
+  loading?: boolean;
+  disabled?: boolean;
+}) {
   return (
-    <button onClick={onClick} className="admin-panel p-5 text-left hover:-translate-y-0.5 transition-transform">
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="admin-panel p-5 text-left hover:-translate-y-0.5 transition-transform disabled:cursor-wait disabled:opacity-60 disabled:hover:translate-y-0"
+    >
       <div className="text-2xl mb-2">{icon}</div>
       <div className="text-base font-bold text-foreground mb-1">{title}</div>
       <div className="text-xs text-foreground-muted">{desc}</div>
-      <div className="mt-3 text-xs text-accent-emerald font-semibold">下载 CSV →</div>
+      <div className="mt-3 text-xs text-accent-emerald font-semibold">
+        {loading ? '正在整理数据…' : '下载 CSV →'}
+      </div>
     </button>
   );
 }

@@ -19,7 +19,7 @@ import {
   Sparkles,
   WandSparkles,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import ContentChat from '@/components/ContentChat';
 import TranscriptViewer from '@/components/TranscriptViewer';
 import {
@@ -56,6 +56,91 @@ const REVISE_PROMPTS = [
   { label: '改成 7 天', value: '保留已完成任务，把剩余内容重新安排到接下来 7 天。' },
   { label: '拆得更细', value: '把剩余任务拆得更具体，并标出最优先的三件事。' },
 ];
+
+function OnDemandVideoPlayer({
+  mediaUrl,
+  coverUrl,
+  title,
+  sourceUrl,
+}: {
+  mediaUrl: string;
+  coverUrl: string;
+  title: string;
+  sourceUrl: string;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [requested, setRequested] = useState(false);
+  const [started, setStarted] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  const startPlayback = () => {
+    if (requested) return;
+    setRequested(true);
+    setFailed(false);
+    const playback = videoRef.current?.play();
+    if (playback) {
+      void playback.catch(() => {
+        // 网络错误交给 video 的 onError 统一展示；浏览器策略拒绝时仍可用原生控件重试。
+      });
+    }
+  };
+
+  return (
+    <div className="video-knowledge-player">
+      <video
+        ref={videoRef}
+        src={mediaUrl}
+        poster={coverUrl || undefined}
+        controls={started}
+        playsInline
+        preload="none"
+        onPlaying={() => {
+          setStarted(true);
+          setFailed(false);
+        }}
+        onError={() => setFailed(true)}
+        aria-label={`播放视频：${title}`}
+      />
+
+      {!started && !failed && (
+        <button
+          type="button"
+          className={`video-knowledge-play-cover ${requested ? 'is-requested' : ''}`}
+          onClick={startPlayback}
+          disabled={requested}
+          aria-label={requested ? '正在准备视频播放' : `播放视频：${title}`}
+        >
+          {coverUrl ? <img src={coverUrl} alt="" aria-hidden="true" /> : null}
+          <span className="video-knowledge-play-shade" aria-hidden="true" />
+          <span className="video-knowledge-play-action">
+            {!requested && (
+              <span className="video-knowledge-play-icon" aria-hidden="true">
+                <Play size={28} fill="currentColor" />
+              </span>
+            )}
+            <strong>{requested ? '正在准备视频…' : '播放视频'}</strong>
+            <small>按需读取，不保存视频文件</small>
+          </span>
+        </button>
+      )}
+
+      {failed && (
+        <div className="video-knowledge-play-failure" role="alert">
+          {coverUrl ? <img src={coverUrl} alt="" aria-hidden="true" /> : null}
+          <span>
+            <CircleAlert size={20} />
+            <strong>视频暂时无法读取</strong>
+            <small>视频文件不会保存在知萃，可前往抖音继续观看。</small>
+            <a href={sourceUrl} target="_blank" rel="noreferrer">
+              打开原视频
+              <ArrowUpRight size={14} />
+            </a>
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function formatDate(value: string): string {
   if (!value) return '已同步';
@@ -225,13 +310,12 @@ export default function VideoKnowledgeWorkspace() {
         <div className="video-knowledge-media">
           <div className="video-knowledge-stage">
             {item.media_url ? (
-              <video
+              <OnDemandVideoPlayer
                 key={item.media_url}
-                src={item.media_url}
-                poster={item.cover_url || undefined}
-                controls
-                playsInline
-                preload="metadata"
+                mediaUrl={item.media_url}
+                coverUrl={item.cover_url}
+                title={item.title}
+                sourceUrl={item.source_url}
               />
             ) : item.cover_url ? (
               <div className="video-knowledge-no-media">

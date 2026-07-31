@@ -6,7 +6,7 @@ import { useSearchParams } from 'next/navigation';
 import { ArrowLeft, Calendar, CheckSquare, Target, CalendarDays, Trash2, Check, Loader2, Sun, Pencil, RotateCcw } from 'lucide-react';
 import { ListChecks } from '@phosphor-icons/react';
 import { listPlans, getPlan, getPlanOverview, deletePlan, togglePlanTask, updatePlan } from '@/lib/api';
-import type { PlanData, PlanDay, PlanField, PlanOverview } from '@/lib/types';
+import type { PlanData, PlanDay, PlanField, PlanFocusTask, PlanOverview } from '@/lib/types';
 import {
   formatPlanDuration,
   formatPlanFieldValue,
@@ -14,6 +14,7 @@ import {
   getOverdueTasks,
   getPlanCurrentDay,
   getPlanProgress,
+  getPlanTasks,
   getTodayTasks,
   getTodayDayTasks,
   getTodayDay,
@@ -23,6 +24,8 @@ import PlanExecutionOverview from '@/components/PlanExecutionOverview';
 import PlanTaskList from '@/components/PlanTaskList';
 import PlanDynamicField from '@/components/PlanDynamicField';
 import PlanDeleteDialog from '@/components/PlanDeleteDialog';
+
+type PlanWorkspaceView = 'today' | 'goals' | 'review';
 
 function PlansContent() {
   const searchParams = useSearchParams();
@@ -59,14 +62,18 @@ function PlanList() {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [totalPlans, setTotalPlans] = useState(0);
   const [overview, setOverview] = useState<PlanOverview | null>(null);
-  const [filter, setFilter] = useState<'all' | 'today' | 'overdue' | 'done'>('all');
+  const [view, setView] = useState<PlanWorkspaceView>('today');
+  const [focusMutating, setFocusMutating] = useState<Set<string>>(new Set());
+  const [workspaceError, setWorkspaceError] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<PlanData | null>(null);
   const [deletePending, setDeletePending] = useState(false);
   const [deleteError, setDeleteError] = useState('');
 
   const load = useCallback(async (p: number) => {
     setLoading(true);
+    setWorkspaceError('');
     const [plansResponse, overviewResponse] = await Promise.all([
       listPlans(p),
       getPlanOverview(),
@@ -75,14 +82,43 @@ function PlanList() {
       setPlans(plansResponse.data.items);
       setTotalPages(plansResponse.data.total_pages);
       setPage(plansResponse.data.page);
+      setTotalPlans(plansResponse.data.total);
+    } else {
+      setWorkspaceError(plansResponse.error || '计划暂时无法读取，请稍后重试。');
     }
     if (overviewResponse.success && overviewResponse.data) {
       setOverview(overviewResponse.data);
+    } else if (!plansResponse.error) {
+      setWorkspaceError(overviewResponse.error || '今日计划暂时无法读取，请稍后重试。');
     }
     setLoading(false);
   }, []);
 
   useEffect(() => { void load(1); }, [load]);
+
+  const handleFocusToggle = async (task: PlanFocusTask) => {
+    const mutationKey = `${task.plan_id}:${task.task_id}`;
+    if (focusMutating.has(mutationKey)) return;
+    setFocusMutating(current => new Set(current).add(mutationKey));
+    setWorkspaceError('');
+    const response = await togglePlanTask(task.plan_id, task.task_id);
+    if (response.success && response.data) {
+      setPlans(current => current.map(plan => (
+        plan.id === response.data!.id ? response.data! : plan
+      )));
+      const overviewResponse = await getPlanOverview();
+      if (overviewResponse.success && overviewResponse.data) {
+        setOverview(overviewResponse.data);
+      }
+    } else {
+      setWorkspaceError(response.error || '任务状态更新失败，请重试。');
+    }
+    setFocusMutating(current => {
+      const next = new Set(current);
+      next.delete(mutationKey);
+      return next;
+    });
+  };
 
   const confirmDelete = async () => {
     if (!deleteTarget || deletePending) return;
@@ -91,6 +127,7 @@ function PlanList() {
     const response = await deletePlan(deleteTarget.id);
     if (response.success) {
       setPlans(current => current.filter(plan => plan.id !== deleteTarget.id));
+      setTotalPlans(current => Math.max(0, current - 1));
       setDeleteTarget(null);
       const overviewResponse = await getPlanOverview();
       if (overviewResponse.success && overviewResponse.data) {
@@ -104,7 +141,7 @@ function PlanList() {
 
   if (loading) {
     return (
-      <div className="max-w-4xl mx-auto space-y-4">
+      <div className="desktop-core-page desktop-plans-page max-w-4xl mx-auto space-y-4">
         {[1, 2, 3].map((i) => (
           <div key={i} className="skeleton h-28 rounded-xl" />
         ))}
@@ -112,75 +149,104 @@ function PlanList() {
     );
   }
 
-  const todayCount = plans.filter(plan => getTodayTasks(plan).length > 0).length;
-  const overdueCount = plans.filter(plan => getOverdueTasks(plan).length > 0).length;
-  const doneCount = plans.filter(plan => plan.status === 'done').length;
-  const visiblePlans = plans.filter(plan => {
-    if (filter === 'today') return getTodayTasks(plan).length > 0;
-    if (filter === 'overdue') return getOverdueTasks(plan).length > 0;
-    if (filter === 'done') return plan.status === 'done';
-    return true;
-  });
+  const completedGoals = overview
+    ? Math.max(0, totalPlans - overview.summary.active_plans)
+    : plans.filter(plan => plan.status === 'done').length;
 
   return (
-    <div className="max-w-4xl mx-auto">
-      <div className="mb-6 md:mb-8">
-        <h1 className="flex items-center gap-2.5 text-xl md:text-3xl font-bold text-foreground tracking-tight">
-          <ListChecks size={30} weight="duotone" className="text-accent-emerald" />
-          计划工作台
-        </h1>
-        <p className="text-foreground-muted text-sm mt-1">
-          把视频里的方法整理成每天真正能推进的行动
+    <div className="plan-workspace-shell desktop-core-page desktop-plans-page mx-auto max-w-5xl pb-24">
+      <header className="plan-workspace-header mb-5 md:mb-7">
+        <div className="flex items-start gap-3">
+          <span className="mt-0.5 inline-flex h-10 w-10 flex-none items-center justify-center rounded-xl border border-card-border bg-card-bg text-foreground-secondary">
+            <ListChecks size={22} weight="duotone" />
+          </span>
+          <div>
+            <h1 className="text-2xl font-bold text-foreground md:text-3xl">
+              计划工作台
+            </h1>
+            <p className="mt-1 text-sm leading-relaxed text-foreground-muted">
+              少看一堆任务，先完成真正推进目标的下一步。
+            </p>
+          </div>
+        </div>
+      </header>
+
+      <nav
+        className="plan-workspace-tabs mb-6 grid grid-cols-3 rounded-2xl border border-card-border bg-card-bg p-1"
+        role="tablist"
+        aria-label="计划工作台视图"
+      >
+        <WorkspaceTab
+          active={view === 'today'}
+          onClick={() => setView('today')}
+          label="今日"
+          count={overview?.summary.due_today ?? 0}
+        />
+        <WorkspaceTab
+          active={view === 'goals'}
+          onClick={() => setView('goals')}
+          label="目标"
+          count={totalPlans}
+        />
+        <WorkspaceTab
+          active={view === 'review'}
+          onClick={() => setView('review')}
+          label="进度回顾"
+          count={completedGoals}
+        />
+      </nav>
+
+      {workspaceError && (
+        <p className="plan-workspace-error plan-inline-error mb-4" role="alert">
+          {workspaceError}
         </p>
-      </div>
-
-      {overview && <PlanExecutionOverview overview={overview} />}
-
-      {/* Filter tabs */}
-      {plans.length > 0 && (
-        <div className="flex items-center gap-2 mb-5 overflow-x-auto pb-1">
-          <FilterTab active={filter === 'all'} onClick={() => setFilter('all')} label="全部" count={plans.length} />
-          <FilterTab active={filter === 'today'} onClick={() => setFilter('today')} label="今天" count={todayCount} highlight />
-          <FilterTab active={filter === 'overdue'} onClick={() => setFilter('overdue')} label="逾期" count={overdueCount} highlight />
-          <FilterTab active={filter === 'done'} onClick={() => setFilter('done')} label="完成" count={doneCount} />
-        </div>
       )}
 
-      {plans.length === 0 ? (
-        <div className="min-h-[40vh] flex flex-col items-center justify-center text-center px-4">
-          <p className="text-4xl mb-4">📋</p>
-          <p className="text-foreground-secondary mb-2 text-sm">暂无计划</p>
-          <p className="text-foreground-muted text-xs mb-4">
-            提取计划类视频后，系统会自动生成计划
-          </p>
-          <Link href="/" className="text-accent-emerald hover:underline text-sm">
-            ← 返回首页提取视频
-          </Link>
-        </div>
-      ) : visiblePlans.length === 0 ? (
-        <div className="min-h-[30vh] flex flex-col items-center justify-center text-center px-4">
-          <CheckSquare size={32} className="text-accent-emerald mb-3" />
-          <p className="text-foreground-secondary text-sm">
-            {filter === 'today' ? '今天没有到期任务' : filter === 'overdue' ? '没有逾期任务' : '暂无已完成计划'}
-          </p>
-          <button onClick={() => setFilter('all')} className="text-accent-emerald hover:underline text-sm mt-3">查看全部计划</button>
-        </div>
+      {totalPlans === 0 ? (
+        <PlanWorkspaceEmpty />
+      ) : view === 'today' ? (
+        overview ? (
+          <PlanExecutionOverview
+            overview={overview}
+            onToggle={task => void handleFocusToggle(task)}
+            mutatingIds={focusMutating}
+          />
+        ) : (
+          <div className="plan-workspace-empty min-h-48 rounded-2xl border border-dashed border-card-border bg-card-bg" />
+        )
+      ) : view === 'goals' ? (
+        <section className="plan-workspace-goals" aria-labelledby="plan-workspace-goals-title">
+          <div className="mb-4 flex items-end justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold text-foreground-muted">目标</p>
+              <h2 id="plan-workspace-goals-title" className="mt-1 text-xl font-bold text-foreground md:text-2xl">
+                你的目标与计划
+              </h2>
+            </div>
+            <span className="text-sm text-foreground-muted">{totalPlans} 个目标</span>
+          </div>
+          <div className="plan-workspace-goal-list grid gap-2.5">
+            {plans.map((plan) => (
+              <PlanCard
+                key={plan.id}
+                plan={plan}
+                onDelete={(target) => {
+                  setDeleteError('');
+                  setDeleteTarget(target);
+                }}
+              />
+            ))}
+          </div>
+        </section>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
-          {visiblePlans.map((plan) => (
-            <PlanCard
-              key={plan.id}
-              plan={plan}
-              onDelete={(target) => {
-                setDeleteError('');
-                setDeleteTarget(target);
-              }}
-            />
-          ))}
-        </div>
+        <PlanProgressReview
+          plans={plans}
+          overview={overview}
+          totalPlans={totalPlans}
+        />
       )}
 
-      {totalPages > 1 && (
+      {view === 'goals' && totalPages > 1 && (
         <div className="flex items-center justify-center gap-2 mt-8">
           <button
             onClick={() => load(Math.max(1, page - 1))}
@@ -320,7 +386,7 @@ function PlanDetail({ id, onBack }: { id: string; onBack: () => void }) {
 
   if (loading) {
     return (
-      <div className="max-w-2xl mx-auto space-y-4">
+      <div className="desktop-core-page desktop-plan-detail max-w-2xl mx-auto space-y-4">
         <div className="skeleton h-8 w-32" />
         <div className="skeleton h-16" />
         <div className="skeleton h-64" />
@@ -357,7 +423,7 @@ function PlanDetail({ id, onBack }: { id: string; onBack: () => void }) {
   const fieldGroups = groupPlanFields(plan.fields ?? []);
 
   return (
-    <div className="max-w-5xl mx-auto pb-24">
+    <div className="plan-workspace-detail desktop-core-page desktop-plan-detail max-w-5xl mx-auto pb-24">
       <div className="mb-6 flex items-center justify-between">
         <button
           type="button"
@@ -568,33 +634,151 @@ export default function PlansPage() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Filter tab                                                         */
+/* Workspace views                                                    */
 /* ------------------------------------------------------------------ */
 
-function FilterTab({ active, onClick, label, count, highlight }: {
+function WorkspaceTab({ active, onClick, label, count }: {
   active: boolean;
   onClick: () => void;
   label: string;
   count: number;
-  highlight?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`inline-flex flex-shrink-0 items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-colors min-h-[40px] ${
+      role="tab"
+      aria-selected={active}
+      className={`plan-workspace-tab inline-flex min-h-11 min-w-0 items-center justify-center gap-1.5 rounded-xl px-2 text-sm font-semibold transition-colors md:px-4 ${
         active
-          ? 'bg-accent-emerald/15 text-accent-emerald border border-accent-emerald/30'
-          : 'bg-card-bg text-foreground-muted border border-card-border hover:text-foreground-secondary'
+          ? 'bg-foreground text-background shadow-sm'
+          : 'text-foreground-muted hover:bg-background-secondary hover:text-foreground'
       }`}
     >
-      {label}
+      <span className="truncate">{label}</span>
       {count > 0 && (
-        <span className={`text-[11px] px-1.5 rounded-full ${highlight && !active ? 'bg-accent-rose/15 text-accent-rose' : 'bg-foreground-muted/15 text-foreground-muted'}`}>
+        <span className={`rounded-md px-1.5 py-0.5 text-[11px] tabular-nums ${
+          active ? 'bg-background/15 text-background' : 'bg-background-secondary text-foreground-muted'
+        }`}>
           {count}
         </span>
       )}
     </button>
+  );
+}
+
+function PlanWorkspaceEmpty() {
+  return (
+    <section className="plan-workspace-empty flex min-h-[44vh] flex-col items-center justify-center rounded-3xl border border-dashed border-card-border bg-card-bg px-6 text-center">
+      <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-card-border bg-background-secondary text-foreground-secondary">
+        <Target size={22} />
+      </span>
+      <h2 className="mt-4 text-lg font-semibold text-foreground">先从一个想实现的目标开始</h2>
+      <p className="mt-2 max-w-md text-sm leading-relaxed text-foreground-muted">
+        打开一条已经整理好文案的视频，让 AI 把其中的方法转换成可以逐步打卡的行动计划。
+      </p>
+      <Link
+        href="/library"
+        className="mt-5 inline-flex min-h-11 items-center justify-center rounded-xl bg-foreground px-5 text-sm font-semibold text-background no-underline"
+      >
+        从视频资料创建
+      </Link>
+    </section>
+  );
+}
+
+function PlanProgressReview({
+  plans,
+  overview,
+  totalPlans,
+}: {
+  plans: PlanData[];
+  overview: PlanOverview | null;
+  totalPlans: number;
+}) {
+  const activeGoals = overview?.summary.active_plans
+    ?? plans.filter(plan => plan.status !== 'done').length;
+  const completedGoals = Math.max(0, totalPlans - activeGoals);
+  const dueToday = overview?.summary.due_today ?? 0;
+  const overdue = overview?.summary.overdue_tasks ?? 0;
+  const visibleProgress = [...plans]
+    .sort((left, right) => {
+      if (left.status === right.status) return 0;
+      return left.status === 'done' ? 1 : -1;
+    })
+    .slice(0, 6);
+
+  const metrics = [
+    { label: '进行中目标', value: activeGoals, note: '当前仍在推进' },
+    { label: '已完成目标', value: completedGoals, note: '基于实时状态' },
+    { label: '今日待办', value: dueToday, note: '尚未打卡' },
+    { label: '需要调整', value: overdue, note: '当前逾期任务', danger: overdue > 0 },
+  ];
+
+  return (
+    <section className="plan-workspace-review" aria-labelledby="plan-workspace-review-title">
+      <div className="mb-4">
+        <p className="text-xs font-semibold text-foreground-muted">进度回顾</p>
+        <h2 id="plan-workspace-review-title" className="mt-1 text-xl font-bold text-foreground md:text-2xl">
+          目标推进到哪里了
+        </h2>
+      </div>
+
+      <div className="plan-workspace-review-metrics grid grid-cols-2 gap-2.5 md:grid-cols-4">
+        {metrics.map(metric => (
+          <article
+            key={metric.label}
+            className="rounded-2xl border border-card-border bg-card-bg p-4"
+          >
+            <span className="text-xs font-medium text-foreground-muted">{metric.label}</span>
+            <strong className={`mt-2 block text-2xl font-bold tabular-nums ${
+              metric.danger ? 'text-accent-rose' : 'text-foreground'
+            }`}>
+              {metric.value}
+            </strong>
+            <small className="mt-1 block text-xs text-foreground-muted">{metric.note}</small>
+          </article>
+        ))}
+      </div>
+
+      <aside className="plan-workspace-review-scope mt-4 rounded-2xl border border-card-border bg-background-secondary px-4 py-3 text-sm leading-relaxed text-foreground-muted">
+        这里展示的是计划和任务当前的完成状态。知萃目前还没有长期记录实际耗时、拖延规律或效率时段，因此不会对这些行为做推断。
+      </aside>
+
+      {visibleProgress.length > 0 && (
+        <div className="plan-workspace-review-list mt-6">
+          <h3 className="mb-3 text-sm font-semibold text-foreground">目标进度</h3>
+          <div className="grid gap-2">
+            {visibleProgress.map(plan => {
+              const progress = getPlanProgress(plan);
+              const nextTask = getPlanTasks(plan).find(task => !task.done);
+              return (
+                <Link
+                  key={plan.id}
+                  href={`/plans?id=${plan.id}`}
+                  className="plan-workspace-review-row grid min-h-16 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 rounded-2xl border border-card-border bg-card-bg px-4 py-3 text-foreground no-underline"
+                >
+                  <span className="min-w-0">
+                    <strong className="block truncate text-sm font-semibold text-foreground">{plan.title}</strong>
+                    <small className="mt-1 block truncate text-xs text-foreground-muted">
+                      {plan.status === 'done'
+                        ? '目标已经完成'
+                        : nextTask
+                          ? `下一步：${nextTask.title}`
+                          : '暂时没有待办任务'}
+                    </small>
+                  </span>
+                  <span className="min-w-16 text-right">
+                    <strong className="block text-sm tabular-nums text-foreground">{progress.pct}%</strong>
+                    <small className="text-xs tabular-nums text-foreground-muted">{progress.done}/{progress.total}</small>
+                  </span>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -612,7 +796,7 @@ function TodayCard({ plan, onToggle, mutatingIds }: {
   const tasks = getTodayDayTasks(plan);
 
   return (
-    <div className="mb-4 rounded-2xl border border-accent-emerald/25 bg-accent-emerald/[0.04] p-4">
+    <div className="plan-detail-today mb-4 rounded-2xl border p-4">
       <div className="flex items-center gap-2 mb-3">
         <Sun size={15} className="text-accent-emerald" />
         <h3 className="text-sm font-semibold text-foreground">今日任务 · 第 {currentDay} 天</h3>

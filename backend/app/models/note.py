@@ -89,6 +89,14 @@ class Note(Base):
             "platform": source_meta.get("platform") or "",
             "source_kind": source_meta.get("source_kind") or "",
             "source_recorded_at": source_meta.get("recorded_at") or "",
+            "source_mode": source_meta.get("source_mode") or "unknown",
+            "source_rank": source_meta.get("source_rank"),
+            "source_synced_at": (
+                source_meta.get("source_synced_at")
+                or source_meta.get("first_seen_at")
+                or source_meta.get("recorded_at")
+                or ""
+            ),
             "transcript_raw": self.transcript_raw,
             "transcript_chars": len(self.transcript_raw or ""),
             "ai_initialized": bool(self.ai_initialized),

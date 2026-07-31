@@ -1,10 +1,13 @@
 import type { Metadata, Viewport } from 'next';
 import localFont from 'next/font/local';
 import AppHeader from '@/components/AppHeader';
+import AppFooter from '@/components/AppFooter';
 import BottomTabBar from '@/components/BottomTabBar';
 import GlobalSheetManager from '@/components/GlobalSheetManager';
 import FeedbackButton from '@/components/FeedbackButton';
 import AppUpdatePrompt from '@/components/AppUpdatePrompt';
+import DesktopUpdatePrompt from '@/components/DesktopUpdatePrompt';
+import DesktopAppFrame from '@/components/DesktopAppFrame';
 import AuthGuard from '@/components/AuthGuard';
 import Providers from './Providers';
 import './globals.css';
@@ -20,12 +23,12 @@ export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
   maximumScale: 1,
-  themeColor: '#10b981',
+  themeColor: '#f7faf8',
 };
 
 export const metadata: Metadata = {
-  title: '知萃 · 视频知识萃取工具',
-  description: '把抖音收藏、喜欢和个人作品整理成可提问的视频知识库，自动生成完整文案、知识卡片与行动计划。',
+  title: '知萃 · 把收藏夹里的视频变成能问、能用的知识',
+  description: '同步你选择的抖音收藏、喜欢或作品，自动提取完整文稿，基于视频资料提问，并把有用内容转成知识卡与行动计划。',
   keywords: ['知萃', '抖音收藏整理', '批量视频文案', 'AI视频问答', '知识卡片', '行动计划'],
   manifest: '/manifest.json',
 };
@@ -36,24 +39,69 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh-CN" className={inter.variable} data-scroll-behavior="smooth" suppressHydrationWarning>
+    <html
+      lang="zh-CN"
+      className={inter.variable}
+      data-scroll-behavior="smooth"
+      data-theme="light"
+      data-theme-preference="light"
+      suppressHydrationWarning
+    >
       <head>
-        <link rel="icon" href="/favicon.ico" />
+        <link rel="icon" href="/icons/icon-192.png" type="image/png" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
-        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <script
           dangerouslySetInnerHTML={{
             __html: `
               try {
-                const theme = localStorage.getItem('theme') || 'light';
-                document.documentElement.setAttribute('data-theme', theme);
+                var storedAppearance = {};
+                try {
+                  storedAppearance = JSON.parse(localStorage.getItem('videocapsule-settings') || '{}') || {};
+                } catch (error) {}
+                var legacyTheme = localStorage.getItem('theme');
+                var themeOptions = ['light', 'dark', 'system'];
+                var preference = themeOptions.indexOf(storedAppearance.theme) >= 0
+                  ? storedAppearance.theme
+                  : themeOptions.indexOf(legacyTheme) >= 0
+                    ? legacyTheme
+                    : themeOptions.indexOf(storedAppearance.desktopSidebar) >= 0
+                      ? storedAppearance.desktopSidebar
+                      : 'light';
+                var effectiveTheme = preference === 'system'
+                  ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+                  : preference;
+                document.documentElement.setAttribute('data-theme', effectiveTheme);
+                document.documentElement.setAttribute('data-theme-preference', preference);
+                document.documentElement.setAttribute('data-desktop-sidebar', effectiveTheme);
+                document.documentElement.style.colorScheme = effectiveTheme;
               } catch (e) {}
               // Detect Capacitor native app — hide web-only elements.
               (function () {
                 try {
                   if (window.Capacitor && window.Capacitor.isNativePlatform()) {
                     document.documentElement.setAttribute('data-capacitor', 'true');
+                  }
+                } catch (e) {}
+              })();
+              // Prevent the browser-oriented shell from flashing while the
+              // trusted Electron preload bridge is being verified.
+              (function () {
+                try {
+                  if (window.zhicuiDesktop) {
+                    document.documentElement.setAttribute('data-desktop-app', 'pending');
+                    if (window.location.pathname.indexOf('/agent') === 0) {
+                      document.documentElement.setAttribute('data-desktop-workspace', 'agent');
+                    }
+                    var storedSettings = {};
+                    try {
+                      storedSettings = JSON.parse(localStorage.getItem('videocapsule-settings') || '{}');
+                    } catch (error) {}
+                    var density = ['comfortable', 'compact'].indexOf(storedSettings.desktopDensity) >= 0
+                      ? storedSettings.desktopDensity
+                      : 'comfortable';
+                    document.documentElement.setAttribute('data-desktop-density', density);
                   }
                 } catch (e) {}
               })();
@@ -71,10 +119,15 @@ export default function RootLayout({
                 function recoverFromStaleChunk() {
                   if (recovering) return;
                   var now = Date.now();
-                  var previous = Number(sessionStorage.getItem(recoveryKey) || 0);
+                  var previous = 0;
+                  try {
+                    previous = Number(sessionStorage.getItem(recoveryKey) || 0);
+                  } catch (error) {}
                   if (now - previous < 60000) return;
                   recovering = true;
-                  sessionStorage.setItem(recoveryKey, String(now));
+                  try {
+                    sessionStorage.setItem(recoveryKey, String(now));
+                  } catch (error) {}
                   var cleanup = [];
                   if ('serviceWorker' in navigator) {
                     cleanup.push(
@@ -94,8 +147,16 @@ export default function RootLayout({
                       }).catch(function () {}),
                     );
                   }
-                  Promise.all(cleanup).finally(function () {
+                  var reloadStarted = false;
+                  function reloadOnce() {
+                    if (reloadStarted) return;
+                    reloadStarted = true;
                     location.reload();
+                  }
+                  var reloadFallback = window.setTimeout(reloadOnce, 1500);
+                  Promise.all(cleanup).finally(function () {
+                    window.clearTimeout(reloadFallback);
+                    reloadOnce();
                   });
                 }
                 window.addEventListener('error', function (event) {
@@ -114,35 +175,27 @@ export default function RootLayout({
                   }
                 });
               })();
-              // Service Worker is production-only. In dev (localhost / 127.0.0.1
-              // / *.local), Turbopack rotates chunk hashes on every edit, but a
-              // cache-first SW keeps serving stale chunks → 404 → Next refresh
-              // → SW returns stale HTML → infinite reload loop. So in dev we
-              // also actively unregister any SW that a previous prod build (or
-              // a previous version of this app) left behind, and clear its
-              // caches.
+              // Service Worker cleanup is intentionally web-wide. Previous
+              // releases cached HTML and Next.js chunks, so every current page
+              // removes old registrations and Cache Storage entries. Do not
+              // register /sw.js again: that file now only exists so browsers
+              // with an older registration can update to a one-time cleanup
+              // worker and relinquish control.
               (function () {
-                if (!('serviceWorker' in navigator)) return;
-                var host = location.hostname;
-                var isDev =
-                  host === 'localhost' ||
-                  host === '127.0.0.1' ||
-                  host === '0.0.0.0' ||
-                  host.endsWith('.local');
-                if (isDev) {
+                if ('serviceWorker' in navigator) {
                   navigator.serviceWorker.getRegistrations().then(function (regs) {
-                    regs.forEach(function (r) { r.unregister(); });
+                    return Promise.all(regs.map(function (registration) {
+                      return registration.unregister();
+                    }));
                   }).catch(function () {});
-                  if (window.caches) {
-                    caches.keys().then(function (keys) {
-                      keys.forEach(function (k) { caches.delete(k); });
-                    }).catch(function () {});
-                  }
-                  return;
                 }
-                window.addEventListener('load', function () {
-                  navigator.serviceWorker.register('/sw.js').catch(function () {});
-                });
+                if (window.caches) {
+                  caches.keys().then(function (keys) {
+                    return Promise.all(keys.map(function (key) {
+                      return caches.delete(key);
+                    }));
+                  }).catch(function () {});
+                }
               })();
             `,
           }}
@@ -150,34 +203,28 @@ export default function RootLayout({
       </head>
       <body className="min-h-[100dvh] flex flex-col bg-background">
         <Providers>
-          {/* Desktop-only inline header — not fixed, scrolls with content.
-              Hidden on mobile where BottomTabBar handles all navigation. */}
-          <AppHeader />
+          <DesktopAppFrame>
+            {/* Desktop-only inline header — not fixed, scrolls with content.
+                Hidden on mobile where BottomTabBar handles all navigation. */}
+            <AppHeader />
 
-          {/* Main content — extra bottom padding on mobile so content clears
-              the fixed BottomTabBar (60px tabbar + safe-area + breathing room). */}
-          <main className="mx-auto max-w-[1600px] px-5 pt-6 pb-24 md:px-8 md:py-8 lg:px-12 flex-1 w-full">
-            <AuthGuard>
-              <GlobalSheetManager />
-              {children}
-            </AuthGuard>
-          </main>
+            {/* Main content — extra bottom padding on mobile so content clears
+                the fixed BottomTabBar (60px tabbar + safe-area + breathing room). */}
+            <main className="app-main mx-auto max-w-[1600px] px-4 pt-4 md:px-8 md:py-8 lg:px-12 flex-1 w-full">
+              <AuthGuard>
+                <GlobalSheetManager />
+                {children}
+              </AuthGuard>
+            </main>
 
-          {/* Footer — desktop only. On mobile the BottomTabBar replaces it. */}
-          <footer className="relative border-t border-card-border/50 py-8 md:py-10 hidden md:block">
-            <div className="mx-auto max-w-6xl px-4 md:px-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-foreground-muted text-xs">
-              <p className="flex items-center gap-2">
-                <img src="/logo.png" alt="知萃 Logo" className="h-5 w-5 object-contain" />
-                <span>知萃 · 萃取视频里的全部干货</span>
-              </p>
-              <p className="text-foreground-muted/60">知识卡片提取工具</p>
-            </div>
-          </footer>
+            <AppFooter />
 
-          {/* Mobile-only: bottom tab bar (hidden on md+). */}
-          <BottomTabBar />
-          <FeedbackButton />
-          <AppUpdatePrompt />
+            {/* Mobile-only: bottom tab bar (hidden on md+). */}
+            <BottomTabBar />
+            <FeedbackButton />
+            <AppUpdatePrompt />
+            <DesktopUpdatePrompt />
+          </DesktopAppFrame>
         </Providers>
       </body>
     </html>

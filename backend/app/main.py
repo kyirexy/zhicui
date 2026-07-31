@@ -16,7 +16,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.routes import router
-from app.core.database import Base, engine
+from app.api.agent_routes import router as agent_router
+from app.core.database import Base, SessionLocal, engine
 from sqlalchemy import inspect, text
 
 # Import all models so they are registered with Base.metadata before create_all.
@@ -31,8 +32,20 @@ from app.models.application_error_log import ApplicationErrorLog  # noqa: F401
 from app.models.feedback import Feedback  # noqa: F401
 from app.models.library_hidden_item import LibraryHiddenItem  # noqa: F401
 from app.models.douyin_account_binding import DouyinAccountBinding  # noqa: F401
+from app.models.video_source_ledger import VideoSourceLedger  # noqa: F401
+from app.models.agent_thread import AgentMessage, AgentThread  # noqa: F401
+from app.models.agent_automation import (  # noqa: F401
+    AgentAutomation,
+    AgentAutomationRun,
+)
 from app.core.request_context import reset_request_context, set_request_context
-from app.services import activity_service, auth_service, error_log_service
+from app.services import (
+    activity_service,
+    agent_service,
+    auth_service,
+    automation_runner,
+    error_log_service,
+)
 
 
 def create_app() -> FastAPI:
@@ -144,6 +157,10 @@ def create_app() -> FastAPI:
                 and request.method.upper() != "GET"
                 and not route_path.startswith("/api/auth/")
                 and route_path != "/api/client-errors"
+                and not activity_service.is_explicit_activity_route(
+                    request.method,
+                    route_path,
+                )
             ):
                 activity_service.log_activity_safely(
                     user_id=user_id,
@@ -158,12 +175,20 @@ def create_app() -> FastAPI:
 
     # Register routes
     app.include_router(router)
+    app.include_router(agent_router)
 
     # Create database tables on startup
     @app.on_event("startup")
     def on_startup() -> None:
         Base.metadata.create_all(bind=engine)
         _migrate_db()
+        with SessionLocal() as db:
+            agent_service.mark_stale_threads(db)
+        automation_runner.runner.start()
+
+    @app.on_event("shutdown")
+    def on_shutdown() -> None:
+        automation_runner.runner.stop()
 
     return app
 
@@ -172,18 +197,115 @@ def _migrate_db() -> None:
     """Apply small cross-dialect additive migrations without Alembic."""
     insp = inspect(engine)
     with engine.begin() as conn:
+        # Older local SQLite builds ran with foreign_keys disabled. Remove
+        # only orphan rows from the newly introduced Agent tables before
+        # relying on cascade behavior going forward.
+        for table_name in (
+            "agent_messages",
+            "agent_automation_runs",
+            "agent_automations",
+            "agent_threads",
+            "video_source_ledgers",
+        ):
+            if insp.has_table(table_name) and insp.has_table("users"):
+                conn.execute(text(
+                    f"DELETE FROM {table_name} "
+                    "WHERE user_id NOT IN (SELECT id FROM users)"
+                ))
+        if insp.has_table("agent_messages") and insp.has_table("agent_threads"):
+            conn.execute(text(
+                "DELETE FROM agent_messages "
+                "WHERE thread_id NOT IN (SELECT id FROM agent_threads)"
+            ))
+        if (
+            insp.has_table("agent_automation_runs")
+            and insp.has_table("agent_automations")
+        ):
+            conn.execute(text(
+                "DELETE FROM agent_automation_runs "
+                "WHERE automation_id NOT IN "
+                "(SELECT id FROM agent_automations)"
+            ))
+        if (
+            insp.has_table("agent_automation_runs")
+            and insp.has_table("agent_threads")
+        ):
+            conn.execute(text(
+                "UPDATE agent_automation_runs SET agent_thread_id = NULL "
+                "WHERE agent_thread_id IS NOT NULL AND agent_thread_id "
+                "NOT IN (SELECT id FROM agent_threads)"
+            ))
         if insp.has_table("users"):
             user_cols = {c["name"] for c in insp.get_columns("users")}
             if "username" not in user_cols:
                 conn.execute(text("ALTER TABLE users ADD COLUMN username VARCHAR NULL"))
             if "is_admin" not in user_cols:
                 conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT FALSE"))
+            if "email_verified" not in user_cols:
+                conn.execute(text(
+                    "ALTER TABLE users ADD COLUMN "
+                    "email_verified BOOLEAN NOT NULL DEFAULT FALSE"
+                ))
+            if "email_verification_nonce" not in user_cols:
+                conn.execute(text(
+                    "ALTER TABLE users ADD COLUMN "
+                    "email_verification_nonce VARCHAR(96) NULL"
+                ))
+            if "email_verification_sent_at" not in user_cols:
+                conn.execute(text(
+                    "ALTER TABLE users ADD COLUMN "
+                    "email_verification_sent_at TIMESTAMP NULL"
+                ))
         if insp.has_table("notes"):
             note_cols = {c["name"] for c in insp.get_columns("notes")}
             if "ai_initialized" not in note_cols:
                 conn.execute(text(
                     "ALTER TABLE notes ADD COLUMN "
                     "ai_initialized BOOLEAN NOT NULL DEFAULT TRUE"
+                ))
+        if insp.has_table("video_source_ledgers"):
+            ledger_cols = {
+                c["name"] for c in insp.get_columns("video_source_ledgers")
+            }
+            # This table is new, but keep startup tolerant of an earlier
+            # experimental build that did not yet track all observation times.
+            if "source_rank" not in ledger_cols:
+                conn.execute(text(
+                    "ALTER TABLE video_source_ledgers ADD COLUMN "
+                    "source_rank INTEGER NULL"
+                ))
+            if "first_seen_at" not in ledger_cols:
+                conn.execute(text(
+                    "ALTER TABLE video_source_ledgers ADD COLUMN "
+                    "first_seen_at TIMESTAMP NULL"
+                ))
+            if "last_seen_at" not in ledger_cols:
+                conn.execute(text(
+                    "ALTER TABLE video_source_ledgers ADD COLUMN "
+                    "last_seen_at TIMESTAMP NULL"
+                ))
+            if "source_synced_at" not in ledger_cols:
+                conn.execute(text(
+                    "ALTER TABLE video_source_ledgers ADD COLUMN "
+                    "source_synced_at TIMESTAMP NULL"
+                ))
+            conn.execute(text(
+                "UPDATE video_source_ledgers "
+                "SET first_seen_at = COALESCE(first_seen_at, CURRENT_TIMESTAMP), "
+                "last_seen_at = COALESCE(last_seen_at, first_seen_at, CURRENT_TIMESTAMP), "
+                "source_synced_at = COALESCE(source_synced_at, last_seen_at, "
+                "first_seen_at, CURRENT_TIMESTAMP)"
+            ))
+            if insp.has_table("notes"):
+                conn.execute(text(
+                    "UPDATE video_source_ledgers SET note_id = NULL "
+                    "WHERE note_id IS NOT NULL AND ("
+                    "note_id NOT IN (SELECT id FROM notes) OR "
+                    "NOT EXISTS ("
+                    "SELECT 1 FROM notes "
+                    "WHERE notes.id = video_source_ledgers.note_id "
+                    "AND notes.user_id = video_source_ledgers.user_id"
+                    "))"
                 ))
         if insp.has_table("library_hidden_items"):
             hidden_cols = {
@@ -194,6 +316,81 @@ def _migrate_db() -> None:
                     "ALTER TABLE library_hidden_items ADD COLUMN "
                     "hide_mode VARCHAR(16) NOT NULL DEFAULT 'permanent'"
                 ))
+        if insp.has_table("user_activity_logs"):
+            activity_cols = {
+                c["name"] for c in insp.get_columns("user_activity_logs")
+            }
+            if "detail_json" not in activity_cols:
+                conn.execute(text(
+                    "ALTER TABLE user_activity_logs ADD COLUMN detail_json TEXT NULL"
+                ))
+            if "event_key" not in activity_cols:
+                conn.execute(text(
+                    "ALTER TABLE user_activity_logs "
+                    "ADD COLUMN event_key VARCHAR(180) NULL"
+                ))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "ux_user_activity_event_key "
+                "ON user_activity_logs (event_key)"
+            ))
+        if insp.has_table("agent_automations"):
+            automation_cols = {
+                c["name"] for c in insp.get_columns("agent_automations")
+            }
+            if "source_mode" not in automation_cols:
+                conn.execute(text(
+                    "ALTER TABLE agent_automations ADD COLUMN "
+                    "source_mode VARCHAR(16) NOT NULL DEFAULT 'collect'"
+                ))
+            if "deleted_at" not in automation_cols:
+                conn.execute(text(
+                    "ALTER TABLE agent_automations ADD COLUMN "
+                    "deleted_at TIMESTAMP NULL"
+                ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_agent_automations_deleted_at "
+                "ON agent_automations (deleted_at)"
+            ))
+        if insp.has_table("agent_messages"):
+            message_cols = {
+                c["name"] for c in insp.get_columns("agent_messages")
+            }
+            if "turn_id" not in message_cols:
+                conn.execute(text(
+                    "ALTER TABLE agent_messages ADD COLUMN "
+                    "turn_id VARCHAR(36) NULL"
+                ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_agent_messages_turn_id "
+                "ON agent_messages (turn_id)"
+            ))
+        if insp.has_table("agent_automation_runs"):
+            run_cols = {
+                c["name"] for c in insp.get_columns("agent_automation_runs")
+            }
+            if "automation_version" not in run_cols:
+                conn.execute(text(
+                    "ALTER TABLE agent_automation_runs ADD COLUMN "
+                    "automation_version INTEGER NOT NULL DEFAULT 1"
+                ))
+            if "lease_token" not in run_cols:
+                conn.execute(text(
+                    "ALTER TABLE agent_automation_runs ADD COLUMN "
+                    "lease_token VARCHAR(64) NULL"
+                ))
+            if "heartbeat_at" not in run_cols:
+                conn.execute(text(
+                    "ALTER TABLE agent_automation_runs ADD COLUMN "
+                    "heartbeat_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+                ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_agent_automation_runs_heartbeat_at "
+                "ON agent_automation_runs (heartbeat_at)"
+            ))
 
 
 app = create_app()

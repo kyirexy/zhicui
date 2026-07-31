@@ -18,6 +18,7 @@ node_modules/
 out/
 .pwa/
 *.tsbuildinfo
+desktop/release*/
 
 # IDE
 .vscode/

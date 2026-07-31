@@ -248,6 +248,7 @@ export interface DouyinLibraryItem {
   source_url: string;
   media_url: string;
   cover_url: string;
+  cover_proxy_url?: string;
   can_extract: boolean;
   extracted: boolean;
   extracted_note_id?: string | null;
@@ -350,29 +351,269 @@ export interface LibrarySourceContext {
   output_style: LibraryOutputStyle;
   coverage: 'focused' | 'broad';
   map_calls: number;
+  validated_map_finding_count?: number;
+  web_search_attempted?: boolean;
+  web_search_succeeded?: boolean;
+  web_verified_source_count?: number;
   agent_trace: LibraryAgentStage[];
   sources: Array<{ note_id: string; title: string }>;
 }
 
 export type LibraryResearchMode = 'fast' | 'deep';
 export type LibraryOutputStyle = 'answer' | 'summary' | 'comparison' | 'action_plan' | 'custom';
+export type AgentGroundingStatus = 'grounded' | 'partially_grounded' | 'ungrounded';
+
+export interface AgentCitationCoverage {
+  requested: number;
+  matched: number;
+  verified: number;
+  ratio: number;
+}
 
 export interface LibraryAgentStage {
-  stage: 'plan' | 'retrieve' | 'web' | 'map' | 'synthesize';
+  stage:
+    | 'plan'
+    | 'retrieve'
+    | 'map'
+    | 'planning'
+    | 'scan'
+    | 'rank'
+    | 'web'
+    | 'synthesize'
+    | 'verify';
   label: string;
   detail: string;
+  status?: 'completed' | 'failed' | 'skipped';
+  duration_ms?: number;
+  counts?: Record<string, number | boolean>;
 }
 
 export interface LibraryAskResult {
   note_ids: string[];
   answer: string;
   grounded: boolean;
+  grounding_status?: AgentGroundingStatus;
+  citation_coverage?: AgentCitationCoverage;
+  limitations?: string[];
   evidence: LibraryEvidence[];
   follow_up_questions: string[];
   source_context: LibrarySourceContext;
   web_sources: WebResearchSource[];
   web_scope: ResearchScope;
 }
+
+// ============================================================================
+// Video Agent workspace
+// ============================================================================
+
+/**
+ * `yesterday_new` intentionally means content first organised into Zhicui
+ * yesterday. Douyin does not expose a trustworthy collection timestamp for
+ * every item, so the UI must not describe this scope as the user's exact
+ * collection time.
+ */
+export type AgentSourceScope =
+  | 'all_ready'
+  | 'yesterday_new'
+  | 'collect'
+  | 'like'
+  | 'post'
+  | 'selected';
+export type AgentSourceMode = 'all' | DouyinSourceMode;
+export type AgentThreadStatus = 'ready' | 'running' | 'failed' | 'archived';
+export type AgentDeliveryChannel = 'email';
+export type AgentAutomationSourceScope = 'yesterday' | 'yesterday_new';
+export type AgentAutomationStatus =
+  | 'completed'
+  | 'failed'
+  | 'running'
+  | 'cancelled';
+export type AgentAutomationDeliveryStatus =
+  | 'skipped'
+  | 'delivering'
+  | 'sent'
+  | 'not_configured'
+  | 'verification_required'
+  | 'failed'
+  | 'unknown';
+
+export interface AgentSource {
+  note_id: string;
+  video_id?: string;
+  title: string;
+  author_name: string;
+  cover_url: string;
+  source_url?: string;
+  source_mode: DouyinSourceMode | 'unknown';
+  source_rank?: number | null;
+  source_synced_at?: string | null;
+  created_at?: string | null;
+  transcript_chars: number;
+  ready?: boolean;
+  ai_initialized?: boolean;
+  first_seen_at?: string | null;
+  source_added_at?: string | null;
+}
+
+export interface AgentSourceList {
+  items: AgentSource[];
+  total: number;
+  ready_count?: number;
+  scope?: Exclude<AgentSourceScope, 'selected'>;
+  source_scope?: Exclude<AgentSourceScope, 'selected'>;
+  scope_type?: Exclude<AgentSourceScope, 'selected'>;
+  scope_label?: string;
+  max_sources?: number;
+  truncated?: boolean;
+  database_stores_media?: false;
+  as_of?: string | null;
+}
+
+export interface AgentMessage {
+  id: string;
+  thread_id: string;
+  role: NoteChatRole;
+  content: string;
+  created_at: string;
+  grounded?: boolean;
+  grounding_status?: AgentGroundingStatus;
+  citation_coverage?: AgentCitationCoverage;
+  limitations?: string[];
+  evidence?: LibraryEvidence[];
+  follow_up_questions?: string[];
+  source_context?: LibrarySourceContext | null;
+  web_sources?: WebResearchSource[];
+  result?: Partial<LibraryAskResult> & {
+    note_ids?: string[];
+  };
+}
+
+export interface AgentThread {
+  id: string;
+  title: string;
+  status: AgentThreadStatus;
+  source_scope: AgentSourceScope;
+  scope_type?: AgentSourceScope;
+  source_ids: string[];
+  source_count: number;
+  message_count: number;
+  last_message?: string | null;
+  messages?: AgentMessage[];
+  sources?: AgentSource[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentThreadList {
+  items: AgentThread[];
+  total: number;
+}
+
+export interface AgentThreadCreate {
+  title?: string;
+  source_scope: AgentSourceScope;
+  source_ids?: string[];
+}
+
+export interface AgentThreadUpdate {
+  title: string;
+}
+
+export interface AgentMessageCreate {
+  content: string;
+  research_mode?: LibraryResearchMode;
+  output_style?: LibraryOutputStyle;
+  custom_instruction?: string;
+  web_scope?: ResearchScope;
+}
+
+export interface AgentMessageResult {
+  thread: AgentThread;
+  user_message: AgentMessage;
+  assistant_message: AgentMessage;
+}
+
+export interface AgentAutomation {
+  id: string;
+  name: string;
+  enabled: boolean;
+  timezone: string;
+  schedule_time: string;
+  source_scope: AgentAutomationSourceScope;
+  source_mode: AgentSourceMode;
+  instruction: string;
+  channel: AgentDeliveryChannel;
+  recipient_email: string;
+  next_run_at?: string | null;
+  last_run_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentAutomationList {
+  items: AgentAutomation[];
+  total: number;
+}
+
+export interface AgentAutomationCreate {
+  name: string;
+  enabled?: boolean;
+  timezone: string;
+  schedule_time: string;
+  source_scope: AgentAutomationSourceScope;
+  source_mode: AgentSourceMode;
+  instruction: string;
+  channel: AgentDeliveryChannel;
+  recipient_email: string;
+}
+
+export type AgentAutomationUpdate = Partial<AgentAutomationCreate>;
+
+export interface AgentAutomationRun {
+  id: string;
+  automation_id: string;
+  trigger: 'scheduled' | 'manual';
+  status: AgentAutomationStatus;
+  source_count: number;
+  ready_count?: number;
+  result_text?: string;
+  result?: Record<string, unknown>;
+  delivery_status: AgentAutomationDeliveryStatus;
+  delivery_error: string;
+  agent_thread_id?: string | null;
+  scheduled_for?: string | null;
+  subject?: string | null;
+  summary?: string | null;
+  error?: string | null;
+  started_at: string;
+  finished_at?: string | null;
+}
+
+export interface AgentAutomationRunList {
+  items: AgentAutomationRun[];
+  total: number;
+}
+
+export interface AgentEmailDeliveryStatus {
+  configured: boolean;
+  provider: 'smtp' | 'preview' | string;
+  from_name: string;
+}
+
+export interface AgentEmailStatus {
+  account_email: string;
+  email_verified: boolean;
+  delivery: AgentEmailDeliveryStatus;
+}
+
+export type AgentEmailVerificationSendResult =
+  | { email_verified: true; status: 'already_verified' }
+  | { email_verified: false; status: 'submitted' };
+
+export type AgentEmailVerificationConfirmResult = {
+  email_verified: true;
+  status: 'verified' | 'already_verified';
+};
 
 export interface PaginatedResponse<T> {
   items: T[];
@@ -589,10 +830,22 @@ export type CardStyle =
 /** Information density levels */
 export type DensityLevel = 'low' | 'medium' | 'high';
 
+/** Global application theme shared by Web, Android, and Windows */
+export type AppTheme = 'light' | 'dark' | 'system';
+
+/** @deprecated Kept only so older local settings can be migrated safely. */
+export type DesktopSidebarAppearance = AppTheme;
+
+/** Windows desktop workspace spacing */
+export type DesktopLayoutDensity = 'comfortable' | 'compact';
+
 /** User settings shape persisted to localStorage */
 export interface UserSettings {
   cardStyle: CardStyle;
   density: DensityLevel;
+  theme: AppTheme;
+  desktopSidebar?: DesktopSidebarAppearance;
+  desktopDensity: DesktopLayoutDensity;
 }
 
 /** Per-note override (volatile component state, not persisted) */
@@ -637,4 +890,6 @@ export const DENSITY_CONFIG: Record<DensityLevel, { label: string; description: 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
   cardStyle: 'hero',
   density: 'medium',
+  theme: 'light',
+  desktopDensity: 'comfortable',
 };

@@ -9,6 +9,7 @@ import {
   LoaderCircle,
   TriangleAlert,
 } from 'lucide-react';
+import LibraryCoverImage from '@/components/LibraryCoverImage';
 import {
   getRecentCompletedResults,
   summarizeLibraryExtraction,
@@ -110,13 +111,12 @@ export default function LibraryExtractionLiveProgress({
                 href={`/library/detail?id=${encodeURIComponent(item.aweme_id)}`}
                 className="library-live-result"
               >
-                {item.cover_url ? (
-                  <img src={item.cover_url} alt="" loading="lazy" />
-                ) : (
-                  <span className="library-live-result-cover" aria-hidden="true">
-                    <FileText size={17} />
-                  </span>
-                )}
+                <LibraryCoverImage
+                  key={item.cover_proxy_url || item.cover_url || item.aweme_id}
+                  src={item.cover_proxy_url || item.cover_url}
+                  fallbackClassName="library-live-result-cover"
+                  iconSize={17}
+                />
                 <span>
                   <strong title={item.title}>{item.title}</strong>
                   <small>

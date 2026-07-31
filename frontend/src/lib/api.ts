@@ -1,4 +1,22 @@
 import type {
+  AgentAutomation,
+  AgentAutomationCreate,
+  AgentAutomationList,
+  AgentAutomationRun,
+  AgentAutomationRunList,
+  AgentAutomationUpdate,
+  AgentEmailVerificationConfirmResult,
+  AgentEmailVerificationSendResult,
+  AgentEmailStatus,
+  AgentMessage,
+  AgentMessageCreate,
+  AgentMessageResult,
+  AgentSourceList,
+  AgentSourceScope,
+  AgentThread,
+  AgentThreadCreate,
+  AgentThreadList,
+  AgentThreadUpdate,
   ApiResponse,
   CardData,
   DouyinCollectionJob,
@@ -558,6 +576,437 @@ export async function askVideoLibrary(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Video Agent workspace
+// ---------------------------------------------------------------------------
+
+export async function listAgentSources(
+  scope: Exclude<AgentSourceScope, 'selected'> = 'all_ready',
+  query = '',
+): Promise<ApiResponse<AgentSourceList>> {
+  const params = new URLSearchParams({ scope });
+  if (query.trim()) params.set('q', query.trim());
+  return request<AgentSourceList>(`/api/agent/sources?${params.toString()}`);
+}
+
+interface LegacyAgentPayload {
+  answer: string;
+  grounded?: boolean;
+  evidence?: NonNullable<AgentMessage['evidence']>;
+  follow_up_questions?: string[];
+  source_context?: NonNullable<AgentMessage['source_context']>;
+  web_sources?: NonNullable<AgentMessage['web_sources']>;
+}
+
+function parseJsonLike(value: string): unknown {
+  let candidate = value.trim();
+  if (!candidate) return null;
+
+  const fenced = candidate.match(
+    /^```(?:json)?\s*([\s\S]*?)\s*```$/i,
+  );
+  if (fenced?.[1]) candidate = fenced[1].trim();
+
+  for (let pass = 0; pass < 3; pass += 1) {
+    try {
+      const parsed: unknown = JSON.parse(candidate);
+      if (typeof parsed === 'string') {
+        candidate = parsed.trim();
+        continue;
+      }
+      return parsed;
+    } catch {
+      const firstBrace = candidate.indexOf('{');
+      const lastBrace = candidate.lastIndexOf('}');
+      if (firstBrace >= 0 && lastBrace > firstBrace) {
+        const objectCandidate = candidate.slice(firstBrace, lastBrace + 1);
+        if (objectCandidate !== candidate) {
+          candidate = objectCandidate;
+          continue;
+        }
+      }
+      return null;
+    }
+  }
+  return null;
+}
+
+function extractLegacyJsonField(content: string, key: string): unknown {
+  const marker = new RegExp(
+    `"${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"\\s*:\\s*`,
+  ).exec(content);
+  if (!marker) return undefined;
+
+  const start = marker.index + marker[0].length;
+  const first = content[start];
+  if (!first) return undefined;
+
+  if (first === '"') {
+    let escaped = false;
+    for (let index = start + 1; index < content.length; index += 1) {
+      const character = content[index];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (character === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (character === '"') {
+        try {
+          return JSON.parse(content.slice(start, index + 1));
+        } catch {
+          return undefined;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  if (first === '[' || first === '{') {
+    const opening = first;
+    const closing = first === '[' ? ']' : '}';
+    let depth = 0;
+    let quoted = false;
+    let escaped = false;
+    for (let index = start; index < content.length; index += 1) {
+      const character = content[index];
+      if (quoted) {
+        if (escaped) {
+          escaped = false;
+        } else if (character === '\\') {
+          escaped = true;
+        } else if (character === '"') {
+          quoted = false;
+        }
+        continue;
+      }
+      if (character === '"') {
+        quoted = true;
+        continue;
+      }
+      if (character === opening) depth += 1;
+      if (character === closing) {
+        depth -= 1;
+        if (depth === 0) {
+          try {
+            return JSON.parse(content.slice(start, index + 1));
+          } catch {
+            return undefined;
+          }
+        }
+      }
+    }
+    return undefined;
+  }
+
+  const token = content.slice(start).match(/^(true|false|null|-?\d+(?:\.\d+)?)/);
+  if (!token) return undefined;
+  try {
+    return JSON.parse(token[1]);
+  } catch {
+    return undefined;
+  }
+}
+
+function decodeLegacyAgentPayload(content: string): LegacyAgentPayload | null {
+  const parsed = parseJsonLike(content);
+  const value: Record<string, unknown> = (
+    parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+  )
+    ? parsed as Record<string, unknown>
+    : {
+      answer: extractLegacyJsonField(content, 'answer'),
+      grounded: extractLegacyJsonField(content, 'grounded'),
+      evidence: extractLegacyJsonField(content, 'evidence'),
+      follow_up_questions:
+        extractLegacyJsonField(content, 'follow_up_questions'),
+      source_context: extractLegacyJsonField(content, 'source_context'),
+      web_sources: extractLegacyJsonField(content, 'web_sources'),
+    };
+
+  if (typeof value.answer !== 'string' || !value.answer.trim()) {
+    return null;
+  }
+
+  const evidence = Array.isArray(value.evidence)
+    ? value.evidence.flatMap((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+      const row = item as Record<string, unknown>;
+      if (
+        typeof row.note_id !== 'string'
+        || typeof row.quote !== 'string'
+        || !row.quote.trim()
+      ) {
+        return [];
+      }
+      return [{
+        note_id: row.note_id,
+        title:
+          typeof row.title === 'string' && row.title.trim()
+            ? row.title
+            : '视频原文',
+        quote: row.quote,
+        source: row.source === 'summary' ? 'summary' as const : 'transcript' as const,
+        position_percent:
+          typeof row.position_percent === 'number'
+            ? row.position_percent
+            : undefined,
+      }];
+    })
+    : undefined;
+
+  const followUps = Array.isArray(value.follow_up_questions)
+    ? value.follow_up_questions.filter(
+      (item): item is string => typeof item === 'string' && Boolean(item.trim()),
+    )
+    : undefined;
+
+  return {
+    answer: value.answer.trim(),
+    grounded: typeof value.grounded === 'boolean' ? value.grounded : undefined,
+    evidence,
+    follow_up_questions: followUps,
+    source_context:
+      value.source_context
+      && typeof value.source_context === 'object'
+      && !Array.isArray(value.source_context)
+        ? value.source_context as NonNullable<AgentMessage['source_context']>
+        : undefined,
+    web_sources: Array.isArray(value.web_sources)
+      ? value.web_sources as NonNullable<AgentMessage['web_sources']>
+      : undefined,
+  };
+}
+
+function normalizeAgentMessage(message: AgentMessage): AgentMessage {
+  const legacyPayload = decodeLegacyAgentPayload(message.content);
+  const result = message.result;
+  return {
+    ...message,
+    content:
+      message.role === 'assistant' && legacyPayload?.answer
+        ? legacyPayload.answer
+        : message.content,
+    grounded:
+      legacyPayload?.grounded
+      ?? message.grounded
+      ?? result?.grounded,
+    grounding_status:
+      message.grounding_status
+      ?? result?.grounding_status,
+    citation_coverage:
+      message.citation_coverage
+      ?? result?.citation_coverage,
+    limitations:
+      (message.limitations?.length ? message.limitations : undefined)
+      ?? (result?.limitations?.length ? result.limitations : undefined)
+      ?? [],
+    evidence:
+      (legacyPayload?.evidence?.length ? legacyPayload.evidence : undefined)
+      ?? (message.evidence?.length ? message.evidence : undefined)
+      ?? (result?.evidence?.length ? result.evidence : undefined)
+      ?? [],
+    follow_up_questions:
+      (legacyPayload?.follow_up_questions?.length
+        ? legacyPayload.follow_up_questions
+        : undefined)
+      ?? (message.follow_up_questions?.length
+        ? message.follow_up_questions
+        : undefined)
+      ?? (result?.follow_up_questions?.length
+        ? result.follow_up_questions
+        : undefined)
+      ?? [],
+    source_context:
+      message.source_context
+      ?? result?.source_context
+      ?? legacyPayload?.source_context
+      ?? null,
+    web_sources:
+      (legacyPayload?.web_sources?.length ? legacyPayload.web_sources : undefined)
+      ?? (message.web_sources?.length ? message.web_sources : undefined)
+      ?? (result?.web_sources?.length ? result.web_sources : undefined)
+      ?? [],
+  };
+}
+
+function normalizeAgentThread(thread: AgentThread): AgentThread {
+  const legacyPreview = thread.last_message
+    ? decodeLegacyAgentPayload(thread.last_message)
+    : null;
+  return {
+    ...thread,
+    last_message: legacyPreview?.answer || thread.last_message,
+    messages: thread.messages?.map(normalizeAgentMessage),
+  };
+}
+
+export async function listAgentThreads(): Promise<ApiResponse<AgentThreadList>> {
+  const response = await request<AgentThreadList>('/api/agent/threads');
+  if (response.data) {
+    response.data = {
+      ...response.data,
+      items: response.data.items.map(normalizeAgentThread),
+    };
+  }
+  return response;
+}
+
+export async function createAgentThread(
+  body: AgentThreadCreate,
+): Promise<ApiResponse<AgentThread>> {
+  const response = await request<AgentThread>('/api/agent/threads', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  if (response.data) response.data = normalizeAgentThread(response.data);
+  return response;
+}
+
+export async function getAgentThread(
+  threadId: string,
+): Promise<ApiResponse<AgentThread>> {
+  const response = await request<AgentThread>(
+    `/api/agent/threads/${encodeURIComponent(threadId)}`,
+  );
+  if (response.data) response.data = normalizeAgentThread(response.data);
+  return response;
+}
+
+export async function updateAgentThread(
+  threadId: string,
+  body: AgentThreadUpdate,
+): Promise<ApiResponse<AgentThread>> {
+  const response = await request<AgentThread>(
+    `/api/agent/threads/${encodeURIComponent(threadId)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    },
+  );
+  if (response.data) response.data = normalizeAgentThread(response.data);
+  return response;
+}
+
+export async function deleteAgentThread(
+  threadId: string,
+): Promise<ApiResponse<{ deleted: boolean }>> {
+  return request<{ deleted: boolean }>(
+    `/api/agent/threads/${encodeURIComponent(threadId)}`,
+    { method: 'DELETE' },
+  );
+}
+
+export async function sendAgentMessage(
+  threadId: string,
+  body: AgentMessageCreate,
+  signal?: AbortSignal,
+): Promise<ApiResponse<AgentMessageResult>> {
+  const response = await request<AgentMessageResult>(
+    `/api/agent/threads/${encodeURIComponent(threadId)}/messages`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        ...body,
+        content: body.content.trim(),
+        custom_instruction: body.custom_instruction?.trim() || '',
+      }),
+      signal,
+    },
+  );
+  if (response.data) {
+    response.data = {
+      ...response.data,
+      thread: normalizeAgentThread(response.data.thread),
+      user_message: normalizeAgentMessage(response.data.user_message),
+      assistant_message: normalizeAgentMessage(response.data.assistant_message),
+    };
+  }
+  return response;
+}
+
+export async function listAgentAutomations(): Promise<ApiResponse<AgentAutomationList>> {
+  return request<AgentAutomationList>('/api/agent/automations');
+}
+
+export async function createAgentAutomation(
+  body: AgentAutomationCreate,
+): Promise<ApiResponse<AgentAutomation>> {
+  return request<AgentAutomation>('/api/agent/automations', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateAgentAutomation(
+  automationId: string,
+  body: AgentAutomationUpdate,
+): Promise<ApiResponse<AgentAutomation>> {
+  return request<AgentAutomation>(
+    `/api/agent/automations/${encodeURIComponent(automationId)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export async function deleteAgentAutomation(
+  automationId: string,
+): Promise<ApiResponse<{ deleted: boolean }>> {
+  return request<{ deleted: boolean }>(
+    `/api/agent/automations/${encodeURIComponent(automationId)}`,
+    { method: 'DELETE' },
+  );
+}
+
+export async function runAgentAutomation(
+  automationId: string,
+): Promise<ApiResponse<AgentAutomationRun>> {
+  return request<AgentAutomationRun>(
+    `/api/agent/automations/${encodeURIComponent(automationId)}/run`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ deliver: false }),
+    },
+  );
+}
+
+export async function listAgentAutomationRuns(
+  automationId: string,
+): Promise<ApiResponse<AgentAutomationRunList>> {
+  return request<AgentAutomationRunList>(
+    `/api/agent/automations/${encodeURIComponent(automationId)}/runs`,
+  );
+}
+
+export async function getAgentEmailStatus(): Promise<ApiResponse<AgentEmailStatus>> {
+  return request<AgentEmailStatus>('/api/agent/email/status');
+}
+
+export async function sendAgentEmailVerification(): Promise<
+  ApiResponse<AgentEmailVerificationSendResult>
+> {
+  return request<AgentEmailVerificationSendResult>(
+    '/api/agent/email/verification/send',
+    { method: 'POST' },
+  );
+}
+
+export async function confirmAgentEmailVerification(
+  token: string,
+): Promise<ApiResponse<AgentEmailVerificationConfirmResult>> {
+  return request<AgentEmailVerificationConfirmResult>(
+    '/api/agent/email/verification/confirm',
+    {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    },
+  );
+}
+
 export async function runNotePlanAgent(
   noteId: string,
   instruction: string,
@@ -960,6 +1409,8 @@ export interface UserActivityItem {
   status_code: number;
   duration_ms: number;
   ip: string | null;
+  detail: Record<string, string | number>;
+  detail_summary: string;
   created_at: string;
 }
 
@@ -972,6 +1423,7 @@ export interface UserActivityReport {
   };
   items: UserActivityItem[];
   actions: { value: string; label: string }[];
+  users: { value: string; label: string }[];
   total: number;
   page: number;
   per_page: number;
@@ -983,6 +1435,7 @@ export async function getUserActivity(
   page = 1,
   perPage = 20,
   action?: string,
+  userId?: string,
 ): Promise<ApiResponse<UserActivityReport>> {
   const params = new URLSearchParams({
     days: String(days),
@@ -990,6 +1443,7 @@ export async function getUserActivity(
     per_page: String(perPage),
   });
   if (action) params.set('action', action);
+  if (userId) params.set('user_id', userId);
   return request<UserActivityReport>(`/api/admin/user-activity?${params.toString()}`);
 }
 

@@ -42,6 +42,27 @@ class Settings(BaseSettings):
     #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     ENCRYPTION_KEY: str = ""
 
+    # Optional outbound email for daily video digests. Local development
+    # safely falls back to preview-only runs when SMTP_HOST is empty.
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = ""
+    SMTP_FROM_NAME: str = "知萃"
+    SMTP_USE_TLS: bool = True
+    SMTP_USE_SSL: bool = False
+    SMTP_TIMEOUT_SECONDS: int = 15
+    PUBLIC_APP_URL: str = "https://luxai.cn"
+    # Keep outbound delivery opt-in until the deployment has an approved
+    # sender domain and account-email verification policy.
+    EMAIL_DELIVERY_ENABLED: bool = False
+
+    # Persistent database-backed scheduler. It is safe to leave enabled in
+    # local development; no email is sent without explicit SMTP config.
+    AGENT_AUTOMATION_ENABLED: bool = True
+    AGENT_AUTOMATION_POLL_SECONDS: int = 30
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

@@ -1,0 +1,2344 @@
+.root {
+  --aw-canvas: color-mix(in srgb, var(--background) 86%, #f6f0e7);
+  --aw-surface: color-mix(in srgb, var(--card-bg) 97%, #fbf7f0);
+  --aw-rail: color-mix(in srgb, var(--background-secondary) 80%, #f7f1e8);
+  --aw-soft: color-mix(in srgb, var(--foreground) 4%, transparent);
+  --aw-soft-strong: color-mix(in srgb, var(--foreground) 7%, transparent);
+  --aw-line: color-mix(in srgb, var(--card-border) 84%, #d8d0c5);
+  --aw-mint: var(--accent-mint-strong);
+  --aw-mint-soft: color-mix(in srgb, var(--accent-mint-soft) 76%, var(--card-bg));
+  width: 100%;
+  min-width: 0;
+  color: var(--foreground);
+  background: var(--aw-canvas);
+}
+
+:global([data-theme="dark"]) .root {
+  --aw-canvas: var(--background);
+  --aw-surface: var(--card-bg);
+  --aw-rail: var(--background-secondary);
+  --aw-line: var(--card-border);
+}
+
+.root :global(.video-agent-shell) {
+  position: relative;
+  display: grid;
+  overflow: hidden;
+  width: 100%;
+  height: calc(100dvh - 8.5rem);
+  min-height: 580px;
+  max-height: 920px;
+  border: 1px solid var(--aw-line);
+  border-radius: 18px;
+  grid-template-areas: "sources main";
+  grid-template-columns: clamp(260px, 22vw, 280px) minmax(0, 1fr) !important;
+  background: var(--aw-surface);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--card-shadow) 34%, transparent);
+}
+
+.root :global(.video-agent-main) {
+  grid-area: main;
+  display: flex;
+  overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--aw-surface);
+}
+
+.root :global(.video-agent-sources) {
+  position: relative !important;
+  z-index: auto;
+  grid-area: sources;
+  display: flex;
+  overflow: hidden;
+  width: auto;
+  min-width: 0;
+  height: auto;
+  min-height: 0;
+  border: 0;
+  border-right: 1px solid var(--aw-line);
+  flex-direction: column;
+  background: var(--aw-rail);
+  box-shadow: none;
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+
+.root :global(.video-agent-history) {
+  position: absolute !important;
+  z-index: 96;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  overflow: hidden;
+  width: min(316px, calc(100% - 32px));
+  height: auto;
+  min-height: 0;
+  border: 0;
+  border-right: 1px solid var(--aw-line);
+  flex-direction: column;
+  background: var(--aw-surface);
+  box-shadow: 12px 0 28px color-mix(in srgb, var(--card-shadow) 62%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+  transform: translateX(-16px);
+  transition:
+    transform 160ms ease-out,
+    opacity 160ms ease-out !important;
+}
+
+.root :global(.video-agent-history.is-open) {
+  opacity: 1;
+  pointer-events: auto;
+  visibility: visible;
+  transform: translateX(0);
+}
+
+.root :global(.video-agent-backdrop) {
+  position: fixed;
+  z-index: 94;
+  inset: 0;
+  display: block;
+  border: 0;
+  background: color-mix(in srgb, var(--foreground) 26%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease-out !important;
+}
+
+.root :global(.video-agent-backdrop.is-visible) {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.root :global(.video-agent-panel-heading) {
+  display: flex;
+  min-height: 72px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--aw-line);
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: transparent;
+}
+
+.root :global(.video-agent-panel-heading) > div {
+  min-width: 0;
+}
+
+.root :global(.video-agent-panel-heading span),
+.root :global(.video-agent-panel-heading strong) {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.root :global(.video-agent-panel-heading span) {
+  color: var(--foreground-muted);
+  font-size: 0.69rem;
+  font-weight: 600;
+}
+
+.root :global(.video-agent-panel-heading strong) {
+  margin-top: 3px;
+  color: var(--foreground);
+  font-size: 0.9rem;
+  font-weight: 680;
+}
+
+.root :global(.video-agent-mobile-close),
+.root :global(.video-agent-topbar-icon) {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  border: 0;
+  border-radius: 10px;
+  place-items: center;
+  color: var(--foreground-muted);
+  background: transparent;
+  transition:
+    transform 160ms ease-out,
+    opacity 160ms ease-out !important;
+}
+
+.root :global(.video-agent-mobile-close:hover),
+.root :global(.video-agent-topbar-icon:hover) {
+  color: var(--foreground);
+  background: var(--aw-soft);
+}
+
+.root :global(.video-agent-sources .video-agent-mobile-close) {
+  display: none;
+}
+
+.root :global(.video-agent-new-task) {
+  display: flex;
+  min-height: 44px;
+  margin: 14px 14px 9px;
+  padding: 0 14px;
+  border: 1px solid var(--aw-line);
+  border-radius: 11px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--foreground);
+  background: var(--aw-soft);
+  font-size: 0.79rem;
+  font-weight: 670;
+  transition:
+    transform 160ms ease-out,
+    opacity 160ms ease-out !important;
+}
+
+.root :global(.video-agent-new-task:hover) {
+  filter: none;
+  background: var(--aw-soft-strong);
+  transform: translateY(-1px);
+}
+
+.root :global(.video-agent-new-task:active) {
+  transform: translateY(1px);
+}
+
+.root :global(.video-agent-history-list) {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 4px 10px 12px;
+  flex: 1;
+  scrollbar-width: thin;
+  scrollbar-color: var(--aw-line) transparent;
+  overscroll-behavior: contain;
+}
+
+.root :global(.video-agent-history-item) {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  margin-top: 3px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  color: var(--foreground-muted);
+  background: transparent;
+}
+
+.root :global(.video-agent-history-item:hover) {
+  color: var(--foreground);
+  background: var(--aw-soft);
+}
+
+.root :global(.video-agent-history-item.is-active) {
+  border-color: color-mix(in srgb, var(--aw-mint) 18%, var(--aw-line));
+  color: var(--foreground);
+  background: var(--aw-mint-soft);
+}
+
+.root :global(.video-agent-history-item > button:first-child) {
+  overflow: hidden;
+  min-width: 0;
+  min-height: 66px;
+  padding: 10px 6px 10px 11px;
+  color: inherit;
+  text-align: left;
+}
+
+.root :global(.video-agent-history-item strong),
+.root :global(.video-agent-history-item span),
+.root :global(.video-agent-history-item small) {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.root :global(.video-agent-history-item strong) {
+  color: inherit;
+  font-size: 0.79rem;
+  font-weight: 650;
+}
+
+.root :global(.video-agent-history-item span) {
+  margin-top: 4px;
+  color: var(--foreground-muted);
+  font-size: 0.72rem;
+}
+
+.root :global(.video-agent-history-item small) {
+  margin-top: 5px;
+  color: var(--foreground-muted);
+  font-size: 0.67rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.root :global(.video-agent-history-delete) {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  margin: 6px 4px 0 0;
+  border: 0;
+  border-radius: 9px;
+  place-items: center;
+  color: var(--foreground-muted);
+  background: transparent;
+  opacity: 0;
+  transition:
+    transform 160ms ease-out,
+    opacity 160ms ease-out !important;
+}
+
+.root :global(.video-agent-history-item:hover .video-agent-history-delete),
+.root :global(.video-agent-history-item:focus-within .video-agent-history-delete),
+.root :global(.video-agent-history-delete.is-confirming) {
+  opacity: 1;
+}
+
+.root :global(.video-agent-history-delete:hover),
+.root :global(.video-agent-history-delete.is-confirming) {
+  color: var(--accent-rose);
+  background: color-mix(in srgb, var(--accent-rose) 8%, transparent);
+}
+
+.root :global(.video-agent-automation-entry) {
+  display: grid;
+  min-height: 62px;
+  margin: 8px 12px 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--aw-line);
+  border-radius: 11px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  color: var(--foreground-muted);
+  background: transparent;
+  text-align: left;
+  transition:
+    transform 160ms ease-out,
+    opacity 160ms ease-out !important;
+}
+
+.root :global(.video-agent-automation-entry:hover) {
+  color: var(--foreground);
+  background: var(--aw-soft);
+  transform: translateY(-1px);
+}
+
+.root :global(.video-agent-automation-entry strong),
+.root :global(.video-agent-automation-entry small) {
+  display: block;
+}
+
+.root :global(.video-agent-automation-entry strong) {
+  color: var(--foreground-secondary);
+  font-size: 0.74rem;
+  font-weight: 650;
+}
+
+.root :global(.video-agent-automation-entry small) {
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--foreground-muted);
+  font-size: 0.67rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.root :global(.video-agent-topbar) {
+  display: flex;
+  min-height: 72px;
+  padding: 11px 18px;
+  border-bottom: 1px solid var(--aw-line);
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: var(--aw-surface);
+}
+
+.root :global(.video-agent-topbar-leading),
+.root :global(.video-agent-topbar-actions),
+.root :global(.video-agent-topbar-actions button) {
+  display: flex;
+  align-items: center;
+}
+
+.root :global(.video-agent-topbar-leading) {
+  min-width: 0;
+  gap: 10px;
+}
+
+.root :global(.video-agent-topbar-leading > div:last-child) {
+  min-width: 0;
+}
+
+.root :global(.video-agent-topbar-leading h1),
+.root :global(.video-agent-topbar-leading p) {
+  overflow: hidden;
+  margin: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.root :global(.video-agent-topbar-leading h1) {
+  color: var(--foreground);
+  font-size: 0.98rem;
+  font-weight: 690;
+  line-height: 1.3;
+  text-wrap: balance;
+}
+
+.root :global(.video-agent-topbar-leading p) {
+  margin-top: 3px;
+  color: var(--foreground-muted);
+  font-size: 0.7rem;
+  line-height: 1.3;
+}
+
+.root :global(.video-agent-avatar) {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--aw-mint) 16%, var(--aw-line));
+  border-radius: 10px;
+  place-items: center;
+  color: var(--aw-mint);
+  background: var(--aw-mint-soft);
+}
+
+.root :global(.video-agent-topbar-actions) {
+  min-width: 0;
+  flex: 0 0 auto;
+  gap: 5px;
+}
+
+.root :global(.video-agent-topbar-actions button) {
+  position: relative;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  justify-content: center;
+  gap: 6px;
+  color: var(--foreground-muted);
+  background: transparent;
+  font-size: 0.72rem;
+  font-weight: 620;
+  transition:
+    transform 160ms ease-out,
+    opacity 160ms ease-out !important;
+}
+
+.root :global(.video-agent-topbar-actions button:hover) {
+  border-color: var(--aw-line);
+  color: var(--foreground);
+  background: var(--aw-soft);
+  transform: translateY(-1px);
+}
+
+.root :global(.video-agent-topbar-actions button.is-icon) {
+  width: 40px;
+  padding: 0;
+}
+
+.root :global(.video-agent-topbar-actions button.is-source) {
+  max-width: 220px;
+  border-color: var(--aw-line);
+  background: var(--aw-surface);
+}
+
+.root :global(.video-agent-topbar-actions button.is-source span) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.root :global(.video-agent-topbar-actions button b) {
+  display: grid;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  border-radius: 7px;
+  place-items: center;
+  color: var(--aw-mint);
+  background: var(--aw-mint-soft);
+  font-size: 0.64rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.root :global(.video-agent-inline-status) {
+  display: grid;
+  min-height: 42px;
+  margin: 9px 16px 0;
+  padding: 6px 8px 6px 11px;
+  border: 1px solid color-mix(in srgb, var(--aw-mint) 18%, var(--aw-line));
+  border-radius: 10px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--foreground-secondary);
+  background: var(--aw-mint-soft);
+  font-size: 0.75rem;
+}
+
+.root :global(.video-agent-inline-status.is-error) {
+  border-color: color-mix(in srgb, var(--accent-rose) 26%, var(--aw-line));
+  color: var(--accent-rose);
+  background: color-mix(in srgb, var(--accent-rose) 6%, var(--aw-surface));
+}
+
+.root :global(.video-agent-inline-status > button) {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  border-radius: 8px;
+  place-items: center;
+  color: inherit;
+}
+
+.root :global(.video-agent-thread) {
+  overflow-x: hidden;
+  overflow-y: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: clamp(28px, 4vw, 48px) clamp(24px, 6vw, 72px) 30px;
+  flex: 1;
+  scrollbar-width: thin;
+  scrollbar-color: var(--aw-line) transparent;
+  overscroll-behavior: contain;
+}
+
+.root :global(.video-agent-welcome) {
+  display: flex;
+  width: min(100%, 720px);
+  min-height: 100%;
+  margin: auto;
+  padding: 32px 0 44px;
+  align-items: flex-start;
+  justify-content: center;
+  flex-direction: column;
+}
+
+.root :global(.video-agent-welcome-mark) {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  border: 1px solid color-mix(in srgb, var(--aw-mint) 16%, var(--aw-line));
+  border-radius: 13px;
+  place-items: center;
+  color: var(--aw-mint);
+  background: var(--aw-mint-soft);
+}
+
+.root :global(.video-agent-welcome > p) {
+  margin: 18px 0 0;
+  color: var(--aw-mint);
+  font-size: 0.72rem;
+  font-weight: 680;
+}
+
+.root :global(.video-agent-welcome h2) {
+  max-width: 19ch;
+  margin: 8px 0 0;
+  color: var(--foreground);
+  font-size: clamp(1.7rem, 3vw, 2.35rem);
+  font-weight: 760;
+  line-height: 1.18;
+  text-wrap: balance;
+}
+
+.root :global(.video-agent-welcome-copy) {
+  max-width: 58ch;
+  margin-top: 14px;
+  color: var(--foreground-muted);
+  font-size: 0.84rem;
+  line-height: 1.72;
+  text-wrap: pretty;
+}
+
+.root :global(.video-agent-starters) {
+  display: grid;
+  width: 100%;
+  margin-top: 28px;
+  border-top: 1px solid var(--aw-line);
+}
+
+.root :global(.video-agent-starters button) {
+  display: grid;
+  width: 100%;
+  min-height: 52px;
+  padding: 11px 6px;
+  border: 0;
+  border-bottom: 1px solid var(--aw-line);
+  border-radius: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  color: var(--foreground-secondary);
+  background: transparent;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  text-align: left;
+  transition:
+    transform 160ms ease-out,
+    opacity 160ms ease-out !important;
+}
+
+.root :global(.video-agent-starters button:hover) {
+  padding: 11px 6px;
+  border-color: var(--aw-line);
+  color: var(--foreground);
+  background: var(--aw-soft);
+  transform: translateX(2px);
+}
+
+.root :global(.video-agent-welcome-empty) {
+  display: flex;
+  width: 100%;
+  min-height: 82px;
+  margin-top: 24px;
+  padding: 14px 15px;
+  border: 1px solid var(--aw-line);
+  border-radius: 12px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--foreground-muted);
+  background: var(--aw-soft);
+  font-size: 0.8rem;
+}
+
+.root :global(.video-agent-welcome-empty a) {
+  display: inline-flex;
+  min-height: 44px;
+  padding: 0 13px;
+  border-radius: 10px;
+  align-items: center;
+  gap: 6px;
+  color: #fff;
+  background: var(--aw-mint);
+  font-size: 0.78rem;
+  font-weight: 670;
+}
+
+.root :global(.video-agent-message) {
+  width: min(100%, 760px);
+  min-width: 0;
+  margin: 0 auto 34px;
+  color: var(--foreground-secondary);
+}
+
+.root :global(.video-agent-message.is-user) {
+  width: fit-content;
+  max-width: min(76%, 620px);
+  margin-right: 0;
+  margin-left: auto;
+}
+
+.root :global(.video-agent-message-author) {
+  display: flex;
+  margin-bottom: 9px;
+  align-items: center;
+  gap: 7px;
+  color: var(--foreground-muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.root :global(.video-agent-message-author span) {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  border: 1px solid color-mix(in srgb, var(--aw-mint) 14%, var(--aw-line));
+  border-radius: 8px;
+  place-items: center;
+  color: var(--aw-mint);
+  background: var(--aw-mint-soft);
+}
+
+.root :global(.video-agent-message.is-user .video-agent-message-author) {
+  justify-content: flex-end;
+}
+
+.root :global(.video-agent-message-content) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.93rem;
+  line-height: 1.72;
+  text-wrap: pretty;
+}
+
+.root :global(.video-agent-message.is-user .video-agent-message-content) {
+  padding: 11px 14px;
+  border: 1px solid var(--aw-line);
+  border-radius: 14px 14px 4px;
+  color: var(--foreground);
+  background: var(--aw-soft);
+  box-shadow: none;
+}
+
+.root :global(.video-agent-answer-markdown) {
+  max-width: 68ch;
+  color: var(--foreground);
+  font-size: 0.96rem;
+  line-height: 1.78;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
+.root :global(.video-agent-answer-markdown) :where(p, ul, ol, blockquote, pre, table) {
+  margin: 0 0 1em;
+}
+
+.root :global(.video-agent-answer-markdown) :where(h1, h2, h3, h4) {
+  margin: 1.55em 0 0.58em;
+  color: var(--foreground);
+  font-weight: 700;
+  line-height: 1.35;
+  text-wrap: balance;
+}
+
+.root :global(.video-agent-answer-markdown) :where(h1) {
+  font-size: 1.38rem;
+}
+
+.root :global(.video-agent-answer-markdown) :where(h2) {
+  font-size: 1.16rem;
+}
+
+.root :global(.video-agent-answer-markdown) :where(h3, h4) {
+  font-size: 1rem;
+}
+
+.root :global(.video-agent-answer-markdown) :where(ul, ol) {
+  padding-left: 1.3rem;
+}
+
+.root :global(.video-agent-answer-markdown) :where(li + li) {
+  margin-top: 0.38em;
+}
+
+.root :global(.video-agent-answer-markdown) :where(strong) {
+  color: var(--foreground);
+  font-weight: 700;
+}
+
+.root :global(.video-agent-answer-markdown) :where(blockquote) {
+  padding: 3px 0 3px 14px;
+  border-left: 2px solid color-mix(in srgb, var(--aw-mint) 42%, var(--aw-line));
+  color: var(--foreground-secondary);
+  background: transparent;
+}
+
+.root :global(.video-agent-answer-markdown) :where(pre) {
+  overflow-x: auto;
+  max-width: 100%;
+  padding: 14px;
+  border: 1px solid var(--aw-line);
+  border-radius: 10px;
+  background: var(--aw-rail);
+  font-size: 0.82rem;
+}
+
+.root :global(.video-agent-answer-markdown) :where(code) {
+  padding: 0.12em 0.32em;
+  border-radius: 5px;
+  background: var(--aw-soft);
+  font-size: 0.88em;
+}
+
+.root :global(.video-agent-answer-markdown) :where(pre code) {
+  padding: 0;
+  background: transparent;
+}
+
+.root :global(.video-agent-answer-markdown) :where(a) {
+  color: var(--aw-mint);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--aw-mint) 34%, transparent);
+  text-underline-offset: 3px;
+}
+
+.root :global(.video-agent-answer-markdown) :where(table) {
+  display: block;
+  overflow-x: auto;
+  width: max-content;
+  max-width: 100%;
+  border-collapse: collapse;
+}
+
+.root :global(.video-agent-answer-markdown) :where(th, td) {
+  padding: 8px 10px;
+  border: 1px solid var(--aw-line);
+  text-align: left;
+}
+
+.root :global(.video-agent-answer-status) {
+  display: none;
+}
+
+.root :global(.video-agent-grounding) {
+  margin-top: 18px;
+  border-top: 1px solid var(--aw-line);
+  border-bottom: 1px solid var(--aw-line);
+  background: transparent;
+}
+
+.root :global(.video-agent-grounding-summary) {
+  display: grid;
+  min-height: 50px;
+  padding: 7px 2px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  color: var(--foreground-muted);
+  cursor: pointer;
+  list-style: none;
+}
+
+.root :global(.video-agent-grounding-summary::-webkit-details-marker) {
+  display: none;
+}
+
+.root :global(.video-agent-grounding-summary-label) {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--foreground-secondary);
+}
+
+.root :global(.video-agent-grounding-summary-label strong) {
+  color: var(--foreground);
+  font-size: 0.78rem;
+  font-weight: 680;
+}
+
+.root :global(.video-agent-grounding.is-grounded .video-agent-grounding-summary-label svg) {
+  color: var(--aw-mint);
+}
+
+.root :global(.video-agent-grounding.is-limited .video-agent-grounding-summary-label svg) {
+  color: var(--foreground-muted);
+}
+
+.root :global(.video-agent-grounding-summary-meta) {
+  overflow: hidden;
+  color: var(--foreground-muted);
+  font-size: 0.71rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.root :global(.video-agent-grounding-chevron) {
+  color: var(--foreground-muted);
+  transition: transform 160ms ease-out !important;
+}
+
+.root :global(.video-agent-grounding[open] .video-agent-grounding-chevron) {
+  transform: rotate(90deg);
+}
+
+.root :global(.video-agent-grounding-body) {
+  padding: 0 0 12px;
+}
+
+.root :global(.video-agent-grounding-section) {
+  padding: 15px 2px 4px;
+  border-top: 1px solid var(--aw-line);
+}
+
+.root :global(.video-agent-grounding-section-header) {
+  display: flex;
+  min-height: 28px;
+  margin-bottom: 9px;
+  align-items: center;
+  gap: 7px;
+  color: var(--foreground-muted);
+}
+
+.root :global(.video-agent-grounding-section-header h4) {
+  margin: 0;
+  color: var(--foreground-secondary);
+  font-size: 0.76rem;
+  font-weight: 680;
+}
+
+.root :global(.video-agent-grounding-section-header span) {
+  display: grid;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 6px;
+  place-items: center;
+  color: var(--foreground-muted);
+  background: var(--aw-soft);
+  font-size: 0.65rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.root :global(.video-agent-grounding-evidence),
+.root :global(.video-agent-grounding-links),
+.root :global(.video-agent-grounding-process),
+.root :global(.video-agent-grounding-limitations) {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.root :global(.video-agent-grounding-evidence) {
+  display: grid;
+  gap: 8px;
+}
+
+.root :global(.video-agent-grounding-evidence > li) {
+  display: grid;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--aw-line);
+  border-radius: 10px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 9px;
+  background: var(--aw-soft);
+}
+
+.root :global(.video-agent-grounding-index) {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  place-items: center;
+  color: var(--aw-mint);
+  background: var(--aw-mint-soft);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.root :global(.video-agent-grounding-evidence blockquote) {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.root :global(.video-agent-grounding-source-title) {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 0.76rem;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.root :global(.video-agent-grounding-source-meta) {
+  display: block;
+  margin-top: 2px;
+  color: var(--foreground-muted);
+  font-size: 0.68rem;
+}
+
+.root :global(.video-agent-grounding-evidence p) {
+  margin: 7px 0 0;
+  color: var(--foreground-secondary);
+  font-size: 0.78rem;
+  line-height: 1.62;
+  text-wrap: pretty;
+}
+
+.root :global(.video-agent-grounding-links) {
+  display: grid;
+  gap: 6px;
+}
+
+.root :global(.video-agent-grounding-links a) {
+  display: grid;
+  min-height: 44px;
+  padding: 7px 10px;
+  border: 1px solid var(--aw-line);
+  border-radius: 9px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  color: var(--foreground-secondary);
+  background: transparent;
+}
+
+.root :global(.video-agent-grounding-links a span),
+.root :global(.video-agent-grounding-links a small) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.root :global(.video-agent-grounding-links a span) {
+  font-size: 0.76rem;
+  font-weight: 620;
+}
+
+.root :global(.video-agent-grounding-links a small) {
+  color: var(--foreground-muted);
+  font-size: 0.68rem;
+}
+
+.root :global(.video-agent-grounding-process) {
+  display: grid;
+  gap: 8px;
+}
+
+.root :global(.video-agent-grounding-process li) {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 8px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+}
+
+.root :global(.video-agent-grounding-process li > i) {
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--aw-mint);
+}
+
+.root :global(.video-agent-grounding-process li[data-status="skipped"] > i) {
+  background: var(--foreground-muted);
+}
+
+.root :global(.video-agent-grounding-process li[data-status="failed"] > i) {
+  background: var(--accent-rose);
+}
+
+.root :global(.video-agent-grounding-process strong),
+.root :global(.video-agent-grounding-process small) {
+  display: block;
+}
+
+.root :global(.video-agent-grounding-process strong) {
+  color: var(--foreground-secondary);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.root :global(.video-agent-grounding-process small) {
+  margin-top: 2px;
+  color: var(--foreground-muted);
+  font-size: 0.69rem;
+  line-height: 1.5;
+}
+
+.root :global(.video-agent-grounding-limitations) {
+  padding-left: 1.1rem;
+  color: var(--foreground-muted);
+  font-size: 0.75rem;
+  line-height: 1.62;
+  list-style: disc;
+}
+
+.root :global(.video-agent-grounding-limitations li + li) {
+  margin-top: 4px;
+}
+
+.root :global(.video-agent-answer-actions) {
+  display: flex;
+  margin-top: 9px;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.root :global(.video-agent-answer-actions button) {
+  display: inline-flex;
+  min-height: 38px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 8px;
+  align-items: center;
+  gap: 5px;
+  color: var(--foreground-muted);
+  background: transparent;
+  font-size: 0.72rem;
+  transition:
+    transform 160ms ease-out,
+    opacity 160ms ease-out !important;
+}
+
+.root :global(.video-agent-answer-actions button:hover) {
+  color: var(--foreground);
+  background: var(--aw-soft);
+}
+
+.root :global(.video-agent-followups) {
+  display: grid;
+  margin-top: 19px;
+  border-top: 1px solid var(--aw-line);
+  gap: 0;
+}
+
+.root :global(.video-agent-followups > strong) {
+  padding: 13px 3px 7px;
+  color: var(--foreground-muted);
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+
+.root :global(.video-agent-followups button) {
+  display: grid;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 3px;
+  border: 0;
+  border-bottom: 1px solid var(--aw-line);
+  border-radius: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  color: var(--foreground-secondary);
+  background: transparent;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  text-align: left;
+  transition:
+    transform 160ms ease-out,
+    opacity 160ms ease-out !important;
+}
+
+.root :global(.video-agent-followups button:hover) {
+  padding: 8px 3px;
+  border-radius: 0;
+  color: var(--aw-mint);
+  background: var(--aw-soft);
+  transform: translateX(2px);
+}
+
+.root :global(.video-agent-message-delivery) {
+  display: flex;
+  min-height: 36px;
+  margin-top: 6px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  color: var(--foreground-muted);
+  font-size: 0.72rem;
+}
+
+.root :global(.video-agent-message-delivery.is-failed) {
+  color: var(--accent-rose);
+}
+
+.root :global(.video-agent-message-delivery button) {
+  display: inline-flex;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--aw-line);
+  border-radius: 9px;
+  align-items: center;
+  gap: 5px;
+  color: var(--foreground-secondary);
+  background: var(--aw-soft);
+}
+
+.root :global(.video-agent-thinking) {
+  display: flex;
+  width: min(100%, 760px);
+  min-height: 44px;
+  margin: -12px auto 24px;
+  align-items: center;
+  gap: 10px;
+  color: var(--foreground-muted);
+  font-size: 0.74rem;
+}
+
+.root :global(.video-agent-thinking > span) {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.root :global(.video-agent-thinking i) {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--aw-mint);
+}
+
+.root :global(.video-agent-composer-region) {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 12px clamp(18px, 5vw, 64px) 13px;
+  border-top: 1px solid var(--aw-line);
+  background: var(--aw-surface);
+}
+
+.root :global(.video-agent-composer) {
+  position: relative;
+  overflow: hidden;
+  width: min(100%, 800px);
+  margin: 0 auto;
+  border: 1px solid color-mix(in srgb, var(--foreground) 12%, var(--aw-line));
+  border-radius: 16px;
+  background: var(--card-bg);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--card-shadow) 42%, transparent),
+    0 8px 18px color-mix(in srgb, var(--card-shadow) 26%, transparent);
+}
+
+.root :global(.video-agent-composer:focus-within) {
+  border-color: color-mix(in srgb, var(--aw-mint) 48%, var(--aw-line));
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--card-shadow) 42%, transparent),
+    0 8px 18px color-mix(in srgb, var(--card-shadow) 26%, transparent);
+}
+
+.root :global(.video-agent-composer textarea) {
+  display: block;
+  width: 100%;
+  min-height: 78px;
+  max-height: 180px;
+  padding: 14px 16px 7px;
+  border: 0;
+  resize: none;
+  color: var(--foreground);
+  outline: none;
+  background: transparent;
+  font: inherit;
+  font-size: 0.94rem;
+  line-height: 1.58;
+}
+
+.root :global(.video-agent-composer textarea::placeholder) {
+  color: var(--foreground-muted);
+}
+
+.root :global(.video-agent-custom-instruction) {
+  width: calc(100% - 28px);
+  min-height: 38px;
+  margin: 0 14px 7px;
+  padding: 0 10px;
+  border: 1px solid var(--aw-line);
+  border-radius: 9px;
+  color: var(--foreground);
+  outline: none;
+  background: var(--aw-soft);
+  font: inherit;
+  font-size: 0.75rem;
+}
+
+.root :global(.video-agent-composer-toolbar) {
+  display: flex;
+  min-width: 0;
+  padding: 5px 7px 7px 9px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.root :global(.video-agent-composer-controls) {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+}
+
+.root :global(.video-agent-composer-context),
+.root :global(.video-agent-options-trigger) {
+  display: inline-flex !important;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  align-items: center;
+  gap: 7px;
+  color: var(--foreground-secondary);
+  background: transparent;
+  font-size: 0.75rem;
+  font-weight: 620;
+  transition:
+    transform 160ms ease-out,
+    opacity 160ms ease-out !important;
+}
+
+.root :global(.video-agent-composer-context) {
+  border-color: color-mix(in srgb, var(--aw-mint) 16%, var(--aw-line));
+  color: var(--aw-mint);
+  background: var(--aw-mint-soft);
+}
+
+.root :global(.video-agent-composer-context span),
+.root :global(.video-agent-options-trigger span),
+.root :global(.video-agent-options-trigger small) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.root :global(.video-agent-composer-context b) {
+  display: grid;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 6px;
+  place-items: center;
+  color: var(--aw-mint);
+  background: color-mix(in srgb, var(--aw-mint) 8%, var(--card-bg));
+  font-size: 0.64rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.root :global(.video-agent-options-trigger small) {
+  color: var(--foreground-muted);
+  font-size: 0.67rem;
+  font-weight: 500;
+}
+
+.root :global(.video-agent-composer-context:hover),
+.root :global(.video-agent-options-trigger:hover) {
+  background: var(--aw-soft);
+  transform: translateY(-1px);
+}
+
+.root :global(.video-agent-answer-options) {
+  display: none;
+}
+
+.root :global(.video-agent-send) {
+  position: static !important;
+  display: grid;
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  min-height: 48px;
+  flex: 0 0 48px;
+  border: 0;
+  border-radius: 13px;
+  place-items: center;
+  color: #fff;
+  background: var(--aw-mint);
+  box-shadow: none;
+  transition:
+    transform 160ms ease-out,
+    opacity 160ms ease-out !important;
+}
+
+.root :global(.video-agent-send:hover:not(:disabled)) {
+  filter: none;
+  transform: translateY(-1px);
+}
+
+.root :global(.video-agent-send:active:not(:disabled)) {
+  transform: translateY(1px);
+}
+
+.root :global(.video-agent-send.is-stop) {
+  color: var(--foreground);
+  background: var(--aw-soft-strong);
+}
+
+.root :global(.video-agent-send:disabled) {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.root :global(.video-agent-composer-region > p) {
+  margin: 7px 0 0;
+  color: var(--foreground-muted);
+  font-size: 0.67rem;
+  text-align: center;
+}
+
+.root :global(.video-agent-scope-list) {
+  display: grid;
+  padding: 12px 12px 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.root :global(.video-agent-scope-list > button) {
+  display: flex;
+  min-width: 0;
+  min-height: 44px;
+  padding: 7px 9px;
+  border: 1px solid var(--aw-line);
+  border-radius: 9px;
+  align-items: center;
+  justify-content: center;
+  color: var(--foreground-muted);
+  background: transparent;
+  text-align: center;
+  transition:
+    transform 160ms ease-out,
+    opacity 160ms ease-out !important;
+}
+
+.root :global(.video-agent-scope-list > button:hover) {
+  color: var(--foreground);
+  background: var(--aw-soft);
+}
+
+.root :global(.video-agent-scope-list > button.is-active) {
+  border-color: color-mix(in srgb, var(--aw-mint) 24%, var(--aw-line));
+  color: var(--aw-mint);
+  background: var(--aw-mint-soft);
+}
+
+.root :global(.video-agent-scope-list strong) {
+  display: block;
+  overflow: hidden;
+  font-size: 0.76rem;
+  font-weight: 660;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.root :global(.video-agent-scope-list small),
+.root :global(.video-agent-scope-list > button > i) {
+  display: none;
+}
+
+.root :global(.video-agent-source-search) {
+  display: flex;
+  min-height: 42px;
+  margin: 2px 12px 9px;
+  padding: 0 6px 0 11px;
+  border: 1px solid var(--aw-line);
+  border-radius: 10px;
+  align-items: center;
+  gap: 7px;
+  color: var(--foreground-muted);
+  background: var(--aw-surface);
+}
+
+.root :global(.video-agent-source-search input) {
+  min-width: 0;
+  min-height: 40px;
+  border: 0;
+  flex: 1;
+  color: var(--foreground);
+  outline: none;
+  background: transparent;
+  font: inherit;
+  font-size: 0.76rem;
+}
+
+.root :global(.video-agent-source-search button) {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  border-radius: 8px;
+  place-items: center;
+  color: var(--foreground-muted);
+}
+
+.root :global(.video-agent-source-summary) {
+  display: flex;
+  min-height: 28px;
+  padding: 0 14px 7px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--foreground-muted);
+  font-size: 0.67rem;
+}
+
+.root :global(.video-agent-source-summary strong) {
+  color: var(--aw-mint);
+  font-variant-numeric: tabular-nums;
+}
+
+.root :global(.video-agent-source-list) {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 0 9px 10px;
+  flex: 1;
+  scrollbar-width: thin;
+  scrollbar-color: var(--aw-line) transparent;
+  overscroll-behavior: contain;
+}
+
+.root :global(.video-agent-source-item) {
+  display: grid;
+  width: 100%;
+  min-height: 60px;
+  margin-top: 3px;
+  padding: 7px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  grid-template-columns: 42px minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 9px;
+  color: var(--foreground-muted);
+  background: transparent;
+  text-align: left;
+}
+
+.root :global(.video-agent-source-item:not(:disabled):hover) {
+  border-color: var(--aw-line);
+  background: var(--aw-soft);
+}
+
+.root :global(.video-agent-source-item.is-selected) {
+  border-color: color-mix(in srgb, var(--aw-mint) 22%, var(--aw-line));
+  background: var(--aw-mint-soft);
+}
+
+.root :global(.video-agent-source-cover) {
+  position: relative;
+  display: grid;
+  overflow: hidden;
+  width: 42px;
+  height: 42px;
+  border-radius: 9px;
+  place-items: center;
+  color: var(--foreground-muted);
+  background: var(--aw-soft-strong);
+}
+
+.root :global(.video-agent-source-cover img) {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.root :global(.video-agent-source-copy) {
+  min-width: 0;
+}
+
+.root :global(.video-agent-source-copy strong),
+.root :global(.video-agent-source-copy small) {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.root :global(.video-agent-source-copy strong) {
+  color: var(--foreground-secondary);
+  font-size: 0.77rem;
+  font-weight: 650;
+}
+
+.root :global(.video-agent-source-copy small) {
+  margin-top: 4px;
+  color: var(--foreground-muted);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.root :global(.video-agent-source-item > i) {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--aw-line);
+  border-radius: 7px;
+  place-items: center;
+  color: var(--aw-mint);
+}
+
+.root :global(.video-agent-source-overview) {
+  display: flex;
+  min-height: 100%;
+  padding: 24px 14px 30px;
+  align-items: flex-start;
+  justify-content: center;
+  flex-direction: column;
+  color: var(--foreground-muted);
+}
+
+.root :global(.video-agent-source-overview-icon) {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  border: 1px solid color-mix(in srgb, var(--aw-mint) 16%, var(--aw-line));
+  border-radius: 11px;
+  place-items: center;
+  color: var(--aw-mint);
+  background: var(--aw-mint-soft);
+}
+
+.root :global(.video-agent-source-overview > strong) {
+  margin-top: 14px;
+  color: var(--foreground);
+  font-size: 0.88rem;
+  font-weight: 680;
+}
+
+.root :global(.video-agent-source-overview > p) {
+  margin: 7px 0 0;
+  color: var(--foreground-muted);
+  font-size: 0.74rem;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.root :global(.video-agent-source-overview > div) {
+  display: grid;
+  width: 100%;
+  margin-top: 18px;
+  border-top: 1px solid var(--aw-line);
+}
+
+.root :global(.video-agent-source-overview > div > span) {
+  display: grid;
+  min-width: 0;
+  min-height: 48px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--aw-line);
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.root :global(.video-agent-source-overview > div i) {
+  position: relative;
+  display: grid;
+  overflow: hidden;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  place-items: center;
+  color: var(--foreground-muted);
+  background: var(--aw-soft);
+}
+
+.root :global(.video-agent-source-overview > div img) {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.root :global(.video-agent-source-overview > div b) {
+  overflow: hidden;
+  color: var(--foreground-secondary);
+  font-size: 0.72rem;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.root :global(.video-agent-source-overview > small) {
+  margin-top: 9px;
+  color: var(--foreground-muted);
+  font-size: 0.68rem;
+}
+
+.root :global(.video-agent-rail-empty),
+.root :global(.video-agent-source-empty),
+.root :global(.video-agent-automation-empty) {
+  display: flex;
+  min-height: 150px;
+  padding: 22px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 7px;
+  color: var(--foreground-muted);
+  font-size: 0.73rem;
+  text-align: center;
+}
+
+.root :global(.video-agent-rail-empty strong),
+.root :global(.video-agent-source-empty strong),
+.root :global(.video-agent-automation-empty strong) {
+  color: var(--foreground-secondary);
+  font-size: 0.79rem;
+}
+
+.root :global(.video-agent-source-empty span) {
+  max-width: 28ch;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.root :global(.video-agent-source-empty button) {
+  min-height: 44px;
+  margin-top: 5px;
+  padding: 0 12px;
+  border: 1px solid var(--aw-line);
+  border-radius: 9px;
+  color: var(--foreground-secondary);
+  background: var(--aw-soft);
+}
+
+.root :global(.video-agent-apply-sources) {
+  display: flex;
+  min-height: 48px;
+  margin: 9px 12px 12px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 11px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: #fff;
+  background: var(--aw-mint);
+  font-size: 0.76rem;
+  font-weight: 680;
+  transition:
+    transform 160ms ease-out,
+    opacity 160ms ease-out !important;
+}
+
+.root :global(.video-agent-apply-sources:hover:not(:disabled)) {
+  filter: none;
+  transform: translateY(-1px);
+}
+
+.root :global(.video-agent-apply-sources:active:not(:disabled)) {
+  transform: translateY(1px);
+}
+
+.root :global(.video-agent-apply-sources:disabled) {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.root :global(.video-agent-thread-skeleton),
+.root :global(.video-agent-rail-skeleton),
+.root :global(.video-agent-source-skeleton) {
+  display: grid;
+  gap: 9px;
+}
+
+.root :global(.video-agent-thread-skeleton) {
+  width: min(100%, 760px);
+  margin: 0 auto;
+  padding-top: 16px;
+}
+
+.root :global(.video-agent-rail-skeleton),
+.root :global(.video-agent-source-skeleton) {
+  padding: 12px 9px;
+}
+
+.root :global(.video-agent-thread-skeleton i),
+.root :global(.video-agent-rail-skeleton i),
+.root :global(.video-agent-source-skeleton i) {
+  display: block;
+  border-radius: 9px;
+  background: var(--aw-soft-strong);
+}
+
+.root :global(.video-agent-thread-skeleton i) {
+  height: 16px;
+}
+
+.root :global(.video-agent-rail-skeleton i),
+.root :global(.video-agent-source-skeleton i) {
+  height: 58px;
+}
+
+.root :global(.video-agent-automation-sheet) {
+  z-index: 96;
+  border-color: var(--aw-line);
+  background: var(--aw-surface);
+  box-shadow: -12px 0 28px color-mix(in srgb, var(--card-shadow) 62%, transparent);
+  visibility: hidden;
+  transition:
+    transform 160ms ease-out,
+    opacity 160ms ease-out !important;
+}
+
+.root :global(.video-agent-automation-sheet.is-open) {
+  visibility: visible;
+}
+
+.root :global(.video-agent-automation-sheet > header > button),
+.root :global(.video-agent-email-status > button),
+.root :global(.video-agent-automation-save) {
+  min-height: 44px;
+}
+
+.root :global(.video-agent-automation-sheet > header > button) {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+}
+
+.root :global(.video-agent-automation-fixed-scope) {
+  display: flex;
+  min-width: 0;
+  min-height: 44px;
+  padding: 9px 11px;
+  border: 1px solid var(--aw-line);
+  border-radius: 10px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--foreground-secondary);
+  background: var(--card-bg);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.root :global(.video-agent-automation-fixed-scope strong) {
+  display: block;
+  color: var(--foreground);
+  font-weight: 650;
+}
+
+.root :global(.video-agent-automation-fixed-scope small) {
+  display: block;
+  margin-top: 2px;
+  color: var(--foreground-muted);
+  font-size: 0.69rem;
+}
+
+.root :global(.video-agent-automation-fixed-scope > span) {
+  min-width: 0;
+  flex: 1;
+}
+
+.root :global(.video-agent-automation-source-picker) {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.root :global(.video-agent-automation-source-picker button) {
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 9px;
+  border: 1px solid var(--aw-line);
+  border-radius: 10px;
+  color: var(--foreground-secondary);
+  background: var(--card-bg);
+  font: inherit;
+  font-size: 0.74rem;
+  transition:
+    transform 160ms ease-out,
+    opacity 160ms ease-out !important;
+}
+
+.root :global(.video-agent-automation-source-picker button:hover) {
+  background: var(--aw-soft);
+}
+
+.root :global(.video-agent-automation-source-picker button[aria-pressed="true"]),
+.root :global(.video-agent-automation-source-picker button.is-selected) {
+  border-color: color-mix(in srgb, var(--aw-mint) 28%, var(--aw-line));
+  color: var(--aw-mint);
+  background: var(--aw-mint-soft);
+}
+
+.root :global(:where(button, a, input, textarea, select, summary):focus-visible) {
+  outline: 2px solid var(--aw-mint);
+  outline-offset: 2px;
+}
+
+.root :global(:where(button, a):active) {
+  transform: translateY(1px);
+}
+
+:global(html[data-desktop-app="true"][data-desktop-workspace="agent"]) .root,
+:global(html[data-desktop-app="true"][data-desktop-workspace="agent"]) .root :global(.video-agent-shell) {
+  height: 100dvh;
+  min-height: 0;
+  max-height: none;
+}
+
+:global(html[data-desktop-app="true"][data-desktop-workspace="agent"]) .root :global(.video-agent-shell) {
+  border-top: 0;
+  border-bottom: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+@media (min-width: 768px) and (max-width: 959px) {
+  .root :global(.video-agent-shell) {
+    grid-template-areas: "main";
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .root :global(.video-agent-sources) {
+    position: absolute !important;
+    z-index: 96;
+    top: 12px;
+    right: 12px;
+    bottom: 12px;
+    left: auto;
+    width: min(360px, calc(100% - 24px));
+    height: auto;
+    border: 1px solid var(--aw-line);
+    border-radius: 16px;
+    background: var(--aw-surface);
+    box-shadow: 0 16px 40px color-mix(in srgb, var(--card-shadow) 66%, transparent);
+    opacity: 0;
+    pointer-events: none;
+    visibility: hidden;
+    transform: translateX(18px);
+    transition:
+      transform 160ms ease-out,
+      opacity 160ms ease-out !important;
+  }
+
+  .root :global(.video-agent-sources.is-open) {
+    opacity: 1;
+    pointer-events: auto;
+    visibility: visible;
+    transform: translateX(0);
+  }
+
+  .root :global(.video-agent-sources .video-agent-mobile-close) {
+    display: grid;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 767px) {
+  .root {
+    width: calc(100% + 2rem);
+    margin-inline: -1rem;
+    overflow: hidden;
+  }
+
+  .root :global(.video-agent-shell) {
+    height: calc(
+      100dvh
+      - var(--mobile-nav-height)
+      - env(safe-area-inset-bottom, 0px)
+      - 1rem
+    );
+    min-height: 0;
+    max-height: none;
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
+    grid-template-areas: "main";
+    grid-template-columns: minmax(0, 1fr) !important;
+    box-shadow: none;
+  }
+
+  .root :global(.video-agent-history) {
+    position: fixed !important;
+    z-index: 96;
+    top: 0;
+    right: auto;
+    bottom: 0;
+    left: 0;
+    width: min(88vw, 340px);
+    height: 100dvh;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    border: 0;
+    border-right: 1px solid var(--aw-line);
+    border-radius: 0 16px 16px 0;
+    box-shadow: 12px 0 28px color-mix(in srgb, var(--card-shadow) 66%, transparent);
+    transform: translateX(-18px);
+  }
+
+  .root :global(.video-agent-history.is-open) {
+    transform: translateX(0);
+  }
+
+  .root :global(.video-agent-sources) {
+    position: fixed !important;
+    z-index: 96;
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: flex;
+    width: 100%;
+    height: min(86dvh, 760px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    border: 1px solid var(--aw-line);
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 18px 18px 0 0;
+    background: var(--aw-surface);
+    box-shadow: 0 -12px 28px color-mix(in srgb, var(--card-shadow) 66%, transparent);
+    opacity: 0;
+    pointer-events: none;
+    visibility: hidden;
+    transform: translateY(18px);
+    transition:
+      transform 160ms ease-out,
+      opacity 160ms ease-out !important;
+  }
+
+  .root :global(.video-agent-sources.is-open) {
+    opacity: 1;
+    pointer-events: auto;
+    visibility: visible;
+    transform: translateY(0);
+  }
+
+  .root :global(.video-agent-sources .video-agent-mobile-close) {
+    display: grid;
+  }
+
+  .root :global(.video-agent-panel-heading) {
+    min-height: 64px;
+    padding: 11px 12px;
+  }
+
+  .root :global(.video-agent-mobile-close),
+  .root :global(.video-agent-topbar-icon) {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .root :global(.video-agent-history-delete) {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    margin-top: 2px;
+    opacity: 1;
+  }
+
+  .root :global(.video-agent-topbar) {
+    min-height: 64px;
+    padding: 8px 10px;
+    gap: 7px;
+  }
+
+  .root :global(.video-agent-topbar-leading) {
+    min-width: 0;
+    flex: 1;
+    gap: 7px;
+  }
+
+  .root :global(.video-agent-avatar) {
+    display: none;
+  }
+
+  .root :global(.video-agent-topbar-leading h1) {
+    max-width: 42vw;
+    font-size: 0.84rem;
+  }
+
+  .root :global(.video-agent-topbar-leading p) {
+    max-width: 44vw;
+    font-size: 0.66rem;
+  }
+
+  .root :global(.video-agent-topbar-actions) {
+    gap: 4px;
+  }
+
+  .root :global(.video-agent-topbar-actions button.is-icon) {
+    display: none;
+  }
+
+  .root :global(.video-agent-topbar-actions button.is-source) {
+    width: 48px;
+    min-width: 48px;
+    min-height: 44px;
+    padding: 0;
+  }
+
+  .root :global(.video-agent-topbar-actions button.is-source span) {
+    position: absolute;
+    overflow: hidden;
+    width: 1px;
+    height: 1px;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .root :global(.video-agent-topbar-actions button.is-source b) {
+    position: absolute;
+    top: 2px;
+    right: 0;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 4px;
+    font-size: 0.58rem;
+  }
+
+  .root :global(.video-agent-inline-status) {
+    margin: 7px 9px 0;
+  }
+
+  .root :global(.video-agent-inline-status > button) {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .root :global(.video-agent-thread) {
+    padding:
+      24px max(15px, env(safe-area-inset-right, 0px))
+      22px max(15px, env(safe-area-inset-left, 0px));
+  }
+
+  .root :global(.video-agent-welcome) {
+    justify-content: flex-start;
+    padding: 26px 2px 34px;
+  }
+
+  .root :global(.video-agent-welcome h2) {
+    max-width: 18ch;
+    font-size: 1.58rem;
+  }
+
+  .root :global(.video-agent-welcome-copy) {
+    font-size: 0.8rem;
+  }
+
+  .root :global(.video-agent-starters) {
+    margin-top: 22px;
+  }
+
+  .root :global(.video-agent-starters button) {
+    min-height: 52px;
+    font-size: 0.79rem;
+  }
+
+  .root :global(.video-agent-welcome-empty) {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .root :global(.video-agent-welcome-empty a) {
+    justify-content: center;
+  }
+
+  .root :global(.video-agent-message) {
+    width: 100%;
+    margin-bottom: 28px;
+  }
+
+  .root :global(.video-agent-message.is-user) {
+    width: fit-content;
+    max-width: 88%;
+  }
+
+  .root :global(.video-agent-answer-markdown) {
+    max-width: none;
+    font-size: 0.93rem;
+    line-height: 1.75;
+  }
+
+  .root :global(.video-agent-grounding-summary) {
+    min-height: 56px;
+    padding: 8px 2px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 8px;
+  }
+
+  .root :global(.video-agent-grounding-summary-label) {
+    min-width: 0;
+  }
+
+  .root :global(.video-agent-grounding-summary-meta) {
+    grid-column: 1;
+    grid-row: 2;
+    white-space: normal;
+  }
+
+  .root :global(.video-agent-grounding-chevron) {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .root :global(.video-agent-grounding-evidence > li) {
+    padding: 10px;
+  }
+
+  .root :global(.video-agent-grounding-links a) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+
+  .root :global(.video-agent-answer-actions button) {
+    min-height: 44px;
+  }
+
+  .root :global(.video-agent-composer-region) {
+    padding:
+      8px max(9px, env(safe-area-inset-right, 0px))
+      calc(9px + env(safe-area-inset-bottom, 0px))
+      max(9px, env(safe-area-inset-left, 0px));
+  }
+
+  .root :global(.video-agent-composer) {
+    width: 100%;
+    border-radius: 15px;
+  }
+
+  .root :global(.video-agent-composer textarea) {
+    min-height: 68px;
+    padding: 12px 13px 6px;
+    font-size: 1rem;
+    line-height: 1.48;
+  }
+
+  .root :global(.video-agent-composer-toolbar) {
+    padding: 5px 6px 6px 7px;
+    gap: 5px;
+  }
+
+  .root :global(.video-agent-composer-controls) {
+    overflow: hidden;
+    gap: 4px;
+  }
+
+  .root :global(.video-agent-composer-context),
+  .root :global(.video-agent-options-trigger) {
+    min-height: 44px;
+    padding: 0 9px;
+  }
+
+  .root :global(.video-agent-composer-context) {
+    max-width: 148px;
+  }
+
+  .root :global(.video-agent-options-trigger small) {
+    display: none;
+  }
+
+  .root :global(.video-agent-send) {
+    width: 48px;
+    height: 48px;
+    min-width: 48px;
+    min-height: 48px;
+  }
+
+  .root :global(.video-agent-composer-region > p) {
+    display: none;
+  }
+
+  .root :global(.video-agent-scope-list) {
+    padding: 10px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .root :global(.video-agent-scope-list > button) {
+    min-height: 48px;
+  }
+
+  .root :global(.video-agent-source-search) {
+    min-height: 44px;
+    margin-inline: 10px;
+  }
+
+  .root :global(.video-agent-source-search input) {
+    min-height: 42px;
+    font-size: 1rem;
+  }
+
+  .root :global(.video-agent-source-search button) {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .root :global(.video-agent-source-item) {
+    min-height: 64px;
+  }
+
+  .root :global(.video-agent-apply-sources) {
+    min-height: 48px;
+    margin-bottom: max(10px, env(safe-area-inset-bottom, 0px));
+  }
+
+  .root :global(.video-agent-automation-sheet) {
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: min(92dvh, 820px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 18px 18px 0 0;
+    box-shadow: 0 -12px 28px color-mix(in srgb, var(--card-shadow) 66%, transparent);
+  }
+
+  .root :global(.video-agent-automation-fixed-scope) {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .root :global(.video-agent-automation-source-picker) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 420px) {
+  .root :global(.video-agent-topbar-leading h1) {
+    max-width: 39vw;
+  }
+
+  .root :global(.video-agent-topbar-leading p) {
+    max-width: 39vw;
+  }
+
+  .root :global(.video-agent-composer-context) {
+    max-width: 128px;
+  }
+
+  .root :global(.video-agent-options-trigger) {
+    padding: 0 8px;
+  }
+
+  .root :global(.video-agent-options-trigger span) {
+    max-width: 4.5em;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .root :global(*) {
+    scroll-behavior: auto !important;
+  }
+
+  .root :global(.video-agent-history),
+  .root :global(.video-agent-sources),
+  .root :global(.video-agent-automation-sheet),
+  .root :global(.video-agent-backdrop),
+  .root :global(.video-agent-grounding-chevron),
+  .root :global(.video-agent-starters button),
+  .root :global(.video-agent-followups button),
+  .root :global(.video-agent-new-task),
+  .root :global(.video-agent-apply-sources),
+  .root :global(.video-agent-send),
+  .root :global(.video-agent-composer-context),
+  .root :global(.video-agent-options-trigger),
+  .root :global(.video-agent-topbar-actions button),
+  .root :global(.video-agent-answer-actions button) {
+    transition: none !important;
+    animation: none !important;
+  }
+
+  .root :global(.video-agent-automation-source-picker button) {
+    transition: none !important;
+  }
+
+  .root :global(.video-agent-thinking i),
+  .root :global(.video-agent-message-delivery i),
+  .root :global(.video-agent-thread-skeleton i),
+  .root :global(.video-agent-rail-skeleton i),
+  .root :global(.video-agent-source-skeleton i) {
+    animation: none !important;
+  }
+}

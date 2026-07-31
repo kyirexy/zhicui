@@ -1,11 +1,13 @@
 'use client';
 
 import { App } from '@capacitor/app';
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownWideNarrow,
   ArrowRight,
   Bookmark,
+  Bot,
   CheckCircle2,
   CheckSquare2,
   ChevronDown,
@@ -57,6 +59,11 @@ import {
 import {
   isNativeAndroidApp,
 } from '@/lib/douyinNative';
+import {
+  DESKTOP_DOWNLOAD_URL,
+  detectDesktopRuntime,
+  openInstalledDesktopApp,
+} from '@/lib/desktopRuntime';
 import { formatCollectionSyncMessage } from '@/lib/douyinSyncFeedback';
 import type {
   DouyinCollectionJob,
@@ -69,6 +76,7 @@ import type {
   DouyinPermanentHiddenItem,
   DouyinSourceMode,
 } from '@/lib/types';
+import styles from './LibraryWorkspace.module.css';
 
 interface ExtractProgress {
   state: LibraryExtractState;
@@ -87,7 +95,7 @@ const ALL_LIBRARY_ITEMS = 0;
 const SYNC_COUNT_OPTIONS = [50, 100] as const;
 const QR_AUTO_RECOVERY_ATTEMPTS = 15;
 type DouyinSessionAction = 'logout' | 'rebind';
-type BindingClient = 'desktop-web' | 'mobile-web' | 'android-app';
+type BindingClient = 'desktop-app' | 'desktop-web' | 'mobile-web' | 'android-app';
 const SOURCE_MODES: Array<{
   value: DouyinSourceMode;
   label: string;
@@ -121,6 +129,21 @@ function wait(milliseconds: number): Promise<void> {
 function clampInteger(value: number, minimum: number, maximum: number): number {
   if (!Number.isFinite(value)) return minimum;
   return Math.max(minimum, Math.min(maximum, Math.trunc(value)));
+}
+
+function friendlyLibraryError(message: string): string {
+  const normalized = message.toLowerCase();
+  if (
+    normalized.includes('httpconnectionpool')
+    || normalized.includes('connection refused')
+    || normalized.includes('winerror 10061')
+    || normalized.includes('127.0.0.1')
+  ) {
+    return '视频连接服务暂时没有响应。你仍可使用单条链接，稍后再回来同步视频库。';
+  }
+  return message.length > 180
+    ? '视频库暂时无法连接，请稍后重试。'
+    : message;
 }
 
 export default function VideoLibraryPage() {
@@ -241,16 +264,43 @@ export default function VideoLibraryPage() {
   }, [loadLibrary]);
 
   useEffect(() => {
-    if (isNativeAndroidApp()) {
-      setBindingClient('android-app');
-      return;
-    }
-    const mobileBrowser = (
-      window.matchMedia('(max-width: 767px)').matches
-      || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
-    );
-    setBindingClient(mobileBrowser ? 'mobile-web' : 'desktop-web');
+    let active = true;
+    void detectDesktopRuntime().then((runtime) => {
+      if (!active) return;
+      if (runtime) {
+        setBindingClient('desktop-app');
+        return;
+      }
+      if (isNativeAndroidApp()) {
+        setBindingClient('android-app');
+        return;
+      }
+      const mobileBrowser = (
+        window.matchMedia('(max-width: 767px)').matches
+        || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+      );
+      setBindingClient(mobileBrowser ? 'mobile-web' : 'desktop-web');
+    });
+    return () => {
+      active = false;
+    };
   }, []);
+
+  useEffect(() => {
+    if (bindingClient !== 'desktop-app' || !window.zhicuiDesktop) return undefined;
+    return window.zhicuiDesktop.onDouyinLoginStatus((nextStatus) => {
+      setLoginStatusMessage(nextStatus.message);
+      setNotice(nextStatus.message);
+      if (nextStatus.stage === 'success') {
+        setScanning(false);
+        setBrowserMode('idle');
+      }
+      if (nextStatus.stage === 'error' || nextStatus.stage === 'cancelled') {
+        setScanning(false);
+        setBrowserMode('idle');
+      }
+    });
+  }, [bindingClient]);
 
   const closeAiWorkspace = useCallback(() => {
     restoreAiLauncherFocusRef.current = true;
@@ -307,6 +357,12 @@ export default function VideoLibraryPage() {
     () => items.filter((item) => selected.has(item.aweme_id)),
     [items, selected],
   );
+  const allVisibleSelected = useMemo(() => {
+    const visibleIds = filteredItems
+      .slice(0, MAX_SELECTION)
+      .map((item) => item.aweme_id);
+    return visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
+  }, [filteredItems, selected]);
   const selectedChatSources = useMemo<LibraryChatSource[]>(
     () => selectedItems.flatMap((item) => (
       item.extracted && item.extracted_note_id
@@ -542,13 +598,13 @@ export default function VideoLibraryPage() {
     });
   }, [bindingClient, localBrowserAvailable, scanning]);
 
-  const copyDesktopBindingLink = async () => {
-    try {
-      await navigator.clipboard.writeText('https://luxai.cn/library');
-      setQrActionMessage('电脑端地址已复制：请发送到电脑，并使用当前知萃账号登录。');
-    } catch {
-      setQrActionMessage('电脑端请访问 https://luxai.cn/library，并使用当前知萃账号登录。');
-    }
+  const launchDesktopApp = () => {
+    openInstalledDesktopApp();
+    setQrActionMessage('正在打开知萃桌面端；如果没有响应，请先下载安装。');
+  };
+
+  const downloadDesktopApp = () => {
+    window.location.assign(DESKTOP_DOWNLOAD_URL);
   };
 
   const checkDesktopBinding = async () => {
@@ -896,40 +952,29 @@ export default function VideoLibraryPage() {
     await pollQrLogin(pollId);
   };
 
-  const beginLocalHandoff = async () => {
-    const connectorWindow = window.open(
-      'about:blank',
-      'zhicui-douyin-connector',
-      'popup=yes,width=720,height=640',
-    );
-    if (!connectorWindow) {
+  const beginDesktopAppHandoff = async () => {
+    const desktop = window.zhicuiDesktop;
+    if (!desktop) {
       setScanning(false);
-      setQrPanelOpen(false);
-      setLoginStatusMessage('浏览器阻止了登录窗口');
-      setQrActionMessage('');
-      setNotice('请允许浏览器打开登录窗口，然后重新点击“扫码登录抖音”');
+      setNotice('未检测到知萃桌面端，请重新打开应用后再试');
       return;
     }
-    connectorWindow.document.title = '正在打开抖音登录';
-    connectorWindow.document.body.textContent = '正在打开抖音登录，请稍候…';
-
     setScanning(true);
     setQrPanelOpen(false);
     setLoginQr('');
     setQrActionMessage('');
     setBrowserOpened(false);
-    setBrowserMode('local_handoff');
+    setBrowserMode('desktop_app');
     setQrFallbackVisible(false);
-    setLoginStatusMessage('正在打开 Chrome…');
-    setNotice('正在打开 Chrome，请稍候…');
+    setLoginStatusMessage('正在准备本机 Chrome…');
+    setNotice('正在准备本机 Chrome，请稍候…');
 
     const handoff = await createDouyinLocalHandoff();
     if (!handoff.success || !handoff.data) {
-      connectorWindow.close();
       setScanning(false);
-      setLoginStatusMessage('登录窗口打开失败');
+      setLoginStatusMessage('登录授权创建失败');
       setQrActionMessage('');
-      setNotice(handoff.error || '登录窗口打开失败，请重试');
+      setNotice(handoff.error || '登录授权创建失败，请重试');
       return;
     }
 
@@ -941,64 +986,72 @@ export default function VideoLibraryPage() {
       '/api/library/douyin/local-handoff/complete',
       apiOrigin,
     ).toString();
-    const connectorUrl = new URL(handoff.data.connector_url);
-    connectorUrl.searchParams.set('token', handoff.data.token);
-    connectorUrl.searchParams.set('callback', callbackUrl);
-    connectorWindow.location.replace(connectorUrl.toString());
-
-    const pollId = loginPollRef.current + 1;
-    loginPollRef.current = pollId;
-    setLoginStatusMessage('等待扫码确认…');
-    setNotice('请在弹出的 Chrome 中使用手机抖音扫码');
-
-    for (
-      let attempt = 0;
-      attempt < 180 && activeRef.current && loginPollRef.current === pollId;
-      attempt += 1
-    ) {
-      await wait(2000);
-      const latest = await refreshLoginStatus();
-      if (latest?.cookie_valid) {
-        loginPollRef.current += 1;
-        setScanning(false);
-        setQrPanelOpen(false);
-        setLoginStatusMessage('');
-        setQrActionMessage('');
-        setBrowserMode('idle');
-        setNotice('抖音登录成功，现在可以同步视频');
-        await loadItems(true);
-        return;
-      }
-    }
-    if (loginPollRef.current !== pollId) return;
+    const result = await desktop.loginDouyin({
+      token: handoff.data.token,
+      callbackUrl,
+    });
     setScanning(false);
-    setLoginStatusMessage('尚未收到登录结果');
-    setQrActionMessage('');
-    setNotice('登录等待超时，请确认手机端已点击“确认登录”后重试');
+    setBrowserMode('idle');
+    if (!result.success) {
+      setLoginStatusMessage(result.cancelled ? '登录已取消' : '抖音登录失败');
+      setNotice(
+        result.cancelled
+          ? '已取消抖音登录'
+          : result.error || '抖音登录失败，请重试',
+      );
+      return;
+    }
+    const latest = await refreshLoginStatus();
+    if (!latest?.cookie_valid) {
+      setNotice('抖音已确认，正在刷新绑定状态…');
+      await wait(1200);
+      await refreshLoginStatus();
+    }
+    setLoginStatusMessage('');
+    setNotice('抖音登录成功，现在可以同步视频');
+    await loadItems(true);
   };
 
   const startQrLogin = async () => {
     if (!connected || scanning) return;
-    if (bindingClient !== 'desktop-web') {
-      loginPollRef.current += 1;
-      setScanning(false);
-      setQrPanelOpen(true);
-      setLoginQr('');
-      setQrActionMessage('');
-      setBrowserOpened(false);
-      setBrowserMode('idle');
-      setQrFallbackVisible(false);
-      setQrActionMessage('');
-      setLoginStatusMessage('请在电脑端扫码登录抖音');
-      setNotice('请在电脑端登录同一个知萃账号，再扫码登录抖音');
+    if (bindingClient === 'desktop-app') {
+      await beginDesktopAppHandoff();
       return;
     }
-    if (!localBrowserAvailable) {
-      await beginLocalHandoff();
-      return;
+    loginPollRef.current += 1;
+    setScanning(false);
+    setQrPanelOpen(true);
+    setLoginQr('');
+    setQrActionMessage('');
+    setBrowserOpened(false);
+    setBrowserMode('idle');
+    setQrFallbackVisible(false);
+    setQrActionMessage('');
+    if (bindingClient === 'desktop-web') {
+      setLoginStatusMessage('请使用知萃 Windows 桌面端登录抖音');
+      setNotice('已安装桌面端可以直接打开；未安装请先下载');
+    } else {
+      setLoginStatusMessage('请在 Windows 桌面端扫码登录抖音');
+      setNotice('在电脑安装知萃桌面端并登录同一个知萃账号，即可完成绑定');
     }
-    await beginDesktopQrLogin();
   };
+
+  useEffect(() => {
+    if (
+      bindingClient !== 'desktop-app'
+      || !connected
+      || loggedIn
+      || scanning
+      || typeof window === 'undefined'
+    ) {
+      return;
+    }
+    const currentUrl = new URL(window.location.href);
+    if (currentUrl.searchParams.get('desktopLogin') !== '1') return;
+    currentUrl.searchParams.delete('desktopLogin');
+    window.history.replaceState({}, '', `${currentUrl.pathname}${currentUrl.search}`);
+    void startQrLogin();
+  }, [bindingClient, connected, loggedIn, scanning]);
 
   const openSessionDialog = (action: DouyinSessionAction) => {
     if (sessionPending) return;
@@ -1045,6 +1098,7 @@ export default function VideoLibraryPage() {
     requestedCount: number,
   ): Promise<DouyinCollectionJob | null> => {
     setCollectionJob(initial);
+    let lastVisibleSuccess = -1;
     for (let attempt = 0; attempt < 600 && activeRef.current; attempt += 1) {
       await wait(2000);
       const response = await getDouyinCollectionJob(initial.job_id);
@@ -1055,6 +1109,13 @@ export default function VideoLibraryPage() {
         sourceLabel,
         requestedCount,
       }));
+      if (
+        response.data.success > 0
+        && response.data.success !== lastVisibleSuccess
+      ) {
+        lastVisibleSuccess = response.data.success;
+        await loadItems(true);
+      }
       if (response.data.status === 'success' || response.data.status === 'failed') {
         return response.data;
       }
@@ -1069,7 +1130,7 @@ export default function VideoLibraryPage() {
     setRefreshing(true);
     setExtractionJob(null);
     setPipelineStage('collect');
-    setNotice(`开始同步最近 ${requestedCount} 条${sourceLabel}；同步后自动提取完整文案，不生成 AI 总结`);
+    setNotice(`开始同步最近 ${requestedCount} 条${sourceLabel}；同步后完整文案会自动提取，完成一条显示一条`);
     const response = await collectDouyinLibrary(requestedCount, sourceMode);
     if (!response.success || !response.data) {
       setRefreshing(false);
@@ -1098,14 +1159,6 @@ export default function VideoLibraryPage() {
       sourceLabel,
       requestedCount,
     }));
-    if (
-      Math.max(0, Number(finalJob.total) || 0) === 0
-      && Math.max(0, Number(finalJob.success) || 0) === 0
-    ) {
-      setPipelineStage('done');
-      return;
-    }
-
     const refreshedResult = await loadItems(true);
     const refreshed = refreshedResult?.items || [];
     setSelected(new Set());
@@ -1287,7 +1340,10 @@ export default function VideoLibraryPage() {
   };
 
   return (
-    <div className={`video-library-page ${aiWorkspaceOpen ? 'is-ai-open' : ''}`}>
+    <div
+      className={`${styles.workspace} video-library-page desktop-core-page ${aiWorkspaceOpen ? 'is-ai-open' : ''}`}
+      aria-busy={refreshing || batchExtracting}
+    >
       <div className="library-ambient" aria-hidden="true" />
 
       <div className="library-compact-toolbar">
@@ -1341,9 +1397,11 @@ export default function VideoLibraryPage() {
               )}
               {scanning
                 ? '正在登录'
-                : bindingClient === 'desktop-web'
+                : bindingClient === 'desktop-app'
                   ? '扫码登录抖音'
-                  : '去电脑端绑定'}
+                  : bindingClient === 'desktop-web'
+                    ? '用桌面端登录抖音'
+                    : '去桌面端绑定'}
             </button>
           )}
         </div>
@@ -1564,7 +1622,7 @@ export default function VideoLibraryPage() {
         </div>
       </dialog>
 
-      {qrPanelOpen && bindingClient !== 'desktop-web' && (
+      {qrPanelOpen && bindingClient !== 'desktop-app' && (
         <section className="library-qr-card" aria-live="polite" aria-label="抖音扫码登录">
           <div className="library-qr-heading">
             <div>
@@ -1572,8 +1630,12 @@ export default function VideoLibraryPage() {
                 <QrCode size={15} />
                 登录抖音
               </span>
-              <h2>请在电脑端扫码登录抖音</h2>
-              <p>登录信息会按知萃账号独立保存，不会与其他用户混用。</p>
+              <h2>
+                {bindingClient === 'desktop-web'
+                  ? '请使用知萃 Windows 桌面端'
+                  : '请在 Windows 电脑完成一次绑定'}
+              </h2>
+              <p>桌面端会打开你电脑上的 Chrome，不会再跳转 localhost，也不会显示服务器 Linux 位置。</p>
             </div>
             <button type="button" onClick={closeQrLogin} aria-label="关闭扫码登录">
               <X size={18} />
@@ -1583,8 +1645,8 @@ export default function VideoLibraryPage() {
             <div className="library-qr-frame">
               <div className="library-browser-login is-open">
                 <ExternalLink size={30} aria-hidden="true" />
-                <strong>需要一台电脑</strong>
-                <span>在电脑打开知萃视频库，登录同一个账号后点击“扫码登录抖音”。</span>
+                <strong>知萃 Windows 桌面端</strong>
+                <span>安装一次，之后直接使用本机 Chrome 扫码登录。</span>
               </div>
             </div>
             <div className="library-qr-guide">
@@ -1592,35 +1654,46 @@ export default function VideoLibraryPage() {
                 className={`library-qr-capability is-${bindingClient}`}
                 role={bindingClient === 'mobile-web' ? 'note' : undefined}
               >
-                {bindingClient === 'android-app' && '手机端暂不直接发起抖音登录，请在电脑端完成一次扫码。'}
-                {bindingClient === 'mobile-web' && '手机浏览器暂不直接发起抖音登录，请在电脑端使用同一个知萃账号完成一次扫码。'}
+                {bindingClient === 'desktop-web' && '已安装可直接打开；未安装请先下载 Windows 版。'}
+                {bindingClient === 'android-app' && '手机端登录同一个知萃账号，电脑绑定成功后这里会自动生效。'}
+                {bindingClient === 'mobile-web' && '电脑和手机登录同一个知萃账号，绑定一次即可跨端使用。'}
               </p>
               <ol>
-                <li>在电脑打开 https://luxai.cn/library</li>
-                <li>登录与当前 App 完全相同的知萃账号</li>
-                <li>点击“扫码登录抖音”，在弹出的 Chrome 中扫码确认</li>
-                <li>回到 App，系统会自动检查登录结果</li>
+                <li>下载并安装“知萃 Windows 桌面端”</li>
+                <li>登录与当前页面完全相同的知萃账号</li>
+                <li>进入视频库并点击“扫码登录抖音”</li>
+                <li>在本机 Chrome 扫码确认，绑定结果会自动同步</li>
               </ol>
               <div className="library-qr-actions">
                 <button
                   type="button"
-                  onClick={() => void copyDesktopBindingLink()}
+                  onClick={launchDesktopApp}
                 >
-                  <Download size={17} />
-                  复制电脑端地址
+                  <ExternalLink size={17} />
+                  打开桌面端
                 </button>
                 <button
                   type="button"
                   className="is-primary"
+                  onClick={downloadDesktopApp}
+                >
+                  <Download size={17} />
+                  下载 Windows 版
+                </button>
+              </div>
+              {bindingClient !== 'desktop-web' && (
+                <button
+                  type="button"
+                  className="library-qr-check-button"
                   onClick={() => void checkDesktopBinding()}
                   disabled={bindingCheckPending}
                 >
                   {bindingCheckPending
                     ? <LoaderCircle size={17} className="animate-spin" />
                     : <RefreshCw size={17} />}
-                  检查登录结果
+                  我已在电脑完成，检查结果
                 </button>
-              </div>
+              )}
               {qrActionMessage && (
                 <p className="library-qr-action-message" role="status">
                   {qrActionMessage}
@@ -1649,6 +1722,7 @@ export default function VideoLibraryPage() {
                 type="button"
                 key={value}
                 className={sourceMode === value ? 'is-active' : ''}
+                aria-pressed={sourceMode === value}
                 onClick={() => setSourceMode(value)}
               >
                 <Icon size={16} />
@@ -1679,22 +1753,29 @@ export default function VideoLibraryPage() {
                     : '正在提取完整文案'
                   : `从抖音同步${sourceLabel}`}
             </button>
-            <small>同步最近 {syncCount} 条并自动提取文案，不自动生成 AI 总结</small>
+            <small>
+              {refreshing
+                ? `正在读取最近 ${syncCount} 条${sourceLabel}`
+                : batchExtracting
+                  ? '视频已出现，文案正在逐条就绪'
+                  : `同步最近 ${syncCount} 条${sourceLabel}`}
+            </small>
           </div>
         </div>
 
-        <section className="library-processing-settings" aria-labelledby="library-processing-title">
-          <div className="library-processing-heading">
-            <span id="library-processing-title">
+        <details className="library-processing-settings">
+          <summary className="library-processing-heading">
+            <span>
               <SlidersHorizontal size={14} />
-              同步设置
+              同步 {syncCount} 条
             </span>
-            <small>完整文案自动提取 · AI 总结按需生成</small>
-          </div>
+            <small>调整数量</small>
+            <ChevronDown size={14} aria-hidden="true" />
+          </summary>
           <div className="library-advanced-body">
             <div className="library-auto-controls">
               <div className="library-count-control is-sync-count">
-                <span>同步范围</span>
+                <span>最近同步</span>
                 <div className="library-sync-count-inputs">
                   <span className="library-count-options" aria-label="选择同步数量">
                     {SYNC_COUNT_OPTIONS.map((count) => (
@@ -1710,7 +1791,7 @@ export default function VideoLibraryPage() {
                     ))}
                   </span>
                   <label className="library-custom-count">
-                    <span className="sr-only">自定义同步数量，1 到 100 条</span>
+                    <span>自定义</span>
                     <input
                       type="number"
                       inputMode="numeric"
@@ -1733,14 +1814,29 @@ export default function VideoLibraryPage() {
               </div>
             </div>
           </div>
-        </section>
+        </details>
 
         {sourceMode === 'collect' && (
           <p className="library-mode-warning">
-            每次只同步最近 {syncCount} 条收藏，最多可选 100 条，不会一次搬走整个收藏夹。同步后会自动整理出完整文案，你可以直接提问；知识卡想用时再生成。视频不会保存到知萃服务器。
+            只读取最近 {syncCount} 条收藏。视频出现后会自动整理文案，可以直接提问；不会保存视频文件。
           </p>
         )}
-        {collectionJob && (refreshing || batchExtracting) && (
+        {refreshing && (
+          <div className="library-sync-stage" role="status">
+            <span className="library-sync-stage-icon" aria-hidden="true">
+              <LoaderCircle size={17} className="animate-spin" />
+            </span>
+            <span>
+              <strong>正在把{sourceLabel}放进视频库</strong>
+              <small>拿到一条就显示一条，不用等全部完成</small>
+            </span>
+            <b>
+              {collectionJob?.success || 0}
+              <small>/{collectionJob?.total || syncCount}</small>
+            </b>
+          </div>
+        )}
+        {collectionJob && refreshing && (
           <div className="library-pipeline-progress">
             <span style={{
               width: `${Math.min(100, Math.max(
@@ -1753,6 +1849,20 @@ export default function VideoLibraryPage() {
           </div>
         )}
       </section>
+
+      {notice && (
+        <div className="library-notice" role="status">
+          <Sparkles size={14} />
+          {notice}
+        </div>
+      )}
+
+      {batchExtracting && extractionJob && (
+        <LibraryExtractionLiveProgress
+          job={extractionJob}
+          items={items}
+        />
+      )}
 
       <div className="library-toolbar">
         <label className="library-search">
@@ -1796,24 +1906,26 @@ export default function VideoLibraryPage() {
               发布时间 · 新到旧
             </span>
           )}
-          <button
-            type="button"
-            className="library-hidden-manager-button"
-            onClick={openHiddenManager}
-            aria-label={`管理已永久隐藏的 ${libraryOverview.permanentHidden} 条视频`}
-          >
-            <EyeOff size={15} />
-            已永久隐藏
-            <span>{libraryOverview.permanentHidden}</span>
-          </button>
+          {libraryOverview.permanentHidden > 0 && (
+            <button
+              type="button"
+              className="library-hidden-manager-button"
+              onClick={openHiddenManager}
+              aria-label={`管理已永久隐藏的 ${libraryOverview.permanentHidden} 条视频`}
+            >
+              <EyeOff size={15} />
+              已隐藏
+              <span>{libraryOverview.permanentHidden}</span>
+            </button>
+          )}
           <button
             type="button"
             className="library-text-action"
             onClick={selectVisible}
             disabled={filteredItems.length === 0}
           >
-            {selected.size > 0 ? <CheckSquare2 size={15} /> : <Square size={15} />}
-            全选当前
+            {allVisibleSelected ? <CheckSquare2 size={15} /> : <Square size={15} />}
+            {allVisibleSelected ? '取消全选' : '批量选择'}
           </button>
           {selected.size > 0 && (
             <>
@@ -1878,47 +1990,44 @@ export default function VideoLibraryPage() {
         </div>
       </div>
 
-      {notice && (
-        <div className="library-notice" role="status">
-          <Sparkles size={14} />
-          {notice}
-        </div>
-      )}
-
-      {batchExtracting && extractionJob && (
-        <LibraryExtractionLiveProgress
-          job={extractionJob}
-          items={items}
-        />
-      )}
-
       {!aiWorkspaceOpen && (
-        <button
-          ref={aiLauncherRef}
-          type="button"
-          className="library-ai-launcher"
-          aria-expanded="false"
-          aria-controls="library-ai-workspace"
-          onClick={() => setAiWorkspaceOpen(true)}
-        >
-          <span className="library-ai-launcher-mark" aria-hidden="true">
-            <Sparkles size={19} />
-          </span>
-          <span className="library-ai-launcher-copy">
-            <strong>向视频问 AI</strong>
-            <small>
-              {allChatSources.length > 0
-                ? `无需知识卡，已准备 ${allChatSources.length} 条完整文案；也可只问勾选视频`
-                : selectedItems.length > 0
-                  ? '所选视频的文案仍在提取，可稍后直接提问'
-                  : '同步后会自动提取完整文案，文案就绪即可提问'}
-            </small>
-          </span>
-          <span className="library-ai-launcher-action">
-            打开问答
-            <ArrowRight size={16} />
-          </span>
-        </button>
+        <div className="library-agent-gateway">
+          <Link href="/agent" className="library-agent-gateway-main">
+            <span className="library-ai-launcher-mark" aria-hidden="true">
+              <Bot size={20} />
+            </span>
+            <span className="library-ai-launcher-copy">
+              <strong>进入视频 Agent</strong>
+              <small>
+                选择全部资料、昨天新整理进知萃的内容或手选视频，连续追问并设置每日摘要
+              </small>
+            </span>
+            <span className="library-ai-launcher-action">
+              打开工作台
+              <ArrowRight size={16} />
+            </span>
+          </Link>
+          <button
+            ref={aiLauncherRef}
+            type="button"
+            className="library-agent-gateway-quick"
+            aria-expanded="false"
+            aria-controls="library-ai-workspace"
+            onClick={() => setAiWorkspaceOpen(true)}
+          >
+            <Sparkles size={16} />
+            <span>
+              <strong>当前页快速问答</strong>
+              <small>
+                {allChatSources.length > 0
+                  ? `已准备 ${allChatSources.length} 条完整文案`
+                  : selectedItems.length > 0
+                    ? '所选视频的文案仍在提取'
+                    : '文案就绪后即可提问'}
+              </small>
+            </span>
+          </button>
+        </div>
       )}
 
       <div className={`library-workspace ${aiWorkspaceOpen ? 'is-ai-open' : ''}`}>
@@ -1933,7 +2042,7 @@ export default function VideoLibraryPage() {
             <div className="library-empty-state">
               <ServerOff size={28} />
               <h2>暂时无法读取视频库</h2>
-              <p>{error}</p>
+              <p>{friendlyLibraryError(error)}</p>
               <button type="button" onClick={() => void loadLibrary()}>
                 <RefreshCw size={15} />
                 重新连接

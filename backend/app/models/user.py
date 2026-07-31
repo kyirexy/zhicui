@@ -23,6 +23,9 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     is_active = Column(Boolean, default=True)
     is_admin = Column(Boolean, default=False)
+    email_verified = Column(Boolean, default=False, nullable=False)
+    email_verification_nonce = Column(String(96), nullable=True)
+    email_verification_sent_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
@@ -34,6 +37,7 @@ class User(Base):
             "username": self.username,
             "is_active": self.is_active,
             "is_admin": self.is_admin,
+            "email_verified": bool(self.email_verified),
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

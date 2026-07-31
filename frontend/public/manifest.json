@@ -4,8 +4,8 @@
   "description": "将视频转化为精美知识卡片，快速提取核心信息",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0a0a0f",
-  "theme_color": "#10b981",
+  "background_color": "#f7faf8",
+  "theme_color": "#6ccfa5",
   "orientation": "portrait-primary",
   "categories": ["productivity", "utilities"],
   "icons": [

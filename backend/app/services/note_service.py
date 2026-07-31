@@ -189,6 +189,54 @@ def get_notes_by_video_ids(
     return result
 
 
+def merge_library_source_meta(
+    note: Note,
+    item: dict[str, Any],
+) -> bool:
+    """Refresh reliable downloader metadata without changing the transcript.
+
+    This lets older transcript Notes participate in Agent source filters as
+    soon as the user opens the video library again. It never stores media.
+    """
+    try:
+        payload = json.loads(note.ai_summary or "{}")
+    except (json.JSONDecodeError, TypeError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    previous = payload.get("source_meta")
+    if not isinstance(previous, dict):
+        previous = {}
+    synced_at = (
+        str(item.get("source_synced_at") or "").strip()
+        or str(item.get("recorded_at") or "").strip()
+        or (
+            note.created_at.isoformat()
+            if note.created_at
+            else datetime.now(timezone.utc).isoformat()
+        )
+    )
+    updated = {
+        **previous,
+        "source_kind": "douyin-library",
+        "platform": "douyin",
+        "source_url": str(item.get("source_url") or note.video_url or ""),
+        "cover_url": str(item.get("cover_url") or ""),
+        "author_name": str(item.get("author_name") or ""),
+        "recorded_at": str(item.get("recorded_at") or ""),
+        "caption": str(item.get("caption") or ""),
+        "source_mode": str(item.get("source_mode") or "unknown"),
+        "source_rank": item.get("source_rank"),
+        "source_synced_at": synced_at,
+        "first_seen_at": previous.get("first_seen_at") or synced_at,
+    }
+    if updated == previous:
+        return False
+    payload["source_meta"] = updated
+    note.ai_summary = json.dumps(payload, ensure_ascii=False)
+    return True
+
+
 def list_notes(
     db: Session,
     page: int = 1,
@@ -299,7 +347,25 @@ def update_note_ai(db: Session, note: Note, ai_result: dict[str, Any]) -> Note:
 
     Updates ai_summary, card_type, pitfall_rating, updated_at.
     """
+    # Preserve the first reliable time this source entered Zhicui when a user
+    # later initializes or refreshes the AI card. The downloader's current
+    # sync timestamp is not the original Douyin favourite timestamp.
+    previous_source_meta: dict[str, Any] = {}
+    if note.ai_summary:
+        try:
+            previous_payload = json.loads(note.ai_summary)
+            candidate = previous_payload.get("source_meta")
+            if isinstance(candidate, dict):
+                previous_source_meta = candidate
+        except (json.JSONDecodeError, TypeError):
+            previous_source_meta = {}
     initialized_result = {**ai_result, "ai_initialized": True}
+    new_source_meta = initialized_result.get("source_meta")
+    if isinstance(new_source_meta, dict):
+        merged_source_meta = {**previous_source_meta, **new_source_meta}
+        if previous_source_meta.get("first_seen_at"):
+            merged_source_meta["first_seen_at"] = previous_source_meta["first_seen_at"]
+        initialized_result["source_meta"] = merged_source_meta
     note.ai_summary = json.dumps(initialized_result, ensure_ascii=False)
     note.ai_initialized = True
     note.card_type = ai_result.get("card_type", note.card_type)

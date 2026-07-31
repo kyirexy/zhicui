@@ -1,6 +1,12 @@
 'use client';
 
-import { useRef, useState, type FormEvent, type MouseEvent } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type MouseEvent,
+} from 'react';
 import { Capacitor } from '@capacitor/core';
 import {
   CheckCircle2,
@@ -55,6 +61,17 @@ export default function FeedbackButton() {
   const [historyTotal, setHistoryTotal] = useState(0);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+
+  useEffect(() => {
+    const openFromNavigation = () => {
+      setError('');
+      setSuccess('');
+      setView('compose');
+      dialogRef.current?.showModal();
+    };
+    window.addEventListener('zhicui:open-feedback', openFromNavigation);
+    return () => window.removeEventListener('zhicui:open-feedback', openFromNavigation);
+  }, []);
 
   if (authLoading || !user) return null;
 

@@ -52,7 +52,8 @@ export default function LoginPage() {
   const validate = () => {
     if (!email.trim()) return '请输入邮箱或用户名';
     if (mode === 'register' && !email.includes('@')) return '请输入有效的邮箱地址';
-    if (password.length < 6) return '密码至少需要 6 位字符';
+    if (!password) return '请输入密码';
+    if (mode === 'register' && password.length < 6) return '密码至少需要 6 位字符';
     if (mode === 'register' && username.trim().length < 2) return '请输入用户名（至少 2 个字符）';
     return '';
   };
@@ -217,7 +218,7 @@ export default function LoginPage() {
                     setFieldError('');
                     clearError();
                   }}
-                  placeholder="密码（至少 6 位）"
+                  placeholder={mode === 'login' ? '密码' : '密码（至少 6 位）'}
                   aria-label="密码"
                   className="w-full rounded-xl border border-card-border bg-background py-3 pl-10 pr-4 text-sm text-foreground outline-none transition-colors duration-150 placeholder:text-foreground-muted/50 focus:border-accent-emerald/50"
                   autoComplete={mode === 'login' ? 'current-password' : 'new-password'}

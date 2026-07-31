@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -18,6 +18,11 @@ class UserActivityLog(Base):
         Index("ix_user_activity_created_at", "created_at"),
         Index("ix_user_activity_user_created", "user_id", "created_at"),
         Index("ix_user_activity_action_created", "action", "created_at"),
+        Index(
+            "ux_user_activity_event_key",
+            "event_key",
+            unique=True,
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -32,6 +37,8 @@ class UserActivityLog(Base):
     status_code: Mapped[int] = mapped_column(Integer, nullable=False)
     duration_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    detail_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    event_key: Mapped[str | None] = mapped_column(String(180), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=_utcnow,

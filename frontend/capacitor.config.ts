@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.videocapsule.app',
-  appName: '收藏夹榨汁机',
+  appName: '知萃',
   webDir: 'out',
   server: {
     androidScheme: 'https',

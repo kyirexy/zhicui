@@ -1,0 +1,82 @@
+{
+  "name": "zhicui-desktop",
+  "version": "1.0.3",
+  "description": "知萃 Windows 桌面应用",
+  "main": "dist/main.js",
+  "author": "知萃",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "patch:builder": "node scripts/patch-electron-builder.mjs",
+    "build": "npm run clean && tsc -p tsconfig.json",
+    "dev": "npm run build && electron .",
+    "pack": "npm run build && npm run patch:builder && electron-builder --dir --win --x64",
+    "dist:win": "npm run build && npm run patch:builder && electron-builder --win nsis --x64",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9",
+    "playwright-core": "^1.62.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "typescript": "^5.9.3"
+  },
+  "build": {
+    "appId": "cn.luxai.desktop",
+    "productName": "知萃",
+    "artifactName": "Zhicui-Setup-${version}-${arch}.${ext}",
+    "asar": true,
+    "directories": {
+      "output": "release-${version}"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../frontend/public/icons/icon-512.png",
+        "to": "app-icon.png"
+      }
+    ],
+    "protocols": [
+      {
+        "name": "知萃",
+        "schemes": [
+          "zhicui"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "../frontend/public/icons/desktop-icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "知萃",
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "kyirexy",
+        "repo": "zhicui",
+        "releaseType": "release"
+      }
+    ]
+  }
+}

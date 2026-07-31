@@ -17,8 +17,12 @@ import {
 import InputBar from '@/components/InputBar';
 import CardRenderer from '@/components/CardRenderer';
 import PipelineProgress from '@/components/PipelineProgress';
+import DesktopWorkspaceHome from '@/components/DesktopWorkspaceHome';
+import WebLandingPage from '@/components/WebLandingPage';
+import { useDesktopApp } from '@/components/DesktopAppFrame';
 import { useExtraction } from '@/lib/hooks/ExtractionContext';
 import { getPlanStats } from '@/lib/api';
+import { isNativeAndroidApp } from '@/lib/douyinNative';
 
 const LIBRARY_STEPS = [
   {
@@ -67,6 +71,7 @@ const PREVIEW_VIDEOS = [
 ] as const;
 
 export default function HomePage() {
+  const { isDesktop, resolved } = useDesktopApp();
   const {
     isLoading,
     error,
@@ -78,17 +83,24 @@ export default function HomePage() {
   const [singleExtractorOpen, setSingleExtractorOpen] = useState(false);
   const [planReminder, setPlanReminder] = useState(false);
   const [planReminderDue, setPlanReminderDue] = useState(0);
+  const [nativeAndroid, setNativeAndroid] = useState<boolean | null>(null);
 
   useEffect(() => {
+    setNativeAndroid(isNativeAndroidApp());
+  }, []);
+
+  useEffect(() => {
+    if (isDesktop || nativeAndroid !== true) return;
     try {
       const cached = sessionStorage.getItem('vc-home-card');
       if (cached && !cardData) {
         startExtraction('');
       }
     } catch {}
-  }, []);
+  }, [cardData, isDesktop, nativeAndroid, startExtraction]);
 
   useEffect(() => {
+    if (isDesktop || nativeAndroid !== true) return;
     const today = new Date().toISOString().slice(0, 10);
     const lastDismiss = localStorage.getItem('vc-plan-reminder-dismissed');
     if (lastDismiss === today) return;
@@ -99,7 +111,7 @@ export default function HomePage() {
         setPlanReminderDue(res.data.due_today);
       }
     });
-  }, []);
+  }, [isDesktop, nativeAndroid]);
 
   const dismissReminder = () => {
     const today = new Date().toISOString().slice(0, 10);
@@ -120,6 +132,18 @@ export default function HomePage() {
       });
     }, 60);
   };
+
+  if (!resolved || nativeAndroid === null) {
+    return <div className="min-h-[68dvh]" aria-hidden="true" />;
+  }
+
+  if (isDesktop) {
+    return <DesktopWorkspaceHome />;
+  }
+
+  if (!nativeAndroid) {
+    return <WebLandingPage />;
+  }
 
   const showLanding = !isLoading && !cardData;
   const showSingleExtractor = singleExtractorOpen || isLoading || Boolean(cardData) || Boolean(error);

@@ -496,58 +496,68 @@ export default function PlanTaskList({ plan, onMutate }: PlanTaskListProps) {
               </label>
             </div>
 
-            <div className="plan-task-editor__grid">
-              <label>
-                <span>预计时长（分钟）</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={10080}
-                  value={editor.draft.duration_minutes}
-                  onChange={event => setEditor({
-                    ...editor,
-                    draft: { ...editor.draft, duration_minutes: event.target.value },
-                  })}
-                  placeholder="例如：30"
-                />
-              </label>
-              <label>
-                <span>执行频率（可选）</span>
-                <input
-                  value={editor.draft.frequency}
-                  onChange={event => setEditor({
-                    ...editor,
-                    draft: { ...editor.draft, frequency: event.target.value },
-                  })}
-                  placeholder="例如：每天 3 次"
-                  maxLength={120}
-                />
-              </label>
-            </div>
+            <label>
+              <span>预计时长（分钟）</span>
+              <input
+                type="number"
+                min={1}
+                max={10080}
+                value={editor.draft.duration_minutes}
+                onChange={event => setEditor({
+                  ...editor,
+                  draft: { ...editor.draft, duration_minutes: event.target.value },
+                })}
+                placeholder="例如：30"
+              />
+            </label>
 
-            <fieldset>
-              <legend>优先级</legend>
-              <div className="plan-priority-picker">
-                {priorityOptions.map(option => (
-                  <label key={option.value} className={`is-${option.value}`}>
-                    <input
-                      type="radio"
-                      name="priority"
-                      value={option.value}
-                      checked={editor.draft.priority === option.value}
-                      onChange={() => setEditor({
-                        ...editor,
-                        draft: { ...editor.draft, priority: option.value },
-                      })}
-                    />
-                    <span>
-                      <strong>{option.label}</strong>
-                      <small>{option.note}</small>
-                    </span>
-                  </label>
-                ))}
+            <details className="plan-task-editor__advanced">
+              <summary>
+                <span>
+                  <strong>更多设置</strong>
+                  <small>优先级与频率备注</small>
+                </span>
+                <CaretDown size={16} aria-hidden="true" />
+              </summary>
+              <div>
+                <label>
+                  <span>频率说明（仅备注）</span>
+                  <input
+                    value={editor.draft.frequency}
+                    onChange={event => setEditor({
+                      ...editor,
+                      draft: { ...editor.draft, frequency: event.target.value },
+                    })}
+                    placeholder="例如：每天练习 3 次"
+                    maxLength={120}
+                  />
+                </label>
+
+                <fieldset>
+                  <legend>优先级</legend>
+                  <div className="plan-priority-picker">
+                    {priorityOptions.map(option => (
+                      <label key={option.value} className={`is-${option.value}`}>
+                        <input
+                          type="radio"
+                          name="priority"
+                          value={option.value}
+                          checked={editor.draft.priority === option.value}
+                          onChange={() => setEditor({
+                            ...editor,
+                            draft: { ...editor.draft, priority: option.value },
+                          })}
+                        />
+                        <span>
+                          <strong>{option.label}</strong>
+                          <small>{option.note}</small>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
               </div>
-            </fieldset>
+            </details>
 
             {mutationError && <p className="plan-inline-error" role="alert">{mutationError}</p>}
             <div className="plan-task-editor__actions">

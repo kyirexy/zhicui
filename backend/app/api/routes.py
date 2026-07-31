@@ -37,6 +37,7 @@ from app.services import (
     note_service,
     plan_service,
     settings_service,
+    video_source_ledger_service,
     video_extractor,
 )
 from app.services import auth_service
@@ -197,8 +198,9 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: str = Field(..., min_length=5, max_length=128)
-    password: str = Field(..., min_length=6, max_length=128)
+    # 登录只校验凭据是否填写；长度规则只属于注册和重置密码流程。
+    email: str = Field(..., min_length=1, max_length=128)
+    password: str = Field(..., min_length=1, max_length=128)
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +299,16 @@ def latest_android_release(response: Response) -> dict:
 # Auth endpoints — email + password + JWT
 # ---------------------------------------------------------------------------
 
+def _auth_error_category(error: str | None) -> str:
+    return {
+        "账号不存在": "account_not_found",
+        "密码错误": "invalid_password",
+        "账号已被禁用": "inactive_account",
+        "该邮箱已注册，请直接登录": "email_already_registered",
+        "该用户名已被使用": "username_already_registered",
+    }.get(str(error or ""), "validation_failed")
+
+
 @router.post("/api/auth/register")
 def auth_register(
     body: RegisterRequest,
@@ -305,6 +317,18 @@ def auth_register(
 ) -> dict:
     user, error = auth_service.register(db, body.email, body.password, body.username)
     if error:
+        activity_service.log_activity_safely(
+            user_id=None,
+            action="account_register",
+            method="POST",
+            path="/api/auth/register",
+            status_code=400,
+            ip=request.client.host if request.client else None,
+            detail={
+                "outcome": "failed",
+                "error_category": _auth_error_category(error),
+            },
+        )
         return _err(error)
     token = auth_service.create_access_token(user.id, user.email)
     activity_service.log_activity_safely(
@@ -314,6 +338,7 @@ def auth_register(
         path="/api/auth/register",
         status_code=200,
         ip=request.client.host if request.client else None,
+        detail={"outcome": "success"},
     )
     return _ok({"token": token, "user": user.to_dict()})
 
@@ -326,6 +351,18 @@ def auth_login(
 ) -> dict:
     token, user, error = auth_service.login(db, body.email, body.password)
     if error:
+        activity_service.log_activity_safely(
+            user_id=user.id if user is not None else None,
+            action="account_login",
+            method="POST",
+            path="/api/auth/login",
+            status_code=401,
+            ip=request.client.host if request.client else None,
+            detail={
+                "outcome": "failed",
+                "error_category": _auth_error_category(error),
+            },
+        )
         return _err(error)
     activity_service.log_activity_safely(
         user_id=user.id,
@@ -334,6 +371,7 @@ def auth_login(
         path="/api/auth/login",
         status_code=200,
         ip=request.client.host if request.client else None,
+        detail={"outcome": "success"},
     )
     return _ok({"token": token, "user": user.to_dict()})
 
@@ -1089,6 +1127,7 @@ def create_douyin_local_handoff(
 @router.post("/api/library/douyin/local-handoff/complete")
 def complete_douyin_local_handoff(
     body: LibraryHandoffCompleteRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> dict:
     """Accept a local Chrome result and forward it to the scoped sidecar."""
@@ -1112,11 +1151,29 @@ def complete_douyin_local_handoff(
     if not result.get("valid"):
         douyin_binding_service.mark_disconnected(db, binding)
         raise HTTPException(status_code=400, detail="抖音未返回真实登录会话，请重新扫码")
+    transition_token = (
+        binding.updated_at.isoformat()
+        if binding.updated_at is not None
+        else binding.id
+    )
     douyin_binding_service.update_connection(
         db,
         binding,
         connected=True,
         cookie_count=int(result.get("count") or 0),
+    )
+    activity_service.log_activity_safely(
+        user_id=binding.user_id,
+        action="douyin_connected",
+        method="POST",
+        path="/api/library/douyin/local-handoff/complete",
+        status_code=200,
+        ip=request.client.host if request.client else None,
+        detail={
+            "outcome": "connected",
+            "binding_method": "local_handoff",
+        },
+        event_key=f"douyin-connected:{binding.id}:{transition_token}",
     )
     return _ok(
         {
@@ -1128,6 +1185,7 @@ def complete_douyin_local_handoff(
 
 @router.get("/api/library/douyin/login")
 def get_douyin_library_login(
+    request: Request,
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
@@ -1140,12 +1198,34 @@ def get_douyin_library_login(
         if state["authenticated"] or not state["running"]:
             connection = douyin_library.connection_status(binding.session_scope)
             if connection["connected"]:
+                was_connected = binding.status == "connected"
+                transition_token = (
+                    binding.updated_at.isoformat()
+                    if binding.updated_at is not None
+                    else binding.id
+                )
                 douyin_binding_service.update_connection(
                     db,
                     binding,
                     connected=bool(connection["cookie_valid"]),
                     cookie_count=int(connection["cookie_count"]),
                 )
+                if connection["cookie_valid"] and not was_connected:
+                    activity_service.log_activity_safely(
+                        user_id=current_user.id,
+                        action="douyin_connected",
+                        method="GET",
+                        path="/api/library/douyin/login",
+                        status_code=200,
+                        ip=request.client.host if request.client else None,
+                        detail={
+                            "outcome": "connected",
+                            "binding_method": "visible_chrome",
+                        },
+                        event_key=(
+                            f"douyin-connected:{binding.id}:{transition_token}"
+                        ),
+                    )
             state["cookie_valid"] = bool(connection["cookie_valid"])
             state["cookie_count"] = int(connection["cookie_count"])
         return _ok(state)
@@ -1184,6 +1264,7 @@ def get_douyin_library_login_qr(
 @router.post("/api/library/douyin/collect")
 def collect_douyin_library(
     body: LibraryCollectRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
@@ -1197,13 +1278,48 @@ def collect_douyin_library(
         )
         douyin_binding_service.mark_sync_started(db, binding)
     except douyin_library.DouyinLibraryError as exc:
+        activity_service.log_activity_safely(
+            user_id=current_user.id,
+            action="douyin_sync_failed",
+            method="POST",
+            path="/api/library/douyin/collect",
+            status_code=502,
+            ip=request.client.host if request.client else None,
+            detail={
+                "outcome": "failed",
+                "error_category": "connector_unavailable",
+                "source_mode": body.mode,
+                "requested_count": body.count,
+            },
+        )
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    job_id = str(job.get("job_id") or "").strip()
+    activity_service.log_activity_safely(
+        user_id=current_user.id,
+        action="douyin_sync",
+        method="POST",
+        path="/api/library/douyin/collect",
+        status_code=200,
+        ip=request.client.host if request.client else None,
+        detail={
+            "outcome": "started",
+            "source_mode": body.mode,
+            "requested_count": body.count,
+            "job_id": job_id,
+        },
+        event_key=(
+            f"douyin-sync:{current_user.id}:{job_id}:started"
+            if job_id
+            else None
+        ),
+    )
     return _ok(job)
 
 
 @router.get("/api/library/douyin/jobs/{job_id}")
 def get_douyin_library_job(
     job_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
@@ -1214,6 +1330,8 @@ def get_douyin_library_job(
     except douyin_library.DouyinLibraryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     restored = 0
+    ledger_synced = 0
+    ledger_warning = ""
     if job.get("status") == "success":
         raw_finished_at = job.get("finished_at")
         completed_at: datetime | None = None
@@ -1235,7 +1353,89 @@ def get_douyin_library_job(
                 current_user.id,
                 completed_at,
             )
-    return _ok({**job, "temporary_restored": restored})
+        source_mode = video_source_ledger_service.normalize_source_mode(
+            job.get("mode")
+        )
+        try:
+            sync_count = min(
+                100,
+                max(
+                    int(job.get("total") or 0),
+                    int(job.get("success") or 0),
+                ),
+            )
+        except (TypeError, ValueError):
+            sync_count = 0
+        if source_mode != "unknown" and sync_count > 0:
+            try:
+                synced_items = douyin_library.list_items(
+                    binding.session_scope,
+                    binding.id,
+                    sync_count,
+                    mode=source_mode,
+                    sort_by=(
+                        "collection"
+                        if source_mode == "collect"
+                        else "published"
+                    ),
+                )
+                notes_by_video_id = note_service.get_notes_by_video_ids(
+                    db,
+                    [item["aweme_id"] for item in synced_items],
+                    user_id=current_user.id,
+                )
+                ledger_synced = video_source_ledger_service.upsert_items(
+                    db,
+                    user_id=current_user.id,
+                    items=synced_items,
+                    notes_by_video_id=notes_by_video_id,
+                    observed_at=completed_at or datetime.now(timezone.utc),
+                    source_synced_at=completed_at or datetime.now(timezone.utc),
+                )
+            except Exception:
+                # The downloader job itself succeeded. A transient follow-up
+                # metadata read must not turn that successful sync into a 5xx;
+                # the extraction/save path can still populate the ledger.
+                db.rollback()
+                ledger_warning = "来源顺序稍后刷新"
+    job_status = str(job.get("status") or "").strip().lower()
+    if job_status in {"success", "failed"}:
+        activity_service.log_activity_safely(
+            user_id=current_user.id,
+            action=(
+                "douyin_sync_completed"
+                if job_status == "success"
+                else "douyin_sync_failed"
+            ),
+            method="GET",
+            path="/api/library/douyin/jobs/{job_id}",
+            status_code=200 if job_status == "success" else 502,
+            ip=request.client.host if request.client else None,
+            detail={
+                "outcome": job_status,
+                "error_category": (
+                    "upstream_sync_failed"
+                    if job_status == "failed"
+                    else None
+                ),
+                "source_mode": job.get("mode"),
+                "job_id": job_id,
+                "total": job.get("total"),
+                "success": job.get("success"),
+                "failed": job.get("failed"),
+                "skipped": job.get("skipped"),
+                "temporary_restored": restored,
+            },
+            event_key=(
+                f"douyin-sync:{current_user.id}:{job_id}:{job_status}"
+            ),
+        )
+    return _ok({
+        **job,
+        "temporary_restored": restored,
+        "source_ledger_synced": ledger_synced,
+        "source_ledger_warning": ledger_warning,
+    })
 
 
 @router.get("/api/library/douyin/media/{aweme_id}")
@@ -1316,6 +1516,97 @@ def stream_douyin_library_media(
     )
 
 
+@router.get("/api/library/douyin/cover/{aweme_id}")
+def stream_douyin_library_cover(
+    aweme_id: str = Path(
+        ...,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    ),
+    expires: int = Query(..., ge=1),
+    signature: str = Query(..., min_length=64, max_length=64),
+    binding: str = Query(
+        ...,
+        min_length=24,
+        max_length=24,
+        pattern=r"^dyb-[0-9a-f]{20}$",
+    ),
+    db: Session = Depends(get_db),
+):
+    """Proxy a cover image without exposing loopback URLs or storing files."""
+    if not douyin_library.verify_media_signature(
+        aweme_id,
+        binding,
+        expires,
+        signature,
+    ):
+        raise HTTPException(status_code=403, detail="视频封面地址已失效，请刷新页面")
+    account_binding = douyin_binding_service.get_by_id(db, binding)
+    if account_binding is None:
+        raise HTTPException(status_code=404, detail="抖音账号绑定不存在")
+    try:
+        item = douyin_library.get_item(
+            account_binding.session_scope,
+            account_binding.id,
+            aweme_id,
+        )
+    except douyin_library.DouyinLibraryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    target_url = str((item or {}).get("cover_url") or "").strip()
+    if not target_url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=404, detail="视频暂无可用封面")
+
+    request_headers = {
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        "Accept-Encoding": "identity",
+        "Referer": "https://www.douyin.com/",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/126.0.0.0 Safari/537.36"
+        ),
+    }
+    companion_base = settings.DOUYIN_DOWNLOADER_URL.strip().rstrip("/")
+    if companion_base and target_url.startswith(f"{companion_base}/"):
+        request_headers.update(
+            douyin_library.companion_headers(account_binding.session_scope)
+        )
+        request_headers.pop("Referer", None)
+    try:
+        response = http_requests.get(
+            target_url,
+            headers=request_headers,
+            stream=True,
+            timeout=(8, 45),
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"视频封面读取失败：{exc}") from exc
+
+    content_type = response.headers.get("Content-Type", "image/jpeg")
+    if not content_type.lower().startswith("image/"):
+        response.close()
+        raise HTTPException(status_code=502, detail="视频封面返回了无效格式")
+
+    def body():
+        try:
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            response.close()
+
+    return StreamingResponse(
+        body(),
+        media_type=content_type,
+        headers={
+            "Cache-Control": "private, max-age=1800",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @router.get("/api/library/douyin/items")
 def list_douyin_library_items(
     limit: int = Query(
@@ -1363,8 +1654,41 @@ def list_douyin_library_items(
         [item["aweme_id"] for item in items],
         user_id=current_user.id,
     )
+    ledger_map = video_source_ledger_service.list_by_video_ids(
+        db,
+        user_id=current_user.id,
+        video_ids=[item["aweme_id"] for item in items],
+    )
     for item in items:
         note = note_map.get(item["aweme_id"])
+        ledger = video_source_ledger_service.preferred_for_item(
+            ledger_map.get(item["aweme_id"], []),
+            item.get("source_mode"),
+        )
+        if ledger is not None:
+            ledger_data = ledger.to_dict()
+            item["source_ledger"] = ledger_data
+            item["first_seen_at"] = ledger_data["first_seen_at"]
+            item["last_seen_at"] = ledger_data["last_seen_at"]
+            item["source_synced_at"] = ledger_data["source_synced_at"]
+        else:
+            # Existing installs may only have source metadata embedded in the
+            # card JSON. Read it as a compatibility fallback, never write it.
+            legacy_meta = video_source_ledger_service.legacy_source_meta(note)
+            item["first_seen_at"] = str(
+                legacy_meta.get("first_seen_at") or ""
+            )
+            item["last_seen_at"] = str(
+                legacy_meta.get("last_seen_at")
+                or legacy_meta.get("source_synced_at")
+                or ""
+            )
+            if not item.get("source_synced_at"):
+                item["source_synced_at"] = str(
+                    legacy_meta.get("source_synced_at")
+                    or legacy_meta.get("first_seen_at")
+                    or ""
+                )
         item["extracted"] = note is not None
         item["extracted_note_id"] = note.id if note else None
         item["transcript_chars"] = len(note.transcript_raw or "") if note else 0
@@ -1507,6 +1831,28 @@ def get_douyin_library_item(
         aweme_id,
         user_id=current_user.id,
     )
+    ledger = video_source_ledger_service.preferred_for_item(
+        video_source_ledger_service.list_by_video_ids(
+            db,
+            user_id=current_user.id,
+            video_ids=[aweme_id],
+        ).get(aweme_id, []),
+        item.get("source_mode"),
+    )
+    if ledger is not None:
+        ledger_data = ledger.to_dict()
+        item["source_ledger"] = ledger_data
+        item["first_seen_at"] = ledger_data["first_seen_at"]
+        item["last_seen_at"] = ledger_data["last_seen_at"]
+        item["source_synced_at"] = ledger_data["source_synced_at"]
+    else:
+        legacy_meta = video_source_ledger_service.legacy_source_meta(note)
+        item["first_seen_at"] = str(legacy_meta.get("first_seen_at") or "")
+        item["last_seen_at"] = str(
+            legacy_meta.get("last_seen_at")
+            or legacy_meta.get("source_synced_at")
+            or ""
+        )
     plan = (
         plan_service.get_plan_by_note(db, note.id, user_id=current_user.id)
         if note is not None
@@ -2227,7 +2573,11 @@ def admin_patch_user(
         )
         if dup:
             return _err("该邮箱已被使用")
-        user.email = new_email
+        if new_email != user.email:
+            user.email = new_email
+            user.email_verified = False
+            user.email_verification_nonce = None
+            user.email_verification_sent_at = None
     db.commit()
     db.refresh(user)
     # Audit: record the specific action taken.

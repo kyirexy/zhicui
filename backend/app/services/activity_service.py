@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import distinct, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
@@ -23,12 +25,24 @@ ACTION_LABELS: dict[str, str] = {
     "douyin_login": "发起抖音扫码登录",
     "douyin_logout": "退出抖音账号",
     "douyin_rebind": "换绑抖音账号",
-    "douyin_sync": "同步抖音内容",
+    "douyin_connected": "抖音绑定成功",
+    "douyin_sync": "发起抖音同步",
+    "douyin_sync_completed": "抖音同步完成",
+    "douyin_sync_failed": "抖音同步失败",
     "library_extract": "生成视频文案与知识卡",
     "library_batch_extract": "批量生成视频文案与知识卡",
     "library_remove": "从视频资料库移除",
     "library_delete": "删除视频库知识内容",
     "library_ask": "向视频库提问",
+    "agent_thread_create": "创建视频 Agent 任务",
+    "agent_ask": "向视频 Agent 提问",
+    "agent_thread_delete": "删除视频 Agent 任务",
+    "automation_create": "创建每日视频摘要",
+    "automation_update": "修改每日视频摘要",
+    "automation_delete": "删除每日视频摘要",
+    "automation_run": "运行每日视频摘要",
+    "email_verification_send": "发送邮箱验证邮件",
+    "email_verification_confirm": "完成邮箱验证",
     "note_ask": "向单个视频提问",
     "plan_agent": "让 AI 调整计划",
     "plan_update": "更新计划",
@@ -40,6 +54,71 @@ ACTION_LABELS: dict[str, str] = {
     "admin_operation": "执行管理操作",
     "api_operation": "执行接口操作",
 }
+
+EXPLICIT_ACTIVITY_ROUTES = {
+    ("POST", "/api/library/douyin/collect"),
+}
+
+_DETAIL_KEYS = {
+    "outcome",
+    "error_category",
+    "source_mode",
+    "requested_count",
+    "job_id",
+    "total",
+    "success",
+    "failed",
+    "skipped",
+    "temporary_restored",
+    "binding_method",
+    "source_count",
+    "delivery_status",
+    "trigger",
+}
+_DETAIL_INTEGER_KEYS = {
+    "requested_count",
+    "total",
+    "success",
+    "failed",
+    "skipped",
+    "temporary_restored",
+    "source_count",
+}
+_DETAIL_STRING_LIMITS = {
+    "outcome": 24,
+    "error_category": 64,
+    "source_mode": 24,
+    "job_id": 96,
+    "binding_method": 32,
+    "delivery_status": 32,
+    "trigger": 24,
+}
+_SOURCE_MODE_LABELS = {
+    "like": "喜欢",
+    "collect": "收藏",
+    "collection": "收藏",
+    "post": "我的作品",
+}
+_OUTCOME_LABELS = {
+    "success": "成功",
+    "failed": "失败",
+    "started": "已开始",
+    "connected": "已连接",
+}
+_ERROR_CATEGORY_LABELS = {
+    "account_not_found": "账号不存在",
+    "invalid_password": "密码错误",
+    "inactive_account": "账号已禁用",
+    "email_already_registered": "邮箱已注册",
+    "username_already_registered": "用户名已占用",
+    "validation_failed": "信息校验未通过",
+    "connector_unavailable": "连接暂不可用",
+    "upstream_sync_failed": "同步任务未完成",
+}
+
+
+def is_explicit_activity_route(method: str, path: str) -> bool:
+    return (method.upper(), path) in EXPLICIT_ACTIVITY_ROUTES
 
 
 def classify_action(method: str, path: str) -> str:
@@ -56,6 +135,14 @@ def classify_action(method: str, path: str) -> str:
         ("POST", "/api/library/douyin/items/remove"): "library_remove",
         ("DELETE", "/api/library/douyin/extractions/{note_id}"): "library_delete",
         ("POST", "/api/library/ask"): "library_ask",
+        ("POST", "/api/agent/threads"): "agent_thread_create",
+        ("POST", "/api/agent/threads/{thread_id}/messages"): "agent_ask",
+        ("DELETE", "/api/agent/threads/{thread_id}"): "agent_thread_delete",
+        ("POST", "/api/agent/automations"): "automation_create",
+        ("PATCH", "/api/agent/automations/{automation_id}"): "automation_update",
+        ("DELETE", "/api/agent/automations/{automation_id}"): "automation_delete",
+        ("POST", "/api/agent/automations/{automation_id}/run"): "automation_run",
+        ("POST", "/api/agent/email/verification/send"): "email_verification_send",
         ("POST", "/api/notes/{note_id}/ask"): "note_ask",
         ("POST", "/api/notes/{note_id}/plan-agent"): "plan_agent",
         ("PATCH", "/api/plans/{plan_id}"): "plan_update",
@@ -73,6 +160,77 @@ def classify_action(method: str, path: str) -> str:
     return "api_operation"
 
 
+def sanitize_detail(detail: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep only bounded, low-sensitivity event metadata."""
+    if not isinstance(detail, dict):
+        return {}
+    sanitized: dict[str, Any] = {}
+    for key in _DETAIL_KEYS:
+        value = detail.get(key)
+        if value is None:
+            continue
+        if key in _DETAIL_INTEGER_KEYS:
+            if isinstance(value, bool):
+                continue
+            try:
+                sanitized[key] = max(0, min(int(value), 1_000_000_000))
+            except (TypeError, ValueError):
+                continue
+            continue
+        clean = str(value).strip()
+        if clean:
+            sanitized[key] = clean[: _DETAIL_STRING_LIMITS[key]]
+    return sanitized
+
+
+def parse_detail(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return sanitize_detail(value if isinstance(value, dict) else {})
+
+
+def summarize_detail(action: str, detail: dict[str, Any]) -> str:
+    if not detail:
+        return ""
+    outcome = _OUTCOME_LABELS.get(
+        str(detail.get("outcome") or ""),
+        str(detail.get("outcome") or ""),
+    )
+    if action in {"account_register", "account_login"}:
+        reason = _ERROR_CATEGORY_LABELS.get(
+            str(detail.get("error_category") or ""),
+            "",
+        )
+        return f"{outcome} · {reason}" if reason else outcome
+    if action == "douyin_connected":
+        method = {
+            "local_handoff": "本机扫码",
+            "visible_chrome": "Chrome 扫码",
+        }.get(str(detail.get("binding_method") or ""), "扫码")
+        return f"{method}连接成功"
+    source = _SOURCE_MODE_LABELS.get(
+        str(detail.get("source_mode") or ""),
+        "抖音内容",
+    )
+    if action == "douyin_sync":
+        count = detail.get("requested_count")
+        return f"{source} · 计划同步 {count} 条" if count is not None else source
+    if action in {"douyin_sync_completed", "douyin_sync_failed"}:
+        total = int(detail.get("total") or 0)
+        success = int(detail.get("success") or 0)
+        failed = int(detail.get("failed") or 0)
+        skipped = int(detail.get("skipped") or 0)
+        result = f"{source} · 共 {total} 条，成功 {success}，失败 {failed}"
+        if skipped:
+            result += f"，跳过 {skipped}"
+        return result
+    return outcome
+
+
 def log_activity(
     db: Session,
     *,
@@ -83,8 +241,20 @@ def log_activity(
     status_code: int,
     duration_ms: int = 0,
     ip: str | None = None,
+    detail: dict[str, Any] | None = None,
+    event_key: str | None = None,
 ) -> UserActivityLog:
-    """Store only bounded metadata. There is intentionally no detail/body column."""
+    """Store only bounded metadata and deduplicate explicit lifecycle events."""
+    clean_event_key = str(event_key or "").strip()[:180] or None
+    if clean_event_key:
+        existing = (
+            db.query(UserActivityLog)
+            .filter(UserActivityLog.event_key == clean_event_key)
+            .first()
+        )
+        if existing is not None:
+            return existing
+    safe_detail = sanitize_detail(detail)
     entry = UserActivityLog(
         user_id=user_id,
         action=action[:64],
@@ -93,20 +263,43 @@ def log_activity(
         status_code=int(status_code),
         duration_ms=max(0, int(duration_ms)),
         ip=(ip or "")[:64] or None,
+        detail_json=(
+            json.dumps(
+                safe_detail,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            if safe_detail
+            else None
+        ),
+        event_key=clean_event_key,
     )
     db.add(entry)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        if clean_event_key:
+            existing = (
+                db.query(UserActivityLog)
+                .filter(UserActivityLog.event_key == clean_event_key)
+                .first()
+            )
+            if existing is not None:
+                return existing
+        raise
     db.refresh(entry)
     return entry
 
 
-def log_activity_safely(**kwargs: Any) -> None:
+def log_activity_safely(**kwargs: Any) -> UserActivityLog | None:
     try:
         with SessionLocal() as db:
-            log_activity(db, **kwargs)
+            return log_activity(db, **kwargs)
     except Exception:
         # Logging cannot break authentication, extraction, plans, or admin actions.
-        return
+        return None
 
 
 def get_activity_report(
@@ -150,6 +343,16 @@ def get_activity_report(
         users = db.query(User).filter(User.id.in_(user_ids)).all()
         user_map = {user.id: (user.username or user.email) for user in users}
 
+    activity_users = (
+        db.query(User.id, User.username, User.email)
+        .join(UserActivityLog, UserActivityLog.user_id == User.id)
+        .filter(UserActivityLog.created_at >= cutoff)
+        .distinct()
+        .order_by(User.username.asc(), User.email.asc())
+        .limit(500)
+        .all()
+    )
+
     return {
         "summary": {
             "total": total,
@@ -169,6 +372,11 @@ def get_activity_report(
                 "status_code": row.status_code,
                 "duration_ms": row.duration_ms,
                 "ip": row.ip,
+                "detail": parse_detail(row.detail_json),
+                "detail_summary": summarize_detail(
+                    row.action,
+                    parse_detail(row.detail_json),
+                ),
                 "created_at": row.created_at.isoformat() if row.created_at else None,
             }
             for row in rows
@@ -176,6 +384,13 @@ def get_activity_report(
         "actions": [
             {"value": key, "label": label}
             for key, label in ACTION_LABELS.items()
+        ],
+        "users": [
+            {
+                "value": user.id,
+                "label": user.username or user.email,
+            }
+            for user in activity_users
         ],
         "total": total,
         "page": page,

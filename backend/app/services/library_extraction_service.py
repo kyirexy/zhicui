@@ -15,6 +15,7 @@ from app.services import (
     note_service,
     plan_service,
     settings_service,
+    video_source_ledger_service,
     video_extractor,
 )
 
@@ -73,6 +74,12 @@ def _persist_generated_note(
         ai_result,
         user_id,
     )
+    video_source_ledger_service.upsert_item(
+        db,
+        user_id=user_id,
+        item=item,
+        note_id=note.id,
+    )
     plan_id = _persist_generated_plan(db, note, ai_result, user_id)
     result = note.to_dict()
     result["plan_id"] = plan_id
@@ -112,6 +119,11 @@ def _persist_generated_plan(
 
 
 def _source_meta(item: dict[str, Any]) -> dict[str, Any]:
+    source_synced_at = (
+        str(item.get("source_synced_at") or "").strip()
+        or str(item.get("recorded_at") or "").strip()
+        or _iso_now()
+    )
     return {
         "source_kind": "douyin-library",
         "platform": "douyin",
@@ -120,6 +132,12 @@ def _source_meta(item: dict[str, Any]) -> dict[str, Any]:
         "author_name": item["author_name"],
         "recorded_at": item["recorded_at"],
         "caption": item["caption"],
+        "source_mode": str(item.get("source_mode") or "unknown"),
+        "source_rank": item.get("source_rank"),
+        "source_synced_at": source_synced_at,
+        # The downloader does not expose an exact Douyin favourite timestamp.
+        # This is the first reliable time the item entered Zhicui's text store.
+        "first_seen_at": source_synced_at,
     }
 
 
@@ -264,6 +282,12 @@ def extract_library_item(
                     source_meta=_source_meta(item),
                     user_id=user_id,
                 )
+                video_source_ledger_service.upsert_item(
+                    db,
+                    user_id=user_id,
+                    item=item,
+                    note_id=note.id,
+                )
                 result = note.to_dict()
                 result["already_existed"] = False
                 return result
@@ -289,6 +313,12 @@ def extract_library_item(
                     return result
                 existing.transcript_raw = transcript
                 note = note_service.update_note_ai(db, existing, ai_result)
+                video_source_ledger_service.upsert_item(
+                    db,
+                    user_id=user_id,
+                    item=item,
+                    note_id=note.id,
+                )
                 plan_id = _persist_generated_plan(
                     db,
                     note,

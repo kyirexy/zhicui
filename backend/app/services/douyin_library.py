@@ -213,6 +213,20 @@ def public_media_url(aweme_id: str, binding_ref: str) -> str:
     )
 
 
+def public_cover_url(aweme_id: str, binding_ref: str) -> str:
+    """Create a short-lived same-origin URL for a browser-safe cover image."""
+    expires = int(time.time()) + _MEDIA_URL_TTL_SECONDS
+    clean_binding_ref = str(binding_ref or "").strip()
+    if not _BINDING_REF_PATTERN.fullmatch(clean_binding_ref):
+        raise DouyinLibraryError("抖音账号绑定标识无效")
+    signature = _media_signature(aweme_id, clean_binding_ref, expires)
+    return (
+        f"/api/library/douyin/cover/{quote(aweme_id, safe='')}"
+        f"?binding={quote(clean_binding_ref, safe='')}"
+        f"&expires={expires}&signature={signature}"
+    )
+
+
 def verify_media_signature(
     aweme_id: str,
     binding_ref: str,
@@ -393,6 +407,11 @@ def _normalize_item(
             else ""
         ),
         "cover_url": cover_url,
+        "cover_proxy_url": (
+            public_cover_url(aweme_id, binding_ref)
+            if aweme_id and cover_url
+            else ""
+        ),
         "can_extract": can_extract,
     }
 

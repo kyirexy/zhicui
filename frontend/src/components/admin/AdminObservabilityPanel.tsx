@@ -68,6 +68,7 @@ export default function AdminObservabilityPanel() {
   const [activity, setActivity] = useState<UserActivityReport | null>(null);
   const [activityPage, setActivityPage] = useState(1);
   const [activityAction, setActivityAction] = useState('');
+  const [activityUserId, setActivityUserId] = useState('');
   const [errorReport, setErrorReport] = useState<ApplicationErrorReport | null>(null);
   const [errorPage, setErrorPage] = useState(1);
   const [errorSource, setErrorSource] = useState('');
@@ -91,6 +92,7 @@ export default function AdminObservabilityPanel() {
     usagePage,
     activityPage,
     activityAction,
+    activityUserId,
     errorPage,
     errorSource,
     errorSeverity,
@@ -106,7 +108,13 @@ export default function AdminObservabilityPanel() {
       if (result.success && result.data) setUsage(result.data);
       else setError(result.error || 'Token 用量加载失败');
     } else if (view === 'activity') {
-      const result = await getUserActivity(days, activityPage, 20, activityAction || undefined);
+      const result = await getUserActivity(
+        days,
+        activityPage,
+        20,
+        activityAction || undefined,
+        activityUserId || undefined,
+      );
       if (result.success && result.data) setActivity(result.data);
       else setError(result.error || '用户操作日志加载失败');
     } else if (view === 'errors') {
@@ -215,6 +223,11 @@ export default function AdminObservabilityPanel() {
           action={activityAction}
           setAction={value => {
             setActivityAction(value);
+            setActivityPage(1);
+          }}
+          userId={activityUserId}
+          setUserId={value => {
+            setActivityUserId(value);
             setActivityPage(1);
           }}
           onRefresh={refresh}
@@ -394,6 +407,8 @@ function ActivityView({
   setPage,
   action,
   setAction,
+  userId,
+  setUserId,
   onRefresh,
 }: {
   report: UserActivityReport | null;
@@ -402,6 +417,8 @@ function ActivityView({
   setPage: (page: number) => void;
   action: string;
   setAction: (action: string) => void;
+  userId: string;
+  setUserId: (userId: string) => void;
   onRefresh: () => Promise<void>;
 }) {
   if (!report && loading) return <LoadingPanel label="正在读取用户操作" />;
@@ -420,10 +437,22 @@ function ActivityView({
             <h2 className="text-sm font-semibold text-foreground">用户操作轨迹</h2>
             <p className="mt-1 text-xs text-foreground-muted">不记录请求正文、文案、问题、密码或密钥</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={userId}
+              onChange={event => setUserId(event.target.value)}
+              aria-label="按用户筛选操作日志"
+              className="min-h-10 min-w-36 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-emerald/50"
+            >
+              <option value="">全部用户</option>
+              {report?.users?.map(option => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
             <select
               value={action}
               onChange={event => setAction(event.target.value)}
+              aria-label="按操作类型筛选日志"
               className="min-h-10 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-emerald/50"
             >
               <option value="">全部操作</option>
@@ -441,6 +470,7 @@ function ActivityView({
                 <th className="p-3 text-left">时间</th>
                 <th className="p-3 text-left">用户</th>
                 <th className="p-3 text-left">操作</th>
+                <th className="p-3 text-left">结果详情</th>
                 <th className="p-3 text-left">接口</th>
                 <th className="p-3 text-left">状态</th>
                 <th className="p-3 text-right">耗时</th>
@@ -453,17 +483,20 @@ function ActivityView({
                   <td className="whitespace-nowrap p-3 text-xs text-foreground-muted">{formatDateTime(item.created_at)}</td>
                   <td className="p-3 font-medium text-foreground">{item.username}</td>
                   <td className="p-3"><span className="rounded-md bg-[var(--admin-surface-2)] px-2 py-1 text-xs text-foreground">{item.action_label}</span></td>
+                  <td className="max-w-xs p-3 text-xs text-foreground-secondary">
+                    {item.detail_summary || (item.status_code >= 400 ? '失败' : '已完成')}
+                  </td>
                   <td className="p-3"><code className="text-xs text-foreground-muted">{item.method} {item.path}</code></td>
                   <td className="p-3">
                     <span className={`text-xs font-semibold ${item.status_code >= 400 ? 'text-accent-rose' : 'text-accent-emerald'}`}>
-                      {item.status_code}
+                      {item.status_code >= 400 ? '失败' : '成功'} · {item.status_code}
                     </span>
                   </td>
                   <td className="p-3 text-right text-xs text-foreground-muted">{item.duration_ms} ms</td>
                   <td className="p-3 text-xs text-foreground-muted">{item.ip || '-'}</td>
                 </tr>
               ))}
-              {!report?.items.length && <EmptyTable colSpan={7} label="暂无用户操作记录" />}
+              {!report?.items.length && <EmptyTable colSpan={8} label="暂无用户操作记录" />}
             </tbody>
           </table>
         </div>

@@ -1,0 +1,16 @@
+{
+  "platform": "windows",
+  "architecture": "x64",
+  "version": "1.0.3",
+  "url": "https://luxai.cn/download/Zhicui-Setup-1.0.3-x64.exe",
+  "published_at": "2026-07-31T09:30:00.000Z",
+  "notes": [
+    "全新 Windows 工作台：统一导航、资料上下文与真实数据首页",
+    "视频库、视频 Agent、知识库、行动计划和设置采用一致的桌面体验",
+    "修复加载、空状态、局部失败与错误恢复体验",
+    "使用本机 Chrome 或 Edge 扫码登录抖音",
+    "支持自动检查新版本和一键安装更新"
+  ],
+  "code_signed": false,
+  "release_status": "public_download"
+}

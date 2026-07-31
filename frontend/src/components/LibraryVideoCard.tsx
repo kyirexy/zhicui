@@ -11,9 +11,11 @@ import {
   LoaderCircle,
   MoreHorizontal,
   Play,
+  Square,
   Sparkles,
   Trash2,
 } from 'lucide-react';
+import LibraryCoverImage from '@/components/LibraryCoverImage';
 import type { DouyinLibraryItem } from '@/lib/types';
 
 export type LibraryExtractState =
@@ -87,13 +89,13 @@ export default function LibraryVideoCard({
         <span className="sr-only">打开视频知识详情</span>
       </Link>
       <div className="library-video-cover">
-        {item.cover_url ? (
-          <img src={item.cover_url} alt={`${item.title} 视频封面`} loading="lazy" />
-        ) : (
-          <div className="library-video-cover-fallback" aria-hidden="true">
-            <Play size={26} />
-          </div>
-        )}
+        <LibraryCoverImage
+          key={item.cover_proxy_url || item.cover_url || item.aweme_id}
+          src={item.cover_proxy_url || item.cover_url}
+          fallbackClassName="library-video-cover-fallback"
+          fallbackLabel="封面暂不可用"
+          iconSize={24}
+        />
         <button
           type="button"
           className="library-select-button"
@@ -101,7 +103,7 @@ export default function LibraryVideoCard({
           aria-label={selected ? `取消选择 ${item.title}` : `选择 ${item.title}`}
           aria-pressed={selected}
         >
-          {selected ? <Check size={15} /> : null}
+          {selected ? <Check size={16} /> : <Square size={15} />}
         </button>
         {item.media_url && (
           <a
@@ -168,7 +170,7 @@ export default function LibraryVideoCard({
                     ? '没有可提取视频'
                     : selected
                       ? '已加入处理'
-                      : '勾选后统一处理'}
+                      : '同步后自动提取'}
             </span>
           ) : !item.ai_initialized ? (
             <span className={`library-card-hint ${selected ? 'is-selected' : ''}`}>
@@ -182,24 +184,24 @@ export default function LibraryVideoCard({
                 : '文案已就绪 · 可直接问 AI'}
             </span>
           ) : null}
-          <button
-            type="button"
-            className="library-remove-card-button"
-            disabled={removing}
-            onClick={() => onRemove(item)}
-          >
-            {removing ? (
-              <LoaderCircle size={13} className="animate-spin" />
-            ) : (
-              <CircleMinus size={13} />
-            )}
-            移出资料库
-          </button>
           <details className="library-card-menu">
             <summary aria-label={`更多管理 ${item.title}`}>
               <MoreHorizontal size={15} />
             </summary>
             <div>
+              <button
+                type="button"
+                className="is-temporary"
+                disabled={removing}
+                onClick={() => onRemove(item)}
+              >
+                {removing ? (
+                  <LoaderCircle size={13} className="animate-spin" />
+                ) : (
+                  <CircleMinus size={13} />
+                )}
+                移出资料库
+              </button>
               <p>永久隐藏后，同步也不会再次显示；可以在“已永久隐藏”中恢复。</p>
               <button
                 type="button"

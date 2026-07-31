@@ -17,6 +17,7 @@ interface AuthUser {
   username: string | null;
   is_active: boolean;
   is_admin: boolean;
+  email_verified: boolean;
   created_at: string;
 }
 
@@ -60,6 +61,9 @@ const AuthContext = createContext<AuthState>({
 
 const IS_DEV = process.env.NODE_ENV === 'development';
 const TOKEN_STORAGE_KEY = 'zhicui_token';
+const AUTH_REQUEST_TIMEOUT_MS = 10_000;
+const AUTH_RESTORE_TIMEOUT_MS = 6_000;
+const DEV_SESSION_TIMEOUT_MS = 5_000;
 const DEV_SESSION_RETRY_DELAYS_MS = [0, 300, 800] as const;
 
 function wait(delay: number, signal: AbortSignal): Promise<boolean> {
@@ -127,10 +131,30 @@ function resolveAuthError<T>(
 
 async function authRequest<T>(
   endpoint: string,
-  options?: RequestInit,
+  options: RequestInit = {},
+  timeoutMs = AUTH_REQUEST_TIMEOUT_MS,
 ): Promise<AuthResponse<T>> {
+  const controller = new AbortController();
+  const upstreamSignal = options.signal;
+  let timedOut = false;
+  const forwardAbort = () => controller.abort();
+
+  if (upstreamSignal?.aborted) {
+    controller.abort();
+  } else {
+    upstreamSignal?.addEventListener('abort', forwardAbort, { once: true });
+  }
+
+  const timeoutId = globalThis.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
   try {
-    const response = await fetch(`${API_BASE}${endpoint}`, options);
+    const response = await fetch(`${API_BASE}${endpoint}`, {
+      ...options,
+      signal: controller.signal,
+    });
     const payload = await response.json().catch(() => null) as AuthResponse<T> | null;
 
     if (!response.ok || !payload?.success) {
@@ -141,10 +165,25 @@ async function authRequest<T>(
     }
     return payload;
   } catch (requestError) {
+    if (timedOut) {
+      return {
+        success: false,
+        error: '连接超时，请检查网络或服务状态后重试',
+      };
+    }
+    if (upstreamSignal?.aborted) {
+      return {
+        success: false,
+        error: '请求已取消',
+      };
+    }
     return {
       success: false,
       error: requestError instanceof Error ? requestError.message : '网络连接失败',
     };
+  } finally {
+    globalThis.clearTimeout(timeoutId);
+    upstreamSignal?.removeEventListener('abort', forwardAbort);
   }
 }
 
@@ -159,6 +198,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     writeStoredToken(session.token);
     setToken(session.token);
     setUser(session.user);
+    setError(null);
   }, []);
 
   const enterDevelopmentSession = useCallback(async () => {
@@ -172,7 +212,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const response = await authRequest<AuthSession>('/api/auth/dev-session', {
         method: 'POST',
-      });
+      }, DEV_SESSION_TIMEOUT_MS);
       if (response.success && response.data) {
         applySession(response.data);
         return response.data.user;
@@ -198,7 +238,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const restored = await authRequest<AuthUser>('/api/auth/me', {
           headers: { Authorization: `Bearer ${saved}` },
           signal: controller.signal,
-        });
+        }, AUTH_RESTORE_TIMEOUT_MS);
         if (cancelled) return;
         if (restored.success && restored.data) {
           applySession({ token: saved, user: restored.data });
@@ -208,10 +248,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         removeStoredToken();
         setToken(null);
         setUser(null);
+        if (!IS_DEV) {
+          setError(restored.error || '登录状态恢复失败，请重新登录');
+        }
       }
 
       if (IS_DEV) {
         setEnteringDevelopmentSession(true);
+        let lastDevelopmentError = '';
         for (const delay of DEV_SESSION_RETRY_DELAYS_MS) {
           if (delay > 0 && !(await wait(delay, controller.signal))) return;
           if (cancelled) return;
@@ -219,22 +263,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const development = await authRequest<AuthSession>('/api/auth/dev-session', {
             method: 'POST',
             signal: controller.signal,
-          });
+          }, DEV_SESSION_TIMEOUT_MS);
           if (cancelled) return;
           if (development.success && development.data) {
             applySession(development.data);
             return;
           }
+          lastDevelopmentError = development.error || '';
+        }
+
+        if (!cancelled) {
+          setError(
+            lastDevelopmentError
+              || '开发会话连接失败，请确认本地后端已启动后重试',
+          );
         }
       }
     };
 
-    restore().finally(() => {
-      if (!cancelled) {
-        setEnteringDevelopmentSession(false);
-        setLoading(false);
-      }
-    });
+    void restore()
+      .catch((restoreError) => {
+        if (!cancelled) {
+          setError(
+            restoreError instanceof Error
+              ? restoreError.message
+              : '登录状态恢复失败，请重试',
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setEnteringDevelopmentSession(false);
+          setLoading(false);
+        }
+      });
     return () => {
       cancelled = true;
       controller.abort();

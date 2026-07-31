@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -371,15 +372,9 @@ def _generate_card_once(
     choice = response.choices[0]
     raw: str = choice.message.content or ""
 
-    # For thinking models (e.g. deepseek-v4-pro), content may be None when
-    # the reasoning phase consumes the token budget.  Fall back to the
-    # reasoning_content if available.
-    if not raw.strip() and hasattr(choice.message, "reasoning_content"):
-        raw = choice.message.reasoning_content or ""
-
     if not raw.strip():
         raise RuntimeError(
-            "LLM 返回内容为空（思考模型可能消耗了全部 token 预算）。"
+            "LLM 返回内容为空；内部推理内容不会作为用户可见结果。"
         )
 
     raw = raw.strip()
@@ -548,10 +543,8 @@ def _call_llm(
     )
     choice = response.choices[0]
     raw: str = choice.message.content or ""
-    if not raw.strip() and hasattr(choice.message, "reasoning_content"):
-        raw = choice.message.reasoning_content or ""
     if not raw.strip():
-        raise RuntimeError("LLM returned empty content")
+        raise RuntimeError("LLM 返回内容为空；内部推理内容不会作为用户可见结果。")
     raw = raw.strip()
     if raw.startswith("```"):
         first_newline = raw.index("\n")
@@ -767,6 +760,138 @@ def _validated_web_sources(
         if len(selected) >= 6:
             break
     return selected
+
+
+_AGENT_RESPONSE_KEYS = (
+    "answer",
+    "evidence",
+    "web_source_ids",
+    "grounded",
+    "follow_up_questions",
+)
+
+
+def _decode_agent_json_value(value: Any) -> dict[str, Any] | None:
+    """解开可能被重复 JSON 编码的模型响应。"""
+    current = value
+    for _ in range(3):
+        if isinstance(current, dict):
+            return current
+        if not isinstance(current, str):
+            return None
+        candidate = current.strip().lstrip("\ufeff")
+        if not candidate:
+            return None
+        try:
+            current = json.loads(candidate)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return current if isinstance(current, dict) else None
+
+
+def _agent_json_candidates(text: str) -> list[str]:
+    """在不假设模型严格遵循提示词的前提下找出可能的 JSON 区域。"""
+    candidates = [text.strip().lstrip("\ufeff")]
+    for match in re.finditer(
+        r"```(?:json)?\s*(.*?)```",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        fenced = match.group(1).strip()
+        if fenced and fenced not in candidates:
+            candidates.append(fenced)
+    return candidates
+
+
+def _extract_agent_json_fields(text: str) -> dict[str, Any]:
+    """从损坏的 JSON 对象中恢复仍然有效的单个契约字段。
+
+    每个字段值都使用 ``JSONDecoder``，不通过正则截取值，从而保留转义引号、
+    嵌套数组等 JSON 语义。此逻辑只作为最后的恢复路径。
+    """
+    decoder = json.JSONDecoder()
+    recovered: dict[str, Any] = {}
+    for key in _AGENT_RESPONSE_KEYS:
+        pattern = re.compile(rf'"{re.escape(key)}"\s*:\s*')
+        for match in pattern.finditer(text):
+            try:
+                value, _ = decoder.raw_decode(text, match.end())
+            except (json.JSONDecodeError, TypeError):
+                continue
+            recovered[key] = value
+            break
+    return recovered
+
+
+def _parse_agent_response_payload(raw: Any) -> dict[str, Any]:
+    """解析 Agent 合成契约，同时禁止内部 JSON 泄漏到对话正文。
+
+    模型提供商和兼容网关有时会给合法对象加 Markdown 围栏、再次 JSON 编码，
+    或在前后附加简短说明。旧的严格 ``json.loads(raw)`` 会把这些情况全部当作
+    普通答案文本，最终让用户在对话中看到完整的内部结构。
+    """
+    if isinstance(raw, dict):
+        return raw
+    if raw is None:
+        return {}
+
+    text = str(raw).strip().lstrip("\ufeff")
+    if not text:
+        return {}
+
+    candidates = _agent_json_candidates(text)
+    for candidate in candidates:
+        decoded = _decode_agent_json_value(candidate)
+        if decoded is not None:
+            return decoded
+
+    # 接受被提供商说明文字包围的合法 JSON，并优先选择包含 answer 的对象。
+    decoder = json.JSONDecoder()
+    decoded_objects: list[dict[str, Any]] = []
+    scan_attempts = 0
+    for candidate in candidates:
+        for index, character in enumerate(candidate):
+            if character not in '{"':
+                continue
+            scan_attempts += 1
+            if scan_attempts > 500:
+                break
+            try:
+                value, _ = decoder.raw_decode(candidate, index)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            decoded = _decode_agent_json_value(value)
+            if decoded is None:
+                continue
+            if "answer" in decoded:
+                return decoded
+            decoded_objects.append(decoded)
+        if scan_attempts > 500:
+            break
+    if decoded_objects:
+        return decoded_objects[0]
+
+    recovered = _extract_agent_json_fields(text)
+    if recovered:
+        return recovered
+
+    # 真正的纯文本响应仍然可用；疑似结构化的内容绝不作为答案返回，
+    # 避免再次暴露内部响应契约。
+    looks_structured = (
+        text.startswith(("{", "[", "```"))
+        or any(f'"{key}"' in text for key in _AGENT_RESPONSE_KEYS)
+    )
+    return {} if looks_structured else {"answer": text}
+
+
+def _agent_answer_text(payload: dict[str, Any], fallback: str) -> str:
+    """只返回标量答案，绝不把嵌套契约数据字符串化。"""
+    answer = payload.get("answer")
+    if isinstance(answer, str):
+        cleaned = answer.strip()
+        if cleaned:
+            return cleaned
+    return fallback
 
 
 def _note_answer_mode(question: str) -> str:
@@ -1247,41 +1372,13 @@ def answer_note_question(
         operation="note_qa",
     )
 
-    try:
-        parsed = json.loads(raw_answer)
-    except (json.JSONDecodeError, TypeError):
-        return {
-            "answer": _ensure_note_creative_label(raw_answer, answer_mode),
-            "answer_mode": answer_mode,
-            "evidence": [],
-            "grounded": False,
-            "follow_up_questions": [],
-            "source_context": source_context,
-            "web_sources": [],
-            "research_scope": safe_research_scope,
-            "agent_trace": agent_trace,
-        }
-
-    if not isinstance(parsed, dict):
-        return {
-            "answer": _ensure_note_creative_label(raw_answer, answer_mode),
-            "answer_mode": answer_mode,
-            "evidence": [],
-            "grounded": False,
-            "follow_up_questions": [],
-            "source_context": source_context,
-            "web_sources": [],
-            "research_scope": safe_research_scope,
-            "agent_trace": agent_trace,
-        }
-
-    answer = str(parsed.get("answer") or "").strip()
-    if not answer:
-        answer = (
-            "暂时没有成功生成这个创作示例，请换一种说法后重试。"
-            if answer_mode == "creative"
-            else "原内容没有提供足够信息来回答这个问题。"
-        )
+    parsed = _parse_agent_response_payload(raw_answer)
+    fallback_answer = (
+        "暂时没有成功生成这个创作示例，请换一种说法后重试。"
+        if answer_mode == "creative"
+        else "原内容没有提供足够信息来回答这个问题。"
+    )
+    answer = _agent_answer_text(parsed, fallback_answer)
     answer = _ensure_note_creative_label(answer, answer_mode)
 
     evidence = _validated_note_evidence(
@@ -1307,6 +1404,11 @@ def answer_note_question(
         ),
         "source_context": source_context,
         "web_sources": selected_web_sources,
+        "web_source_ids": [
+            str(source.get("id") or "")
+            for source in selected_web_sources
+            if source.get("id")
+        ],
         "research_scope": safe_research_scope,
         "agent_trace": agent_trace,
     }
@@ -1396,6 +1498,82 @@ def _validated_library_evidence(
     return validated
 
 
+def _library_grounding_summary(
+    *,
+    raw_evidence: Any,
+    raw_web_source_ids: Any,
+    evidence: list[dict[str, Any]],
+    selected_web_sources: list[dict[str, Any]],
+    web_attempted: bool,
+    web_succeeded: bool,
+    scanned_source_count: int,
+    context_source_count: int,
+) -> tuple[str, dict[str, Any], list[str]]:
+    """Summarize verified citations without inferring hidden claim coverage."""
+    requested_transcript = (
+        len(raw_evidence)
+        if isinstance(raw_evidence, list)
+        else 0
+    )
+    requested_web = (
+        len(raw_web_source_ids)
+        if isinstance(raw_web_source_ids, list)
+        else 0
+    )
+    requested = requested_transcript + requested_web
+    matched = len(evidence) + len(selected_web_sources)
+    verified_web = sum(
+        1 for source in selected_web_sources
+        if bool(source.get("verified"))
+    )
+    verified = len(evidence) + verified_web
+    ratio = round(verified / requested, 3) if requested else 0.0
+
+    if matched == 0:
+        grounding_status = "ungrounded"
+    elif requested > 0 and verified >= requested:
+        grounding_status = "grounded"
+    else:
+        grounding_status = "partially_grounded"
+
+    limitations: list[str] = []
+    rejected_transcript = max(0, requested_transcript - len(evidence))
+    rejected_web = max(0, requested_web - len(selected_web_sources))
+    unverified_web = max(0, len(selected_web_sources) - verified_web)
+    if rejected_transcript:
+        limitations.append(
+            f"已移除 {rejected_transcript} 条无法与候选文稿精确匹配的引用。"
+        )
+    if rejected_web:
+        limitations.append(
+            f"已移除 {rejected_web} 条不在本次外部候选集中的网页引用。"
+        )
+    if unverified_web:
+        limitations.append(
+            f"{unverified_web} 条网页依据仅来自搜索摘要，尚未完成页面核验。"
+        )
+    if web_attempted and not web_succeeded:
+        limitations.append("外部搜索暂时不可用，本次回答仅依据所选视频。")
+    if scanned_source_count > context_source_count:
+        limitations.append(
+            f"已扫描 {scanned_source_count} 条视频；最终综合使用了 "
+            f"{context_source_count} 条视频的相关片段。"
+        )
+    if matched == 0:
+        limitations.append("回答没有返回可与本次候选资料精确匹配的引用。")
+
+    return (
+        grounding_status,
+        {
+            "requested": requested,
+            "matched": matched,
+            "verified": verified,
+            "ratio": ratio,
+        },
+        limitations[:5],
+    )
+
+
 _LIBRARY_RESEARCH_PLANNER_PROMPT = """\
 你是多视频研究任务的规划 Agent。你的输出只用于检索和组织回答，不能提供事实结论。
 
@@ -1446,9 +1624,11 @@ def _library_research_plan(
             _LIBRARY_OUTPUT_STYLE_PROMPTS["answer"],
         ),
     }
+    # 标题属于紧凑元数据，因此规划器可以看到检索所扫描的同一份 100 条快照，
+    # 同时不需要接收全部正文。
     title_lines = "\n".join(
         f"{index}. {title[:120]}"
-        for index, title in enumerate(source_titles[:50], start=1)
+        for index, title in enumerate(source_titles[:100], start=1)
     )
     try:
         raw = _call_llm(
@@ -1521,6 +1701,7 @@ def _build_library_research_context(
     research_mode: str,
 ) -> tuple[list[str], dict[str, dict[str, str]], dict[str, Any]]:
     """Scan every transcript, then globally select diverse source chunks."""
+    scan_started_at = time.perf_counter()
     max_context_chars = 58_000 if research_mode == "deep" else 44_000
     max_context_sources = 28 if research_mode == "deep" else 18
     max_context_chunks = 30 if research_mode == "deep" else 20
@@ -1533,7 +1714,9 @@ def _build_library_research_context(
     scanned_chunks = 0
     summary_count = 0
 
-    for source in sources[:50]:
+    # 扫描产品支持的完整批次（最多 100 条），只有全局相关且来源多样的分块
+    # 会进入有界模型上下文。
+    for source in sources[:100]:
         note_id = str(source.get("note_id") or "").strip()
         if not note_id or note_id in records:
             continue
@@ -1575,6 +1758,10 @@ def _build_library_research_context(
                 "score": score,
             })
 
+    scan_duration_ms = max(
+        0,
+        round((time.perf_counter() - scan_started_at) * 1000),
+    )
     if not records:
         return [], {}, {
             "note_count": 0,
@@ -1584,9 +1771,13 @@ def _build_library_research_context(
             "ai_summary_count": 0,
             "matched_note_count": 0,
             "context_note_count": 0,
+            "researched_note_ids": [],
             "sources": [],
+            "scan_duration_ms": scan_duration_ms,
+            "rank_duration_ms": 0,
         }
 
+    rank_started_at = time.perf_counter()
     candidates.sort(
         key=lambda item: (-item["score"], item["note_id"], item["start"])
     )
@@ -1691,6 +1882,10 @@ AI 结构化理解：
         1 for record in records.values()
         if int(record["best_score"]) > 0
     )
+    rank_duration_ms = max(
+        0,
+        round((time.perf_counter() - rank_started_at) * 1000),
+    )
     context = {
         "note_count": len(records),
         "transcript_chars": total_transcript_chars,
@@ -1699,27 +1894,88 @@ AI 结构化理解：
         "ai_summary_count": summary_count,
         "matched_note_count": matched_note_count,
         "context_note_count": len(supplied_sources),
+        # 这是检索实际检查的完整有界快照；下方较小的 sources 列表只记录
+        # 摘录进入合成提示词、因此能够支撑引用的来源子集。
+        "researched_note_ids": list(records),
         "sources": [
             {"note_id": note_id, "title": data["title"]}
             for note_id, data in supplied_sources.items()
         ],
+        "scan_duration_ms": scan_duration_ms,
+        "rank_duration_ms": rank_duration_ms,
     }
     return source_blocks, supplied_sources, context
 
 
+def _validated_deep_map_findings(
+    raw_payload: Any,
+    *,
+    allowed_note_ids: set[str],
+    supplied_sources: dict[str, dict[str, str]],
+) -> list[dict[str, str]]:
+    """Keep only map findings backed by an exact quote in the current batch."""
+    parsed = _parse_agent_response_payload(raw_payload)
+    raw_findings = parsed.get("findings")
+    if not isinstance(raw_findings, list):
+        return []
+
+    validated: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in raw_findings:
+        if not isinstance(item, dict):
+            continue
+        note_id = str(item.get("note_id") or "").strip()
+        claim = str(item.get("claim") or "").strip()
+        quote = str(item.get("quote") or "").strip()
+        if (
+            not note_id
+            or note_id not in allowed_note_ids
+            or not claim
+            or not quote
+            or (note_id, quote) in seen
+        ):
+            continue
+        source_data = supplied_sources.get(note_id)
+        if not source_data:
+            continue
+
+        source = ""
+        if quote in source_data.get("transcript_context", ""):
+            source = "transcript"
+        elif quote in source_data.get("summary_context", ""):
+            source = "summary"
+        if not source:
+            continue
+
+        seen.add((note_id, quote))
+        validated.append({
+            "claim": claim[:500],
+            "note_id": note_id,
+            "quote": quote[:360],
+            "source": source,
+        })
+        if len(validated) >= 12:
+            break
+    return validated
+
+
 def _deep_library_map(
     source_blocks: list[str],
+    supplied_sources: dict[str, dict[str, str]],
     question: str,
     subquestions: list[str],
-) -> tuple[list[str], int]:
-    """Map source batches into provisional findings for deep research."""
+) -> tuple[list[str], int, int]:
+    """Map source batches and pass only quote-verified findings to synthesis."""
     if not source_blocks:
-        return [], 0
+        return [], 0, 0
     group_size = 5
     findings: list[str] = []
     map_calls = 0
+    validated_finding_count = 0
+    source_ids = list(supplied_sources)
     for start in range(0, min(len(source_blocks), 30), group_size):
         group = source_blocks[start:start + group_size]
+        allowed_note_ids = set(source_ids[start:start + len(group)])
         try:
             mapped = _call_llm(
                 system="""\
@@ -1742,16 +1998,25 @@ def _deep_library_map(
                 timeout=60,
                 operation="library_research_map",
             )
-            findings.append(mapped[:6000])
             map_calls += 1
-        except Exception as exc:
-            findings.append(
-                json.dumps(
-                    {"findings": [], "gaps": [f"该批次分析失败：{type(exc).__name__}"]},
-                    ensure_ascii=False,
-                )
+            validated = _validated_deep_map_findings(
+                mapped,
+                allowed_note_ids=allowed_note_ids,
+                supplied_sources=supplied_sources,
             )
-    return findings, map_calls
+            if not validated:
+                continue
+            validated_finding_count += len(validated)
+            findings.append(json.dumps(
+                {"findings": validated},
+                ensure_ascii=False,
+            ))
+        except Exception:
+            # Optional batch analysis is recoverable. The exception is already
+            # recorded by `_call_llm`; neither its text nor an invented gap is
+            # allowed to influence the final answer.
+            continue
+    return findings, map_calls, validated_finding_count
 
 
 def answer_library_question(
@@ -1763,7 +2028,7 @@ def answer_library_question(
     custom_instruction: str = "",
     web_scope: str = "auto",
 ) -> dict[str, Any]:
-    """Research up to 50 videos through planning, retrieval and synthesis."""
+    """Research up to 100 videos through planning, retrieval and synthesis."""
     clean_question = question.strip()
     if not clean_question:
         raise ValueError("问题不能为空")
@@ -1777,7 +2042,9 @@ def answer_library_question(
         else "answer"
     )
     clean_custom = custom_instruction.strip()[:600]
-    bounded_sources = sources[:50]
+    # 单个任务快照最多包含 100 条视频。检索会扫描全部来源，而
+    # `_build_library_research_context` 只让全局相关且多样的摘录进入模型提示词。
+    bounded_sources = sources[:100]
     history_lines: list[str] = []
     retrieval_history: list[str] = []
     for item in (history or [])[-6:]:
@@ -1793,6 +2060,7 @@ def answer_library_question(
         if role == "user":
             retrieval_history.append(content)
 
+    planning_started_at = time.perf_counter()
     plan = _library_research_plan(
         clean_question,
         [
@@ -1802,6 +2070,10 @@ def answer_library_question(
         history_lines,
         safe_style,
         clean_custom,
+    )
+    planning_duration_ms = max(
+        0,
+        round((time.perf_counter() - planning_started_at) * 1000),
     )
     queries = [
         clean_question,
@@ -1820,7 +2092,29 @@ def answer_library_question(
     if not supplied_sources:
         raise ValueError("所选视频没有可用内容")
 
+    mapped_findings: list[str] = []
+    map_calls = 0
+    validated_map_finding_count = 0
+    map_duration_ms = 0
+    if safe_mode == "deep" and len(supplied_sources) >= 6:
+        map_started_at = time.perf_counter()
+        (
+            mapped_findings,
+            map_calls,
+            validated_map_finding_count,
+        ) = _deep_library_map(
+            source_blocks,
+            supplied_sources,
+            clean_question,
+            plan["subquestions"],
+        )
+        map_duration_ms = max(
+            0,
+            round((time.perf_counter() - map_started_at) * 1000),
+        )
+
     safe_web_scope = web_scope if web_scope in {"auto", "video_only"} else "auto"
+    web_started_at = time.perf_counter()
     web_plan = _plan_web_research(
         title="；".join(
             str(source.get("title") or "未命名视频")
@@ -1831,8 +2125,9 @@ def answer_library_question(
         research_scope=safe_web_scope,
     )
     web_sources: list[dict[str, Any]] = []
-    web_error = ""
-    if web_plan["needs_web"]:
+    web_attempted = bool(web_plan["needs_web"])
+    web_succeeded = False
+    if web_attempted:
         try:
             result = web_research.research_web(
                 web_plan["queries"],
@@ -1840,8 +2135,8 @@ def answer_library_question(
                 verify_pages=3,
             )
             web_sources = list(result.get("sources") or [])
+            web_succeeded = True
         except Exception as exc:
-            web_error = type(exc).__name__
             error_log_service.record_exception_safely(
                 exc,
                 source="web_research",
@@ -1851,52 +2146,17 @@ def answer_library_question(
                     "query_count": len(web_plan["queries"]),
                 },
             )
-
-    agent_trace = [
-        {
-            "stage": "plan",
-            "label": "规划问题与检索方向",
-            "detail": (
-                f"{len(plan['search_queries'])} 个检索方向 · "
-                f"{len(plan['subquestions'])} 个子问题"
-            ),
-        },
-        {
-            "stage": "retrieve",
-            "label": "扫描完整文案并全局召回",
-            "detail": (
-                f"扫描 {source_context['note_count']} 条视频、"
-                f"{source_context['scanned_chunks']} 个分块，"
-                f"选取 {source_context['selected_chunks']} 个片段"
-            ),
-        },
-    ]
-    if web_plan["needs_web"]:
-        agent_trace.append({
-            "stage": "web",
-            "label": "联网查证外部信息",
-            "detail": (
-                f"{len(web_plan['queries'])} 个查询 · "
-                f"{len(web_sources)} 个候选来源"
-                if not web_error
-                else "外部搜索暂时不可用，已回退到所选视频"
-            ),
-        })
-    mapped_findings: list[str] = []
-    map_calls = 0
-    if safe_mode == "deep" and len(supplied_sources) >= 6:
-        mapped_findings, map_calls = _deep_library_map(
-            source_blocks,
-            clean_question,
-            plan["subquestions"],
-        )
-        agent_trace.append({
-            "stage": "map",
-            "label": "分批提取跨视频发现",
-            "detail": f"完成 {map_calls} 个来源批次分析",
-        })
+    web_duration_ms = max(
+        0,
+        round((time.perf_counter() - web_started_at) * 1000),
+    )
+    web_verified_source_count = sum(
+        1 for source in web_sources
+        if bool(source.get("verified"))
+    )
 
     style_instruction = _LIBRARY_OUTPUT_STYLE_PROMPTS[safe_style]
+    synthesis_started_at = time.perf_counter()
     raw_answer = _call_llm(
         system=_LIBRARY_CHAT_SYSTEM_PROMPT,
         user=f"""\
@@ -1926,48 +2186,17 @@ def answer_library_question(
         timeout=90,
         operation="library_qa",
     )
-    agent_trace.append({
-        "stage": "synthesize",
-        "label": "综合回答并校验引用",
-        "detail": f"{'深度' if safe_mode == 'deep' else '快速'}模式综合",
-    })
-    source_context.update({
-        "research_mode": safe_mode,
-        "output_style": safe_style,
-        "coverage": plan["coverage"],
-        "map_calls": map_calls,
-        "agent_trace": agent_trace,
-        "web_scope": safe_web_scope,
-        "web_search_used": bool(web_plan["needs_web"]),
-        "web_query_count": len(web_plan["queries"]),
-        "web_source_count": len(web_sources),
-    })
-    try:
-        parsed = json.loads(raw_answer)
-    except (json.JSONDecodeError, TypeError):
-        return {
-            "answer": raw_answer,
-            "evidence": [],
-            "grounded": False,
-            "follow_up_questions": [],
-            "source_context": source_context,
-            "web_sources": [],
-            "web_scope": safe_web_scope,
-        }
-    if not isinstance(parsed, dict):
-        return {
-            "answer": raw_answer,
-            "evidence": [],
-            "grounded": False,
-            "follow_up_questions": [],
-            "source_context": source_context,
-            "web_sources": [],
-            "web_scope": safe_web_scope,
-        }
+    synthesis_duration_ms = max(
+        0,
+        round((time.perf_counter() - synthesis_started_at) * 1000),
+    )
 
-    answer = str(parsed.get("answer") or "").strip()
-    if not answer:
-        answer = "所选视频没有提供足够信息来回答这个问题。"
+    verification_started_at = time.perf_counter()
+    parsed = _parse_agent_response_payload(raw_answer)
+    answer = _agent_answer_text(
+        parsed,
+        "所选视频没有提供足够信息来回答这个问题。",
+    )
     evidence = _validated_library_evidence(
         parsed.get("evidence"),
         supplied_sources,
@@ -1976,15 +2205,165 @@ def answer_library_question(
         parsed.get("web_source_ids"),
         web_sources,
     )
+    (
+        grounding_status,
+        citation_coverage,
+        limitations,
+    ) = _library_grounding_summary(
+        raw_evidence=parsed.get("evidence"),
+        raw_web_source_ids=parsed.get("web_source_ids"),
+        evidence=evidence,
+        selected_web_sources=selected_web_sources,
+        web_attempted=web_attempted,
+        web_succeeded=web_succeeded,
+        scanned_source_count=int(source_context["note_count"]),
+        context_source_count=int(source_context["context_note_count"]),
+    )
+    verification_duration_ms = max(
+        0,
+        round((time.perf_counter() - verification_started_at) * 1000),
+    )
+
+    if not web_attempted:
+        web_status = "skipped"
+        web_detail = "本次问题未进行外部搜索"
+    elif not web_succeeded:
+        web_status = "failed"
+        web_detail = "外部搜索暂时不可用，已继续使用所选视频"
+    elif web_sources:
+        web_status = "completed"
+        web_detail = (
+            f"获得 {len(web_sources)} 个候选来源，"
+            f"{web_verified_source_count} 个已核验页面"
+        )
+    else:
+        web_status = "completed"
+        web_detail = "外部搜索已完成，未找到可用来源"
+
+    rank_duration_ms = (
+        int(source_context.get("rank_duration_ms") or 0)
+        + map_duration_ms
+    )
+    agent_trace = [
+        {
+            "stage": "planning",
+            "label": "规划问题与检索方向",
+            "status": "completed",
+            "duration_ms": planning_duration_ms,
+            "counts": {
+                "query_count": len(plan["search_queries"]),
+                "subquestion_count": len(plan["subquestions"]),
+            },
+            "detail": (
+                f"{len(plan['search_queries'])} 个检索方向 · "
+                f"{len(plan['subquestions'])} 个子问题"
+            ),
+        },
+        {
+            "stage": "scan",
+            "label": "扫描所选视频文稿",
+            "status": "completed",
+            "duration_ms": int(source_context.get("scan_duration_ms") or 0),
+            "counts": {
+                "video_count": int(source_context["note_count"]),
+                "transcript_chars": int(source_context["transcript_chars"]),
+                "chunk_count": int(source_context["scanned_chunks"]),
+            },
+            "detail": (
+                f"扫描 {source_context['note_count']} 条视频 · "
+                f"{source_context['scanned_chunks']} 个文稿分块"
+            ),
+        },
+        {
+            "stage": "rank",
+            "label": "筛选与核对候选依据",
+            "status": "completed",
+            "duration_ms": rank_duration_ms,
+            "counts": {
+                "matched_video_count": int(source_context["matched_note_count"]),
+                "context_video_count": int(source_context["context_note_count"]),
+                "selected_chunk_count": int(source_context["selected_chunks"]),
+                "map_call_count": map_calls,
+                "validated_map_finding_count": validated_map_finding_count,
+            },
+            "detail": (
+                f"选取 {source_context['selected_chunks']} 个相关片段 · "
+                f"{source_context['context_note_count']} 条视频进入综合"
+            ),
+        },
+        {
+            "stage": "web",
+            "label": "按需查证外部信息",
+            "status": web_status,
+            "duration_ms": web_duration_ms,
+            "counts": {
+                "attempted": web_attempted,
+                "succeeded": web_succeeded,
+                "query_count": len(web_plan["queries"]),
+                "source_count": len(web_sources),
+                "verified_source_count": web_verified_source_count,
+            },
+            "detail": web_detail,
+        },
+        {
+            "stage": "synthesize",
+            "label": "根据候选依据生成回答",
+            "status": "completed",
+            "duration_ms": synthesis_duration_ms,
+            "counts": {
+                "source_count": int(source_context["context_note_count"]),
+            },
+            "detail": f"{'深度' if safe_mode == 'deep' else '快速'}模式综合",
+        },
+        {
+            "stage": "verify",
+            "label": "校验回答中的引用",
+            "status": "completed",
+            "duration_ms": verification_duration_ms,
+            "counts": {
+                **citation_coverage,
+                "limitation_count": len(limitations),
+            },
+            "detail": (
+                f"{citation_coverage['matched']} 条引用匹配候选资料 · "
+                f"{citation_coverage['verified']} 条完成核验"
+            ),
+        },
+    ]
+    source_context.update({
+        "research_mode": safe_mode,
+        "output_style": safe_style,
+        "coverage": plan["coverage"],
+        "map_calls": map_calls,
+        "validated_map_finding_count": validated_map_finding_count,
+        "map_duration_ms": map_duration_ms,
+        "agent_trace": agent_trace,
+        "web_scope": safe_web_scope,
+        # Compatibility: the old field meant that a search was attempted.
+        "web_search_used": web_attempted,
+        "web_search_attempted": web_attempted,
+        "web_search_succeeded": web_succeeded,
+        "web_query_count": len(web_plan["queries"]),
+        "web_source_count": len(web_sources),
+        "web_verified_source_count": web_verified_source_count,
+    })
     return {
         "answer": answer,
         "evidence": evidence,
         "grounded": bool(evidence or selected_web_sources),
+        "grounding_status": grounding_status,
+        "citation_coverage": citation_coverage,
+        "limitations": limitations,
         "follow_up_questions": _note_follow_up_questions(
             parsed.get("follow_up_questions")
         ),
         "source_context": source_context,
         "web_sources": selected_web_sources,
+        "web_source_ids": [
+            str(source.get("id") or "")
+            for source in selected_web_sources
+            if source.get("id")
+        ],
         "web_scope": safe_web_scope,
     }
 

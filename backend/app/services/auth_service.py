@@ -28,6 +28,7 @@ if not _JWT_SECRET:
 SECRET_KEY: str = _JWT_SECRET
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 30  # long-lived for MVP, refresh later
+EMAIL_VERIFICATION_EXPIRE_HOURS = 24
 DEV_USER_EMAIL = "dev@zhicui.local"
 DEV_USER_USERNAME = "zhicui_dev"
 
@@ -61,6 +62,35 @@ def decode_access_token(token: str) -> dict | None:
         return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError:
         return None
+
+
+def create_email_verification_token(user: User, nonce: str) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(
+        hours=EMAIL_VERIFICATION_EXPIRE_HOURS
+    )
+    return jwt.encode(
+        {
+            "sub": user.id,
+            "email": user.email,
+            "purpose": "verify_email",
+            "nonce": nonce,
+            "exp": expire,
+        },
+        SECRET_KEY,
+        algorithm=ALGORITHM,
+    )
+
+
+def decode_email_verification_token(token: str) -> dict | None:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        return None
+    if payload.get("purpose") != "verify_email":
+        return None
+    if not payload.get("sub") or not payload.get("nonce"):
+        return None
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -105,9 +135,9 @@ def login(db: Session, email: str, password: str) -> tuple[str | None, User | No
     if not user:
         return None, None, "账号不存在"
     if not verify_password(password, user.hashed_password):
-        return None, None, "密码错误"
+        return None, user, "密码错误"
     if not user.is_active:
-        return None, None, "账号已被禁用"
+        return None, user, "账号已被禁用"
 
     token = create_access_token(user.id, user.email)
     return token, user, None

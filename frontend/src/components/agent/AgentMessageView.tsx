@@ -1,9 +1,9 @@
 'use client';
 
+import { memo } from 'react';
 import {
   ArrowClockwise,
   CaretRight,
-  ChatCircleDots,
   CheckCircle,
   ClipboardText,
   FileText,
@@ -13,6 +13,9 @@ import {
   VideoCamera,
 } from '@phosphor-icons/react';
 import AgentMark from '@/components/agent/AgentMark';
+import AgentVideoAnalysisCard, {
+  type AgentVideoAnalysisDecision,
+} from '@/components/agent/AgentVideoAnalysisCard';
 import { MessageResponse } from '@/components/ai-elements/message';
 import type { AgentMessage } from '@/lib/types';
 
@@ -22,9 +25,16 @@ interface AgentMessageViewProps {
   message: AgentMessage;
   disabled?: boolean;
   deliveryState?: AgentMessageDeliveryState;
+  deliveryError?: string;
+  streaming?: boolean;
   onFollowUp: (question: string) => void;
   onRetry?: (message: AgentMessage) => void;
   onEdit?: (message: AgentMessage) => void;
+  onVideoAnalysisDecision?: (
+    message: AgentMessage,
+    action: AgentVideoAnalysisDecision,
+    options?: { offeringId?: string; useByok?: boolean },
+  ) => void;
 }
 
 function readableAssistantContent(content: string): string {
@@ -57,20 +67,36 @@ function readableAssistantContent(content: string): string {
   return typeof candidate === 'string' ? candidate : original;
 }
 
-export default function AgentMessageView({
+function formatTimestamp(milliseconds?: number): string {
+  if (typeof milliseconds !== 'number' || milliseconds < 0) return '';
+  const totalSeconds = Math.floor(milliseconds / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function AgentMessageView({
   message,
   disabled = false,
   deliveryState,
+  deliveryError,
+  streaming = false,
   onFollowUp,
   onRetry,
   onEdit,
+  onVideoAnalysisDecision,
 }: AgentMessageViewProps) {
   const isAssistant = message.role === 'assistant';
   const evidenceCount = message.evidence?.length || 0;
   const transcriptEvidenceCount = message.evidence?.filter(
     (evidence) => evidence.source === 'transcript',
   ).length || 0;
-  const summaryEvidenceCount = evidenceCount - transcriptEvidenceCount;
+  const visualEvidenceCount = message.evidence?.filter(
+    (evidence) => evidence.source === 'visual',
+  ).length || 0;
+  const summaryEvidenceCount = evidenceCount
+    - transcriptEvidenceCount
+    - visualEvidenceCount;
   const webSourceCount = message.web_sources?.length || 0;
   const sourceContext = message.source_context;
   const grounded = Boolean(message.grounded || evidenceCount);
@@ -124,25 +150,44 @@ export default function AgentMessageView({
 
   return (
     <article
+      id={`agent-message-${message.id}`}
       className={`video-agent-message is-${message.role} ${
         deliveryState ? `is-${deliveryState}` : ''
-      }`}
+      } ${streaming ? 'is-streaming' : ''}`}
     >
-      <div className="video-agent-message-author">
-        {isAssistant ? (
+      {isAssistant && (
+        <div className="video-agent-message-author">
           <>
-            <span><AgentMark variant="avatar" /></span>
-            知萃
+            <span className="video-agent-message-avatar">
+              <AgentMark variant="avatar" />
+            </span>
+            <span className="video-agent-message-identity">
+              <strong>知萃</strong>
+              <small>{streaming ? '正在生成' : '基于视频资料'}</small>
+            </span>
           </>
-        ) : '你'}
-      </div>
+        </div>
+      )}
 
       {isAssistant ? (
-        <MessageResponse className="video-agent-answer-markdown">
-          {displayContent}
-        </MessageResponse>
+        displayContent ? (
+          <MessageResponse
+            className="video-agent-answer-markdown"
+            isAnimating={streaming}
+          >
+            {displayContent}
+          </MessageResponse>
+        ) : null
       ) : (
         <div className="video-agent-message-content">{displayContent}</div>
+      )}
+
+      {isAssistant && !streaming && (
+        <AgentVideoAnalysisCard
+          message={message}
+          disabled={disabled}
+          onDecision={onVideoAnalysisDecision}
+        />
       )}
 
       {!isAssistant && deliveryState && (
@@ -157,25 +202,30 @@ export default function AgentMessageView({
             </>
           ) : (
             <>
-              <span>这条问题没有发出去</span>
-              {onEdit && (
-                <button type="button" onClick={() => onEdit(message)}>
-                  <PencilSimple size={14} />
-                  编辑
-                </button>
-              )}
-              {onRetry && (
-                <button type="button" onClick={() => onRetry(message)}>
-                  <ArrowClockwise size={14} />
-                  重试
-                </button>
-              )}
+              <span className="video-agent-message-failure-copy">
+                <strong>回答生成中断</strong>
+                <small>{deliveryError || '服务暂时没有完成这条回答'}</small>
+              </span>
+              <span className="video-agent-message-failure-actions">
+                {onEdit && (
+                  <button type="button" onClick={() => onEdit(message)}>
+                    <PencilSimple size={14} />
+                    修改问题
+                  </button>
+                )}
+                {onRetry && (
+                  <button type="button" onClick={() => onRetry(message)}>
+                    <ArrowClockwise size={14} />
+                    重新生成
+                  </button>
+                )}
+              </span>
             </>
           )}
         </div>
       )}
 
-      {isAssistant && (
+      {isAssistant && !streaming && (
         <details
           className={`video-agent-grounding ${
             groundingStatus === 'grounded' ? 'is-grounded' : 'is-limited'
@@ -218,7 +268,14 @@ export default function AgentMessageView({
                         ? ' · '
                         : ''}
                       {summaryEvidenceCount > 0
-                        ? `${summaryEvidenceCount} 条知识卡理解`
+                        ? `${summaryEvidenceCount} 条摘要笔记`
+                        : ''}
+                      {(transcriptEvidenceCount > 0 || summaryEvidenceCount > 0)
+                        && visualEvidenceCount > 0
+                        ? ' · '
+                        : ''}
+                      {visualEvidenceCount > 0
+                        ? `${visualEvidenceCount} 条画面观察`
                         : ''}
                     </span>
                   </header>
@@ -238,7 +295,11 @@ export default function AgentMessageView({
                           <small className="video-agent-grounding-source-meta">
                             {evidence.source === 'transcript'
                               ? '完整文案'
-                              : '知识卡理解'}
+                              : evidence.source === 'visual'
+                                ? `AI 画面观察${formatTimestamp(evidence.timestamp_ms)
+                                  ? ` · ${formatTimestamp(evidence.timestamp_ms)}`
+                                  : ''}`
+                                : '摘要笔记'}
                             {typeof evidence.position_percent === 'number'
                               ? ` · 文稿约 ${Math.round(evidence.position_percent)}% 处`
                               : ''}
@@ -325,25 +386,16 @@ export default function AgentMessageView({
         </details>
       )}
 
-      {isAssistant && (
+      {isAssistant && !streaming && (
         <div className="video-agent-answer-actions" aria-label="回答操作">
           <button type="button" onClick={() => void copyAnswer()}>
             <ClipboardText size={15} />
             复制回答
           </button>
-          <button
-            type="button"
-            onClick={() => window.dispatchEvent(
-              new CustomEvent('zhicui:open-feedback'),
-            )}
-          >
-            <ChatCircleDots size={15} />
-            反馈
-          </button>
         </div>
       )}
 
-      {isAssistant && message.follow_up_questions?.length ? (
+      {isAssistant && !streaming && message.follow_up_questions?.length ? (
         <div className="video-agent-followups">
           <strong>继续追问</strong>
           {message.follow_up_questions.map((followUp) => (
@@ -362,3 +414,5 @@ export default function AgentMessageView({
     </article>
   );
 }
+
+export default memo(AgentMessageView);

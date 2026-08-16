@@ -16,6 +16,7 @@ import {
 import { useAuth } from '@/lib/hooks/AuthContext';
 
 const IS_DEV = process.env.NODE_ENV === 'development';
+const DEV_AUTH_AUTO = IS_DEV && process.env.NEXT_PUBLIC_DEV_AUTH_AUTO === 'true';
 
 function getSafeRedirect(fallback: string): string {
   const candidate = new URLSearchParams(window.location.search).get('redirect');
@@ -40,7 +41,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
   const [mode, setMode] = useState<'login' | 'register'>('login');
-  const [showStandardAuth, setShowStandardAuth] = useState(!IS_DEV);
+  const [showStandardAuth, setShowStandardAuth] = useState(!DEV_AUTH_AUTO);
   const [submitting, setSubmitting] = useState(false);
   const [fieldError, setFieldError] = useState('');
 
@@ -90,7 +91,7 @@ export default function LoginPage() {
           <div>
             <h1 className="text-balance">{IS_DEV ? '正在进入开发环境' : '正在恢复登录状态'}</h1>
             <p className="text-pretty">
-              {IS_DEV ? '正在连接本地开发账号，无需填写账号和密码。' : '正在确认你的账号信息。'}
+              {DEV_AUTH_AUTO ? '正在连接本地开发账号，无需填写账号和密码。' : '正在确认你的账号信息。'}
             </p>
           </div>
           <LoaderCircle
@@ -106,7 +107,7 @@ export default function LoginPage() {
   return (
     <div className="min-h-[70vh] flex items-center justify-center px-5 py-8">
       <div className="w-full max-w-sm">
-        {IS_DEV && (
+        {DEV_AUTH_AUTO && (
           <section className="rounded-3xl border border-card-border bg-card-bg p-5 shadow-sm">
             <div className="flex items-start gap-4">
               <div className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-accent-emerald/10 text-accent-emerald">

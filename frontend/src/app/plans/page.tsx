@@ -1,850 +1,581 @@
 'use client';
 
-import { useCallback, useEffect, useState, Suspense } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
-import { ArrowLeft, Calendar, CheckSquare, Target, CalendarDays, Trash2, Check, Loader2, Sun, Pencil, RotateCcw } from 'lucide-react';
-import { ListChecks } from '@phosphor-icons/react';
-import { listPlans, getPlan, getPlanOverview, deletePlan, togglePlanTask, updatePlan } from '@/lib/api';
-import type { PlanData, PlanDay, PlanField, PlanFocusTask, PlanOverview } from '@/lib/types';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  formatPlanDuration,
+  ArrowLeft,
+  CalendarBlank,
+  CaretRight,
+  Check,
+  CheckCircle,
+  ClockCountdown,
+  Note,
+  PencilSimple,
+  Plus,
+  SpinnerGap,
+  Target,
+  Trash,
+} from '@phosphor-icons/react';
+import {
+  deletePlan,
+  getPlan,
+  getPlanOverview,
+  listPlans,
+  togglePlanTask,
+  updatePlan,
+} from '@/lib/api';
+import type { PlanData, PlanFocusTask, PlanOverview } from '@/lib/types';
+import {
   formatPlanFieldValue,
-  formatPlanSchedule,
-  getOverdueTasks,
+  getChinaToday,
   getPlanCurrentDay,
   getPlanProgress,
   getPlanTasks,
-  getTodayTasks,
-  getTodayDayTasks,
-  getTodayDay,
 } from '@/lib/types';
-import PlanCard from '@/components/PlanCard';
-import PlanExecutionOverview from '@/components/PlanExecutionOverview';
-import PlanTaskList from '@/components/PlanTaskList';
-import PlanDynamicField from '@/components/PlanDynamicField';
-import PlanDeleteDialog from '@/components/PlanDeleteDialog';
+import BottomSheet from '@/components/BottomSheet';
+import PlanCoachPanel from '@/components/plans/PlanCoachPanel';
+import PlanQuickCapture from '@/components/plans/PlanQuickCapture';
+import PlanTaskBoard from '@/components/plans/PlanTaskBoard';
+import PlanTodayView from '@/components/plans/PlanTodayView';
+import PlanWeeklyReviewView from '@/components/plans/PlanWeeklyReview';
+import styles from '@/components/plans/PlanWorkspace.module.css';
 
-type PlanWorkspaceView = 'today' | 'goals' | 'review';
+type WorkspaceView = 'today' | 'plans' | 'review';
+type PlanFilter = 'active' | 'done';
+type CaptureMode = 'plan' | 'task';
 
-function PlansContent() {
-  const searchParams = useSearchParams();
-  const planId = searchParams.get('id');
-  const showPlanList = useCallback(() => {
-    const nextUrl = new URL(window.location.href);
-    nextUrl.searchParams.delete('id');
-    window.history.replaceState(
-      null,
-      '',
-      `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`,
-    );
-    window.scrollTo({ top: 0, behavior: 'auto' });
-  }, []);
-
-  return planId ? <PlanDetail id={planId} onBack={showPlanList} /> : <PlanList />;
-}
-
-function groupPlanFields(fields: PlanField[]): { label: string; fields: PlanField[] }[] {
-  const groups = new Map<string, PlanField[]>();
-  for (const field of fields) {
-    const group = field.group?.trim() || '计划信息';
-    groups.set(group, [...(groups.get(group) ?? []), field]);
-  }
-  return Array.from(groups, ([label, groupedFields]) => ({ label, fields: groupedFields }));
-}
-
-/* ------------------------------------------------------------------ */
-/* List view                                                          */
-/* ------------------------------------------------------------------ */
-
-function PlanList() {
-  const [plans, setPlans] = useState<PlanData[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [totalPlans, setTotalPlans] = useState(0);
-  const [overview, setOverview] = useState<PlanOverview | null>(null);
-  const [view, setView] = useState<PlanWorkspaceView>('today');
-  const [focusMutating, setFocusMutating] = useState<Set<string>>(new Set());
-  const [workspaceError, setWorkspaceError] = useState('');
-  const [deleteTarget, setDeleteTarget] = useState<PlanData | null>(null);
-  const [deletePending, setDeletePending] = useState(false);
-  const [deleteError, setDeleteError] = useState('');
-
-  const load = useCallback(async (p: number) => {
-    setLoading(true);
-    setWorkspaceError('');
-    const [plansResponse, overviewResponse] = await Promise.all([
-      listPlans(p),
-      getPlanOverview(),
-    ]);
-    if (plansResponse.success && plansResponse.data) {
-      setPlans(plansResponse.data.items);
-      setTotalPages(plansResponse.data.total_pages);
-      setPage(plansResponse.data.page);
-      setTotalPlans(plansResponse.data.total);
-    } else {
-      setWorkspaceError(plansResponse.error || '计划暂时无法读取，请稍后重试。');
-    }
-    if (overviewResponse.success && overviewResponse.data) {
-      setOverview(overviewResponse.data);
-    } else if (!plansResponse.error) {
-      setWorkspaceError(overviewResponse.error || '今日计划暂时无法读取，请稍后重试。');
-    }
-    setLoading(false);
-  }, []);
-
-  useEffect(() => { void load(1); }, [load]);
-
-  const handleFocusToggle = async (task: PlanFocusTask) => {
-    const mutationKey = `${task.plan_id}:${task.task_id}`;
-    if (focusMutating.has(mutationKey)) return;
-    setFocusMutating(current => new Set(current).add(mutationKey));
-    setWorkspaceError('');
-    const response = await togglePlanTask(task.plan_id, task.task_id);
-    if (response.success && response.data) {
-      setPlans(current => current.map(plan => (
-        plan.id === response.data!.id ? response.data! : plan
-      )));
-      const overviewResponse = await getPlanOverview();
-      if (overviewResponse.success && overviewResponse.data) {
-        setOverview(overviewResponse.data);
-      }
-    } else {
-      setWorkspaceError(response.error || '任务状态更新失败，请重试。');
-    }
-    setFocusMutating(current => {
-      const next = new Set(current);
-      next.delete(mutationKey);
-      return next;
-    });
-  };
-
-  const confirmDelete = async () => {
-    if (!deleteTarget || deletePending) return;
-    setDeletePending(true);
-    setDeleteError('');
-    const response = await deletePlan(deleteTarget.id);
-    if (response.success) {
-      setPlans(current => current.filter(plan => plan.id !== deleteTarget.id));
-      setTotalPlans(current => Math.max(0, current - 1));
-      setDeleteTarget(null);
-      const overviewResponse = await getPlanOverview();
-      if (overviewResponse.success && overviewResponse.data) {
-        setOverview(overviewResponse.data);
-      }
-    } else {
-      setDeleteError(response.error || '计划删除失败，请重试。');
-    }
-    setDeletePending(false);
-  };
-
-  if (loading) {
-    return (
-      <div className="desktop-core-page desktop-plans-page max-w-4xl mx-auto space-y-4">
-        {[1, 2, 3].map((i) => (
-          <div key={i} className="skeleton h-28 rounded-xl" />
-        ))}
-      </div>
-    );
-  }
-
-  const completedGoals = overview
-    ? Math.max(0, totalPlans - overview.summary.active_plans)
-    : plans.filter(plan => plan.status === 'done').length;
-
+function LoadingState() {
   return (
-    <div className="plan-workspace-shell desktop-core-page desktop-plans-page mx-auto max-w-5xl pb-24">
-      <header className="plan-workspace-header mb-5 md:mb-7">
-        <div className="flex items-start gap-3">
-          <span className="mt-0.5 inline-flex h-10 w-10 flex-none items-center justify-center rounded-xl border border-card-border bg-card-bg text-foreground-secondary">
-            <ListChecks size={22} weight="duotone" />
-          </span>
-          <div>
-            <h1 className="text-2xl font-bold text-foreground md:text-3xl">
-              计划工作台
-            </h1>
-            <p className="mt-1 text-sm leading-relaxed text-foreground-muted">
-              少看一堆任务，先完成真正推进目标的下一步。
-            </p>
-          </div>
-        </div>
-      </header>
-
-      <nav
-        className="plan-workspace-tabs mb-6 grid grid-cols-3 rounded-2xl border border-card-border bg-card-bg p-1"
-        role="tablist"
-        aria-label="计划工作台视图"
-      >
-        <WorkspaceTab
-          active={view === 'today'}
-          onClick={() => setView('today')}
-          label="今日"
-          count={overview?.summary.due_today ?? 0}
-        />
-        <WorkspaceTab
-          active={view === 'goals'}
-          onClick={() => setView('goals')}
-          label="目标"
-          count={totalPlans}
-        />
-        <WorkspaceTab
-          active={view === 'review'}
-          onClick={() => setView('review')}
-          label="进度回顾"
-          count={completedGoals}
-        />
-      </nav>
-
-      {workspaceError && (
-        <p className="plan-workspace-error plan-inline-error mb-4" role="alert">
-          {workspaceError}
-        </p>
-      )}
-
-      {totalPlans === 0 ? (
-        <PlanWorkspaceEmpty />
-      ) : view === 'today' ? (
-        overview ? (
-          <PlanExecutionOverview
-            overview={overview}
-            onToggle={task => void handleFocusToggle(task)}
-            mutatingIds={focusMutating}
-          />
-        ) : (
-          <div className="plan-workspace-empty min-h-48 rounded-2xl border border-dashed border-card-border bg-card-bg" />
-        )
-      ) : view === 'goals' ? (
-        <section className="plan-workspace-goals" aria-labelledby="plan-workspace-goals-title">
-          <div className="mb-4 flex items-end justify-between gap-4">
-            <div>
-              <p className="text-xs font-semibold text-foreground-muted">目标</p>
-              <h2 id="plan-workspace-goals-title" className="mt-1 text-xl font-bold text-foreground md:text-2xl">
-                你的目标与计划
-              </h2>
-            </div>
-            <span className="text-sm text-foreground-muted">{totalPlans} 个目标</span>
-          </div>
-          <div className="plan-workspace-goal-list grid gap-2.5">
-            {plans.map((plan) => (
-              <PlanCard
-                key={plan.id}
-                plan={plan}
-                onDelete={(target) => {
-                  setDeleteError('');
-                  setDeleteTarget(target);
-                }}
-              />
-            ))}
-          </div>
-        </section>
-      ) : (
-        <PlanProgressReview
-          plans={plans}
-          overview={overview}
-          totalPlans={totalPlans}
-        />
-      )}
-
-      {view === 'goals' && totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2 mt-8">
-          <button
-            onClick={() => load(Math.max(1, page - 1))}
-            disabled={page === 1}
-            className="glass-input px-4 py-2 text-sm disabled:opacity-30 min-w-[44px] min-h-[44px]"
-          >
-            上一页
-          </button>
-          <span className="text-sm text-foreground-muted px-3">
-            {page} / {totalPages}
-          </span>
-          <button
-            onClick={() => load(Math.min(totalPages, page + 1))}
-            disabled={page === totalPages}
-            className="glass-input px-4 py-2 text-sm disabled:opacity-30 min-w-[44px] min-h-[44px]"
-          >
-            下一页
-          </button>
-        </div>
-      )}
-      <PlanDeleteDialog
-        plan={deleteTarget}
-        pending={deletePending}
-        error={deleteError}
-        onClose={() => {
-          if (deletePending) return;
-          setDeleteTarget(null);
-          setDeleteError('');
-        }}
-        onConfirm={() => void confirmDelete()}
-      />
+    <div className={styles.loading} aria-label="正在读取行动计划">
+      <div className={styles.loadingBlock} />
+      <div className={styles.loadingBlock} />
+      <div className={styles.loadingBlock} />
     </div>
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* Detail view                                                        */
-/* ------------------------------------------------------------------ */
+function ConfirmDialog({
+  title,
+  description,
+  pending,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  description: string;
+  pending: boolean;
+  error?: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const dialogRef = useRef<HTMLElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const pendingRef = useRef(pending);
+  const cancelRef = useRef(onCancel);
 
-function PlanDetail({ id, onBack }: { id: string; onBack: () => void }) {
+  useEffect(() => {
+    pendingRef.current = pending;
+    cancelRef.current = onCancel;
+  }, [onCancel, pending]);
+
+  useEffect(() => {
+    previousFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const focusableSelector = 'button:not([disabled]), a[href], input:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const focusFirst = () => dialogRef.current?.querySelector<HTMLElement>(focusableSelector)?.focus();
+    const frame = window.requestAnimationFrame(focusFirst);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !pendingRef.current) {
+        event.preventDefault();
+        cancelRef.current();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialogRef.current) return;
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(focusableSelector));
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialogRef.current.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previousFocusRef.current?.focus();
+    };
+  }, []);
+
+  return (
+    <div className={styles.dialogBackdrop} role="presentation" onPointerDown={event => event.target === event.currentTarget && !pending && onCancel()}>
+      <section ref={dialogRef} tabIndex={-1} className={styles.dialog} role="alertdialog" aria-modal="true" aria-labelledby="plan-confirm-title" aria-describedby="plan-confirm-description">
+        <h2 id="plan-confirm-title">{title}</h2>
+        <p id="plan-confirm-description">{description}</p>
+        {error && <p className={styles.dialogError} role="alert">{error}</p>}
+        <div className={styles.dialogActions}>
+          <button type="button" className={styles.secondaryButton} onClick={onCancel} disabled={pending}>取消</button>
+          <button type="button" className={styles.dangerButton} onClick={onConfirm} disabled={pending}>
+            {pending && <SpinnerGap size={15} className="animate-spin" />}
+            确认删除
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function GoalRow({ plan, onDelete }: { plan: PlanData; onDelete: () => void }) {
+  const progress = getPlanProgress(plan);
+  const nextTask = getPlanTasks(plan).find(task => !task.done);
+  const complete = plan.status === 'done';
+  return (
+    <article className={styles.goalRow}>
+      <Link href={`/plans?id=${plan.id}`} className={styles.goalLink} aria-label={`打开计划：${plan.title}`} />
+      <div className={styles.goalMain}>
+        <span className={styles.goalStatus}><i />{complete ? '已完成' : plan.note_id ? '来自视频' : '手动计划'}</span>
+        <h3 className={styles.goalTitle}>{plan.title}</h3>
+      </div>
+      <div className={styles.goalNext}>
+        <span>{complete ? '完成状态' : '下一步'}</span>
+        <strong>{complete ? '目标已经达成' : nextTask?.title || '还没有执行任务'}</strong>
+      </div>
+      <div className={styles.goalProgress}>
+        <span>进度</span>
+        <div className={styles.progressTrack}><i style={{ width: `${progress.pct}%` }} /></div>
+        <span className={styles.progressLabel}>{progress.done}/{progress.total} · {progress.pct}%</span>
+      </div>
+      <div className={styles.goalActions}>
+        <button type="button" className={styles.iconButton} onClick={onDelete} aria-label={`删除计划：${plan.title}`}>
+          <Trash size={16} />
+        </button>
+        <span className={styles.iconButton}><CaretRight size={16} /></span>
+      </div>
+    </article>
+  );
+}
+
+function PlansWorkspace() {
+  const [plans, setPlans] = useState<PlanData[]>([]);
+  const [overview, setOverview] = useState<PlanOverview | null>(null);
+  const [totalPlans, setTotalPlans] = useState(0);
+  const [view, setView] = useState<WorkspaceView>('today');
+  const [filter, setFilter] = useState<PlanFilter>('active');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [busyKeys, setBusyKeys] = useState<Set<string>>(new Set());
+  const [captureOpen, setCaptureOpen] = useState(false);
+  const [captureMode, setCaptureMode] = useState<CaptureMode>('plan');
+  const [deleteTarget, setDeleteTarget] = useState<PlanData | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const load = useCallback(async (showLoading = true) => {
+    if (showLoading) setLoading(true);
+    setError('');
+    const [plansResponse, overviewResponse] = await Promise.all([
+      listPlans(1, 100),
+      getPlanOverview(getChinaToday()),
+    ]);
+    if (plansResponse.success && plansResponse.data) {
+      setPlans(plansResponse.data.items);
+      setTotalPlans(plansResponse.data.total);
+    } else {
+      setError(plansResponse.error || '计划暂时无法读取，请稍后重试。');
+    }
+    if (overviewResponse.success && overviewResponse.data) {
+      setOverview(overviewResponse.data);
+    } else if (!plansResponse.error) {
+      setError(overviewResponse.error || '今天的行动暂时无法读取。');
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const openCapture = (mode: CaptureMode) => {
+    setCaptureMode(mode);
+    setCaptureOpen(true);
+  };
+
+  const toggleFocusTask = async (task: PlanFocusTask) => {
+    const key = `${task.plan_id}:${task.task_id}`;
+    if (busyKeys.has(key)) return;
+    setBusyKeys(current => new Set(current).add(key));
+    setError('');
+    const response = await togglePlanTask(task.plan_id, task.task_id);
+    if (response.success && response.data) {
+      setPlans(current => current.map(plan => plan.id === response.data!.id ? response.data! : plan));
+      const overviewResponse = await getPlanOverview(overview?.date || getChinaToday());
+      if (overviewResponse.success && overviewResponse.data) setOverview(overviewResponse.data);
+    } else {
+      setError(response.error || '任务状态更新失败，请重试。');
+    }
+    setBusyKeys(current => {
+      const next = new Set(current);
+      next.delete(key);
+      return next;
+    });
+  };
+
+  const changeOverviewDate = useCallback(async (date: string) => {
+    setError('');
+    const response = await getPlanOverview(date);
+    if (response.success && response.data) {
+      setOverview(response.data);
+    } else {
+      setError(response.error || '所选日期的行动暂时无法读取。');
+    }
+  }, []);
+
+  const confirmDelete = async () => {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    setError('');
+    const response = await deletePlan(deleteTarget.id);
+    if (response.success) {
+      setDeleteTarget(null);
+      await load(false);
+    } else {
+      setError(response.error || '计划删除失败，请重试。');
+    }
+    setDeleting(false);
+  };
+
+  const filteredPlans = useMemo(
+    () => plans.filter(plan => filter === 'done' ? plan.status === 'done' : plan.status !== 'done'),
+    [filter, plans],
+  );
+  const completedCount = plans.filter(plan => plan.status === 'done').length;
+
+  if (loading) return <LoadingState />;
+
+  return (
+    <main className={styles.shell}>
+      <header className={styles.pageHeader}>
+        <div>
+          <h1 className={styles.pageTitle}>行动计划</h1>
+          <div className={styles.headerSummary} aria-label="计划概览">
+            <span><strong>{plans.filter(plan => plan.status !== 'done').length}</strong> 个进行中</span>
+            <span><strong>{overview?.summary.open_tasks || 0}</strong> 项待办</span>
+          </div>
+        </div>
+        <button type="button" className={styles.primaryButton} onClick={() => openCapture('plan')}>
+          <Plus size={16} weight="bold" />新建计划
+        </button>
+      </header>
+
+      <nav className={styles.tabs} role="tablist" aria-label="行动计划视图">
+        {([
+          ['today', '今日', overview?.summary.focus_tasks || overview?.summary.due_today || 0],
+          ['plans', '目标', totalPlans],
+          ['review', '复盘', completedCount],
+        ] as const).map(([value, label, count]) => (
+          <button
+            key={value}
+            type="button"
+            role="tab"
+            aria-selected={view === value}
+            className={`${styles.tab} ${view === value ? styles.tabActive : ''}`}
+            onClick={() => setView(value)}
+          >
+            {label}{count > 0 && <span className={styles.tabCount}>{count}</span>}
+          </button>
+        ))}
+      </nav>
+
+      {error && <p className={styles.error} role="alert">{error}</p>}
+
+      {view === 'today' && overview && (
+        <PlanTodayView
+          overview={overview}
+          busyKeys={busyKeys}
+          onToggle={task => void toggleFocusTask(task)}
+          onOverview={setOverview}
+          onDateChange={changeOverviewDate}
+          onQuickTask={() => openCapture(plans.some(plan => plan.status !== 'done') ? 'task' : 'plan')}
+          onNewPlan={() => openCapture('plan')}
+        />
+      )}
+
+      {view === 'plans' && (
+        <section aria-labelledby="plans-list-title">
+          <div className={styles.goalToolbar}>
+            <h2 id="plans-list-title" className="sr-only">全部目标</h2>
+            <div className={styles.segmented} aria-label="计划筛选">
+              <button type="button" className={`${styles.segment} ${filter === 'active' ? styles.segmentActive : ''}`} onClick={() => setFilter('active')}>进行中</button>
+              <button type="button" className={`${styles.segment} ${filter === 'done' ? styles.segmentActive : ''}`} onClick={() => setFilter('done')}>已完成</button>
+            </div>
+          </div>
+          {filteredPlans.length > 0 ? (
+            <div className={styles.goalList}>
+              {filteredPlans.map(plan => (
+                <GoalRow key={plan.id} plan={plan} onDelete={() => setDeleteTarget(plan)} />
+              ))}
+            </div>
+          ) : (
+            <div className={styles.emptyState}>
+              <span className={styles.emptyIcon}><Target size={21} weight="duotone" /></span>
+              <h3>{filter === 'done' ? '还没有完成的目标' : '先创建第一个目标'}</h3>
+              <p>{filter === 'done' ? '完成的计划会出现在这里。' : '先创建一个想实现的目标。'}</p>
+              {filter === 'active' && <button type="button" className={styles.primaryButton} onClick={() => openCapture('plan')}>创建计划</button>}
+            </div>
+          )}
+        </section>
+      )}
+
+      {view === 'review' && <PlanWeeklyReviewView />}
+
+      <button type="button" className={styles.floatingAdd} onClick={() => openCapture('plan')} aria-label="快速新增">
+        <Plus size={21} weight="bold" />
+      </button>
+
+      <PlanQuickCapture
+        open={captureOpen}
+        plans={plans}
+        initialMode={captureMode}
+        onClose={() => setCaptureOpen(false)}
+        onSaved={(_plan, _created) => void load(false)}
+      />
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title={`删除“${deleteTarget.title}”？`}
+          description="计划、任务和打卡记录会一起删除，且无法恢复。"
+          pending={deleting}
+          error={error}
+          onCancel={() => !deleting && setDeleteTarget(null)}
+          onConfirm={() => void confirmDelete()}
+        />
+      )}
+    </main>
+  );
+}
+
+function PlanDetail({ id }: { id: string }) {
+  const router = useRouter();
   const [plan, setPlan] = useState<PlanData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [actionError, setActionError] = useState('');
-  const [deleting, setDeleting] = useState(false);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [deleteError, setDeleteError] = useState('');
-  const [editingTitle, setEditingTitle] = useState(false);
+  const [metaOpen, setMetaOpen] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
-  const [savingMetadata, setSavingMetadata] = useState(false);
-  const [todayMutating, setTodayMutating] = useState<Set<string>>(new Set());
+  const [startDateDraft, setStartDateDraft] = useState('');
+  const [daysDraft, setDaysDraft] = useState('');
+  const [savingMeta, setSavingMeta] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
   useEffect(() => {
-    getPlan(id).then((res) => {
-      if (res.success && res.data) {
-        setPlan(res.data);
-        setTitleDraft(res.data.title);
+    setLoading(true);
+    void getPlan(id).then(response => {
+      if (response.success && response.data) {
+        setPlan(response.data);
+        setTitleDraft(response.data.title);
+        setStartDateDraft(response.data.start_date || getChinaToday());
+        setDaysDraft(response.data.total_days ? String(response.data.total_days) : '');
       } else {
-        setError(res.error || '加载失败');
+        setError(response.error || '计划不存在或已经删除。');
       }
       setLoading(false);
     });
   }, [id]);
 
-  const handleMutate = (nextPlan: PlanData) => setPlan(nextPlan);
-
-  // Quick-toggle from the "today" pinned card. Shares plan state with PlanTaskList.
-  const handleTodayToggle = async (taskId: string) => {
-    if (!plan) return;
-    const previous = plan;
-    const optimistic = {
-      ...plan,
-      tasks: plan.tasks?.map(task => task.id === taskId ? { ...task, done: !task.done } : task) ?? [],
-      days: plan.days?.map(day => ({
-        ...day,
-        tasks: day.tasks.map(task => task.id === taskId ? { ...task, done: !task.done } : task),
-      })) ?? [],
-    };
-    setPlan(optimistic);
-    setTodayMutating(s => new Set(s).add(taskId));
-    setActionError('');
-    const res = await togglePlanTask(plan.id, taskId);
-    if (res.success && res.data) {
-      setPlan(res.data);
-    } else {
-      setPlan(previous);
-      setActionError(res.error || '任务状态更新失败，请重试。');
-    }
-    setTodayMutating(s => { const n = new Set(s); n.delete(taskId); return n; });
+  const updateLocal = (next: PlanData) => {
+    setPlan(next);
+    setTitleDraft(next.title);
+    setStartDateDraft(next.start_date || getChinaToday());
+    setDaysDraft(next.total_days ? String(next.total_days) : '');
   };
 
-  const handleDelete = async () => {
-    if (deleting) return;
-    setDeleting(true);
-    setDeleteError('');
-    const res = await deletePlan(id);
-    if (res.success) {
-      setDeleteDialogOpen(false);
-      onBack();
+  const saveMeta = async () => {
+    if (!plan || !titleDraft.trim() || savingMeta) return;
+    setSavingMeta(true);
+    setError('');
+    const response = await updatePlan(plan.id, {
+      title: titleDraft.trim(),
+      start_date: startDateDraft || null,
+      total_days: daysDraft ? Number(daysDraft) : 0,
+    });
+    if (response.success && response.data) {
+      updateLocal(response.data);
+      setMetaOpen(false);
     } else {
-      setDeleteError(res.error || '计划删除失败，请重试。');
+      setError(response.error || '计划信息保存失败。');
+    }
+    setSavingMeta(false);
+  };
+
+  const toggleStatus = async () => {
+    if (!plan || savingMeta) return;
+    setSavingMeta(true);
+    setError('');
+    const response = await updatePlan(plan.id, { status: plan.status === 'done' ? 'active' : 'done' });
+    if (response.success && response.data) updateLocal(response.data);
+    else setError(response.error || '计划状态更新失败。');
+    setSavingMeta(false);
+  };
+
+  const remove = async () => {
+    if (!plan || deleting) return;
+    setDeleting(true);
+    const response = await deletePlan(plan.id);
+    if (response.success) router.replace('/plans');
+    else {
+      setError(response.error || '计划删除失败。');
       setDeleting(false);
     }
   };
 
-  const saveTitle = async () => {
-    if (!plan || !titleDraft.trim() || titleDraft.trim() === plan.title) {
-      setEditingTitle(false);
-      setTitleDraft(plan?.title ?? '');
-      return;
-    }
-    setSavingMetadata(true);
-    setActionError('');
-    const response = await updatePlan(plan.id, { title: titleDraft.trim() });
-    if (response.success && response.data) {
-      setPlan(response.data);
-      setTitleDraft(response.data.title);
-      setEditingTitle(false);
-    } else {
-      setActionError(response.error || '计划标题保存失败，请重试。');
-    }
-    setSavingMetadata(false);
-  };
-
-  const togglePlanStatus = async () => {
-    if (!plan) return;
-    setSavingMetadata(true);
-    setActionError('');
-    const nextStatus = plan.status === 'done' ? 'active' : 'done';
-    const response = await updatePlan(plan.id, { status: nextStatus });
-    if (response.success && response.data) {
-      setPlan(response.data);
-    } else {
-      setActionError(response.error || '计划状态更新失败，请重试。');
-    }
-    setSavingMetadata(false);
-  };
-
-  if (loading) {
+  if (loading) return <LoadingState />;
+  if (!plan) {
     return (
-      <div className="desktop-core-page desktop-plan-detail max-w-2xl mx-auto space-y-4">
-        <div className="skeleton h-8 w-32" />
-        <div className="skeleton h-16" />
-        <div className="skeleton h-64" />
-      </div>
-    );
-  }
-
-  if (error || !plan) {
-    return (
-      <div className="min-h-[40vh] flex flex-col items-center justify-center text-center">
-        <p className="text-4xl mb-4">😕</p>
-        <p className="text-foreground-secondary mb-4">{error || '计划不存在'}</p>
-        <button
-          type="button"
-          onClick={onBack}
-          className="text-accent-emerald hover:underline text-sm"
-        >
-          ← 返回计划列表
-        </button>
-      </div>
+      <main className={styles.shell}>
+        <div className={styles.emptyState}>
+          <h3>无法打开这份计划</h3>
+          <p>{error}</p>
+          <button type="button" className={styles.primaryButton} onClick={() => router.replace('/plans')}>返回行动计划</button>
+        </div>
+      </main>
     );
   }
 
   const progress = getPlanProgress(plan);
   const currentDay = getPlanCurrentDay(plan);
-  const todayTasks = getTodayTasks(plan);
-  // Fallback: if the LLM returned a flat tasks array (no day structure),
-  // synthesize a single-day PlanDay so PlanTaskList can render them.
-  const days: PlanDay[] = plan.days?.length
-    ? plan.days
-    : plan.tasks?.length
-      ? [{ day: 1, label: '第1天', tasks: plan.tasks }]
-      : [];
-  const fieldGroups = groupPlanFields(plan.fields ?? []);
 
   return (
-    <div className="plan-workspace-detail desktop-core-page desktop-plan-detail max-w-5xl mx-auto pb-24">
-      <div className="mb-6 flex items-center justify-between">
-        <button
-          type="button"
-          onClick={onBack}
-          className="inline-flex items-center gap-1.5 text-foreground-secondary hover:text-foreground transition-colors text-sm px-3 py-2.5 rounded-lg hover:bg-white/5 min-h-[44px]"
-        >
-          <ArrowLeft size={14} />返回计划列表
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            setDeleteError('');
-            setDeleteDialogOpen(true);
-          }}
-          disabled={deleting}
-          className="inline-flex items-center gap-1.5 text-foreground-muted hover:text-accent-rose hover:bg-accent-rose/10 transition-colors text-xs px-3 py-2 rounded-lg min-h-[44px]"
-          aria-label="删除计划">
-          <Trash2 size={13} />
-          <span>{deleting ? '删除中...' : '删除计划'}</span>
-        </button>
-      </div>
+    <main className={styles.shell}>
+      <button type="button" className={`${styles.quietButton} ${styles.backButton}`} onClick={() => router.replace('/plans')}>
+        <ArrowLeft size={16} />返回行动计划
+      </button>
+      {error && <p className={styles.error} role="alert">{error}</p>}
 
-      {/* Header with key metrics */}
-      <div className="mb-8">
-        <div className="plan-title-row">
-          {editingTitle ? (
-            <form
-              className="plan-title-editor"
-              onSubmit={event => {
-                event.preventDefault();
-                void saveTitle();
-              }}
-            >
-              <input
-                value={titleDraft}
-                onChange={event => setTitleDraft(event.target.value)}
-                maxLength={256}
-                autoFocus
-                aria-label="计划标题"
-              />
-              <button type="submit" disabled={savingMetadata || !titleDraft.trim()} className="plan-primary-button">
-                {savingMetadata ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />}
-                保存
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setTitleDraft(plan.title);
-                  setEditingTitle(false);
-                }}
-                className="plan-secondary-button"
-              >
-                取消
-              </button>
-            </form>
-          ) : (
-            <>
-              <h1 className="text-xl md:text-2xl font-bold text-foreground leading-snug text-balance">{plan.title}</h1>
-              <button
-                type="button"
-                onClick={() => setEditingTitle(true)}
-                className="plan-icon-button"
-                aria-label="修改计划标题"
-              >
-                <Pencil size={15} />
-              </button>
-            </>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center gap-3 mt-3">
-          <span className="inline-flex items-center gap-1 text-sm text-foreground-muted">
-            <CalendarDays size={14} className="text-accent-emerald" />
-            第 {currentDay}/{plan.total_days || days.length || '?'} 天
-          </span>
-          <span className="inline-flex items-center gap-1 text-sm text-foreground-muted">
-            <CheckSquare size={14} className="text-accent-emerald" />
-            {progress.done}/{progress.total} 项 · {progress.pct}%
-          </span>
-          {todayTasks.length > 0 && (
-            <span className="inline-flex items-center gap-1 text-sm text-accent-emerald font-medium">
-              <Calendar size={14} />{todayTasks.length} 项今日到期
-            </span>
-          )}
-        </div>
-        {actionError && <p className="plan-inline-error mt-3" role="alert">{actionError}</p>}
-      </div>
-
-      {/* 2-column layout (desktop) */}
-      <div className="flex flex-col lg:flex-row gap-6 lg:gap-8">
-        <section className="flex-1 lg:flex-[2] min-w-0">
-          {/* Today pinned card — surfaces the current day's todos at the top. */}
-          <TodayCard plan={plan} onToggle={handleTodayToggle} mutatingIds={todayMutating} />
-          <PlanTaskList plan={plan} onMutate={handleMutate} />
-        </section>
-
-        {/* Right: meta + dynamic fields (narrower sidebar on desktop) */}
-        <aside className="lg:flex-[1] lg:min-w-[240px]">
-          <div className="space-y-4 lg:sticky lg:top-24">
-            {/* Status badge */}
-            <div className="plan-status-panel">
-              <div>
-                <Target size={15} className="text-accent-emerald" />
-                <span>
-                  <strong>{plan.status === 'done' ? '计划已完成' : '计划进行中'}</strong>
-                  <small>{plan.status === 'done' ? '需要时可以重新开启' : '所有任务完成后会自动归档'}</small>
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => void togglePlanStatus()}
-                disabled={savingMetadata}
-                className={plan.status === 'done' ? 'plan-secondary-button' : 'plan-primary-button'}
-              >
-                {savingMetadata
-                  ? <Loader2 size={14} className="animate-spin" />
-                  : plan.status === 'done'
-                    ? <RotateCcw size={14} />
-                    : <Check size={14} />}
-                {plan.status === 'done' ? '重新开启' : '标记完成'}
-              </button>
+      <header className={styles.detailHeader}>
+        <div className={styles.detailTopline}>
+          <div className="min-w-0">
+            <span className={styles.eyebrow}>{plan.status === 'done' ? '目标已完成' : '正在推进'}</span>
+            <h1 className={styles.detailTitle}>{plan.title}</h1>
+            <div className={styles.detailMeta}>
+              <span><CalendarBlank size={14} />第 {currentDay}/{plan.total_days || '?'} 天</span>
+              <span><CheckCircle size={14} />{progress.done}/{progress.total} 已完成</span>
+              <span><ClockCountdown size={14} />{progress.pct}%</span>
+              <span>{plan.note_id ? '来自视频资料' : '手动计划'}</span>
             </div>
-
-            {fieldGroups.length > 0 && (
-              <details className="plan-details-disclosure">
-                <summary>
-                  <span>
-                    <strong>计划细节</strong>
-                    <small>{plan.fields.length} 项 AI 规划信息</small>
-                  </span>
-                  <ChevronDetails />
-                </summary>
-                <div className="plan-field-groups">
-                  {fieldGroups.map(group => (
-                    <section key={group.label} className="plan-field-group">
-                      <header>
-                        <h2 className="text-balance">{group.label}</h2>
-                        <span className="tabular-nums">{group.fields.length} 项</span>
-                      </header>
-                      <div className="space-y-3">
-                        {group.fields.map((field, index) => (
-                          <PlanDynamicField
-                            key={`${field.name}-${index}`}
-                            field={field}
-                          />
-                        ))}
-                      </div>
-                    </section>
-                  ))}
-                </div>
-              </details>
-            )}
           </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={styles.secondaryButton} onClick={() => setMetaOpen(true)}>
+              <PencilSimple size={15} />编辑
+            </button>
+            <button type="button" className={plan.status === 'done' ? styles.secondaryButton : styles.primaryButton} onClick={() => void toggleStatus()} disabled={savingMeta}>
+              {savingMeta ? <SpinnerGap size={15} className="animate-spin" /> : <Check size={15} />}
+              {plan.status === 'done' ? '重新开启' : '完成计划'}
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div className={styles.detailGrid}>
+        <div className={styles.detailMain}>
+          <PlanTaskBoard plan={plan} onMutate={updateLocal} />
+        </div>
+        <aside className={`${styles.detailAside} ${styles.sticky}`}>
+          <PlanCoachPanel plan={plan} onMutate={updateLocal} />
+
+          {plan.fields.length > 0 && (
+            <details className={styles.fieldsDisclosure}>
+              <summary><span>计划依据与细节 · {plan.fields.length}</span><CaretRight size={15} /></summary>
+              <div className={styles.fieldList}>
+                {plan.fields.map((field, index) => (
+                  <div key={`${field.name}-${index}`} className={styles.fieldItem}>
+                    <small>{field.label}</small>
+                    <strong>{formatPlanFieldValue(field.value)}</strong>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+
+          {plan.note_id && (
+            <Link href={`/notes?id=${plan.note_id}`} className={styles.sourceLink}>
+              <span className="inline-flex items-center gap-2"><Note size={15} />查看计划来源</span>
+              <CaretRight size={15} />
+            </Link>
+          )}
+
+          <button type="button" className={styles.dangerButton} onClick={() => { setError(''); setDeleteOpen(true); }}>
+            <Trash size={15} />删除计划
+          </button>
         </aside>
       </div>
 
-      {/* Note link */}
-      {plan.note_id && (
-        <div className="mt-8 pt-5 border-t border-card-border">
-          <Link
-            href={`/notes?id=${plan.note_id}`}
-            className="inline-flex items-center gap-1.5 text-xs text-foreground-muted hover:text-foreground-secondary transition-colors"
-          >
-            查看原始笔记 →
-          </Link>
-        </div>
+      <BottomSheet open={metaOpen} onClose={() => !savingMeta && setMetaOpen(false)} title="编辑计划">
+        <form
+          className={styles.sheetForm}
+          onSubmit={event => {
+            event.preventDefault();
+            void saveMeta();
+          }}
+        >
+          <label className={styles.field}>
+            <span>目标名称</span>
+            <input value={titleDraft} onChange={event => setTitleDraft(event.target.value)} maxLength={256} autoFocus />
+          </label>
+          <div className={styles.formGrid}>
+            <label className={styles.field}>
+              <span>开始日期</span>
+              <input type="date" value={startDateDraft} onChange={event => setStartDateDraft(event.target.value)} />
+            </label>
+            <label className={styles.field}>
+              <span>计划天数</span>
+              <input type="number" min={0} max={3650} value={daysDraft} onChange={event => setDaysDraft(event.target.value)} />
+            </label>
+          </div>
+          <div className={styles.sheetActions}>
+            <button type="button" className={styles.secondaryButton} onClick={() => setMetaOpen(false)} disabled={savingMeta}>取消</button>
+            <button type="submit" className={styles.primaryButton} disabled={savingMeta || !titleDraft.trim()}>
+              {savingMeta && <SpinnerGap size={15} className="animate-spin" />}保存
+            </button>
+          </div>
+        </form>
+      </BottomSheet>
+
+      {deleteOpen && (
+        <ConfirmDialog
+          title={`删除“${plan.title}”？`}
+          description="计划、任务和全部打卡记录会一起删除，且无法恢复。"
+          pending={deleting}
+          error={error}
+          onCancel={() => !deleting && setDeleteOpen(false)}
+          onConfirm={() => void remove()}
+        />
       )}
-      <PlanDeleteDialog
-        plan={deleteDialogOpen ? plan : null}
-        pending={deleting}
-        error={deleteError}
-        onClose={() => {
-          if (deleting) return;
-          setDeleteDialogOpen(false);
-          setDeleteError('');
-        }}
-        onConfirm={() => void handleDelete()}
-      />
-    </div>
+    </main>
   );
 }
 
-function ChevronDetails() {
-  return (
-    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-      <path d="m9 18 6-6-6-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  );
+function PlansRoute() {
+  const searchParams = useSearchParams();
+  const planId = searchParams.get('id');
+  return planId ? <PlanDetail id={planId} /> : <PlansWorkspace />;
 }
-
-/* ------------------------------------------------------------------ */
-/* Page export — wrapped in Suspense for useSearchParams              */
-/* ------------------------------------------------------------------ */
 
 export default function PlansPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="max-w-4xl mx-auto space-y-4">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="skeleton h-28 rounded-xl" />
-          ))}
-        </div>
-      }
-    >
-      <PlansContent />
+    <Suspense fallback={<LoadingState />}>
+      <PlansRoute />
     </Suspense>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Workspace views                                                    */
-/* ------------------------------------------------------------------ */
-
-function WorkspaceTab({ active, onClick, label, count }: {
-  active: boolean;
-  onClick: () => void;
-  label: string;
-  count: number;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      role="tab"
-      aria-selected={active}
-      className={`plan-workspace-tab inline-flex min-h-11 min-w-0 items-center justify-center gap-1.5 rounded-xl px-2 text-sm font-semibold transition-colors md:px-4 ${
-        active
-          ? 'bg-foreground text-background shadow-sm'
-          : 'text-foreground-muted hover:bg-background-secondary hover:text-foreground'
-      }`}
-    >
-      <span className="truncate">{label}</span>
-      {count > 0 && (
-        <span className={`rounded-md px-1.5 py-0.5 text-[11px] tabular-nums ${
-          active ? 'bg-background/15 text-background' : 'bg-background-secondary text-foreground-muted'
-        }`}>
-          {count}
-        </span>
-      )}
-    </button>
-  );
-}
-
-function PlanWorkspaceEmpty() {
-  return (
-    <section className="plan-workspace-empty flex min-h-[44vh] flex-col items-center justify-center rounded-3xl border border-dashed border-card-border bg-card-bg px-6 text-center">
-      <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-card-border bg-background-secondary text-foreground-secondary">
-        <Target size={22} />
-      </span>
-      <h2 className="mt-4 text-lg font-semibold text-foreground">先从一个想实现的目标开始</h2>
-      <p className="mt-2 max-w-md text-sm leading-relaxed text-foreground-muted">
-        打开一条已经整理好文案的视频，让 AI 把其中的方法转换成可以逐步打卡的行动计划。
-      </p>
-      <Link
-        href="/library"
-        className="mt-5 inline-flex min-h-11 items-center justify-center rounded-xl bg-foreground px-5 text-sm font-semibold text-background no-underline"
-      >
-        从视频资料创建
-      </Link>
-    </section>
-  );
-}
-
-function PlanProgressReview({
-  plans,
-  overview,
-  totalPlans,
-}: {
-  plans: PlanData[];
-  overview: PlanOverview | null;
-  totalPlans: number;
-}) {
-  const activeGoals = overview?.summary.active_plans
-    ?? plans.filter(plan => plan.status !== 'done').length;
-  const completedGoals = Math.max(0, totalPlans - activeGoals);
-  const dueToday = overview?.summary.due_today ?? 0;
-  const overdue = overview?.summary.overdue_tasks ?? 0;
-  const visibleProgress = [...plans]
-    .sort((left, right) => {
-      if (left.status === right.status) return 0;
-      return left.status === 'done' ? 1 : -1;
-    })
-    .slice(0, 6);
-
-  const metrics = [
-    { label: '进行中目标', value: activeGoals, note: '当前仍在推进' },
-    { label: '已完成目标', value: completedGoals, note: '基于实时状态' },
-    { label: '今日待办', value: dueToday, note: '尚未打卡' },
-    { label: '需要调整', value: overdue, note: '当前逾期任务', danger: overdue > 0 },
-  ];
-
-  return (
-    <section className="plan-workspace-review" aria-labelledby="plan-workspace-review-title">
-      <div className="mb-4">
-        <p className="text-xs font-semibold text-foreground-muted">进度回顾</p>
-        <h2 id="plan-workspace-review-title" className="mt-1 text-xl font-bold text-foreground md:text-2xl">
-          目标推进到哪里了
-        </h2>
-      </div>
-
-      <div className="plan-workspace-review-metrics grid grid-cols-2 gap-2.5 md:grid-cols-4">
-        {metrics.map(metric => (
-          <article
-            key={metric.label}
-            className="rounded-2xl border border-card-border bg-card-bg p-4"
-          >
-            <span className="text-xs font-medium text-foreground-muted">{metric.label}</span>
-            <strong className={`mt-2 block text-2xl font-bold tabular-nums ${
-              metric.danger ? 'text-accent-rose' : 'text-foreground'
-            }`}>
-              {metric.value}
-            </strong>
-            <small className="mt-1 block text-xs text-foreground-muted">{metric.note}</small>
-          </article>
-        ))}
-      </div>
-
-      <aside className="plan-workspace-review-scope mt-4 rounded-2xl border border-card-border bg-background-secondary px-4 py-3 text-sm leading-relaxed text-foreground-muted">
-        这里展示的是计划和任务当前的完成状态。知萃目前还没有长期记录实际耗时、拖延规律或效率时段，因此不会对这些行为做推断。
-      </aside>
-
-      {visibleProgress.length > 0 && (
-        <div className="plan-workspace-review-list mt-6">
-          <h3 className="mb-3 text-sm font-semibold text-foreground">目标进度</h3>
-          <div className="grid gap-2">
-            {visibleProgress.map(plan => {
-              const progress = getPlanProgress(plan);
-              const nextTask = getPlanTasks(plan).find(task => !task.done);
-              return (
-                <Link
-                  key={plan.id}
-                  href={`/plans?id=${plan.id}`}
-                  className="plan-workspace-review-row grid min-h-16 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 rounded-2xl border border-card-border bg-card-bg px-4 py-3 text-foreground no-underline"
-                >
-                  <span className="min-w-0">
-                    <strong className="block truncate text-sm font-semibold text-foreground">{plan.title}</strong>
-                    <small className="mt-1 block truncate text-xs text-foreground-muted">
-                      {plan.status === 'done'
-                        ? '目标已经完成'
-                        : nextTask
-                          ? `下一步：${nextTask.title}`
-                          : '暂时没有待办任务'}
-                    </small>
-                  </span>
-                  <span className="min-w-16 text-right">
-                    <strong className="block text-sm tabular-nums text-foreground">{progress.pct}%</strong>
-                    <small className="text-xs tabular-nums text-foreground-muted">{progress.done}/{progress.total}</small>
-                  </span>
-                </Link>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </section>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Today pinned card                                                  */
-/* ------------------------------------------------------------------ */
-
-function TodayCard({ plan, onToggle, mutatingIds }: {
-  plan: PlanData;
-  onToggle: (taskId: string) => void;
-  mutatingIds: Set<string>;
-}) {
-  const currentDay = getPlanCurrentDay(plan);
-  const todayDay = getTodayDay(plan);
-  const tasks = getTodayDayTasks(plan);
-
-  return (
-    <div className="plan-detail-today mb-4 rounded-2xl border p-4">
-      <div className="flex items-center gap-2 mb-3">
-        <Sun size={15} className="text-accent-emerald" />
-        <h3 className="text-sm font-semibold text-foreground">今日任务 · 第 {currentDay} 天</h3>
-        {todayDay && (
-          <span className="text-xs text-foreground-muted truncate">{todayDay.label}</span>
-        )}
-        <span className="ml-auto text-xs text-foreground-muted">{tasks.length} 项待办</span>
-      </div>
-      {!todayDay ? (
-        <p className="text-sm text-foreground-muted py-1">当前天数暂无对应日程，去下方任务列表继续推进。</p>
-      ) : tasks.length === 0 ? (
-        <p className="text-sm text-foreground-muted py-1">今天没有待办，继续加油 🎉</p>
-      ) : (
-        <div className="space-y-1">
-          {tasks.map(t => {
-            const busy = mutatingIds.has(t.id);
-            const taskMeta = [
-              formatPlanSchedule(t.scheduled_at),
-              formatPlanDuration(t.duration_minutes),
-              t.frequency,
-              ...(t.details?.slice(0, 2).map(detail => (
-                `${detail.label} ${formatPlanFieldValue(detail.value)}`
-              )) ?? []),
-            ].filter(Boolean).join(' · ');
-            return (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => onToggle(t.id)}
-                disabled={busy}
-                className={`plan-today-task ${t.done ? 'is-done' : ''}`}
-              >
-                <span className="plan-today-task__check">
-                  {busy ? <Loader2 size={12} className="animate-spin text-accent-emerald" /> : t.done ? <Check size={12} className="text-white" strokeWidth={3} /> : null}
-                </span>
-                <span className="flex-1 min-w-0">
-                  <span className="plan-today-task__title">{t.title}</span>
-                  {taskMeta && (
-                    <small className="mt-0.5 block truncate text-[11px] text-foreground-muted">
-                      {taskMeta}
-                    </small>
-                  )}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
   );
 }

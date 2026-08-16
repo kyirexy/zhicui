@@ -44,6 +44,7 @@ interface AuthResponse<T> {
   data?: T;
   error?: string;
   detail?: unknown;
+  status?: number;
 }
 
 const AuthContext = createContext<AuthState>({
@@ -60,6 +61,7 @@ const AuthContext = createContext<AuthState>({
 });
 
 const IS_DEV = process.env.NODE_ENV === 'development';
+const DEV_AUTH_AUTO = IS_DEV && process.env.NEXT_PUBLIC_DEV_AUTH_AUTO === 'true';
 const TOKEN_STORAGE_KEY = 'zhicui_token';
 const AUTH_REQUEST_TIMEOUT_MS = 10_000;
 const AUTH_RESTORE_TIMEOUT_MS = 6_000;
@@ -161,6 +163,7 @@ async function authRequest<T>(
       return {
         success: false,
         error: resolveAuthError(payload, response.status),
+        status: response.status,
       };
     }
     return payload;
@@ -245,15 +248,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        removeStoredToken();
-        setToken(null);
-        setUser(null);
-        if (!IS_DEV) {
-          setError(restored.error || '登录状态恢复失败，请重新登录');
+        const sessionRejected = restored.status === 401 || restored.status === 403;
+        if (sessionRejected) {
+          removeStoredToken();
+          setToken(null);
+          setUser(null);
+          setError('登录已过期，请重新登录');
+        } else {
+          // A timeout or temporary server failure is not proof that the saved
+          // session is invalid. Keep the token so a retry can recover it.
+          setToken(saved);
+          setUser(null);
+          setError(restored.error || '暂时无法确认登录状态，请稍后重试');
         }
       }
 
-      if (IS_DEV) {
+      if (DEV_AUTH_AUTO) {
         setEnteringDevelopmentSession(true);
         let lastDevelopmentError = '';
         for (const delay of DEV_SESSION_RETRY_DELAYS_MS) {

@@ -1,0 +1,1473 @@
+.section {
+  display: grid;
+  gap: 16px;
+  margin-top: 18px;
+  padding: 20px;
+  border: 1px solid var(--border, rgba(15, 23, 42, 0.1));
+  border-radius: 20px;
+  background: var(--surface-elevated, rgba(255, 255, 255, 0.78));
+}
+
+.section[hidden] {
+  display: none !important;
+}
+
+.heading,
+.inputRow,
+.cardMeta,
+.readiness,
+.actions,
+.filters,
+.platformMarks {
+  display: flex;
+  align-items: center;
+}
+
+.heading {
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.heading h2 {
+  margin: 4px 0 6px;
+  font-size: clamp(1.1rem, 2vw, 1.4rem);
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+.heading p,
+.importer small,
+.cardBody p,
+.empty span {
+  color: var(--foreground-muted);
+  text-wrap: pretty;
+}
+
+.heading p {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.kicker {
+  color: var(--accent-emerald);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.platformMarks {
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.platformMarks span,
+.cover b {
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.platformMarks span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 10px;
+  background: var(--background-secondary, rgba(15, 23, 42, 0.05));
+}
+
+.platformMarks [data-platform-brand='bilibili'] {
+  color: #087ea4;
+}
+
+.platformMarks [data-platform-brand='xiaohongshu'] {
+  color: #b4232f;
+}
+
+.accountSync {
+  display: grid;
+  gap: 16px;
+  border: 1px solid var(--border, rgba(15, 23, 42, 0.1));
+  border-radius: 18px;
+  padding: 18px;
+  background: var(--background-secondary, rgba(15, 23, 42, 0.04));
+}
+
+.accountSyncHeading,
+.accountCardHeader,
+.accountStatus,
+.accountUnavailable,
+.localOnly,
+.syncActions,
+.accountManagement,
+.accountNotice {
+  display: flex;
+  align-items: center;
+}
+
+.accountSyncHeading {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.accountSyncHeading h3 {
+  margin: 3px 0 4px;
+  font-size: 1.0625rem;
+  line-height: 1.3;
+  text-wrap: balance;
+}
+
+.accountSyncHeading p,
+.accountCard p,
+.accountUnavailable span,
+.accountNotice span {
+  color: var(--foreground-muted);
+  text-wrap: pretty;
+}
+
+.accountSyncHeading p,
+.accountCard p {
+  margin: 0;
+  font-size: 0.8125rem;
+}
+
+.localOnly {
+  flex: 0 0 auto;
+  gap: 8px;
+  max-width: 190px;
+  border-left: 1px solid var(--border, rgba(15, 23, 42, 0.1));
+  padding-left: 14px;
+  color: var(--accent-emerald);
+}
+
+.localOnly > span {
+  display: grid;
+  gap: 1px;
+}
+
+.localOnly strong {
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.localOnly small {
+  color: var(--foreground-muted);
+  font-size: 0.6875rem;
+}
+
+.accountGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.accountCard {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 13px;
+  border: 1px solid var(--border, rgba(15, 23, 42, 0.1));
+  border-radius: 15px;
+  padding: 16px;
+  background: var(--background, #fff);
+}
+
+.accountCard[data-connected='true'] {
+  border-color: rgba(48, 48, 52, 0.24);
+}
+
+.accountCardHeader {
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.platformSymbol {
+  display: flex;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border, rgba(15, 23, 42, 0.1));
+  border-radius: 11px;
+  background: var(--background-secondary, rgba(15, 23, 42, 0.05));
+  color: var(--foreground);
+  font-size: 0.875rem;
+  font-weight: 750;
+}
+
+.platformSymbol > svg {
+  display: block;
+}
+
+.accountCard[data-platform='bilibili'] .platformSymbol {
+  color: #087ea4;
+}
+
+.accountCard[data-platform='xiaohongshu'] .platformSymbol {
+  color: #b4232f;
+}
+
+.accountIdentity {
+  min-width: 0;
+  flex: 1;
+}
+
+.accountTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.accountTitleRow h4 {
+  margin: 0 0 3px;
+  font-size: 0.9375rem;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+.betaBadge {
+  border: 1px solid rgba(138, 93, 0, 0.2);
+  border-radius: 4px;
+  padding: 2px 5px;
+  background: rgba(154, 103, 0, 0.08);
+  color: #8a5d00;
+  font-size: 0.625rem;
+  font-weight: 750;
+}
+
+.connectionState {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding-top: 4px;
+  color: var(--foreground-muted);
+  font-size: 0.6875rem;
+  font-weight: 700;
+}
+
+.connectionState i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--foreground-muted);
+}
+
+.connectionState[data-connected='true'] {
+  color: var(--accent-emerald);
+}
+
+.connectionState[data-connected='true'] i {
+  background: var(--accent-emerald);
+}
+
+.accountStatus {
+  min-height: 34px;
+  gap: 8px;
+  border-radius: 9px;
+  padding: 7px 9px;
+  background: var(--background-secondary, rgba(15, 23, 42, 0.045));
+  color: var(--foreground-secondary);
+  font-size: 0.75rem;
+}
+
+.accountStatus > span {
+  min-width: 0;
+  flex: 1;
+}
+
+.accountStatus svg {
+  flex: 0 0 auto;
+}
+
+.accountStatus[data-stage='error'] {
+  background: rgba(190, 24, 93, 0.07);
+  color: var(--accent-rose, #be185d);
+}
+
+.accountStatus[data-stage='success'] {
+  background: rgba(48, 48, 52, 0.07);
+  color: var(--accent-emerald);
+}
+
+.accountStatus button {
+  min-height: 44px;
+  border: 0;
+  padding: 0 4px;
+  background: transparent;
+  color: currentColor;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.connectedActions,
+.connectAction {
+  display: grid;
+  gap: 9px;
+}
+
+.actionLabel {
+  color: var(--foreground-muted);
+  font-size: 0.6875rem;
+  font-weight: 650;
+}
+
+.syncActions {
+  gap: 8px;
+}
+
+.syncActions button,
+.connectAction > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 44px;
+  border: 1px solid var(--border, rgba(15, 23, 42, 0.1));
+  border-radius: 10px;
+  background: var(--background, #fff);
+  color: var(--foreground-secondary);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.syncActions button {
+  flex: 1 1 0;
+  padding: 0 12px;
+}
+
+.syncActions .primarySyncButton,
+.connectAction > button {
+  border-color: var(--accent-emerald);
+  background: var(--accent-emerald);
+  color: white;
+}
+
+.connectAction > button {
+  width: 100%;
+}
+
+.connectAction small {
+  color: var(--foreground-muted);
+  font-size: 0.6875rem;
+  text-align: center;
+  text-wrap: pretty;
+}
+
+.accountManagement {
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.accountManagementDisclosure {
+  display: grid;
+  gap: 4px;
+}
+
+.accountManagementDisclosure summary {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  justify-self: end;
+  padding: 0 4px;
+  color: var(--foreground-muted);
+  cursor: pointer;
+  font-size: 0.6875rem;
+  font-weight: 650;
+  list-style: none;
+}
+
+.accountManagementDisclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.accountManagementDisclosure summary > svg {
+  transition: transform 160ms ease;
+}
+
+.accountManagementDisclosure[open] summary > svg {
+  transform: rotate(180deg);
+}
+
+.accountManagement > span {
+  width: 1px;
+  height: 12px;
+  background: var(--border, rgba(15, 23, 42, 0.12));
+}
+
+.accountManagement button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  padding: 0 4px;
+  background: transparent;
+  color: var(--foreground-muted);
+  font: inherit;
+  font-size: 0.6875rem;
+  font-weight: 650;
+}
+
+.accountManagement .disconnectButton {
+  color: var(--accent-rose, #be185d);
+}
+
+.accountUnavailable {
+  gap: 12px;
+  border: 1px dashed var(--border, rgba(15, 23, 42, 0.14));
+  border-radius: 12px;
+  padding: 14px;
+  color: var(--foreground-muted);
+}
+
+.unavailableIcon {
+  display: flex;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: var(--background-secondary, rgba(15, 23, 42, 0.05));
+}
+
+.accountUnavailable > div {
+  display: grid;
+  gap: 3px;
+}
+
+.accountUnavailable strong {
+  color: var(--foreground);
+  font-size: 0.8125rem;
+}
+
+.accountUnavailable span {
+  font-size: 0.75rem;
+}
+
+.accountNotice {
+  align-items: flex-start;
+  gap: 8px;
+  border-top: 1px solid var(--border, rgba(15, 23, 42, 0.1));
+  padding-top: 12px;
+  color: #8a5d00;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.accountNotice svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.accountNotice strong {
+  margin-right: 6px;
+  color: #8a5d00;
+}
+
+.syncActions button:not(:disabled):hover,
+.connectAction > button:not(:disabled):hover,
+.accountManagement button:not(:disabled):hover,
+.accountStatus button:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+.syncActions button:not(:disabled):active,
+.connectAction > button:not(:disabled):active,
+.accountManagement button:not(:disabled):active,
+.accountStatus button:not(:disabled):active {
+  transform: translateY(1px);
+}
+
+.syncActions button:disabled,
+.connectAction > button:disabled,
+.accountManagement button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.importerDisclosure {
+  overflow: clip;
+  border: 1px solid var(--border, rgba(15, 23, 42, 0.1));
+  border-radius: 14px;
+  background: var(--background, #fff);
+}
+
+.importerDisclosure summary {
+  display: flex;
+  min-height: 60px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 15px;
+  color: var(--foreground-secondary);
+  cursor: pointer;
+  list-style: none;
+}
+
+.importerDisclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.importerDisclosure summary > span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.importerDisclosure summary > span > span {
+  display: grid;
+  gap: 2px;
+}
+
+.importerDisclosure summary strong {
+  color: var(--foreground);
+  font-size: 0.8125rem;
+}
+
+.importerDisclosure summary small {
+  color: var(--foreground-muted);
+  font-size: 0.75rem;
+  text-wrap: pretty;
+}
+
+.disclosureChevron {
+  flex: 0 0 auto;
+}
+
+.importerDisclosure[open] .disclosureChevron {
+  transform: rotate(180deg);
+}
+
+.importer {
+  display: grid;
+  gap: 9px;
+  border-top: 1px solid var(--border, rgba(15, 23, 42, 0.08));
+  padding: 15px;
+}
+
+.importer label {
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.directImporter {
+  display: grid;
+  gap: 18px;
+  border: 1px solid var(--border, rgba(15, 23, 42, 0.1));
+  border-radius: 12px;
+  padding: 18px;
+  background: var(--background, #fff);
+}
+
+.directImporterHeading {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+}
+
+.directImporterHeading h3,
+.directImporterHeading p {
+  margin: 0;
+}
+
+.directImporterHeading h3 {
+  font-size: 0.9375rem;
+  line-height: 1.35;
+}
+
+.directImporterHeading p {
+  margin-top: 3px;
+  color: var(--foreground-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.importIcon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--accent-emerald) 20%, var(--border, rgba(15, 23, 42, 0.1)));
+  border-radius: 10px;
+  place-items: center;
+  color: var(--accent-emerald);
+  background: color-mix(in srgb, var(--accent-emerald) 6%, var(--background, #fff));
+}
+
+.inputRow {
+  align-items: stretch;
+  gap: 10px;
+}
+
+.inputRow textarea {
+  min-height: 92px;
+  flex: 1;
+  resize: vertical;
+  border: 1px solid var(--border, rgba(15, 23, 42, 0.12));
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: var(--background, #fff);
+  color: var(--foreground);
+  font: inherit;
+  line-height: 1.5;
+}
+
+.inputRow textarea:focus-visible,
+.inputRow button:focus-visible,
+.filters button:focus-visible,
+.actions a:focus-visible,
+.actions button:focus-visible,
+.importerDisclosure summary:focus-visible,
+.accountManagementDisclosure summary:focus-visible,
+.syncActions button:focus-visible,
+.connectAction > button:focus-visible,
+.accountManagement button:focus-visible,
+.accountStatus button:focus-visible,
+.disconnectDialogActions button:focus-visible {
+  outline: 2px solid var(--accent-emerald);
+  outline-offset: 2px;
+}
+
+.inputRow button,
+.actions button,
+.actions a,
+.filters button {
+  min-height: 44px;
+  border-radius: 12px;
+  font-weight: 650;
+}
+
+.inputRow button {
+  display: inline-flex;
+  min-width: 150px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  padding: 0 18px;
+  background: var(--accent-emerald);
+  color: white;
+}
+
+.inputRow button:disabled,
+.actions button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.disconnectDialog {
+  width: min(440px, calc(100% - 32px));
+  max-width: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--foreground);
+}
+
+.disconnectDialog::backdrop {
+  background: rgba(10, 10, 15, 0.54);
+}
+
+.disconnectDialogCard {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  border: 1px solid var(--border, rgba(15, 23, 42, 0.12));
+  border-radius: 18px;
+  padding: 20px;
+  background: var(--background, #fff);
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.18);
+}
+
+.disconnectDialogIcon {
+  display: flex;
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  background: rgba(190, 24, 93, 0.08);
+  color: var(--accent-rose, #be185d);
+}
+
+.disconnectDialogCard h2 {
+  margin: 1px 0 6px;
+  font-size: 1rem;
+  line-height: 1.35;
+  text-wrap: balance;
+}
+
+.disconnectDialogCard p {
+  margin: 0;
+  color: var(--foreground-muted);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.disconnectError {
+  grid-column: 1 / -1;
+  border-radius: 10px;
+  padding: 9px 10px;
+  background: rgba(190, 24, 93, 0.08);
+  color: var(--accent-rose, #be185d) !important;
+}
+
+.disconnectDialogActions {
+  display: flex;
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.disconnectDialogActions button {
+  display: inline-flex;
+  min-width: 92px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--border, rgba(15, 23, 42, 0.12));
+  border-radius: 10px;
+  padding: 0 14px;
+  background: transparent;
+  color: var(--foreground-secondary);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.disconnectDialogActions .confirmDisconnectButton {
+  border-color: var(--accent-rose, #be185d);
+  background: var(--accent-rose, #be185d);
+  color: white;
+}
+
+.disconnectDialogActions button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.error,
+.results li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+}
+
+.error {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(190, 24, 93, 0.08);
+  color: var(--accent-rose, #be185d);
+  font-size: 0.875rem;
+}
+
+.error > span {
+  min-width: 0;
+  flex: 1;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.error button {
+  display: inline-flex;
+  min-height: 36px;
+  margin: -6px -6px -6px 6px;
+  padding: 0 9px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  align-items: center;
+  gap: 5px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.error button:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.error button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.results {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.results li {
+  color: var(--foreground-secondary);
+  font-size: 0.8125rem;
+}
+
+.results li[data-success='true'] svg {
+  color: var(--accent-emerald);
+}
+
+.results li[data-success='false'] svg {
+  color: var(--accent-rose, #be185d);
+}
+
+.filters {
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.filters button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  padding: 0 14px;
+  background: transparent;
+  color: var(--foreground-muted);
+}
+
+.filters button [data-platform-brand='douyin'] {
+  color: var(--foreground);
+}
+
+.filters button [data-platform-brand='bilibili'] {
+  color: #087ea4;
+}
+
+.filters button [data-platform-brand='xiaohongshu'] {
+  color: #b4232f;
+}
+
+.filters button[data-active='true'] {
+  border-color: rgba(48, 48, 52, 0.28);
+  background: rgba(48, 48, 52, 0.09);
+  color: var(--accent-emerald);
+}
+
+.grid,
+.skeletons {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.skeletons span {
+  min-height: 260px;
+  border-radius: 16px;
+  background: var(--background-secondary, rgba(15, 23, 42, 0.05));
+}
+
+.card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border, rgba(15, 23, 42, 0.1));
+  border-radius: 16px;
+  background: var(--background, #fff);
+}
+
+.cover {
+  position: relative;
+  display: grid;
+  min-height: 148px;
+  place-items: center;
+  overflow: hidden;
+  background: var(--background-secondary, rgba(15, 23, 42, 0.05));
+  color: var(--foreground-muted);
+}
+
+.cover img {
+  width: 100%;
+  height: 148px;
+  object-fit: cover;
+}
+
+.cover b {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  background: rgba(10, 10, 15, 0.78);
+  color: white;
+}
+
+.cardBody {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.cardMeta {
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--foreground-muted);
+  font-size: 0.75rem;
+}
+
+.cardMeta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cardBody h3 {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 1rem;
+  line-height: 1.35;
+  text-wrap: balance;
+}
+
+.cardBody p {
+  display: -webkit-box;
+  min-height: 38px;
+  overflow: hidden;
+  margin: 0;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.readiness {
+  gap: 6px;
+  color: var(--foreground-secondary);
+  font-size: 0.75rem;
+}
+
+.readiness b {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.readiness[data-ready='false'] {
+  color: #9a6700;
+}
+
+.actions {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.actions a,
+.actions button {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid var(--border, rgba(15, 23, 42, 0.1));
+  padding: 0 10px;
+  background: transparent;
+  color: var(--foreground-secondary);
+  font-size: 0.75rem;
+  text-decoration: none;
+}
+
+.actions button {
+  color: var(--accent-emerald);
+}
+
+.empty {
+  display: grid;
+  min-height: 150px;
+  place-items: center;
+  align-content: center;
+  gap: 6px;
+  border: 1px dashed var(--border, rgba(15, 23, 42, 0.14));
+  border-radius: 16px;
+  color: var(--foreground-muted);
+  text-align: center;
+}
+
+.empty strong {
+  color: var(--foreground);
+}
+
+/* The controls presentation is embedded in the workspace source rail. */
+.section[data-presentation='controls'] {
+  gap: 10px;
+  min-width: 0;
+  margin-top: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.section[data-presentation='controls'] .accountSync {
+  gap: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.section[data-presentation='controls'] .accountSyncHeading {
+  align-items: center;
+  flex-direction: row;
+  gap: 12px;
+}
+
+.section[data-presentation='controls'] .accountSyncHeading > div:first-child {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.section[data-presentation='controls'] .accountSyncHeading h3 {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+.section[data-presentation='controls'] .accountSyncHeading p {
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.section[data-presentation='controls'] .localOnly {
+  width: auto;
+  max-width: none;
+  gap: 6px;
+  border: 0;
+  padding: 0;
+}
+
+.section[data-presentation='controls'] .localOnly strong {
+  font-size: 0.75rem;
+}
+
+.section[data-presentation='controls'] .localOnly small {
+  display: none;
+}
+
+.section[data-presentation='controls'] .accountGrid {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  border-top: 0;
+}
+
+.section[data-presentation='controls'] .accountCard {
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--border, rgba(15, 23, 42, 0.1));
+  border-radius: 12px;
+  background: var(--background, #fff);
+}
+
+.section[data-presentation='controls'] .accountCard[data-connected='true'] {
+  border-color: color-mix(in srgb, var(--accent-emerald) 24%, var(--border, rgba(15, 23, 42, 0.1)));
+}
+
+.section[data-presentation='controls'] .accountCardHeader {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px 11px;
+}
+
+.section[data-presentation='controls'] .platformSymbol {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  font-size: 0.75rem;
+}
+
+.section[data-presentation='controls'] .platformSymbol > svg {
+  width: 20px;
+  height: 20px;
+}
+
+.section[data-presentation='controls'] .actionLabel,
+.section[data-presentation='controls'] .connectAction small {
+  display: none;
+}
+
+.section[data-presentation='controls'] .accountIdentity p {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.section[data-presentation='controls'] .accountTitleRow h4 {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+.section[data-presentation='controls'] .betaBadge {
+  display: none;
+}
+
+.section[data-presentation='controls'] .connectionState {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: end;
+  padding-top: 3px;
+  font-size: 0.75rem;
+}
+
+.section[data-presentation='controls'] .accountStatus {
+  min-height: 40px;
+  padding: 8px 10px;
+  font-size: 0.75rem;
+}
+
+.section[data-presentation='controls'] .connectedActions,
+.section[data-presentation='controls'] .connectAction {
+  gap: 8px;
+}
+
+.section[data-presentation='controls'] .connectAction {
+  justify-items: start;
+}
+
+.section[data-presentation='controls'] .syncActions {
+  gap: 6px;
+}
+
+.section[data-presentation='controls'] .syncActions button,
+.section[data-presentation='controls'] .connectAction > button {
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 0.8125rem;
+}
+
+.section[data-presentation='controls'] .connectAction > button {
+  width: auto;
+  min-width: 148px;
+}
+
+.section[data-presentation='controls'] .accountManagement {
+  justify-content: stretch;
+  gap: 4px;
+}
+
+.section[data-presentation='controls'] .accountManagementDisclosure summary {
+  min-height: 40px;
+  font-size: 0.75rem;
+}
+
+.section[data-presentation='controls'] .accountManagement > span {
+  display: none;
+}
+
+.section[data-presentation='controls'] .accountManagement button {
+  min-width: 0;
+  min-height: 40px;
+  flex: 1 1 0;
+  justify-content: center;
+  padding: 0 2px;
+  font-size: 0.75rem;
+}
+
+.section[data-presentation='controls'] .accountUnavailable {
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 8px;
+}
+
+.section[data-presentation='controls'] .unavailableIcon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+}
+
+.section[data-presentation='controls'] .accountUnavailable strong,
+.section[data-presentation='controls'] .accountUnavailable span {
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.section[data-presentation='controls'] .accountNotice {
+  gap: 6px;
+  padding-top: 9px;
+  font-size: 0.6875rem;
+  line-height: 1.45;
+}
+
+.section[data-presentation='controls'] .accountNotice strong {
+  display: block;
+  margin-right: 0;
+}
+
+.section[data-presentation='controls'] .importerDisclosure {
+  border: 0;
+  border-top: 1px solid var(--border, rgba(15, 23, 42, 0.1));
+  border-radius: 0;
+  background: transparent;
+}
+
+.section[data-presentation='controls'] .importerDisclosure summary {
+  min-height: 48px;
+  gap: 8px;
+  padding: 6px 0;
+}
+
+.section[data-presentation='controls'] .importerDisclosure summary > span {
+  gap: 7px;
+}
+
+.section[data-presentation='controls'] .importerDisclosure summary strong {
+  font-size: 0.75rem;
+}
+
+.section[data-presentation='controls'] .importerDisclosure summary small {
+  display: none;
+}
+
+.section[data-presentation='controls'] .importer {
+  gap: 8px;
+  padding: 10px 0 0;
+}
+
+.section[data-presentation='controls'] .directImporter .importer {
+  border-top: 0;
+  padding: 0;
+}
+
+.section[data-presentation='controls'] .importer label,
+.section[data-presentation='controls'] .importer > small {
+  font-size: 0.6875rem;
+  line-height: 1.45;
+}
+
+.section[data-presentation='controls'] .inputRow {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.section[data-presentation='controls'] .inputRow textarea {
+  min-height: 88px;
+  border-radius: 8px;
+  padding: 9px 10px;
+  font-size: 0.75rem;
+}
+
+.section[data-presentation='controls'] .inputRow button {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 0.75rem;
+}
+
+.section[data-presentation='controls'][data-manager-view='import'] .inputRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+}
+
+.section[data-presentation='controls'][data-manager-view='import'] .inputRow button {
+  width: auto;
+  min-width: 156px;
+  min-height: 40px;
+  padding-inline: 16px;
+  font-size: 0.8125rem;
+}
+
+.section[data-presentation='controls'] .error {
+  padding: 8px 9px;
+  border-radius: 8px;
+  font-size: 0.6875rem;
+  line-height: 1.45;
+}
+
+.section[data-presentation='controls'] .results {
+  gap: 5px;
+}
+
+.section[data-presentation='controls'] .results li {
+  font-size: 0.6875rem;
+  line-height: 1.4;
+}
+
+@media (max-width: 900px) {
+  .grid,
+  .skeletons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .section {
+    margin-top: 12px;
+    padding: 15px;
+    border-radius: 16px;
+  }
+
+  .heading,
+  .inputRow {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .platformMarks {
+    align-self: flex-start;
+  }
+
+  .accountSync {
+    padding: 13px;
+  }
+
+  .accountSyncHeading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .localOnly {
+    width: 100%;
+    max-width: none;
+    border-top: 1px solid var(--border, rgba(15, 23, 42, 0.1));
+    border-left: 0;
+    padding-top: 11px;
+    padding-left: 0;
+  }
+
+  .accountGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .syncActions button,
+  .connectAction > button,
+  .accountManagement button,
+  .accountStatus button {
+    min-height: 48px;
+  }
+
+  .accountManagement {
+    justify-content: center;
+  }
+
+  .importerDisclosure summary {
+    min-height: 64px;
+  }
+
+  .importerDisclosure summary small {
+    display: none;
+  }
+
+  .inputRow button {
+    width: 100%;
+    min-height: 48px;
+  }
+
+  .grid,
+  .skeletons {
+    grid-template-columns: 1fr;
+  }
+
+  .cover,
+  .cover img {
+    min-height: 180px;
+    height: 180px;
+  }
+
+  .disconnectDialogCard {
+    padding: 17px;
+  }
+
+  .disconnectDialogActions button {
+    flex: 1 1 0;
+    min-height: 48px;
+  }
+
+  .section[data-presentation='controls'] .syncActions button,
+  .section[data-presentation='controls'] .connectAction > button,
+  .section[data-presentation='controls'] .accountManagementDisclosure summary,
+  .section[data-presentation='controls'] .accountManagement button,
+  .section[data-presentation='controls'] .inputRow button {
+    min-height: 48px;
+  }
+
+  .section[data-presentation='controls'] .accountSyncHeading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .section[data-presentation='controls'] .localOnly {
+    width: 100%;
+    border-top: 1px solid var(--border, rgba(15, 23, 42, 0.1));
+    padding-top: 9px;
+  }
+
+  .section[data-presentation='controls'] .accountCard,
+  .directImporter {
+    padding: 14px;
+  }
+
+  .section[data-presentation='controls'] .accountCardHeader {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+
+  .section[data-presentation='controls'] .platformSymbol {
+    grid-row: 1 / 3;
+  }
+
+  .section[data-presentation='controls'] .connectionState {
+    grid-row: 2;
+    grid-column: 2;
+    justify-self: start;
+    padding-top: 0;
+  }
+
+  .section[data-presentation='controls'] .connectAction > button {
+    width: 100%;
+  }
+
+  .section[data-presentation='controls'][data-manager-view='import'] .inputRow {
+    grid-template-columns: 1fr;
+  }
+
+  .section[data-presentation='controls'][data-manager-view='import'] .inputRow button {
+    width: 100%;
+  }
+
+  .section[data-presentation='controls'] .error,
+  .section[data-presentation='controls'] .results li,
+  .section[data-presentation='controls'] .importer label {
+    font-size: 0.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .disclosureChevron,
+  .accountManagementDisclosure summary > svg:last-child,
+  .section :global(.animate-spin) {
+    transition: none !important;
+    animation: none !important;
+  }
+}

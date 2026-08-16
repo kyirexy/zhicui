@@ -645,6 +645,7 @@ def execute_run(
                 "最后给出可以继续追问的方向。"
             ),
             web_scope="video_only",
+            allow_video_analysis=False,
         )
         digest_body = assistant_message.content
         digest_thread_id = thread.id

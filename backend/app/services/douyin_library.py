@@ -24,6 +24,8 @@ from app.core.config import settings
 _MAX_BOUNDED_LIBRARY_ITEMS = 10000
 _MAX_SYNC_COUNT = 100
 _MAX_QR_IMAGE_BYTES = 512 * 1024
+_MAX_VISUAL_IMAGE_BYTES = 4 * 1024 * 1024
+_MAX_VISUAL_TOTAL_BYTES = 16 * 1024 * 1024
 _MEDIA_URL_TTL_SECONDS = 60 * 60
 _HANDOFF_TOKEN_TTL_SECONDS = 10 * 60
 _SESSION_SCOPE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{32,64}$")
@@ -185,9 +187,87 @@ def companion_media_url(aweme_id: str) -> str:
     return f"{_base_url()}/api/v1/media/{quote(aweme_id.strip(), safe='')}"
 
 
+def companion_cover_url(aweme_id: str) -> str:
+    """Loopback-only cover stream resolved from fresh Douyin metadata."""
+    return f"{_base_url()}/api/v1/cover/{quote(aweme_id.strip(), safe='')}"
+
+
+def companion_gallery_image_url(aweme_id: str, image_index: int) -> str:
+    """Loopback-only image stream for a Douyin gallery item."""
+    return (
+        f"{_base_url()}/api/v1/gallery/{quote(aweme_id.strip(), safe='')}"
+        f"/{max(0, int(image_index))}"
+    )
+
+
 def companion_headers(session_scope: str) -> dict[str, str]:
     """Headers for loopback-only sidecar requests."""
     return _scope_headers(session_scope)
+
+
+def gallery_image_data_urls(
+    session_scope: str,
+    aweme_id: str,
+    image_count: int,
+    *,
+    max_images: int = 8,
+) -> list[str]:
+    """读取有界图集图片并转换成视觉模型可直接消费的 data URL。"""
+    bounded_count = max(0, min(int(image_count or 0), int(max_images or 0), 8))
+    if bounded_count == 0:
+        return []
+
+    total_bytes = 0
+    images: list[str] = []
+    headers = _scope_headers(session_scope)
+    try:
+        with requests.Session() as session:
+            session.trust_env = False
+            for image_index in range(bounded_count):
+                response = session.get(
+                    companion_gallery_image_url(aweme_id, image_index),
+                    headers=headers,
+                    stream=True,
+                    timeout=(5, 20),
+                )
+                response.raise_for_status()
+                content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+                if content_type not in {
+                    "image/jpeg", "image/png", "image/webp", "image/gif",
+                }:
+                    continue
+                try:
+                    declared_size = int(response.headers.get("content-length") or 0)
+                except ValueError:
+                    declared_size = 0
+                if declared_size > _MAX_VISUAL_IMAGE_BYTES:
+                    continue
+
+                chunks: list[bytes] = []
+                image_bytes = 0
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    image_bytes += len(chunk)
+                    if (
+                        image_bytes > _MAX_VISUAL_IMAGE_BYTES
+                        or total_bytes + image_bytes > _MAX_VISUAL_TOTAL_BYTES
+                    ):
+                        chunks = []
+                        break
+                    chunks.append(chunk)
+                if not chunks:
+                    continue
+                payload = b"".join(chunks)
+                total_bytes += len(payload)
+                images.append(
+                    f"data:{content_type};base64,"
+                    + base64.b64encode(payload).decode("ascii")
+                )
+    except requests.RequestException as exc:
+        if not images:
+            raise DouyinLibraryError(f"图文图片暂时无法读取：{exc}") from exc
+    return images
 
 
 def _media_signature(aweme_id: str, binding_ref: str, expires: int) -> str:
@@ -227,14 +307,38 @@ def public_cover_url(aweme_id: str, binding_ref: str) -> str:
     )
 
 
+def public_gallery_image_url(
+    aweme_id: str,
+    binding_ref: str,
+    image_index: int,
+) -> str:
+    """Create a signed same-origin URL for one gallery image."""
+    expires = int(time.time()) + _MEDIA_URL_TTL_SECONDS
+    clean_binding_ref = str(binding_ref or "").strip()
+    if not _BINDING_REF_PATTERN.fullmatch(clean_binding_ref):
+        raise DouyinLibraryError("抖音账号绑定标识无效")
+    signature = _media_signature(aweme_id, clean_binding_ref, expires)
+    return (
+        f"/api/library/douyin/gallery/{quote(aweme_id, safe='')}"
+        f"/{max(0, int(image_index))}"
+        f"?binding={quote(clean_binding_ref, safe='')}"
+        f"&expires={expires}&signature={signature}"
+    )
+
+
 def verify_media_signature(
     aweme_id: str,
     binding_ref: str,
     expires: int,
     signature: str,
+    *,
+    allow_expired: bool = False,
 ) -> bool:
     now = int(time.time())
-    if expires < now or expires > now + _MEDIA_URL_TTL_SECONDS + 60:
+    if (
+        (not allow_expired and expires < now)
+        or expires > now + _MEDIA_URL_TTL_SECONDS + 60
+    ):
         return False
     if not _BINDING_REF_PATTERN.fullmatch(str(binding_ref or "").strip()):
         return False
@@ -373,6 +477,14 @@ def _normalize_item(
     )
     media_type = str(raw.get("media_type") or "video").strip()
     can_extract = bool(aweme_id and media_type == "video")
+    try:
+        gallery_count = int(raw.get("gallery_count") or 0)
+    except (TypeError, ValueError):
+        gallery_count = 0
+    if media_type == "gallery":
+        gallery_count = max(1, min(gallery_count, 30))
+    else:
+        gallery_count = 0
     remote_cover = str(raw.get("cover_url") or "").strip()
     cover_url = (
         remote_cover
@@ -399,7 +511,13 @@ def _normalize_item(
         "source_synced_at": str(raw.get("source_synced_at") or "").strip(),
         "source_mode": source_mode,
         "source_url": (
-            f"https://www.douyin.com/video/{aweme_id}" if aweme_id else ""
+            (
+                f"https://www.douyin.com/note/{aweme_id}"
+                if media_type == "gallery"
+                else f"https://www.douyin.com/video/{aweme_id}"
+            )
+            if aweme_id
+            else ""
         ),
         "media_url": (
             public_media_url(aweme_id, binding_ref)
@@ -409,9 +527,13 @@ def _normalize_item(
         "cover_url": cover_url,
         "cover_proxy_url": (
             public_cover_url(aweme_id, binding_ref)
-            if aweme_id and cover_url
+            if aweme_id
             else ""
         ),
+        "gallery_images": [
+            public_gallery_image_url(aweme_id, binding_ref, image_index)
+            for image_index in range(gallery_count)
+        ],
         "can_extract": can_extract,
     }
 
@@ -463,17 +585,19 @@ def _load_normalized_items(
     ]
 
 
-def refresh_collection_order(
+def refresh_source_order(
     session_scope: str,
+    mode: str,
     count: int = 50,
 ) -> dict[str, Any]:
-    """只刷新收藏接口返回顺序，不触发媒体下载。"""
+    """只刷新收藏或喜欢接口返回顺序，不触发媒体下载。"""
     safe_count = max(1, min(count, _MAX_SYNC_COUNT))
+    safe_mode = "like" if mode == "like" else "collection"
     return _request(
         "POST",
         "/api/v1/source-order/refresh",
         session_scope=session_scope,
-        json_body={"mode": "collection", "count": safe_count},
+        json_body={"mode": safe_mode, "count": safe_count},
         timeout=35.0,
     )
 
@@ -484,8 +608,12 @@ def list_items(
     limit: int = 0,
     mode: str | None = None,
     sort_by: str = "collection",
+    refresh_order: bool = False,
 ) -> list[dict[str, Any]]:
     """返回标准化下载器条目；``limit=0`` 表示读取全部 manifest。"""
+    if refresh_order and sort_by == "collection" and mode in {"collect", "like"}:
+        refresh_source_order(session_scope, mode, _MAX_SYNC_COUNT)
+
     normalized = _load_normalized_items(session_scope, binding_ref)
     if mode in {"like", "collect", "post"}:
         normalized = [
@@ -493,33 +621,8 @@ def list_items(
             if item["source_mode"] == mode
         ]
 
-    if (
-        sort_by == "collection"
-        and mode == "collect"
-        and normalized
-        and not any(item.get("source_rank") is not None for item in normalized)
-    ):
-        status = connection_status(session_scope)
-        if status["connected"] and status["cookie_valid"]:
-            try:
-                refresh_collection_order(
-                    session_scope,
-                    min(max(len(normalized), 50), _MAX_SYNC_COUNT)
-                )
-                normalized = [
-                    item
-                    for item in _load_normalized_items(
-                        session_scope,
-                        binding_ref,
-                    )
-                    if item["source_mode"] == "collect"
-                ]
-            except DouyinLibraryError:
-                # 顺序元数据失败不应让本地视频库不可用；下面回退发布时间。
-                pass
-
     normalized.sort(key=_item_sort_key, reverse=True)
-    if sort_by == "collection" and mode == "collect":
+    if sort_by == "collection" and mode in {"collect", "like"}:
         normalized.sort(
             key=lambda item: (
                 0,
@@ -568,13 +671,128 @@ def trigger_collect(
         safe_count = max(1, min(int(count), _MAX_SYNC_COUNT))
     except (TypeError, ValueError):
         safe_count = 50
-    return _request(
+    job = _request(
         "POST",
         "/api/v1/auto-collect",
         session_scope=session_scope,
         json_body={"mode": companion_mode, "count": safe_count},
         timeout=15.0,
     )
+    # Older companion builds returned only job_id/status/url here. Keep the
+    # browser contract complete while rolling out real page-by-page progress.
+    job.setdefault("target", safe_count)
+    job.setdefault("processed", 0)
+    job.setdefault("total", 0)
+    job.setdefault("success", 0)
+    job.setdefault("failed", 0)
+    job.setdefault("skipped", 0)
+    job.setdefault("mode", safe_mode)
+    return job
+
+
+def resolve_creator(session_scope: str, profile_url: str) -> dict[str, Any]:
+    """Resolve a Douyin profile through the scoped companion session.
+
+    The companion response is deliberately reduced to display metadata.  It
+    must not return cookies, signed media URLs or an upstream response body.
+    """
+    clean_url = str(profile_url or "").strip()
+    try:
+        data = _request(
+            "POST",
+            "/api/v1/creators/resolve",
+            session_scope=session_scope,
+            json_body={"profile_url": clean_url},
+            timeout=20.0,
+        )
+    except DouyinLibraryError:
+        # The pinned companion already accepts an explicit profile URL through
+        # auto-collect. During a rolling sidecar upgrade, keep profile saving
+        # available and let the run perform the real authenticated discovery.
+        state = connection_status(session_scope)
+        if not state.get("connected") or not state.get("cookie_valid"):
+            raise DouyinLibraryError("抖音账号连接已失效，请重新连接")
+        marker = "/user/"
+        creator_id = clean_url.split(marker, 1)[1].split("?", 1)[0].split("/", 1)[0] if marker in clean_url else ""
+        if not creator_id:
+            raise DouyinLibraryError("抖音博主主页格式无效")
+        return {
+            "creator_id": creator_id[:192],
+            "display_name": "抖音博主",
+            "avatar_url": "",
+            "profile_url": f"https://www.douyin.com/user/{creator_id}",
+        }
+    creator_id = str(data.get("creator_id") or data.get("sec_user_id") or "").strip()
+    if not creator_id:
+        raise DouyinLibraryError("抖音博主解析结果缺少用户标识")
+    return {
+        "creator_id": creator_id[:192],
+        "display_name": str(data.get("display_name") or data.get("nickname") or "抖音博主").strip()[:160],
+        "avatar_url": str(data.get("avatar_url") or "").strip()[:2048],
+        "profile_url": f"https://www.douyin.com/user/{creator_id}",
+    }
+
+
+def list_creator_works(
+    session_scope: str,
+    binding_ref: str,
+    creator_id: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Discover recent creator works and register them in the scoped manifest."""
+    safe_limit = max(1, min(int(limit), _MAX_SYNC_COUNT))
+    clean_creator_id = str(creator_id or "").strip()
+    try:
+        body = _request(
+            "POST",
+            "/api/v1/creators/works",
+            session_scope=session_scope,
+            json_body={"creator_id": clean_creator_id, "limit": safe_limit},
+            timeout=45.0,
+        )
+        raw_items = body.get("items") if isinstance(body, dict) else None
+        if not isinstance(raw_items, list):
+            raise DouyinLibraryError("抖音博主作品接口未返回作品列表")
+    except DouyinLibraryError:
+        # Backward-compatible path for the pinned production patch: its
+        # metadata-only auto-collect already supports req.url + mode=post.
+        profile_url = f"https://www.douyin.com/user/{clean_creator_id}"
+        job = _request(
+            "POST",
+            "/api/v1/auto-collect",
+            session_scope=session_scope,
+            json_body={"mode": "post", "count": safe_limit, "url": profile_url},
+            timeout=15.0,
+        )
+        job_id = str(job.get("job_id") or "").strip()
+        if not job_id:
+            raise DouyinLibraryError("抖音博主同步任务没有启动")
+        for _ in range(180):
+            state = get_job(session_scope, job_id)
+            if state.get("status") == "success":
+                break
+            if state.get("status") == "failed":
+                raise DouyinLibraryError("抖音博主作品读取失败")
+            time.sleep(1)
+        else:
+            raise DouyinLibraryError("抖音博主作品读取超时")
+        raw_items = _request(
+            "GET",
+            "/api/v1/items",
+            session_scope=session_scope,
+            timeout=15.0,
+        ).get("items", [])
+        raw_items = [
+            item for item in raw_items
+            if isinstance(item, dict)
+            and str(item.get("source_mode") or _infer_source_mode(item.get("file_paths") or [])) == "post"
+        ][:safe_limit]
+    normalized = [
+        _normalize_item(raw, binding_ref)
+        for raw in raw_items[:safe_limit]
+        if isinstance(raw, dict)
+    ]
+    return [item for item in normalized if item.get("aweme_id")]
 
 
 def clear_session(session_scope: str) -> dict[str, Any]:

@@ -1,0 +1,41 @@
+services:
+  omniroute:
+    build:
+      context: ../../integrations/OmniRoute
+      # 知萃只需要网关与控制台，不安装服务器用不到的 CLI 工具。
+      target: runner-base
+    image: zhicui/omniroute:84b1e5e
+    container_name: zhicui-omniroute
+    # The upstream shell entrypoint can be checked out with CRLF on Windows.
+    # Start the same standalone server directly so the image is portable.
+    entrypoint: ["node", "dev/run-standalone.mjs"]
+    command: []
+    restart: unless-stopped
+    stop_grace_period: 40s
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      NODE_ENV: production
+      PORT: 20128
+      HOSTNAME: 0.0.0.0
+      DATA_DIR: /app/data
+      OMNIROUTE_API_KEY: ${OMNIROUTE_API_KEY:?set OMNIROUTE_API_KEY in deploy/omniroute/.env}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in deploy/omniroute/.env}
+      API_KEY_SECRET: ${API_KEY_SECRET:?set API_KEY_SECRET in deploy/omniroute/.env}
+      INITIAL_PASSWORD: ${INITIAL_PASSWORD:?set INITIAL_PASSWORD in deploy/omniroute/.env}
+      DISABLE_SQLITE_AUTO_BACKUP: ${DISABLE_SQLITE_AUTO_BACKUP:-false}
+    ports:
+      - "127.0.0.1:${OMNIROUTE_PORT:-20128}:20128"
+    volumes:
+      - omniroute-data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "healthcheck.mjs"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  omniroute-data:
+    name: zhicui-omniroute-data

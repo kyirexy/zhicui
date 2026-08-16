@@ -145,7 +145,7 @@ export default function FeedbackButton() {
 
     setSubject('');
     setContent('');
-    setSuccess('反馈已提交，我们会在这里更新处理进度。');
+    setSuccess('反馈已提交，可在“我的反馈”查看进度。');
     setHistory((items) => [response.data!, ...items.filter((item) => item.id !== response.data!.id)]);
     setHistoryTotal((total) => Math.max(total + 1, 1));
   };
@@ -169,17 +169,14 @@ export default function FeedbackButton() {
         onClick={handleBackdrop}
       >
         <div className="flex max-h-[min(82dvh,720px)] min-h-0 flex-col">
-          <header className="flex items-start justify-between gap-4 border-b border-card-border px-4 py-4 sm:px-6">
-            <div>
-              <p className="text-xs font-semibold text-accent-emerald">帮助我们把知萃做得更好</p>
-              <h2 id="feedback-title" className="mt-1 text-xl font-bold text-foreground text-balance">
-                用户反馈
-              </h2>
-            </div>
+          <header className="flex items-center justify-between gap-4 border-b border-card-border px-4 py-3 sm:px-6">
+            <h2 id="feedback-title" className="text-lg font-bold text-foreground text-balance">
+              用户反馈
+            </h2>
             <button
               type="button"
               onClick={closeDialog}
-              className="inline-flex size-10 items-center justify-center rounded-xl text-foreground-muted hover:bg-[var(--admin-surface-2)] hover:text-foreground"
+              className="inline-flex size-11 items-center justify-center rounded-lg text-foreground-muted hover:bg-[var(--admin-surface-2)] hover:text-foreground"
               aria-label="关闭反馈窗口"
             >
               <X size={20} aria-hidden="true" />
@@ -191,7 +188,7 @@ export default function FeedbackButton() {
               type="button"
               onClick={() => { setView('compose'); setError(''); }}
               aria-pressed={view === 'compose'}
-              className={`min-h-10 rounded-lg px-3 text-sm font-semibold ${
+              className={`min-h-11 rounded-lg px-3 text-sm font-semibold ${
                 view === 'compose'
                   ? 'bg-[var(--admin-surface)] text-foreground shadow-sm'
                   : 'text-foreground-muted hover:text-foreground'
@@ -203,7 +200,7 @@ export default function FeedbackButton() {
               type="button"
               onClick={loadHistory}
               aria-pressed={view === 'history'}
-              className={`min-h-10 rounded-lg px-3 text-sm font-semibold ${
+              className={`min-h-11 rounded-lg px-3 text-sm font-semibold ${
                 view === 'history'
                   ? 'bg-[var(--admin-surface)] text-foreground shadow-sm'
                   : 'text-foreground-muted hover:text-foreground'
@@ -277,7 +274,7 @@ export default function FeedbackButton() {
                     required
                   />
                   <p className="mt-1 flex items-center justify-between gap-3 text-xs text-foreground-muted">
-                    <span>会附带当前页面、设备类型与屏幕尺寸，不会上传视频、Cookie 或页面正文。</span>
+                    <span>会附带页面、设备和屏幕尺寸；不上传视频、Cookie 或正文。</span>
                     <span className="shrink-0">{content.length}/2000</span>
                   </p>
                 </div>
@@ -296,14 +293,13 @@ export default function FeedbackButton() {
                 {loadingHistory ? (
                   <div className="py-12 text-center text-sm text-foreground-muted">正在加载…</div>
                 ) : history.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-card-border px-5 py-10 text-center">
+                  <div className="rounded-xl border border-dashed border-card-border px-5 py-10 text-center">
                     <MessageCircle className="mx-auto text-foreground-muted" size={28} aria-hidden="true" />
                     <p className="mt-3 font-semibold text-foreground">还没有反馈记录</p>
-                    <p className="mt-1 text-sm text-foreground-muted">遇到问题或有新想法，都可以直接告诉我们。</p>
                     <button
                       type="button"
                       onClick={() => setView('compose')}
-                      className="mt-4 min-h-10 rounded-xl bg-accent-emerald px-4 text-sm font-bold text-white"
+                      className="mt-4 min-h-11 rounded-lg bg-accent-emerald px-4 text-sm font-bold text-white"
                     >
                       提交第一条反馈
                     </button>
@@ -311,7 +307,7 @@ export default function FeedbackButton() {
                 ) : (
                   <div className="space-y-3">
                     {history.map((item) => (
-                      <article key={item.id} className="rounded-2xl border border-card-border bg-[var(--admin-surface)] p-4">
+                      <article key={item.id} className="rounded-xl border border-card-border bg-[var(--admin-surface)] p-4">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
                             <p className="font-semibold text-foreground text-pretty">{item.subject}</p>
@@ -327,7 +323,7 @@ export default function FeedbackButton() {
                         </div>
                         <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-foreground-secondary">{item.content}</p>
                         {item.admin_reply && (
-                          <div className="mt-3 rounded-xl border-l-2 border-accent-emerald bg-accent-emerald/5 px-3 py-2.5">
+                          <div className="mt-3 rounded-lg border border-accent-emerald/20 bg-accent-emerald/5 px-3 py-2.5">
                             <p className="text-xs font-semibold text-accent-emerald">知萃回复</p>
                             <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-foreground">{item.admin_reply}</p>
                           </div>

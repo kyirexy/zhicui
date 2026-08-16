@@ -91,6 +91,13 @@ class Note(Base):
             "source_recorded_at": source_meta.get("recorded_at") or "",
             "source_mode": source_meta.get("source_mode") or "unknown",
             "source_rank": source_meta.get("source_rank"),
+            "caption": source_meta.get("caption") or "",
+            "tags": source_meta.get("tags") or [],
+            "media_type": source_meta.get("media_type") or "",
+            "media_url": source_meta.get("media_url") or "",
+            "transcript_source": source_meta.get("transcript_source") or "",
+            "speech_ready": bool(source_meta.get("speech_ready")),
+            "degraded": bool(source_meta.get("degraded")),
             "source_synced_at": (
                 source_meta.get("source_synced_at")
                 or source_meta.get("first_seen_at")
@@ -100,6 +107,8 @@ class Note(Base):
             "transcript_raw": self.transcript_raw,
             "transcript_chars": len(self.transcript_raw or ""),
             "ai_initialized": bool(self.ai_initialized),
+            "generation_status": ai.get("generation_status", "ready"),
+            "generation_error": ai.get("generation_error", ""),
             "card_type": self.card_type,
             "sections": ai.get("sections", []),
             "conclusion": ai.get("conclusion", ""),

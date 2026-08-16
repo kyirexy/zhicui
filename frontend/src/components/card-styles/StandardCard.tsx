@@ -110,7 +110,7 @@ export default function StandardCard({ cardData, density, cardRef }: StyleCardPr
 
             <div className="relative flex items-start justify-between gap-3">
               <div className="flex items-start gap-3.5 min-w-0">
-                <span className="text-2xl md:text-3xl flex-shrink-0 mt-0.5 drop-shadow-[0_0_12px_rgba(16,185,129,0.15)]">
+                <span className="text-2xl md:text-3xl flex-shrink-0 mt-0.5 drop-shadow-[0_0_12px_rgba(48,48,52,0.15)]">
                   {config.emoji}
                 </span>
                 <div className="min-w-0">

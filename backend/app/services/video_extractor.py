@@ -123,13 +123,53 @@ def _bilibili_get_title(bvid: str) -> str:
         return ''
 
 def _parse_bilibili(url: str) -> dict[str, Any]:
-    """Extract B站 video metadata.  Tries bilibili-api first, falls back to yt-dlp."""
+    """Extract normalized Bilibili metadata, preferring yt-dlp's full record."""
     import json as _json
     import re as _re
 
     clean_url = _clean_bilibili_url(url)
     bv_match = _re.search(r'(BV[\w]+|av\d+)', clean_url)
     bvid = bv_match.group(1) if bv_match else ''
+
+    full_cmd = [
+        sys.executable, '-m', 'yt_dlp',
+        '--dump-single-json', '--no-playlist', '--skip-download',
+        *_BILI_HEADERS,
+        clean_url,
+    ]
+    try:
+        full_result = subprocess.run(
+            full_cmd, capture_output=True, text=True, timeout=45,
+        )
+        if full_result.returncode == 0 and full_result.stdout.strip():
+            info = _json.loads(full_result.stdout)
+            source_url = (
+                info.get('webpage_url')
+                or (f'https://www.bilibili.com/video/{bvid}/' if bvid else clean_url)
+            )
+            media_url = info.get('url', '')
+            return {
+                'video_id': info.get('id', '') or bvid,
+                'title': info.get('title', 'B站视频'),
+                'description': info.get('description') or '',
+                'author_name': info.get('uploader') or info.get('channel') or '',
+                'author_id': str(info.get('uploader_id') or info.get('channel_id') or ''),
+                'cover_url': info.get('thumbnail') or '',
+                'tags': [str(tag) for tag in (info.get('tags') or []) if str(tag).strip()],
+                'duration': info.get('duration'),
+                'published_at': info.get('upload_date') or '',
+                'source_url': source_url,
+                'webpage_url': source_url,
+                'media_url': media_url,
+                'download_url': media_url or source_url,
+                'url': media_url or source_url,
+                'platform': 'bilibili',
+                'media_type': 'video',
+                'subtitles': info.get('subtitles') or {},
+                'automatic_captions': info.get('automatic_captions') or {},
+            }
+    except (OSError, subprocess.TimeoutExpired, _json.JSONDecodeError):
+        pass
 
     # ── bilibili-api (never chokes under uvicorn's asyncio loop) ──
     if bvid:
@@ -150,8 +190,15 @@ def _parse_bilibili(url: str) -> dict[str, Any]:
                     'title': title,
                     'download_url': f'https://www.bilibili.com/video/{bvid}/',
                     'url': f'https://www.bilibili.com/video/{bvid}/',
+                    'source_url': f'https://www.bilibili.com/video/{bvid}/',
+                    'description': '',
+                    'author_name': '',
+                    'cover_url': '',
+                    'tags': [],
                     'platform': 'bilibili',
+                    'media_type': 'video',
                     'subtitles': {},
+                    'automatic_captions': {},
                 }
         except Exception:
             pass  # Fall through to yt-dlp on error
@@ -178,24 +225,37 @@ def _parse_bilibili(url: str) -> dict[str, Any]:
     return {
         'video_id': info.get('id', ''),
         'title': info.get('title', 'B站视频'),
+        'description': info.get('description') or '',
+        'author_name': info.get('uploader') or '',
+        'cover_url': info.get('thumbnail') or '',
+        'tags': info.get('tags') or [],
+        'source_url': info.get('webpage_url') or bv_link,
+        'media_url': info.get('url', ''),
         'download_url': info.get('url', '') or bv_link,
         'url': info.get('url', '') or bv_link,
         'platform': 'bilibili',
+        'media_type': 'video',
         'subtitles': info.get('subtitles', {}),
+        'automatic_captions': info.get('automatic_captions') or {},
     }
 
 
-def _bilibili_subtitles(url: str) -> str:
-    """Download B站 auto-generated subtitles and return as plain text.
+def _bilibili_subtitles_with_source(
+    url: str,
+    info: dict[str, Any] | None = None,
+) -> tuple[str, str]:
+    """Download available Bilibili subtitles and report their source.
 
     Raises RuntimeError if no subtitles are available.
     """
     clean_url = _clean_bilibili_url(url)
+    manual_available = bool((info or {}).get('subtitles'))
     with tempfile.TemporaryDirectory() as tmpdir:
         outtmpl = os.path.join(tmpdir, '%(id)s.%(ext)s')
         cmd = [
             sys.executable, '-m', 'yt_dlp',
-            '--write-auto-subs', '--sub-lang', 'zh-Hans,zh,ai-zh,en',
+            '--write-subs', '--write-auto-subs',
+            '--sub-langs', 'zh-Hans,zh-CN,zh,ai-zh,en',
             '--convert-subs', 'srt',
             '--skip-download',
             '--output', outtmpl,
@@ -209,21 +269,30 @@ def _bilibili_subtitles(url: str) -> str:
                 "B站字幕下载需要 yt-dlp，请先安装: pip install yt-dlp"
             )
 
-        for f in os.listdir(tmpdir):
+        for f in sorted(os.listdir(tmpdir)):
             if f.endswith(('.srt', '.vtt')):
                 sub_path = os.path.join(tmpdir, f)
                 with open(sub_path, encoding='utf-8') as sf:
                     content = sf.read()
-                # Strip SRT/VTT markup to plain text
-                clean = re.sub(
-                    r'\d+\n\d{2}:\d{2}:\d{2}[.,]\d{3} --> \d{2}:\d{2}:\d{2}[.,]\d{3}\n',
-                    '', content,
-                )
-                clean = re.sub(r'<[^>]+>', '', clean)
-                clean = re.sub(r'\n\n+', '\n', clean)
-                return clean.strip()
+                lines: list[str] = []
+                for raw_line in content.splitlines():
+                    line = raw_line.strip()
+                    if not line or line == 'WEBVTT' or line.isdigit() or '-->' in line:
+                        continue
+                    line = re.sub(r'<[^>]+>', '', line).strip()
+                    if line and (not lines or lines[-1] != line):
+                        lines.append(line)
+                clean = '\n'.join(lines).strip()
+                if clean:
+                    source = 'manual-subtitle' if manual_available else 'automatic-subtitle'
+                    return clean, source
 
-        raise RuntimeError("B站视频没有可用的自动字幕")
+        raise RuntimeError("B站视频没有可用的字幕")
+
+
+def _bilibili_subtitles(url: str) -> str:
+    """Backward-compatible text-only wrapper for existing callers."""
+    return _bilibili_subtitles_with_source(url)[0]
 
 
 def _bilibili_download_audio(url: str, output_dir: str) -> str:

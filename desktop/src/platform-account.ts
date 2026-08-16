@@ -1,0 +1,501 @@
+import { createHash } from 'node:crypto';
+import { mkdir, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import {
+  chromium,
+  type BrowserContext,
+  type Page,
+} from 'playwright-core';
+import type {
+  PlatformAccountCollectRequest,
+  PlatformAccountProvider,
+  PlatformAccountRequest,
+  PlatformAccountResult,
+  PlatformAccountSourceMode,
+  PlatformAccountStatus,
+} from './contract';
+
+const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
+const XHS_PROFILE_TIMEOUT_MS = 2 * 60 * 1000;
+const POLL_INTERVAL_MS = 1200;
+const MAX_BILIBILI_FOLDERS = 20;
+const MAX_XHS_SCROLLS = 8;
+const BILIBILI_LOGIN_URL = 'https://passport.bilibili.com/login';
+const XHS_LOGIN_URL = 'https://www.xiaohongshu.com/explore';
+
+type SupportedBrowser = 'chrome' | 'msedge';
+type StatusListener = (status: PlatformAccountStatus) => void;
+
+interface PlatformCookie {
+  name: string;
+  value: string;
+  domain: string;
+}
+
+interface RankedUrl {
+  url: string;
+  rank: number;
+}
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function list(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function numeric(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function publicError(platform: PlatformAccountProvider, error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error || '');
+  if (/Executable doesn't exist|launchPersistentContext/i.test(detail)) {
+    return '未找到可用的 Chrome 或 Edge，请安装浏览器后重试';
+  }
+  if (/Target page, context or browser has been closed/i.test(detail)) {
+    return '登录或同步窗口已关闭';
+  }
+  const sanitized = detail
+    .split(/\r?\n/, 1)[0]
+    .replace(/[A-Za-z]:[\\/][^\s"']+/g, '[本机路径]')
+    .replace(/(SESSDATA|DedeUserID|web_session|cookie)\s*[=:]\s*[^\s;,]+/gi, '$1=[已隐藏]')
+    .slice(0, 180);
+  return sanitized || (platform === 'bilibili'
+    ? 'B站账号操作失败，请重新登录后重试'
+    : '小红书账号操作失败，请重新登录后重试');
+}
+
+function normalizeBilibiliUrl(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(rawUrl, 'https://www.bilibili.com');
+    if (!/(^|\.)bilibili\.com$/i.test(parsed.hostname)) return null;
+    const match = parsed.pathname.match(/\/video\/(BV[A-Za-z0-9]+|av\d+)/i);
+    return match ? `https://www.bilibili.com/video/${match[1]}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeXhsUrl(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(rawUrl, 'https://www.xiaohongshu.com');
+    if (!/(^|\.)xiaohongshu\.com$/i.test(parsed.hostname)) return null;
+    const supported = [
+      /^\/explore\/[A-Za-z0-9]+/i,
+      /^\/discovery\/item\/[A-Za-z0-9]+/i,
+      /^\/user\/profile\/[^/]+\/[A-Za-z0-9]+/i,
+    ].some((pattern) => pattern.test(parsed.pathname));
+    if (!supported) return null;
+    const clean = new URL(`https://www.xiaohongshu.com${parsed.pathname}`);
+    for (const key of ['xsec_token', 'xsec_source']) {
+      const value = parsed.searchParams.get(key);
+      if (value) clean.searchParams.set(key, value);
+    }
+    return clean.toString();
+  } catch {
+    return null;
+  }
+}
+
+export function boundedPlatformUrls(
+  platform: PlatformAccountProvider,
+  values: string[],
+  limit: number,
+): string[] {
+  const boundedLimit = Math.max(1, Math.min(10, Math.trunc(limit) || 1));
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const normalized = platform === 'bilibili'
+      ? normalizeBilibiliUrl(value)
+      : normalizeXhsUrl(value);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+    if (result.length >= boundedLimit) break;
+  }
+  return result;
+}
+
+export function hasPlatformAuthCookie(
+  platform: PlatformAccountProvider,
+  cookies: PlatformCookie[],
+): boolean {
+  const expectedNames = platform === 'bilibili'
+    ? new Set(['SESSDATA', 'DedeUserID'])
+    : new Set(['web_session']);
+  const expectedDomain = platform === 'bilibili' ? 'bilibili.com' : 'xiaohongshu.com';
+  return cookies.some((cookie) => {
+    const domain = String(cookie.domain || '').toLowerCase().replace(/^\./, '');
+    return (
+      (domain === expectedDomain || domain.endsWith(`.${expectedDomain}`))
+      && expectedNames.has(String(cookie.name || ''))
+      && Boolean(cookie.value)
+    );
+  });
+}
+
+export class PlatformAccountConnector {
+  private activeContext: BrowserContext | null = null;
+  private activePlatform: PlatformAccountProvider = 'bilibili';
+  private cancelled = false;
+  private running = false;
+
+  constructor(
+    private readonly baseDirectory: () => string,
+    private readonly notify: StatusListener,
+  ) {}
+
+  async login(request: PlatformAccountRequest): Promise<PlatformAccountResult> {
+    return this.runExclusive(request.platform, async () => {
+      const profilePath = await this.profilePath(request);
+      this.notifyStatus(request.platform, 'starting', '正在打开本机浏览器…');
+      const launched = await this.launchBrowser(profilePath);
+      this.activeContext = launched.context;
+      const page = launched.context.pages()[0] || await launched.context.newPage();
+      const loginUrl = request.platform === 'bilibili'
+        ? BILIBILI_LOGIN_URL
+        : XHS_LOGIN_URL;
+      await page.goto(loginUrl, { waitUntil: 'commit', timeout: 20_000 })
+        .catch(() => undefined);
+      await page.bringToFront().catch(() => undefined);
+      this.notifyStatus(
+        request.platform,
+        'browser-open',
+        request.platform === 'bilibili'
+          ? '请在 B站官方页面完成扫码或账号登录'
+          : '请在小红书官方页面完成登录',
+        launched.browser,
+      );
+
+      const deadline = Date.now() + LOGIN_TIMEOUT_MS;
+      while (!this.cancelled && Date.now() < deadline) {
+        if (hasPlatformAuthCookie(request.platform, await launched.context.cookies())) {
+          this.notifyStatus(
+            request.platform,
+            'success',
+            request.platform === 'bilibili' ? 'B站连接成功' : '小红书连接成功',
+            launched.browser,
+          );
+          return {
+            success: true,
+            connected: true,
+            platform: request.platform,
+          };
+        }
+        await wait(POLL_INTERVAL_MS);
+      }
+      if (this.cancelled) {
+        return { success: false, cancelled: true, platform: request.platform };
+      }
+      throw new Error('登录等待超时，请重新发起登录');
+    });
+  }
+
+  async collect(
+    request: PlatformAccountCollectRequest,
+  ): Promise<PlatformAccountResult> {
+    return this.runExclusive(request.platform, async () => {
+      const profilePath = await this.profilePath(request);
+      this.notifyStatus(request.platform, 'starting', '正在读取本机登录会话…');
+      const launched = await this.launchBrowser(profilePath);
+      this.activeContext = launched.context;
+      if (!hasPlatformAuthCookie(request.platform, await launched.context.cookies())) {
+        throw new Error('账号登录已失效，请先重新登录');
+      }
+      this.notifyStatus(
+        request.platform,
+        'collecting',
+        request.mode === 'collect' ? '正在读取最近收藏…' : '正在读取最近喜欢…',
+        launched.browser,
+      );
+      const urls = request.platform === 'bilibili'
+        ? await this.collectBilibili(launched.context, request.mode, request.limit)
+        : await this.collectXiaohongshu(launched.context, request.mode, request.limit);
+      if (this.cancelled) {
+        return { success: false, cancelled: true, platform: request.platform };
+      }
+      if (urls.length === 0) {
+        throw new Error(request.platform === 'bilibili'
+          ? '没有读取到可同步的 B站作品，请确认账号列表可见'
+          : '没有读取到可同步的小红书作品，请确认已进入自己的主页和对应标签');
+      }
+      this.notifyStatus(
+        request.platform,
+        'success',
+        `已读取 ${urls.length} 条${request.mode === 'collect' ? '收藏' : '喜欢'}作品`,
+        launched.browser,
+      );
+      return {
+        success: true,
+        connected: true,
+        platform: request.platform,
+        urls,
+        count: urls.length,
+      };
+    });
+  }
+
+  async cancel(): Promise<PlatformAccountResult> {
+    this.cancelled = true;
+    const platform = this.activePlatform;
+    const context = this.activeContext;
+    if (context) await context.close().catch(() => undefined);
+    this.notifyStatus(platform, 'cancelled', '已取消平台账号操作');
+    return { success: false, cancelled: true, platform };
+  }
+
+  async disconnect(request: PlatformAccountRequest): Promise<PlatformAccountResult> {
+    if (this.running) {
+      return {
+        success: false,
+        platform: request.platform,
+        error: '请先取消正在进行的平台账号操作',
+      };
+    }
+    const profilePath = await this.profilePath(request, false);
+    await rm(profilePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+    this.notifyStatus(request.platform, 'disconnected', '本机平台登录已断开');
+    return { success: true, connected: false, platform: request.platform };
+  }
+
+  private async runExclusive(
+    platform: PlatformAccountProvider,
+    action: () => Promise<PlatformAccountResult>,
+  ): Promise<PlatformAccountResult> {
+    if (this.running) {
+      return { success: false, platform, error: '已有平台账号操作正在进行' };
+    }
+    this.running = true;
+    this.cancelled = false;
+    this.activePlatform = platform;
+    try {
+      return await action();
+    } catch (error) {
+      if (this.cancelled) {
+        return { success: false, cancelled: true, platform };
+      }
+      const message = publicError(platform, error);
+      this.notifyStatus(platform, 'error', message);
+      return { success: false, platform, error: message };
+    } finally {
+      const context = this.activeContext;
+      this.activeContext = null;
+      if (context) await context.close().catch(() => undefined);
+      this.running = false;
+    }
+  }
+
+  private async profilePath(
+    request: PlatformAccountRequest,
+    create = true,
+  ): Promise<string> {
+    const userHash = createHash('sha256').update(request.profileKey).digest('hex');
+    const base = this.baseDirectory();
+    if (create) await mkdir(base, { recursive: true });
+    return join(base, userHash, request.platform);
+  }
+
+  private async launchBrowser(
+    profilePath: string,
+  ): Promise<{ context: BrowserContext; browser: SupportedBrowser }> {
+    let lastError: unknown;
+    for (const browser of ['chrome', 'msedge'] as const) {
+      try {
+        const context = await chromium.launchPersistentContext(profilePath, {
+          channel: browser,
+          headless: false,
+          locale: 'zh-CN',
+          viewport: null,
+          acceptDownloads: false,
+          args: [
+            '--start-maximized',
+            '--disable-background-mode',
+            '--no-first-run',
+            '--no-default-browser-check',
+          ],
+        });
+        return { context, browser };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError || new Error('未找到可用浏览器');
+  }
+
+  private notifyStatus(
+    platform: PlatformAccountProvider,
+    stage: PlatformAccountStatus['stage'],
+    message: string,
+    browser?: SupportedBrowser,
+  ): void {
+    this.notify({ platform, stage, message, browser });
+  }
+
+  private async requestBilibili(
+    context: BrowserContext,
+    url: string,
+  ): Promise<Record<string, unknown>> {
+    const response = await context.request.get(url, {
+      timeout: 20_000,
+      headers: { Referer: 'https://space.bilibili.com/' },
+    });
+    if (!response.ok()) throw new Error(`B站账号接口暂不可用（${response.status()}）`);
+    const payload = record(await response.json());
+    if (numeric(payload.code) !== 0) {
+      const message = String(payload.message || payload.msg || '账号接口拒绝请求');
+      throw new Error(`B站${message.slice(0, 80)}`);
+    }
+    return record(payload.data);
+  }
+
+  private async collectBilibili(
+    context: BrowserContext,
+    mode: PlatformAccountSourceMode,
+    limit: number,
+  ): Promise<string[]> {
+    const nav = await this.requestBilibili(
+      context,
+      'https://api.bilibili.com/x/web-interface/nav',
+    );
+    const mid = numeric(nav.mid);
+    if (!mid) throw new Error('B站登录状态无效，请重新登录');
+    const ranked: RankedUrl[] = [];
+    if (mode === 'like') {
+      const data = await this.requestBilibili(
+        context,
+        `https://api.bilibili.com/x/space/like/video?vmid=${mid}&pn=1&ps=${limit}`,
+      );
+      const videos = list(record(data.list).vlist);
+      for (const value of videos) {
+        const video = record(value);
+        const bvid = String(video.bvid || '').trim();
+        if (!bvid) continue;
+        ranked.push({
+          url: `https://www.bilibili.com/video/${bvid}`,
+          rank: numeric(video.created || video.pubdate),
+        });
+      }
+    } else {
+      const foldersData = await this.requestBilibili(
+        context,
+        `https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=${mid}`,
+      );
+      const folders = list(foldersData.list).slice(0, MAX_BILIBILI_FOLDERS);
+      for (const value of folders) {
+        if (this.cancelled) break;
+        const folder = record(value);
+        const mediaId = numeric(folder.id || folder.media_id);
+        if (!mediaId) continue;
+        const folderData = await this.requestBilibili(
+          context,
+          `https://api.bilibili.com/x/v3/fav/resource/list?media_id=${mediaId}&pn=1&ps=${limit}&keyword=&order=mtime&type=0&tid=0&platform=web`,
+        );
+        for (const mediaValue of list(folderData.medias)) {
+          const media = record(mediaValue);
+          const bvid = String(media.bvid || '').trim();
+          if (!bvid) continue;
+          ranked.push({
+            url: `https://www.bilibili.com/video/${bvid}`,
+            rank: numeric(media.fav_time || media.ctime || media.pubtime),
+          });
+        }
+      }
+    }
+    ranked.sort((left, right) => right.rank - left.rank);
+    return boundedPlatformUrls('bilibili', ranked.map((item) => item.url), limit);
+  }
+
+  private async collectXiaohongshu(
+    context: BrowserContext,
+    mode: PlatformAccountSourceMode,
+    limit: number,
+  ): Promise<string[]> {
+    let page = context.pages()[0] || await context.newPage();
+    await page.goto(XHS_LOGIN_URL, { waitUntil: 'commit', timeout: 20_000 })
+      .catch(() => undefined);
+    await page.bringToFront().catch(() => undefined);
+    this.notifyStatus(
+      'xiaohongshu',
+      'waiting',
+      `请在打开的小红书页面进入“我”的个人主页，随后选择${mode === 'collect' ? '收藏' : '点赞'}；知萃只读取页面可见内容`,
+    );
+
+    const deadline = Date.now() + XHS_PROFILE_TIMEOUT_MS;
+    while (!this.cancelled && Date.now() < deadline) {
+      page = this.latestPage(context, page);
+      if (/xiaohongshu\.com\/user\/profile\//i.test(page.url())) {
+        const ownProfile = await this.hasOwnXhsProfileMarker(page);
+        if (!ownProfile) {
+          throw new Error('请进入你自己的小红书个人主页后再同步');
+        }
+        break;
+      }
+      await wait(POLL_INTERVAL_MS);
+    }
+    if (this.cancelled) return [];
+    if (!/xiaohongshu\.com\/user\/profile\//i.test(page.url())) {
+      throw new Error('等待个人主页超时，请重新同步并在浏览器中进入“我”的主页');
+    }
+
+    await this.selectXhsTab(page, mode);
+    const collected: string[] = [];
+    let unchangedRounds = 0;
+    for (let index = 0; index < MAX_XHS_SCROLLS && collected.length < limit; index += 1) {
+      if (this.cancelled) break;
+      const hrefs = await page.locator(
+        'a[href*="/explore/"], a[href*="/discovery/item/"], a[href*="/user/profile/"]',
+      ).evaluateAll((anchors) => anchors.map((anchor) => (anchor as HTMLAnchorElement).href));
+      const next = boundedPlatformUrls('xiaohongshu', [...collected, ...hrefs], limit);
+      unchangedRounds = next.length === collected.length ? unchangedRounds + 1 : 0;
+      collected.splice(0, collected.length, ...next);
+      if (collected.length >= limit || unchangedRounds >= 3) break;
+      await page.evaluate(() => {
+        window.scrollBy({ top: Math.max(window.innerHeight * 0.85, 640), behavior: 'instant' });
+      });
+      await page.waitForTimeout(900);
+    }
+    return collected;
+  }
+
+  private latestPage(context: BrowserContext, fallback: Page): Page {
+    const pages = context.pages().filter((candidate) => !candidate.isClosed());
+    return pages[pages.length - 1] || fallback;
+  }
+
+  private async hasOwnXhsProfileMarker(page: Page): Promise<boolean> {
+    for (const label of ['编辑资料', '编辑个人资料']) {
+      const marker = page.getByText(label, { exact: false }).first();
+      if (await marker.isVisible().catch(() => false)) return true;
+    }
+    return false;
+  }
+
+  private async selectXhsTab(
+    page: Page,
+    mode: PlatformAccountSourceMode,
+  ): Promise<void> {
+    const labels = mode === 'collect' ? ['收藏'] : ['点赞', '赞过', '喜欢'];
+    for (const label of labels) {
+      const matches = page.getByText(label, { exact: true });
+      const count = Math.min(await matches.count(), 8);
+      for (let index = 0; index < count; index += 1) {
+        const candidate = matches.nth(index);
+        if (!await candidate.isVisible().catch(() => false)) continue;
+        await candidate.click({ timeout: 3000 }).catch(() => undefined);
+        await page.waitForTimeout(1000);
+        return;
+      }
+    }
+    throw new Error(`当前个人主页没有找到“${mode === 'collect' ? '收藏' : '点赞'}”标签`);
+  }
+}

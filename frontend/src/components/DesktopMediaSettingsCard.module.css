@@ -1,0 +1,322 @@
+.card {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--desktop-border-strong, rgba(36, 36, 38, 0.16)) 82%, transparent);
+  border-radius: 12px;
+  background: var(--desktop-surface, var(--card-bg));
+}
+
+.header {
+  display: flex;
+  gap: 0.9rem;
+  align-items: flex-start;
+  padding: 1.35rem 1.4rem 1.15rem;
+  border-bottom: 1px solid var(--desktop-border, var(--card-border));
+}
+
+.mark,
+.modeIcon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--desktop-accent-strong, var(--accent-emerald));
+  background: var(--desktop-accent-soft, rgba(48, 48, 52, 0.1));
+}
+
+.mark {
+  width: 2.8rem;
+  height: 2.8rem;
+  border-radius: 0.85rem;
+}
+
+.header > div {
+  min-width: 0;
+}
+
+.header h2 {
+  margin: 0;
+  color: var(--desktop-ink, var(--foreground));
+  font-size: .96rem;
+  font-weight: 680;
+  text-wrap: balance;
+}
+
+.header p,
+.directory p {
+  color: var(--desktop-muted, var(--foreground-muted));
+  text-wrap: pretty;
+}
+
+.header p {
+  margin: 0.3rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.body {
+  display: grid;
+  gap: 0;
+}
+
+.modeRow {
+  display: flex;
+  gap: 0.8rem;
+  align-items: center;
+  padding: 1.15rem 1.4rem;
+}
+
+.modeIcon {
+  width: 2.35rem;
+  height: 2.35rem;
+  border-radius: 0.72rem;
+}
+
+.modeCopy {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 0.18rem;
+}
+
+.modeCopy strong {
+  color: var(--desktop-ink, var(--foreground));
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.modeCopy span {
+  color: var(--desktop-muted, var(--foreground-muted));
+  font-size: 0.76rem;
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.switch {
+  position: relative;
+  width: 48px;
+  height: 44px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.switch::before {
+  position: absolute;
+  top: 9px;
+  left: 2px;
+  width: 44px;
+  height: 26px;
+  border: 1px solid var(--desktop-border-strong, var(--card-border));
+  border-radius: 13px;
+  background: var(--desktop-surface-soft, rgba(15, 23, 42, 0.05));
+  content: '';
+  transition: background-color 180ms ease, border-color 180ms ease;
+}
+
+.switch > span {
+  position: absolute;
+  top: 12px;
+  left: 5px;
+  z-index: 1;
+  display: flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: white;
+  background: var(--desktop-faint, #87938c);
+  transition: transform 180ms ease, background 180ms ease;
+}
+
+.switchActive {
+  background: transparent;
+}
+
+.switchActive::before {
+  border-color: color-mix(in srgb, var(--desktop-accent, var(--accent-emerald)) 55%, transparent);
+  background: var(--desktop-accent-soft, color-mix(in srgb, var(--accent-emerald) 12%, transparent));
+}
+
+.switchActive > span {
+  transform: translateX(18px);
+  background: var(--desktop-accent-strong, var(--accent-emerald));
+}
+
+.switch:focus-visible,
+.primaryAction:focus-visible,
+.secondaryAction:focus-visible,
+.error button:focus-visible {
+  outline: 2px solid var(--desktop-accent, var(--accent-emerald));
+  outline-offset: 2px;
+}
+
+.switch:active,
+.primaryAction:active,
+.secondaryAction:active {
+  transform: translateY(1px);
+}
+
+.switch:disabled,
+.primaryAction:disabled,
+.secondaryAction:disabled {
+  cursor: wait;
+  opacity: 0.66;
+}
+
+.directory {
+  margin: 0 1.4rem 1.4rem;
+  padding: 1rem;
+  border-radius: 0.95rem;
+  background: var(--desktop-surface-soft, rgba(15, 23, 42, 0.035));
+}
+
+.directoryTop {
+  display: flex;
+  gap: 0.8rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.directoryTop > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.25rem;
+}
+
+.directoryTop span {
+  color: var(--desktop-muted, var(--foreground-muted));
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.directoryTop strong {
+  overflow: hidden;
+  color: var(--desktop-ink, var(--foreground));
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.77rem;
+  font-weight: 560;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.directoryTop > svg {
+  flex: 0 0 auto;
+  color: var(--desktop-accent-strong, var(--accent-emerald));
+}
+
+.directory p {
+  margin: 0.65rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.actions {
+  display: flex;
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+}
+
+.actions button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 0.42rem;
+  padding: 0.52rem 0.8rem;
+  border-radius: 0.68rem;
+  font-size: 0.76rem;
+  font-weight: 620;
+  cursor: pointer;
+  transition: transform 160ms ease, background 180ms ease, border-color 180ms ease;
+}
+
+.primaryAction {
+  border: 1px solid var(--desktop-accent-strong, #303034);
+  color: white;
+  background: var(--desktop-accent-strong, #303034);
+}
+
+.primaryAction:hover {
+  background: color-mix(in srgb, var(--desktop-accent-strong, #303034) 90%, black);
+}
+
+.secondaryAction {
+  border: 1px solid var(--desktop-border-strong, var(--card-border));
+  color: var(--desktop-ink, var(--foreground));
+  background: var(--desktop-surface, var(--card-bg));
+}
+
+.secondaryAction:hover {
+  border-color: var(--desktop-accent, #74747b);
+}
+
+.loading {
+  display: flex;
+  min-height: 8rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  color: var(--desktop-muted, var(--foreground-muted));
+  font-size: 0.8rem;
+}
+
+.spin {
+  animation: media-settings-spin 900ms linear infinite;
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0 1.4rem 1.25rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: 0.7rem;
+  color: #9a4b16;
+  background: rgba(245, 158, 11, 0.1);
+  font-size: 0.75rem;
+}
+
+.error button {
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+@keyframes media-settings-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 640px) {
+  .header,
+  .modeRow {
+    padding-inline: 1rem;
+  }
+
+  .directory,
+  .error {
+    margin-inline: 1rem;
+  }
+
+  .actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switch,
+  .switch > span,
+  .actions button {
+    transition: none;
+  }
+}

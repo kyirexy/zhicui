@@ -28,6 +28,20 @@ ASR_API_BASE_URL_KEY = "asr_api_base_url"
 ASR_MODEL_KEY = "asr_model"
 EXTRACTION_ASR_CONCURRENCY_KEY = "extraction_asr_concurrency"
 EXTRACTION_LLM_CONCURRENCY_KEY = "extraction_llm_concurrency"
+CREATOR_SYNC_ENABLED_KEY = "creator_sync_enabled"
+CREATOR_SYNC_XHS_COOKIE_KEY = "creator_sync_xhs_cookie"
+CREATOR_SYNC_DOUYIN_CONCURRENCY_KEY = "creator_sync_douyin_concurrency"
+CREATOR_SYNC_BILIBILI_CONCURRENCY_KEY = "creator_sync_bilibili_concurrency"
+CREATOR_SYNC_XHS_CONCURRENCY_KEY = "creator_sync_xhs_concurrency"
+CREATOR_SYNC_HEALTH_KEYS = {
+    "douyin": "creator_sync_douyin_healthy",
+    "bilibili": "creator_sync_bilibili_healthy",
+    "xiaohongshu": "creator_sync_xiaohongshu_healthy",
+}
+CREATOR_SYNC_TESTED_AT_KEYS = {
+    platform: f"creator_sync_{platform}_tested_at"
+    for platform in CREATOR_SYNC_HEALTH_KEYS
+}
 
 DEEPSEEK_PROVIDER = "deepseek"
 CUSTOM_PROVIDER = "custom"
@@ -37,6 +51,11 @@ MAX_EXTRACTION_ASR_CONCURRENCY = 200
 MAX_EXTRACTION_LLM_CONCURRENCY = 50
 DEFAULT_EXTRACTION_ASR_CONCURRENCY = 200
 DEFAULT_EXTRACTION_LLM_CONCURRENCY = 12
+DEFAULT_CREATOR_SYNC_CONCURRENCY = {
+    "douyin": 1,
+    "bilibili": 2,
+    "xiaohongshu": 1,
+}
 
 
 def _fernet():
@@ -67,6 +86,16 @@ def _decrypt(value: str) -> str:
         return f.decrypt(value[4:].encode()).decode()
     except Exception:
         return value  # corrupt ciphertext or wrong key; fall back
+
+
+def encrypt_value(value: str) -> str:
+    """Encrypt a user-scoped secret with the application Fernet key."""
+    return _encrypt(value)
+
+
+def decrypt_value(value: str) -> str:
+    """Decrypt a user-scoped secret without exposing storage details."""
+    return _decrypt(value)
 
 
 def get_setting(db: Session, key: str, default: str = "") -> str:
@@ -199,6 +228,96 @@ def get_extraction_concurrency(db: Session) -> dict[str, int]:
             maximum=MAX_EXTRACTION_LLM_CONCURRENCY,
         ),
     }
+
+
+def _as_bool(value: str, default: bool = False) -> bool:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return default
+    return normalized in {"1", "true", "yes", "on", "enabled"}
+
+
+def get_creator_sync_config(db: Session, *, include_secret: bool = False) -> dict[str, Any]:
+    """Return the admin-controlled creator sync feature configuration.
+
+    The feature is deliberately disabled until an administrator enables it.
+    The XHS service credential is never included unless server-side connector
+    code explicitly requests it.
+    """
+    xhs_cookie = get_secret(db, CREATOR_SYNC_XHS_COOKIE_KEY) or getattr(settings, "XHS_COOKIE", "")
+    result: dict[str, Any] = {
+        "enabled": _as_bool(get_setting(db, CREATOR_SYNC_ENABLED_KEY, "false")),
+        "platforms": {
+            platform: _as_bool(get_setting(db, health_key, "false"))
+            and (platform != "xiaohongshu" or bool(xhs_cookie))
+            for platform, health_key in CREATOR_SYNC_HEALTH_KEYS.items()
+        },
+        "last_tested_at": {
+            platform: get_setting(db, CREATOR_SYNC_TESTED_AT_KEYS[platform], "") or None
+            for platform in CREATOR_SYNC_HEALTH_KEYS
+        },
+        "concurrency": {
+            "douyin": _bounded_int_setting(
+                db, CREATOR_SYNC_DOUYIN_CONCURRENCY_KEY, 1, maximum=4
+            ),
+            "bilibili": _bounded_int_setting(
+                db, CREATOR_SYNC_BILIBILI_CONCURRENCY_KEY, 2, maximum=4
+            ),
+            "xiaohongshu": _bounded_int_setting(
+                db, CREATOR_SYNC_XHS_CONCURRENCY_KEY, 1, maximum=4
+            ),
+        },
+        "xhs_cookie_masked": mask_key(xhs_cookie),
+    }
+    if include_secret:
+        result["xhs_cookie"] = xhs_cookie
+    return result
+
+
+def set_creator_sync_config(
+    db: Session,
+    *,
+    enabled: bool,
+    xhs_cookie: str | None = None,
+    douyin_concurrency: int = 1,
+    bilibili_concurrency: int = 2,
+    xiaohongshu_concurrency: int = 1,
+) -> dict[str, Any]:
+    """Persist the feature flag, encrypted XHS credential and safe limits."""
+    set_setting(db, CREATOR_SYNC_ENABLED_KEY, "true" if enabled else "false")
+    if xhs_cookie is not None and xhs_cookie.strip():
+        set_secret(db, CREATOR_SYNC_XHS_COOKIE_KEY, xhs_cookie.strip())
+        set_setting(db, CREATOR_SYNC_HEALTH_KEYS["xiaohongshu"], "false")
+    set_setting(
+        db,
+        CREATOR_SYNC_DOUYIN_CONCURRENCY_KEY,
+        str(max(1, min(int(douyin_concurrency), 4))),
+    )
+    set_setting(
+        db,
+        CREATOR_SYNC_BILIBILI_CONCURRENCY_KEY,
+        str(max(1, min(int(bilibili_concurrency), 4))),
+    )
+    set_setting(
+        db,
+        CREATOR_SYNC_XHS_CONCURRENCY_KEY,
+        str(max(1, min(int(xiaohongshu_concurrency), 4))),
+    )
+    return get_creator_sync_config(db)
+
+
+def record_creator_connector_test(
+    db: Session,
+    *,
+    platform: str,
+    healthy: bool,
+    tested_at: str,
+) -> dict[str, Any]:
+    if platform not in CREATOR_SYNC_HEALTH_KEYS:
+        raise ValueError("不支持的博主同步平台")
+    set_setting(db, CREATOR_SYNC_HEALTH_KEYS[platform], "true" if healthy else "false")
+    set_setting(db, CREATOR_SYNC_TESTED_AT_KEYS[platform], tested_at)
+    return get_creator_sync_config(db)
 
 
 def set_extraction_concurrency(

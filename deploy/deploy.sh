@@ -110,6 +110,8 @@ trap on_exit EXIT
 
 log "拉取最新代码..."
 git pull --ff-only origin master
+git submodule sync --recursive
+git submodule update --init --recursive
 
 log "更新后端依赖..."
 "$VENV/bin/pip" install -r "$APP_DIR/deploy/requirements-server.txt" -q

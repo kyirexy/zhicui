@@ -34,6 +34,8 @@ export interface CardData {
   transcript_raw?: string | null;
   transcript_chars?: number;
   ai_initialized?: boolean;
+  generation_status?: 'ready' | 'fallback';
+  generation_error?: string;
   video_title?: string;
   video_id?: string;
   cover_url?: string;
@@ -41,6 +43,13 @@ export interface CardData {
   platform?: string;
   source_kind?: string;
   source_recorded_at?: string;
+  caption?: string;
+  tags?: string[];
+  media_type?: string;
+  media_url?: string;
+  transcript_source?: string;
+  speech_ready?: boolean;
+  degraded?: boolean;
   /** New adaptive-profile fields (server-side defaults keep older cards working). */
   tone?: ContentTone;
   density?: ContentDensity;
@@ -49,6 +58,8 @@ export interface CardData {
   stats?: CardStat[];
   /** plan_id when the extract pipeline auto-created a Plan for this note. */
   plan_id?: string | null;
+  /** Optional on-demand visual enrichment; ordinary extraction never creates it. */
+  detailed_video_analysis?: DetailedVideoAnalysisSummary | null;
 }
 
 export interface Note {
@@ -65,12 +76,22 @@ export interface Note {
   platform?: string;
   source_kind?: string;
   source_recorded_at?: string;
+  caption?: string;
+  tags?: string[];
+  media_type?: string;
+  media_url?: string;
+  transcript_source?: string;
+  speech_ready?: boolean;
+  degraded?: boolean;
   transcript_chars?: number;
   ai_initialized: boolean;
+  generation_status?: 'ready' | 'fallback';
+  generation_error?: string;
   seo_meta?: string;
   tone?: ContentTone;
   density?: ContentDensity;
   section_count?: number;
+  detailed_video_analysis?: DetailedVideoAnalysisSummary | null;
 }
 
 export interface NoteDetail extends Note {
@@ -96,6 +117,413 @@ export interface ApiResponse<T> {
   success: boolean;
   data?: T;
   error?: string;
+  status?: number;
+}
+
+// ============================================================================
+// On-demand detailed video analysis
+// ============================================================================
+
+export type VideoAnalysisMethod = 'local_scene' | 'scene_frames_vlm' | 'native_video';
+export type VideoAnalysisTrigger = 'manual' | 'batch' | 'agent';
+export type VideoAnalysisRunStatus =
+  | 'quoting'
+  | 'awaiting_confirmation'
+  | 'prepared'
+  | 'reserved'
+  | 'queued'
+  | 'running'
+  | 'preparing'
+  | 'scene_detection'
+  | 'visual_analysis'
+  | 'summary_update'
+  | 'succeeded'
+  | 'partial'
+  | 'failed'
+  | 'cancelled'
+  | 'reauthorization_required';
+export type VideoAnalysisBillingStatus =
+  | 'none'
+  | 'quoted'
+  | 'reserved'
+  | 'captured'
+  | 'released'
+  | 'partially_released'
+  | 'refunded'
+  | 'not_billable'
+  | 'reconciliation_pending';
+export type VideoAnalysisItemStatus =
+  | VideoAnalysisRunStatus
+  | 'cached'
+  | 'unsupported';
+
+export interface VideoAnalysisOfferingLimits {
+  max_duration_seconds?: number;
+  max_frames?: number;
+  max_model_calls?: number;
+  max_provider_calls?: number;
+  timeout_seconds?: number;
+}
+
+export interface VideoAnalysisOfferingPrice {
+  is_free?: boolean;
+  base_points?: number;
+  per_minute_points?: number;
+  per_frame_points?: number;
+  per_media_unit_points?: number;
+  byok_processing_points?: number;
+  billing_unit?: 'run' | 'minute' | string;
+  billing_increment_seconds?: number;
+  min_points?: number;
+  max_points?: number;
+}
+
+export interface VideoAnalysisOffering {
+  id: string;
+  code?: string;
+  version?: number | string;
+  version_id?: string;
+  name: string;
+  description?: string;
+  method: VideoAnalysisMethod;
+  recommended?: boolean;
+  is_recommended?: boolean;
+  is_free?: boolean;
+  supports_byok?: boolean;
+  byok_allowed?: boolean;
+  byok_available?: boolean;
+  provider_id?: string | null;
+  provider_name?: string;
+  model?: string;
+  allowed_triggers?: VideoAnalysisTrigger[];
+  limits?: VideoAnalysisOfferingLimits;
+  price?: VideoAnalysisOfferingPrice;
+  free_quota?: {
+    remaining_count?: number | null;
+    remaining_minutes?: number | null;
+    period?: 'day' | 'month' | string;
+    unit?: 'run' | 'minute' | string;
+    units?: number;
+    scope?: string;
+  } | null;
+  estimated_seconds_min?: number;
+  estimated_seconds_max?: number;
+}
+
+export interface VideoAnalysisLedgerEntry {
+  id: string | number;
+  kind: 'grant' | 'purchase' | 'adjustment' | 'reserve' | 'capture' | 'release' | 'refund' | string;
+  points: number;
+  entry_type?: string;
+  available_delta?: number;
+  reserved_delta?: number;
+  available_after?: number;
+  reserved_after?: number;
+  balance_after?: number;
+  reason?: string;
+  run_id?: string | null;
+  user_id?: string;
+  username?: string;
+  created_at: string;
+}
+
+export interface VideoAnalysisAccount {
+  available_points: number;
+  reserved_points: number;
+  total_points?: number;
+  points_per_cny: number;
+  recent_ledger?: VideoAnalysisLedgerEntry[];
+}
+
+export interface VideoAnalysisCatalog {
+  enabled: boolean;
+  reason?: string | null;
+  items: VideoAnalysisOffering[];
+  offerings?: VideoAnalysisOffering[];
+  recommendation?: VideoAnalysisOffering | string | null;
+  recommended_offering_id?: string | null;
+  account?: VideoAnalysisAccount | null;
+}
+
+export interface VideoAnalysisQuoteLine {
+  label: string;
+  points: number;
+  note_id?: string;
+  quantity?: number;
+  unit?: string;
+}
+
+export interface VideoAnalysisQuote {
+  id?: string;
+  quote_id?: string;
+  offering_id?: string;
+  offering_version?: number | string;
+  estimated_points: number;
+  quoted_points?: number;
+  max_points: number;
+  max_reserved_points?: number;
+  expires_at?: string;
+  estimated_seconds_min?: number;
+  estimated_seconds_max?: number;
+  max_frames?: number;
+  max_model_calls?: number;
+  cached_count?: number;
+  process_count?: number;
+  unsupported_count?: number;
+  line_items?: VideoAnalysisQuoteLine[];
+}
+
+export interface VideoAnalysisItem {
+  id: string;
+  run_id?: string;
+  note_id: string;
+  title?: string;
+  status: VideoAnalysisItemStatus;
+  billing_status?: VideoAnalysisBillingStatus;
+  progress?: number;
+  stage?: string;
+  error?: string | null;
+  cached?: boolean;
+  supported?: boolean;
+  scene_count?: number;
+  frame_count?: number;
+  actual_points?: number;
+  reserved_points?: number;
+  released_points?: number;
+  analysis_id?: string | null;
+  updated_at?: string;
+}
+
+export interface VideoAnalysisRun {
+  id: string;
+  status: VideoAnalysisRunStatus;
+  billing_status?: VideoAnalysisBillingStatus;
+  trigger?: VideoAnalysisTrigger;
+  agent_thread_id?: string | null;
+  agent_turn_id?: string | null;
+  offering_id?: string;
+  offering_name?: string;
+  offering_version?: number | string;
+  use_byok?: boolean;
+  note_ids?: string[];
+  source_count?: number;
+  item_count?: number;
+  completed_count?: number;
+  failed_count?: number;
+  progress?: number;
+  current_stage?: string;
+  estimated_points?: number;
+  max_reserved_points?: number;
+  actual_points?: number;
+  released_points?: number;
+  provider_cost_micros?: number;
+  user_id?: string;
+  username?: string;
+  error?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  finished_at?: string | null;
+  quote?: VideoAnalysisQuote | null;
+  items?: VideoAnalysisItem[];
+}
+
+export interface VideoAnalysisPrepareResult {
+  run: VideoAnalysisRun;
+  quote?: VideoAnalysisQuote | null;
+  items: VideoAnalysisItem[];
+  requires_confirmation: boolean;
+  can_start?: boolean;
+  can_auto_start?: boolean;
+}
+
+export interface VideoAnalysisRunResult {
+  run: VideoAnalysisRun;
+  items: VideoAnalysisItem[];
+}
+
+export interface VideoAnalysisRunPage {
+  items: VideoAnalysisRun[];
+  total: number;
+  page?: number;
+  per_page?: number;
+}
+
+export interface UserVisionProviderConfig {
+  enabled: boolean;
+  configured?: boolean;
+  provider_name: string;
+  driver: string;
+  model: string;
+  api_base: string;
+  api_key_set: boolean;
+  api_key_masked?: string;
+  health_status?: 'untested' | 'healthy' | 'unhealthy' | string;
+  health_message?: string;
+  capabilities?: Record<string, boolean>;
+  supported_drivers?: Array<{
+    value: string;
+    label: string;
+    supports_images?: boolean;
+    description?: string;
+  }>;
+  last_test_ok?: boolean | null;
+  last_tested_at?: string | null;
+}
+
+export interface AdminVisionProvider {
+  id: string;
+  code?: string;
+  name: string;
+  driver: string;
+  api_base?: string;
+  api_key_set?: boolean;
+  api_key_masked?: string;
+  model?: string;
+  default_model?: string;
+  enabled: boolean;
+  capabilities?: {
+    supports_images?: boolean;
+    supports_native_video?: boolean;
+    supports_ocr?: boolean;
+    supports_audio?: boolean;
+    native_video_driver_installed?: boolean;
+    [key: string]: boolean | undefined;
+  };
+  metering?: {
+    unit?: string;
+    [key: string]: string | number | boolean | undefined;
+  };
+  limits?: {
+    max_images?: number;
+    max_duration_seconds?: number;
+    max_file_bytes?: number;
+    timeout_seconds?: number;
+    [key: string]: string | number | boolean | undefined;
+  };
+  cost?: {
+    cost_class?: 'unknown' | 'no_cost' | 'metered' | string;
+    micros_per_unit?: number;
+    [key: string]: string | number | boolean | undefined;
+  };
+  supports_images?: boolean;
+  supports_native_video?: boolean;
+  supports_ocr?: boolean;
+  supports_audio?: boolean;
+  supports_byok?: boolean;
+  free?: boolean;
+  metering_unit?: string;
+  cost_known?: boolean;
+  cost_per_unit_micros?: number | null;
+  max_images?: number;
+  max_duration_seconds?: number;
+  max_file_bytes?: number;
+  concurrency?: number;
+  max_concurrency?: number;
+  timeout_seconds?: number;
+  daily_budget_micros?: number;
+  health_status?: 'untested' | 'healthy' | 'unhealthy' | 'disabled' | string;
+  health_message?: string;
+  circuit_open_until?: string | null;
+  last_test_succeeded_at?: string | null;
+  last_tested_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AdminVideoAnalysisOffering extends VideoAnalysisOffering {
+  enabled?: boolean;
+  published?: boolean;
+  status?: 'draft' | 'published' | 'disabled' | string;
+  sort_order?: number;
+  provider_id?: string | null;
+  allow_manual?: boolean;
+  allow_batch?: boolean;
+  allow_agent?: boolean;
+  allow_byok?: boolean;
+  byok_allowed?: boolean;
+  triggers?: VideoAnalysisTrigger[];
+  pricing?: VideoAnalysisOfferingPrice;
+  fallback?: { mode?: 'none' | 'local_scene' | string; [key: string]: unknown };
+  current_version_id?: string | null;
+  next_version?: number;
+  free_quota_period?: 'day' | 'month' | string | null;
+  free_quota_count?: number | null;
+  free_quota_minutes?: number | null;
+  base_points?: number;
+  per_minute_points?: number;
+  per_frame_points?: number;
+  per_media_unit_points?: number;
+  min_points?: number;
+  max_points?: number;
+  created_at?: string;
+  updated_at?: string;
+  published_at?: string | null;
+}
+
+export interface AdminVideoAnalysisSettings {
+  enabled: boolean;
+  recommended_offering_id?: string | null;
+  quote_ttl_seconds: number;
+  agent_max_candidates: number;
+  agent_candidate_limit?: number;
+  global_concurrency?: number;
+  user_daily_points_limit: number;
+  run_points_limit: number;
+  scene_concurrency: number;
+  vision_concurrency: number;
+  retry_count: number;
+  stale_run_minutes: number;
+  temporary_file_ttl_minutes: number;
+  provider_failure_threshold?: number;
+  provider_cooldown_minutes?: number;
+}
+
+export interface AdminVideoAnalysisUsageSummary {
+  runs: number;
+  items: number;
+  succeeded: number;
+  partial: number;
+  failed: number;
+  cache_hits: number;
+  points_captured: number;
+  points_refunded: number;
+  provider_cost_micros: number;
+  failure_cost_micros: number;
+}
+
+export interface AdminVideoAnalysisUsageReport {
+  summary?: AdminVideoAnalysisUsageSummary;
+  runs?: number | VideoAnalysisRun[];
+  items?: number | VideoAnalysisRun[];
+  total?: number;
+  page?: number;
+  per_page?: number;
+  days?: number;
+  succeeded_runs?: number;
+  partial_runs?: number;
+  failed_runs?: number;
+  cancelled_runs?: number;
+  quoted_points?: number;
+  captured_points?: number;
+  released_points?: number;
+  refunded_points?: number;
+  platform_cost_micros?: number;
+  failure_cost_micros?: number;
+  active_runs?: number;
+  byok_runs?: number;
+  cache_hits?: number;
+}
+
+export interface DetailedVideoAnalysisSummary {
+  analysis_id?: string;
+  offering_name?: string;
+  offering_version?: number | string;
+  scene_count?: number;
+  frame_count?: number;
+  status?: 'succeeded' | 'partial';
+  updated_at?: string;
+  degraded_reason?: string | null;
+  degradation_reason?: string | null;
 }
 
 export type FeedbackCategory = 'bug' | 'suggestion' | 'content' | 'account' | 'other';
@@ -127,17 +555,19 @@ export interface NoteChatTurn {
   content: string;
 }
 
-export type NoteEvidenceSource = 'transcript' | 'summary';
+export type NoteEvidenceSource = 'transcript' | 'summary' | 'visual';
 export type ResearchScope = 'auto' | 'video_only';
 
 export interface NoteEvidence {
   quote: string;
   source: NoteEvidenceSource;
   position_percent?: number;
+  /** Server-attached timestamp for persisted AI visual observations. */
+  timestamp_ms?: number;
 }
 
 export type NoteTranscriptMode = 'full' | 'retrieved' | 'none';
-export type NoteAnswerMode = 'grounded' | 'creative';
+export type NoteAnswerMode = 'grounded' | 'creative' | 'visual';
 
 export interface NoteSourceContext {
   transcript_chars: number;
@@ -150,6 +580,9 @@ export interface NoteSourceContext {
   web_query_count?: number;
   web_source_count?: number;
   agent_trace?: ResearchAgentStage[];
+  source_mode?: 'text' | 'visual';
+  media_type?: 'gallery' | 'video';
+  visual_evidence_count?: number;
 }
 
 export interface WebResearchSource {
@@ -162,7 +595,7 @@ export interface WebResearchSource {
 }
 
 export interface ResearchAgentStage {
-  stage: 'plan' | 'retrieve' | 'web' | 'map' | 'synthesize';
+  stage: 'plan' | 'retrieve' | 'web' | 'map' | 'visual' | 'synthesize';
   label: string;
   detail: string;
 }
@@ -178,6 +611,11 @@ export interface NoteAskResult {
   web_sources: WebResearchSource[];
   research_scope: ResearchScope;
   agent_trace: ResearchAgentStage[];
+}
+
+export interface VisualAskResult extends Omit<NoteAskResult, 'note_id' | 'research_scope'> {
+  item_id: string;
+  research_scope: 'visual_only';
 }
 
 export interface DouyinLibraryStatus {
@@ -226,6 +664,10 @@ export interface DouyinCollectionJob {
   success: number;
   failed: number;
   skipped: number;
+  /** Requested range for the running metadata sync. */
+  target?: number;
+  /** Real, de-duplicated items read so far; separate from final success. */
+  processed?: number;
   error?: string | null;
   mode?: DouyinSourceMode | null;
   temporary_restored?: number;
@@ -244,17 +686,19 @@ export interface DouyinLibraryItem {
   publish_timestamp?: number | null;
   source_rank?: number | null;
   source_synced_at?: string;
-  source_mode: DouyinSourceMode | 'unknown';
+  source_mode: DouyinSourceMode | 'unknown' | 'import';
   source_url: string;
   media_url: string;
   cover_url: string;
   cover_proxy_url?: string;
+  gallery_images?: string[];
   can_extract: boolean;
   extracted: boolean;
   extracted_note_id?: string | null;
   transcript_chars: number;
   ai_initialized: boolean;
   card_type?: CardType | null;
+  platform?: 'douyin' | 'bilibili' | 'xiaohongshu' | string;
 }
 
 export interface DouyinLibraryListResult {
@@ -303,6 +747,7 @@ export interface DouyinBatchExtractionJob {
   job_id: string;
   operation: DouyinBatchExtractionOperation;
   status: 'running' | 'success' | 'partial' | 'failed';
+  error?: string;
   created_at: string;
   started_at: string;
   finished_at?: string | null;
@@ -327,6 +772,129 @@ export interface DouyinVideoWorkspace {
   };
 }
 
+export type PlatformLibraryPlatform = 'bilibili' | 'xiaohongshu';
+export type LibraryPlatformFilter = 'all' | 'douyin' | PlatformLibraryPlatform;
+
+export interface PlatformLibraryItem {
+  id: string;
+  video_id: string;
+  title: string;
+  platform: PlatformLibraryPlatform;
+  caption: string;
+  author_name: string;
+  cover_url: string;
+  source_url: string;
+  media_url: string;
+  media_type: 'video' | 'image' | string;
+  tags: string[];
+  published_at: string;
+  imported_at: string;
+  transcript_chars: number;
+  transcript_source: 'manual-subtitle' | 'automatic-subtitle' | 'cloud-asr' | 'local-asr' | 'caption-only' | string;
+  speech_ready: boolean;
+  degraded: boolean;
+  ai_initialized: boolean;
+  card_type?: CardType | null;
+  note: NoteDetail;
+}
+
+export interface PlatformLibraryListResult {
+  items: PlatformLibraryItem[];
+  total: number;
+}
+
+export interface PlatformLibraryImportEntry {
+  input: string;
+  success: boolean;
+  status: 'imported' | 'reused' | 'failed';
+  item?: PlatformLibraryItem;
+  platform?: PlatformLibraryPlatform | 'unknown';
+  error?: string;
+}
+
+export interface PlatformLibraryImportResult {
+  items: PlatformLibraryImportEntry[];
+  total: number;
+  success: number;
+  failed: number;
+}
+
+export type CreatorSourcePlatform = 'douyin' | 'bilibili' | 'xiaohongshu';
+export type CreatorSyncStage =
+  | 'queued'
+  | 'resolving'
+  | 'discovering'
+  | 'importing'
+  | 'transcribing'
+  | 'succeeded'
+  | 'partial'
+  | 'failed'
+  | 'cancelled';
+
+export interface CreatorSyncRunItem {
+  external_id: string;
+  status: 'imported' | 'reused' | 'removed' | 'failed' | string;
+  note_id?: string | null;
+  error_code?: string;
+}
+
+export interface CreatorSyncRun {
+  id: string;
+  source_id: string;
+  platform: CreatorSourcePlatform;
+  status: CreatorSyncStage;
+  requested_limit: 20 | 50 | 100;
+  checked_count: number;
+  new_count: number;
+  reused_count: number;
+  failed_count: number;
+  skipped_count: number;
+  results: CreatorSyncRunItem[];
+  error_code: string;
+  error_message: string;
+  cancellation_requested: boolean;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  updated_at: string;
+}
+
+export interface CreatorSource {
+  id: string;
+  platform: CreatorSourcePlatform;
+  creator_id: string;
+  profile_url: string;
+  display_name: string;
+  avatar_url: string;
+  status: 'active' | 'disabled' | 'unavailable';
+  last_synced_at?: string | null;
+  last_success_at?: string | null;
+  last_error_code: string;
+  created_at: string;
+  updated_at: string;
+  last_run?: CreatorSyncRun | null;
+}
+
+export interface CreatorSourcePreview {
+  platform: CreatorSourcePlatform;
+  creator_id: string;
+  profile_url: string;
+  display_name: string;
+  avatar_url: string;
+}
+
+export interface CreatorSourceCatalog {
+  enabled: boolean;
+  platforms: Record<CreatorSourcePlatform, boolean>;
+  limits: Array<20 | 50 | 100>;
+  max_sources: number;
+}
+
+export interface CreatorSourceListResult {
+  catalog: CreatorSourceCatalog;
+  items: CreatorSource[];
+}
+
 export interface PlanAgentResult {
   plan: PlanData;
   created: boolean;
@@ -345,6 +913,7 @@ export interface LibrarySourceContext {
   scanned_chunks: number;
   selected_chunks: number;
   ai_summary_count: number;
+  visual_source_count?: number;
   matched_note_count: number;
   context_note_count: number;
   research_mode: 'fast' | 'deep';
@@ -420,7 +989,13 @@ export type AgentSourceScope =
   | 'post'
   | 'selected';
 export type AgentSourceMode = 'all' | DouyinSourceMode;
-export type AgentThreadStatus = 'ready' | 'running' | 'failed' | 'archived';
+export type AgentThreadStatus =
+  | 'ready'
+  | 'running'
+  | 'awaiting_approval'
+  | 'running_analysis'
+  | 'failed'
+  | 'archived';
 export type AgentDeliveryChannel = 'email';
 export type AgentAutomationSourceScope = 'yesterday' | 'yesterday_new';
 export type AgentAutomationStatus =
@@ -440,6 +1015,7 @@ export type AgentAutomationDeliveryStatus =
 export interface AgentSource {
   note_id: string;
   video_id?: string;
+  platform?: 'douyin' | 'bilibili' | 'xiaohongshu' | string;
   title: string;
   author_name: string;
   cover_url: string;
@@ -451,12 +1027,25 @@ export interface AgentSource {
   transcript_chars: number;
   ready?: boolean;
   ai_initialized?: boolean;
+  visual_analysis?: {
+    status: string;
+    scene_count?: number;
+    frame_count?: number;
+    updated_at?: string | null;
+  } | null;
   first_seen_at?: string | null;
   source_added_at?: string | null;
+  match?: {
+    rank: number;
+    score: number;
+    fields: Array<'title' | 'author' | 'summary' | 'transcript'>;
+    snippet: string;
+  };
 }
 
 export interface AgentSourceList {
   items: AgentSource[];
+  included_items?: AgentSource[];
   total: number;
   ready_count?: number;
   scope?: Exclude<AgentSourceScope, 'selected'>;
@@ -469,9 +1058,18 @@ export interface AgentSourceList {
   as_of?: string | null;
 }
 
+export interface AgentSourceSearchResult extends AgentSourceList {
+  query: string;
+  search_mode: 'smart' | 'keyword_fallback';
+  expanded_queries: string[];
+  matched_count: number;
+  scanned_count: number;
+}
+
 export interface AgentMessage {
   id: string;
   thread_id: string;
+  turn_id?: string | null;
   role: NoteChatRole;
   content: string;
   created_at: string;
@@ -485,6 +1083,19 @@ export interface AgentMessage {
   web_sources?: WebResearchSource[];
   result?: Partial<LibraryAskResult> & {
     note_ids?: string[];
+    type?:
+      | 'video_analysis_approval_required'
+      | 'video_analysis_analysis_started'
+      | 'video_analysis_cancelled'
+      | 'video_analysis_resume_failed'
+      | string;
+    video_analysis?: VideoAnalysisPrepareResult | VideoAnalysisRunResult | {
+      run?: VideoAnalysisRun;
+      quote?: VideoAnalysisQuote | null;
+      items?: VideoAnalysisItem[];
+      requires_confirmation?: boolean;
+      can_start?: boolean;
+    };
   };
 }
 
@@ -531,6 +1142,32 @@ export interface AgentMessageResult {
   thread: AgentThread;
   user_message: AgentMessage;
   assistant_message: AgentMessage;
+  terminal?: 'approval_required' | 'analysis_started' | 'done' | 'cancelled';
+  video_analysis?: VideoAnalysisPrepareResult | VideoAnalysisRunResult | Record<string, unknown>;
+}
+
+export type AgentStreamStage =
+  | 'queued'
+  | 'reading'
+  | 'planning'
+  | 'scanning'
+  | 'ranking'
+  | 'researching'
+  | 'web'
+  | 'synthesizing'
+  | 'verifying'
+  | 'finalizing'
+  | 'completed';
+
+export interface AgentStreamProgress {
+  stage: AgentStreamStage;
+  message: string;
+  source_count?: number;
+  matched_source_count?: number;
+  selected_chunk_count?: number;
+  context_source_count?: number;
+  evidence_count?: number;
+  web_source_count?: number;
 }
 
 export interface AgentAutomation {
@@ -625,10 +1262,10 @@ export interface PaginatedResponse<T> {
 
 export const CARD_TYPE_CONFIG: Record<CardType, { emoji: string; label: string; accent: string }> = {
   recipe: { emoji: '🍳', label: '食谱', accent: '#f97316' },
-  insight: { emoji: '💡', label: '洞察', accent: '#10b981' },
+  insight: { emoji: '💡', label: '洞察', accent: '#303034' },
   history: { emoji: '📚', label: '历史', accent: '#f59e0b' },
   product: { emoji: '🛒', label: '产品', accent: '#f43f5e' },
-  plan: { emoji: '📋', label: '计划', accent: '#6366f1' },
+  plan: { emoji: '📋', label: '计划', accent: '#55555c' },
   general: { emoji: '📝', label: '通用', accent: '#64748b' },
 };
 
@@ -649,6 +1286,10 @@ export interface PlanTask {
   frequency?: string | null;
   details?: PlanField[];
   priority?: PlanPriority;
+  position?: number;
+  focus_date?: string | null;
+  focus_order?: number | null;
+  completed_at?: string | null;
 }
 
 export interface PlanField {
@@ -676,6 +1317,8 @@ export interface PlanData {
   tasks: PlanTask[];
   days: PlanDay[];
   status: 'draft' | 'active' | 'done';
+  start_date?: string | null;
+  completed_at?: string | null;
   total_days?: number;
   created_at?: string;
   updated_at?: string;
@@ -691,22 +1334,89 @@ export interface PlanFocusTask {
   duration_minutes?: number | null;
   frequency?: string | null;
   priority: PlanPriority;
+  position?: number;
+  focus_date?: string | null;
+  focus_order?: number | null;
+  recommendation_reason?: string | null;
+  note_id?: string | null;
 }
 
 export interface PlanOverview {
   summary: PlanStats;
+  date: string;
+  focus: PlanFocusTask[];
+  suggestions: PlanFocusTask[];
   today: PlanFocusTask[];
   overdue: PlanFocusTask[];
   upcoming: PlanFocusTask[];
+  unscheduled: PlanFocusTask[];
+}
+
+export interface PlanWeeklyReviewSummary {
+  completed_tasks: number;
+  scheduled_tasks: number;
+  carried_over_tasks: number;
+  overdue_tasks: number;
+  completed_plans: number;
+}
+
+export interface PlanWeeklyReviewRow {
+  plan_id: string;
+  plan_title: string;
+  completed: number;
+  scheduled: number;
+  carried_over: number;
+  overdue: number;
+  open: number;
+}
+
+export interface PlanWeeklyReview {
+  week_start: string;
+  week_end: string;
+  summary: PlanWeeklyReviewSummary;
+  plans: PlanWeeklyReviewRow[];
+  partial_history: boolean;
+  history_started_at?: string | null;
+  history_note: string;
+}
+
+export interface PlanCoachDiff {
+  additions: Array<{ task_id: string; title: string }>;
+  modifications: Array<{
+    task_id: string;
+    before: Record<string, unknown>;
+    after: Record<string, unknown>;
+  }>;
+  removals: Array<{ task_id: string; title: string }>;
+  completed_tasks_preserved: number;
+}
+
+export interface PlanCoachPreview {
+  plan_id: string;
+  base_updated_at: string;
+  change_summary: string;
+  diff: PlanCoachDiff;
+  operations: Array<Record<string, unknown>>;
+  preview_plan: PlanData;
+  source_context?: Record<string, unknown>;
 }
 
 
 /** Day/progress helpers for PlanData. */
 export function getPlanCurrentDay(plan: PlanData): number {
-  if (!plan.created_at) return 1;
-  const start = new Date(plan.created_at);
-  const now = new Date();
-  const diffDays = Math.floor((now.getTime() - start.getTime()) / 86400000);
+  let startDate = plan.start_date;
+  if (!startDate && plan.created_at) {
+    startDate = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date(plan.created_at));
+  }
+  if (!startDate) return 1;
+  const start = new Date(`${startDate}T00:00:00+08:00`);
+  const today = new Date(`${getChinaToday()}T00:00:00+08:00`);
+  const diffDays = Math.floor((today.getTime() - start.getTime()) / 86400000);
   return Math.max(1, diffDays + 1);
 }
 
@@ -809,6 +1519,8 @@ export interface PlanStats {
   open_tasks: number;
   due_today: number;
   overdue_tasks: number;
+  focus_tasks?: number;
+  unscheduled_tasks?: number;
 }
 
 // ============================================================================
@@ -839,6 +1551,12 @@ export type DesktopSidebarAppearance = AppTheme;
 /** Windows desktop workspace spacing */
 export type DesktopLayoutDensity = 'comfortable' | 'compact';
 
+/** Automatic Douyin collection refresh interval on the current device, in minutes. */
+export type LibraryAutoSyncIntervalMinutes = number;
+
+/** Number of video sources loaded into the question workspace browser. */
+export type AgentSourceDisplayLimit = 100 | 200 | 500 | 1000;
+
 /** User settings shape persisted to localStorage */
 export interface UserSettings {
   cardStyle: CardStyle;
@@ -846,6 +1564,9 @@ export interface UserSettings {
   theme: AppTheme;
   desktopSidebar?: DesktopSidebarAppearance;
   desktopDensity: DesktopLayoutDensity;
+  localWorkspaceCache: boolean;
+  libraryAutoSyncIntervalMinutes: LibraryAutoSyncIntervalMinutes;
+  agentSourceDisplayLimit: AgentSourceDisplayLimit;
 }
 
 /** Per-note override (volatile component state, not persisted) */
@@ -892,4 +1613,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   density: 'medium',
   theme: 'light',
   desktopDensity: 'comfortable',
+  localWorkspaceCache: true,
+  libraryAutoSyncIntervalMinutes: 0,
+  agentSourceDisplayLimit: 200,
 };

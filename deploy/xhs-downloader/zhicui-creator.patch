@@ -1,0 +1,195 @@
+diff --git a/source/application/app.py b/source/application/app.py
+index 769b7d5..0000000 100644
+--- a/source/application/app.py
++++ b/source/application/app.py
+@@ -15,8 +15,8 @@ from urllib.parse import urlparse
+ 
+ from fastapi import FastAPI
+ from fastapi.responses import RedirectResponse
+ from fastmcp import FastMCP
+-from pydantic import Field
++from pydantic import BaseModel, Field
+ from pyperclip import copy, paste
+ from rich import print
+ from uvicorn import Config, Server
+@@ -57,6 +57,106 @@ from .video import Video
+ __all__ = ["XHS"]
+ 
+ 
++class ZhicuiCreatorParams(BaseModel):
++    profile_url: str
++    cookie: str
++    download: bool = False
++
++
++class ZhicuiCreatorWorksParams(BaseModel):
++    creator_id: str
++    limit: int = 50
++    cookie: str
++    download: bool = False
++
++
++def _zhicui_unwrap(value):
++    """Remove Vue ref wrappers without returning an upstream response object."""
++    while isinstance(value, dict):
++        if "_rawValue" in value:
++            value = value["_rawValue"]
++            continue
++        if "_value" in value:
++            value = value["_value"]
++            continue
++        break
++    return value
++
++
++def _zhicui_profile_cards(state: dict) -> list[dict]:
++    user = _zhicui_unwrap((state or {}).get("user") or {})
++    notes = _zhicui_unwrap((user or {}).get("notes") or {}) if isinstance(user, dict) else {}
++    groups = list(notes.values()) if isinstance(notes, dict) else notes
++    if not isinstance(groups, list):
++        return []
++    cards: list[dict] = []
++    for group in groups:
++        group = _zhicui_unwrap(group)
++        if not isinstance(group, list):
++            continue
++        for raw in group:
++            if not isinstance(raw, dict):
++                continue
++            card = _zhicui_unwrap(raw.get("noteCard") or raw.get("note_card") or {})
++            note_id = str(raw.get("id") or raw.get("noteId") or "").strip()
++            token = str(raw.get("xsecToken") or raw.get("xsec_token") or "").strip()
++            if isinstance(card, dict) and note_id:
++                cards.append({"id": note_id, "token": token, "card": card})
++    seen: set[str] = set()
++    return [item for item in cards if not (item["id"] in seen or seen.add(item["id"]))]
++
++
++def _zhicui_creator_payload(creator_id: str, cards: list[dict]) -> dict:
++    first = cards[0]["card"] if cards else {}
++    user = _zhicui_unwrap(first.get("user") or {}) if isinstance(first, dict) else {}
++    avatar = ""
++    if isinstance(user, dict):
++        images = user.get("avatar") or user.get("image") or user.get("images") or ""
++        if isinstance(images, str):
++            avatar = images
++        elif isinstance(images, dict):
++            avatar = str(images.get("urlDefault") or images.get("url") or "")
++    return {
++        "creator_id": creator_id,
++        "display_name": str(
++            (user.get("nickName") or user.get("nickname") or "小红书博主")
++            if isinstance(user, dict) else "小红书博主"
++        )[:160],
++        "avatar_url": avatar[:2048],
++    }
++
++
++def _zhicui_work_payload(item: dict) -> dict:
++    card = item["card"]
++    note_id = item["id"]
++    user = _zhicui_unwrap(card.get("user") or {})
++    cover = _zhicui_unwrap(card.get("cover") or {})
++    work_type = str(card.get("type") or "").lower()
++    if not work_type and card.get("video"):
++        work_type = "video"
++    canonical = f"https://www.xiaohongshu.com/explore/{note_id}"
++    token = item.get("token") or ""
++    fetch_url = canonical + (
++        f"?xsec_token={token}&xsec_source=pc_user" if token else ""
++    )
++    return {
++        "note_id": note_id,
++        "title": str(card.get("displayTitle") or card.get("title") or "小红书作品")[:240],
++        "desc": str(card.get("desc") or "")[:2000],
++        "type": "video" if work_type == "video" else "image",
++        "author_name": str(
++            (user.get("nickName") or user.get("nickname") or "")
++            if isinstance(user, dict) else ""
++        )[:160],
++        "source_url": canonical,
++        "fetch_url": fetch_url,
++        "cover_url": str(
++            (cover.get("urlDefault") or cover.get("url") or "")
++            if isinstance(cover, dict) else ""
++        )[:2048],
++    }
++
++
+ def data_cache(function):
+     async def inner(
+         self,
+@@ -737,6 +837,73 @@ class XHS:
+         async def index():
+             return RedirectResponse(url=REPOSITORY)
+ 
++        async def creator_state(profile_url: str, cookie: str):
++            parsed = urlparse(profile_url)
++            if (
++                parsed.scheme != "https"
++                or parsed.hostname != "www.xiaohongshu.com"
++                or not parsed.path.startswith("/user/profile/")
++            ):
++                return "", [], "仅支持小红书官方博主主页"
++            creator_id = parsed.path.split("/user/profile/", 1)[1].split("/", 1)[0]
++            if not creator_id or not creator_id.replace("-", "").replace("_", "").isalnum():
++                return "", [], "博主 ID 无效"
++            html = await self.html.request_url(profile_url, cookie=cookie)
++            try:
++                raw_state = self.convert._convert_object(
++                    self.convert._extract_object(html)
++                )
++            except Exception:
++                return creator_id, [], "博主主页数据格式异常"
++            return creator_id, _zhicui_profile_cards(raw_state), ""
++
++        @server.post(
++            "/xhs/creator",
++            summary="解析公开博主资料（知萃扩展）",
++            tags=["Zhicui"],
++        )
++        async def zhicui_creator(params: ZhicuiCreatorParams):
++            creator_id, cards, error = await creator_state(
++                params.profile_url,
++                params.cookie,
++            )
++            if error:
++                return {"message": error, "data": None}
++            return {
++                "message": "获取博主资料成功",
++                "data": _zhicui_creator_payload(creator_id, cards),
++            }
++
++        @server.post(
++            "/xhs/creator/works",
++            summary="获取公开博主最近作品（知萃扩展）",
++            tags=["Zhicui"],
++        )
++        async def zhicui_creator_works(params: ZhicuiCreatorWorksParams):
++            limit = params.limit if params.limit in {20, 50, 100} else 50
++            profile_url = (
++                "https://www.xiaohongshu.com/user/profile/"
++                + params.creator_id
++            )
++            creator_id, cards, error = await creator_state(
++                profile_url,
++                params.cookie,
++            )
++            if error:
++                return {"message": error, "data": None}
++            # The main service performs a second video-only filter.  No media
++            # is downloaded here and the Cookie is never echoed in a model.
++            return {
++                "message": "获取博主作品成功",
++                "data": {
++                    "creator_id": creator_id,
++                    "items": [
++                        _zhicui_work_payload(item)
++                        for item in cards[:limit]
++                    ],
++                },
++            }
++
+         @server.post(
+             "/xhs/detail",
+             summary=_("获取作品数据及下载地址"),

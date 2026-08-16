@@ -3,6 +3,9 @@ Application configuration using pydantic-settings.
 Reads from environment variables with sensible defaults for local development.
 """
 
+import os
+from urllib.parse import urlparse
+
 from pydantic_settings import BaseSettings
 
 
@@ -19,6 +22,15 @@ class Settings(BaseSettings):
     LLM_API_BASE: str = ""  # 留空走 DeepSeek 官方；或填入 Anthropic 兼容端点 URL
     LLM_API_KEY: str = ""
 
+    # Optional server-managed OmniRoute gateway. The key is backend-only and
+    # must never be returned to clients. Leave the base/key empty to disable.
+    OMNIROUTE_API_BASE: str = ""
+    OMNIROUTE_API_KEY: str = ""
+    OMNIROUTE_MODEL: str = "auto"
+    # Optional browser-facing URL for the separately authenticated OmniRoute
+    # admin console. It is only returned to Zhicui administrators.
+    OMNIROUTE_DASHBOARD_URL: str = ""
+
     # SiliconFlow ASR endpoint and model (used by the DouyinProcessor)
     ASR_API_BASE_URL: str = "https://api.siliconflow.cn/v1/audio/transcriptions"
     ASR_MODEL: str = "FunAudioLLM/SenseVoiceSmall"
@@ -26,6 +38,13 @@ class Settings(BaseSettings):
     # Optional companion service used by the batch Douyin video library.
     # The main app stays fully functional when this service is offline.
     DOUYIN_DOWNLOADER_URL: str = "http://127.0.0.1:9000"
+
+    # Optional GPL-3.0 XHS-Downloader sidecar. It runs as a separate process;
+    # the application only consumes its JSON API and falls back to the legacy
+    # metadata scraper when the sidecar is unavailable.
+    XHS_DOWNLOADER_API_BASE: str = "http://127.0.0.1:5556"
+    XHS_DOWNLOADER_TIMEOUT_SECONDS: int = 20
+    XHS_COOKIE: str = ""
 
     HOST: str = "0.0.0.0"
     PORT: int = 8000
@@ -63,11 +82,44 @@ class Settings(BaseSettings):
     AGENT_AUTOMATION_ENABLED: bool = True
     AGENT_AUTOMATION_POLL_SECONDS: int = 30
 
+    # On-demand detailed video analysis. Keep the feature off until an
+    # administrator has tested and published at least one Offering. The
+    # first database-backed worker is intentionally single-concurrency.
+    VIDEO_ANALYSIS_ENABLED: bool = False
+    VIDEO_ANALYSIS_MAX_WORKERS: int = 1
+    VIDEO_ANALYSIS_POLL_SECONDS: int = 5
+    VIDEO_ANALYSIS_HEARTBEAT_SECONDS: int = 15
+    VIDEO_ANALYSIS_RECOVERY_SECONDS: int = 60
+    VIDEO_ANALYSIS_STALE_SECONDS: int = 900
+    VIDEO_ANALYSIS_MAX_DOWNLOAD_BYTES: int = 800 * 1024 * 1024
+    VIDEO_ANALYSIS_DOWNLOAD_CONNECT_TIMEOUT_SECONDS: int = 10
+    VIDEO_ANALYSIS_DOWNLOAD_TIMEOUT_SECONDS: int = 300
+    VIDEO_ANALYSIS_FRAME_MAX_WIDTH: int = 1024
+    VIDEO_ANALYSIS_JPEG_QUALITY: int = 85
+
     model_config = {
-        "env_file": ".env",
+        # Keep local OmniRoute credentials separate from the application's
+        # existing environment file. The second file is optional and ignored
+        # by Git, while later values intentionally override matching entries.
+        "env_file": (".env", ".env.omniroute.local"),
         "env_file_encoding": "utf-8",
         "extra": "ignore",
     }
 
 
 settings = Settings()
+
+
+def _ensure_loopback_no_proxy(url: str) -> None:
+    """让本机 AI 网关绕过 Windows/系统级 HTTP 代理。"""
+    hostname = (urlparse(url).hostname or "").lower()
+    if hostname not in {"127.0.0.1", "localhost", "::1"}:
+        return
+    required = {"127.0.0.1", "localhost", "::1"}
+    for variable in ("NO_PROXY", "no_proxy"):
+        existing = {item.strip() for item in os.environ.get(variable, "").split(",") if item.strip()}
+        os.environ[variable] = ",".join(sorted(existing | required))
+
+
+_ensure_loopback_no_proxy(settings.OMNIROUTE_API_BASE)
+_ensure_loopback_no_proxy(settings.XHS_DOWNLOADER_API_BASE)

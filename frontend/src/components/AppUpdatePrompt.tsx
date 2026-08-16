@@ -23,6 +23,7 @@ import {
   type AndroidReleaseManifest,
   type RuntimeAppInfo,
 } from '@/lib/appUpdate';
+import { useAuth } from '@/lib/hooks/AuthContext';
 
 const DISMISSED_BUILD_KEY = 'zhicui_update_dismissed_build';
 
@@ -32,12 +33,14 @@ interface AvailableUpdate {
 }
 
 export default function AppUpdatePrompt() {
+  const { user, loading: authLoading } = useAuth();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [available, setAvailable] = useState<AvailableUpdate | null>(null);
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
+    if (authLoading || !user) return undefined;
     let active = true;
     const isDevelopmentPreview = (
       process.env.NODE_ENV === 'development'
@@ -77,9 +80,10 @@ export default function AppUpdatePrompt() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [authLoading, user]);
 
   useEffect(() => {
+    if (authLoading || !user) return undefined;
     const nativeAndroid = (
       Capacitor.isNativePlatform()
       && Capacitor.getPlatform() === 'android'
@@ -115,7 +119,7 @@ export default function AppUpdatePrompt() {
       disposed = true;
       if (listener) void listener.remove();
     };
-  }, []);
+  }, [authLoading, user]);
 
   useEffect(() => {
     if (available && !dialogRef.current?.open) {

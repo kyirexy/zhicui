@@ -166,9 +166,9 @@ export default function AppUpdateSettingsCard() {
         : '正在识别当前设备';
 
   return (
-    <section className="rounded-2xl border border-card-border bg-card-bg p-4 sm:p-5">
+    <section className="rounded-xl border border-card-border bg-card-bg p-4 sm:p-5">
       <header className="flex items-start gap-3">
-        <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 text-accent-emerald">
+        <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-accent-emerald">
           {mode === 'desktop' ? (
             <MonitorDown size={21} aria-hidden="true" />
           ) : mode === 'android' ? (
@@ -263,7 +263,7 @@ export default function AppUpdateSettingsCard() {
         {(mode === 'android' || mode === 'desktop') && (
           <button
             type="button"
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-card-border px-4 text-sm font-medium text-foreground transition-colors duration-150 hover:bg-foreground/5 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-card-border px-4 text-sm font-medium text-foreground transition-colors duration-150 hover:bg-foreground/5 disabled:cursor-not-allowed disabled:opacity-60"
             disabled={checking || desktopDownloading}
             onClick={checkForUpdate}
           >
@@ -274,7 +274,7 @@ export default function AppUpdateSettingsCard() {
         {androidHasUpdate && (
           <button
             type="button"
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-accent-emerald px-4 text-sm font-semibold text-white transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent-emerald px-4 text-sm font-semibold text-white transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
             disabled={opening}
             onClick={openAndroidDownload}
           >
@@ -285,7 +285,7 @@ export default function AppUpdateSettingsCard() {
         {desktopDownloaded && (
           <button
             type="button"
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-accent-emerald px-4 text-sm font-semibold text-white transition-opacity duration-150 hover:opacity-90 disabled:opacity-60"
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent-emerald px-4 text-sm font-semibold text-white transition-opacity duration-150 hover:opacity-90 disabled:opacity-60"
             disabled={opening}
             onClick={installDesktopUpdate}
           >
@@ -297,14 +297,14 @@ export default function AppUpdateSettingsCard() {
           <>
             <a
               href="/download/zhicui.apk"
-              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-accent-emerald px-4 text-sm font-semibold text-white transition-opacity duration-150 hover:opacity-90"
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent-emerald px-4 text-sm font-semibold text-white transition-opacity duration-150 hover:opacity-90"
             >
               <Smartphone size={17} aria-hidden="true" />
               下载 Android App
             </a>
             <a
               href={DESKTOP_DOWNLOAD_URL}
-              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-card-border px-4 text-sm font-semibold text-foreground transition-colors duration-150 hover:bg-foreground/5"
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-card-border px-4 text-sm font-semibold text-foreground transition-colors duration-150 hover:bg-foreground/5"
             >
               <MonitorDown size={17} aria-hidden="true" />
               下载 Windows 桌面端

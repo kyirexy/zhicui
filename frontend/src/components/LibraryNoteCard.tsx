@@ -61,7 +61,7 @@ function readableSummary(note: Note): string {
   ) {
     return '完整文案已经保留，可以打开详情继续整理这条资料。';
   }
-  return candidate || '这条资料已经整理成知识卡片，可以打开查看完整内容。';
+  return candidate || '这条资料已经保存为摘要笔记，可以打开继续查看。';
 }
 
 function platformLabel(platform?: string, sourceKind?: string): string {
@@ -95,7 +95,7 @@ export default function LibraryNoteCard({
       <Link
         href={`/notes?id=${note.id}`}
         className="knowledge-workspace-item__link knowledge-workspace-touch-target"
-        aria-label={`打开知识卡片：${note.title}`}
+        aria-label={`打开保存的摘要：${note.title}`}
       >
         <div className="knowledge-workspace-item__cover">
           {showCover ? (

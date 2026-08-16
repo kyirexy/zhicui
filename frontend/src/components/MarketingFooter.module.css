@@ -1,8 +1,9 @@
 .footer {
   position: relative;
   z-index: 2;
-  color: #d9e9e1;
-  background: #173129;
+  border-top: 1px solid #e1e1df;
+  color: #242426;
+  background: #ffffff;
 }
 
 .inner {
@@ -41,7 +42,7 @@
 
 .identity span {
   margin-top: 0.26rem;
-  color: rgba(217, 233, 225, 0.62);
+  color: #74747b;
   font-size: 0.72rem;
 }
 
@@ -58,7 +59,7 @@
   align-items: center;
   gap: 0.36rem;
   border-radius: 0.75rem;
-  color: rgba(235, 246, 240, 0.74);
+  color: #5f5f66;
   font-size: 0.72rem;
   font-weight: 620;
   text-decoration: none;
@@ -68,15 +69,15 @@
 }
 
 .inner nav a:hover {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.07);
+  color: #242426;
+  background: #f1f1ef;
 }
 
 .inner > p {
   grid-column: 1 / -1;
   padding-top: 1.4rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-  color: rgba(217, 233, 225, 0.42);
+  border-top: 1px solid #e1e1df;
+  color: #929298;
   font-size: 0.64rem;
 }
 

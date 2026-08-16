@@ -6,6 +6,7 @@ from typing import Literal
 from sqlalchemy.orm import Session
 
 from app.models.library_hidden_item import LibraryHiddenItem
+from app.models.creator_sync import CreatorSourceItem
 
 MAX_BATCH_REMOVE = 50
 HideMode = Literal["temporary", "permanent"]
@@ -153,7 +154,26 @@ def hide_aweme_ids(
             record.created_at = _utcnow()
             promoted_ids.append(aweme_id)
 
-    if new_ids or promoted_ids:
+    if mode == "permanent":
+        now = _utcnow()
+        (
+            db.query(CreatorSourceItem)
+            .filter(
+                CreatorSourceItem.user_id == user_id,
+                CreatorSourceItem.platform == "douyin",
+                CreatorSourceItem.external_id.in_(normalized),
+            )
+            .update(
+                {
+                    CreatorSourceItem.state: "removed",
+                    CreatorSourceItem.removed_at: now,
+                    CreatorSourceItem.note_id: None,
+                },
+                synchronize_session=False,
+            )
+        )
+
+    if new_ids or promoted_ids or mode == "permanent":
         db.commit()
     return {
         "removed": len(normalized),
@@ -203,7 +223,23 @@ def restore_permanent_aweme_ids(
         )
         .delete(synchronize_session=False)
     )
-    if restored:
+    creator_items_restored = (
+        db.query(CreatorSourceItem)
+        .filter(
+            CreatorSourceItem.user_id == user_id,
+            CreatorSourceItem.platform == "douyin",
+            CreatorSourceItem.external_id.in_(normalized),
+            CreatorSourceItem.state == "removed",
+        )
+        .update(
+            {
+                CreatorSourceItem.state: "discovered",
+                CreatorSourceItem.removed_at: None,
+            },
+            synchronize_session=False,
+        )
+    )
+    if restored or creator_items_restored:
         db.commit()
     return {
         "restored": int(restored or 0),

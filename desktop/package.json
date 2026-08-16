@@ -11,6 +11,7 @@
     "patch:builder": "node scripts/patch-electron-builder.mjs",
     "build": "npm run clean && tsc -p tsconfig.json",
     "dev": "npm run build && electron .",
+    "verify:platform-account": "npm run build && node scripts/verify-platform-account.mjs",
     "pack": "npm run build && npm run patch:builder && electron-builder --dir --win --x64",
     "dist:win": "npm run build && npm run patch:builder && electron-builder --win nsis --x64",
     "typecheck": "tsc -p tsconfig.json --noEmit"

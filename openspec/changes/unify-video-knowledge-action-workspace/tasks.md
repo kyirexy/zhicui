@@ -1,8 +1,8 @@
 ## 1. Shared product shell
 
-- [ ] 1.1 Create one typed navigation definition for 今日行动、视频资料、AI 助手、我的知识 and adopt it in Web, Electron, and mobile navigation
+- [x] 1.1 Create one typed navigation definition for 今日行动、视频资料、AI 助手、我的知识 and adopt it in Web, Electron, and mobile navigation
 - [ ] 1.2 Move settings, feedback, update, logout, Douyin connection, and admin entry into an accessible account menu
-- [ ] 1.3 Reduce the mobile bottom navigation to four 44px targets and preserve active states for legacy routes
+- [x] 1.3 Reduce the mobile bottom navigation to four 44px targets and preserve active states for legacy routes
 - [ ] 1.4 Add structured authentication/loading shells so protected routes never resolve to an empty page
 - [ ] 1.5 Replace remaining purple/indigo workspace accents with the shared neutral and mint semantic tokens
 
@@ -37,13 +37,13 @@
 - [ ] 5.1 Implement EvidenceCanvas using existing verified transcript and web evidence with video title, quote, document position, and available timestamp
 - [ ] 5.2 Add editable KnowledgeCardCanvas and PlanCanvas adapters around the existing card and plan APIs
 - [ ] 5.3 Update result actions so “保存为知识卡” and “转成行动计划” focus the artifact canvas instead of emitting long Markdown-only results
-- [ ] 5.4 Extract a shared single-video workspace with 知识卡、完整文稿、AI 问答、行动计划 tabs
+- [x] 5.4 Extract a shared single-video workspace with AI 助手、完整文稿、摘要笔记、行动计划 tabs and default to AI 助手
 - [ ] 5.5 Reuse the shared workspace from library detail and legacy notes detail routes while preserving their existing URLs
 - [ ] 5.6 Link transcript citations back to the shared detail, highlighted text, and video time when reliable timing exists
 
 ## 6. My knowledge workspace
 
-- [ ] 6.1 Reframe the notes list as knowledge outcomes with 最近整理、主题集合、已转为行动、全部成果 views
+- [ ] 6.1 Reframe the notes list as optional saved outcomes with 最近整理、主题集合、已转为行动、全部成果 views and remove card-count value framing
 - [ ] 6.2 Demote recipe, insight, history, product, plan, and general categories to secondary filters and metadata
 - [ ] 6.3 Remove video sync and duplicate video-management affordances from the knowledge workspace
 - [ ] 6.4 Add a persistence contract for saved multi-video topics and Agent answers, with per-user isolation and frozen source provenance

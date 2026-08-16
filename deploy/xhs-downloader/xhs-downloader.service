@@ -1,0 +1,19 @@
+[Unit]
+Description=Zhicui XHS-Downloader sidecar
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/zhicui/integrations/XHS-Downloader
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/zhicui/integrations/XHS-Downloader/.venv/bin/python main.py api
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,36 @@
+.page {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.page :global(.video-knowledge-page) {
+  max-width: none;
+  padding-bottom: 0;
+}
+
+.page :global(.video-knowledge-page)::before {
+  display: none;
+}
+
+.page :global(.video-knowledge-shell) {
+  border-radius: 12px;
+  background: var(--background);
+  box-shadow: none;
+}
+
+.page :global(.video-knowledge-media) {
+  background: var(--background-secondary);
+}
+
+.page :global(.video-knowledge-panel) {
+  background: var(--background);
+}
+
+@media (max-width: 767px) {
+  .page :global(.video-knowledge-shell) {
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
+  }
+}

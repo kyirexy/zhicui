@@ -351,12 +351,16 @@ def update_note_ai(db: Session, note: Note, ai_result: dict[str, Any]) -> Note:
     # later initializes or refreshes the AI card. The downloader's current
     # sync timestamp is not the original Douyin favourite timestamp.
     previous_source_meta: dict[str, Any] = {}
+    previous_detailed_analysis: dict[str, Any] = {}
     if note.ai_summary:
         try:
             previous_payload = json.loads(note.ai_summary)
             candidate = previous_payload.get("source_meta")
             if isinstance(candidate, dict):
                 previous_source_meta = candidate
+            detailed = previous_payload.get("detailed_video_analysis")
+            if isinstance(detailed, dict):
+                previous_detailed_analysis = detailed
         except (json.JSONDecodeError, TypeError):
             previous_source_meta = {}
     initialized_result = {**ai_result, "ai_initialized": True}
@@ -366,7 +370,57 @@ def update_note_ai(db: Session, note: Note, ai_result: dict[str, Any]) -> Note:
         if previous_source_meta.get("first_seen_at"):
             merged_source_meta["first_seen_at"] = previous_source_meta["first_seen_at"]
         initialized_result["source_meta"] = merged_source_meta
-    note.ai_summary = json.dumps(initialized_result, ensure_ascii=False)
+    # VideoAnalysis 是画面解析的 canonical 结果。普通 AI 摘要刷新只替换
+    # 文本卡内容，不能让已购/已生成的视觉证据从 UI 与 Agent 上下文消失。
+    canonical_analysis = None
+    try:
+        from app.models.video_analysis import VideoAnalysis
+
+        canonical_analysis = (
+            db.query(VideoAnalysis)
+            .filter(
+                VideoAnalysis.note_id == note.id,
+                VideoAnalysis.user_id == note.user_id,
+                VideoAnalysis.is_current.is_(True),
+                VideoAnalysis.status.in_(["succeeded", "partial"]),
+            )
+            .order_by(VideoAnalysis.updated_at.desc(), VideoAnalysis.revision.desc())
+            .first()
+        )
+    except Exception:
+        # 兼容尚未执行视频解析表迁移的旧部署启动窗口。
+        canonical_analysis = None
+
+    detailed_analysis = previous_detailed_analysis
+    analysis_id = str(detailed_analysis.get("analysis_id") or "")
+    offering_version_id = str(detailed_analysis.get("offering_version_id") or "")
+    source_fingerprint = str(detailed_analysis.get("source_fingerprint") or "")
+    analysis_status = str(detailed_analysis.get("status") or "")
+    if canonical_analysis is not None:
+        try:
+            canonical_payload = json.loads(canonical_analysis.result_json or "{}")
+        except (json.JSONDecodeError, TypeError):
+            canonical_payload = {}
+        if isinstance(canonical_payload, dict):
+            detailed_analysis = canonical_payload
+            analysis_id = canonical_analysis.id
+            offering_version_id = canonical_analysis.offering_version_id
+            source_fingerprint = canonical_analysis.source_fingerprint
+            analysis_status = canonical_analysis.status
+
+    if detailed_analysis:
+        from app.services.video_analysis_engine import merge_detailed_analysis_summary
+
+        note.ai_summary = merge_detailed_analysis_summary(
+            initialized_result,
+            detailed_analysis,
+            analysis_id=analysis_id,
+            offering_version_id=offering_version_id,
+            source_fingerprint=source_fingerprint,
+            status=analysis_status,
+        )
+    else:
+        note.ai_summary = json.dumps(initialized_result, ensure_ascii=False)
     note.ai_initialized = True
     note.card_type = ai_result.get("card_type", note.card_type)
     note.pitfall_rating = int(ai_result.get("pitfall_rating", note.pitfall_rating))

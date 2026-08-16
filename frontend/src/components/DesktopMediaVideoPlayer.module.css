@@ -1,0 +1,297 @@
+.shell {
+  position: absolute;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  inset: 0;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.shell :global(.video-knowledge-player) {
+  position: relative;
+  min-height: 0;
+  inset: auto;
+}
+
+.shell[data-orientation='portrait'] :global(.video-knowledge-player) {
+  width: min(100%, 34rem);
+  justify-self: center;
+}
+
+.shell[data-orientation='square'] :global(.video-knowledge-player) {
+  width: min(100%, 46rem);
+  justify-self: center;
+}
+
+.shell :global(.video-knowledge-play-cover > img),
+.shell :global(.video-knowledge-play-failure > img) {
+  object-fit: contain;
+  object-position: center;
+  background: #050807;
+}
+
+.coverFallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.72);
+  background:
+    radial-gradient(circle at 50% 35%, rgba(68, 142, 108, 0.28), transparent 40%),
+    #17211c;
+}
+
+.coverFallback small {
+  font-size: 0.72rem;
+}
+
+.spin {
+  animation: desktop-media-spin 850ms linear infinite;
+}
+
+.failureActions {
+  display: flex;
+  gap: 0.55rem;
+  align-items: center;
+  margin-top: 0.45rem;
+}
+
+.failureActions button,
+.failureActions a {
+  display: inline-flex;
+  min-height: 2rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.68rem;
+  border-radius: 0.58rem;
+  font-size: 0.72rem;
+  font-weight: 620;
+  text-decoration: none;
+}
+
+.failureActions button {
+  border: 0;
+  color: #143326;
+  background: #f1f1ef;
+  cursor: pointer;
+}
+
+.failureActions a {
+  color: rgba(255, 255, 255, 0.86);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.localBar {
+  display: flex;
+  min-height: 4.25rem;
+  gap: 0.7rem;
+  align-items: center;
+  padding: 0.78rem 0.9rem;
+  border-top: 1px solid var(--desktop-border, rgba(255, 255, 255, 0.1));
+  background: var(--desktop-surface-soft, rgba(255, 255, 255, 0.96));
+}
+
+.statusIcon {
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.62rem;
+  color: var(--desktop-muted, #647269);
+  background: var(--desktop-surface, #fff);
+}
+
+.statusIconCached {
+  color: var(--desktop-accent-strong, #303034);
+  background: var(--desktop-accent-soft, #f1f1ef);
+}
+
+.statusCopy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 0.18rem;
+}
+
+.statusCopy strong {
+  overflow: hidden;
+  color: var(--desktop-ink, #142019);
+  font-size: 0.76rem;
+  font-weight: 650;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusCopy > span:not(.progressTrack) {
+  overflow: hidden;
+  color: var(--desktop-muted, #647269);
+  font-size: 0.68rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusCopy > .directoryPath {
+  direction: rtl;
+  text-align: left;
+}
+
+.progressTrack {
+  overflow: hidden;
+  width: min(16rem, 100%);
+  height: 0.22rem;
+  margin-top: 0.2rem;
+  border-radius: 999px;
+  background: var(--desktop-border, rgba(36, 36, 38, 0.1));
+}
+
+.progressTrack i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--desktop-accent, #74747b);
+  transition: width 180ms ease;
+}
+
+.progressValue {
+  color: var(--desktop-muted, #647269);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.localActions,
+.confirmActions {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.localActions button,
+.confirmActions button,
+.saveAction {
+  display: inline-flex;
+  min-height: 2.05rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.32rem;
+  padding: 0.42rem 0.62rem;
+  border-radius: 0.56rem;
+  font-size: 0.68rem;
+  font-weight: 620;
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 180ms ease, background 180ms ease;
+}
+
+.localActions button {
+  border: 1px solid var(--desktop-border-strong, rgba(36, 36, 38, 0.16));
+  color: var(--desktop-ink, #142019);
+  background: var(--desktop-surface, #fff);
+}
+
+.localActions button:hover {
+  border-color: var(--desktop-accent, #74747b);
+}
+
+.localActions .removeAction {
+  color: var(--desktop-muted, #647269);
+}
+
+.confirmActions {
+  padding: 0.25rem;
+  border-radius: 0.62rem;
+  background: var(--desktop-surface, #fff);
+}
+
+.confirmActions span {
+  padding-left: 0.25rem;
+  color: var(--desktop-muted, #647269);
+  font-size: 0.66rem;
+}
+
+.confirmActions button {
+  border: 0;
+  color: var(--desktop-muted, #647269);
+  background: transparent;
+}
+
+.confirmActions button:first-of-type {
+  color: #9b3b32;
+  background: rgba(185, 66, 52, 0.09);
+}
+
+.saveAction {
+  border: 1px solid var(--desktop-ink, #142019);
+  color: white;
+  background: var(--desktop-ink, #142019);
+}
+
+.saveAction:hover {
+  background: color-mix(in srgb, var(--desktop-ink, #142019) 88%, white);
+}
+
+.saveAction:disabled { cursor: wait; opacity: 0.58; }
+
+.localActions button:active,
+.confirmActions button:active,
+.saveAction:active,
+.failureActions button:active {
+  transform: translateY(1px);
+}
+
+.localActions button:focus-visible,
+.confirmActions button:focus-visible,
+.saveAction:focus-visible,
+.failureActions button:focus-visible,
+.failureActions a:focus-visible {
+  outline: 2px solid var(--desktop-accent, #74747b);
+  outline-offset: 2px;
+}
+
+@keyframes desktop-media-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 760px) {
+  .localBar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .statusCopy {
+    min-width: calc(100% - 2.7rem);
+  }
+
+  .localActions,
+  .confirmActions,
+  .saveAction {
+    width: 100%;
+  }
+
+  .localActions button,
+  .confirmActions button {
+    flex: 1;
+  }
+
+  .progressValue {
+    margin-left: 2.7rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progressTrack i,
+  .localActions button,
+  .confirmActions button,
+  .saveAction,
+  .failureActions button {
+    transition: none;
+  }
+}

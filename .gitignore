@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 *.so
 .env
+.env.omniroute.local
 *.db
 *.egg-info/
 dist/
@@ -48,6 +49,18 @@ backend/package.json
 backend/package-lock.json
 picture/
 videos/
+
+# Agent tooling / runtime artifacts (never commit)
+.codex/
+.codex-runtime/
+.tmp/
+.playwright-mcp/
+.codex-frontend-*.log
+.pytest_cache/
+.hypothesis/
+
+# Third-party reference projects (not part of this repo)
+参考项目/
 
 # OpenSpec (keep changes tracked)
 # openspec/changes/ - tracked for project history

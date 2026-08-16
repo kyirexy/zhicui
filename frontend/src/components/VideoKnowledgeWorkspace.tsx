@@ -5,13 +5,11 @@ import { useSearchParams } from 'next/navigation';
 import {
   ArrowLeft,
   ArrowUpRight,
-  Bot,
+  BookOpenText,
   CalendarCheck2,
   CheckCircle2,
   ChevronRight,
   CircleAlert,
-  Clock3,
-  DatabaseZap,
   FileText,
   LoaderCircle,
   Play,
@@ -19,29 +17,35 @@ import {
   Sparkles,
   WandSparkles,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import ContentChat from '@/components/ContentChat';
+import DesktopMediaVideoPlayer from '@/components/DesktopMediaVideoPlayer';
+import DouyinGalleryViewer from '@/components/DouyinGalleryViewer';
 import TranscriptViewer from '@/components/TranscriptViewer';
+import VideoAnalysisEntry from '@/components/VideoAnalysisEntry';
 import {
   extractDouyinLibraryItem,
   getDouyinLibraryItem,
+  getPlatformLibraryItem,
+  initializePlatformLibraryItem,
   runNotePlanAgent,
 } from '@/lib/api';
 import {
-  CARD_TYPE_CONFIG,
   getPlanProgress,
+  type DouyinLibraryItem,
   type DouyinVideoWorkspace,
 } from '@/lib/types';
 
-type WorkspaceTab = 'chat' | 'transcript' | 'plan';
+type WorkspaceTab = 'assistant' | 'transcript' | 'summary' | 'plan';
 
 const TABS: Array<{
   id: WorkspaceTab;
   label: string;
-  Icon: typeof Bot;
+  Icon: typeof Sparkles;
 }> = [
-  { id: 'chat', label: 'AI 问答', Icon: Bot },
+  { id: 'assistant', label: '视频研伴', Icon: Sparkles },
   { id: 'transcript', label: '完整文案', Icon: FileText },
+  { id: 'summary', label: '摘要笔记', Icon: BookOpenText },
   { id: 'plan', label: '行动计划', Icon: CalendarCheck2 },
 ];
 
@@ -57,91 +61,6 @@ const REVISE_PROMPTS = [
   { label: '拆得更细', value: '把剩余任务拆得更具体，并标出最优先的三件事。' },
 ];
 
-function OnDemandVideoPlayer({
-  mediaUrl,
-  coverUrl,
-  title,
-  sourceUrl,
-}: {
-  mediaUrl: string;
-  coverUrl: string;
-  title: string;
-  sourceUrl: string;
-}) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [requested, setRequested] = useState(false);
-  const [started, setStarted] = useState(false);
-  const [failed, setFailed] = useState(false);
-
-  const startPlayback = () => {
-    if (requested) return;
-    setRequested(true);
-    setFailed(false);
-    const playback = videoRef.current?.play();
-    if (playback) {
-      void playback.catch(() => {
-        // 网络错误交给 video 的 onError 统一展示；浏览器策略拒绝时仍可用原生控件重试。
-      });
-    }
-  };
-
-  return (
-    <div className="video-knowledge-player">
-      <video
-        ref={videoRef}
-        src={mediaUrl}
-        poster={coverUrl || undefined}
-        controls={started}
-        playsInline
-        preload="none"
-        onPlaying={() => {
-          setStarted(true);
-          setFailed(false);
-        }}
-        onError={() => setFailed(true)}
-        aria-label={`播放视频：${title}`}
-      />
-
-      {!started && !failed && (
-        <button
-          type="button"
-          className={`video-knowledge-play-cover ${requested ? 'is-requested' : ''}`}
-          onClick={startPlayback}
-          disabled={requested}
-          aria-label={requested ? '正在准备视频播放' : `播放视频：${title}`}
-        >
-          {coverUrl ? <img src={coverUrl} alt="" aria-hidden="true" /> : null}
-          <span className="video-knowledge-play-shade" aria-hidden="true" />
-          <span className="video-knowledge-play-action">
-            {!requested && (
-              <span className="video-knowledge-play-icon" aria-hidden="true">
-                <Play size={28} fill="currentColor" />
-              </span>
-            )}
-            <strong>{requested ? '正在准备视频…' : '播放视频'}</strong>
-            <small>按需读取，不保存视频文件</small>
-          </span>
-        </button>
-      )}
-
-      {failed && (
-        <div className="video-knowledge-play-failure" role="alert">
-          {coverUrl ? <img src={coverUrl} alt="" aria-hidden="true" /> : null}
-          <span>
-            <CircleAlert size={20} />
-            <strong>视频暂时无法读取</strong>
-            <small>视频文件不会保存在知萃，可前往抖音继续观看。</small>
-            <a href={sourceUrl} target="_blank" rel="noreferrer">
-              打开原视频
-              <ArrowUpRight size={14} />
-            </a>
-          </span>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function formatDate(value: string): string {
   if (!value) return '已同步';
   const parsed = new Date(value);
@@ -153,11 +72,25 @@ function formatDate(value: string): string {
   }).format(parsed);
 }
 
+function formatSourceIdentity(item: DouyinLibraryItem): string {
+  if (item.platform === 'bilibili') return 'B站 · 导入资料';
+  if (item.platform === 'xiaohongshu') return '小红书 · 导入资料';
+  const source = item.source_mode === 'collect'
+    ? '收藏'
+    : item.source_mode === 'like'
+      ? '喜欢'
+      : item.source_mode === 'post'
+        ? '我的作品'
+        : '导入资料';
+  return `抖音 · ${source}`;
+}
+
 export default function VideoKnowledgeWorkspace() {
   const searchParams = useSearchParams();
   const awemeId = searchParams.get('id')?.trim() || '';
+  const importedNoteId = searchParams.get('note')?.trim() || '';
   const [workspace, setWorkspace] = useState<DouyinVideoWorkspace | null>(null);
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>('chat');
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>('assistant');
   const [loading, setLoading] = useState(true);
   const [extracting, setExtracting] = useState(false);
   const [initializingAi, setInitializingAi] = useState(false);
@@ -167,14 +100,16 @@ export default function VideoKnowledgeWorkspace() {
   const [error, setError] = useState('');
 
   const loadWorkspace = useCallback(async () => {
-    if (!awemeId) {
-      setError('缺少视频标识，请从视频资料库重新打开。');
+    if (!awemeId && !importedNoteId) {
+      setError('缺少视频标识，请从视频资料重新打开。');
       setLoading(false);
       return;
     }
     setLoading(true);
     setError('');
-    const response = await getDouyinLibraryItem(awemeId);
+    const response = importedNoteId
+      ? await getPlatformLibraryItem(importedNoteId)
+      : await getDouyinLibraryItem(awemeId);
     if (response.success && response.data) {
       setWorkspace(response.data);
     } else {
@@ -182,7 +117,7 @@ export default function VideoKnowledgeWorkspace() {
       setError(response.error || '这个视频暂时无法打开');
     }
     setLoading(false);
-  }, [awemeId]);
+  }, [awemeId, importedNoteId]);
 
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -191,6 +126,25 @@ export default function VideoKnowledgeWorkspace() {
 
   const note = workspace?.note ?? null;
   const plan = workspace?.plan ?? null;
+  const hasTranscript = Boolean(note?.transcript_raw?.trim());
+  const visualSource = workspace && (
+    workspace.item.media_type === 'gallery'
+      ? (workspace.item.gallery_images?.length || 0) > 0
+      : Boolean(workspace.item.media_url)
+  ) ? {
+    itemId: workspace.item.aweme_id,
+    mediaType: workspace.item.media_type === 'gallery' ? 'gallery' as const : 'video' as const,
+    imageCount: workspace.item.media_type === 'gallery'
+      ? workspace.item.gallery_images?.length || 0
+      : undefined,
+  } : null;
+  const summaryGenerationFailed = Boolean(
+    note && (
+      note.generation_status === 'fallback'
+      || note.key_insight?.includes('AI 暂时无法生成结构化卡片')
+      || note.conclusion?.includes('AI 处理暂时不可用')
+    ),
+  );
   const prompts = plan ? REVISE_PROMPTS : CREATE_PROMPTS;
   const progress = useMemo(
     () => plan ? getPlanProgress(plan) : null,
@@ -205,7 +159,7 @@ export default function VideoKnowledgeWorkspace() {
   }, [plan]);
 
   const prepareVideo = async () => {
-    if (!workspace || extracting) return;
+    if (!workspace || extracting || importedNoteId) return;
     setExtracting(true);
     setError('');
     const response = await extractDouyinLibraryItem(
@@ -221,16 +175,20 @@ export default function VideoKnowledgeWorkspace() {
   };
 
   const initializeAi = async () => {
-    if (!workspace || !note || note.ai_initialized || initializingAi) return;
+    if (
+      !workspace
+      || !note
+      || (note.ai_initialized && !summaryGenerationFailed)
+      || initializingAi
+    ) return;
     setInitializingAi(true);
     setError('');
-    const response = await extractDouyinLibraryItem(
-      workspace.item.aweme_id,
-      'ai',
-    );
+    const response = importedNoteId
+      ? await initializePlatformLibraryItem(importedNoteId)
+      : await extractDouyinLibraryItem(workspace.item.aweme_id, 'ai');
     setInitializingAi(false);
     if (!response.success) {
-      setError(response.error || 'AI 总结与知识卡生成失败，请稍后重试');
+      setError(response.error || '摘要笔记生成失败，请稍后重试');
       return;
     }
     await loadWorkspace();
@@ -246,7 +204,7 @@ export default function VideoKnowledgeWorkspace() {
     const response = await runNotePlanAgent(note.id, cleanInstruction);
     setAgentRunning(false);
     if (!response.success || !response.data) {
-      setError(response.error || '计划 Agent 暂时没有完成这次调整');
+      setError(response.error || '暂时无法完成计划调整');
       return;
     }
     setWorkspace((current) => (
@@ -262,8 +220,7 @@ export default function VideoKnowledgeWorkspace() {
     return (
       <div className="video-knowledge-loading" role="status">
         <span className="video-knowledge-loading-mark" aria-hidden />
-        <strong>正在打开视频知识工作区</strong>
-        <span>读取视频、完整文案与行动计划</span>
+        <strong>正在打开视频资料</strong>
       </div>
     );
   }
@@ -272,12 +229,12 @@ export default function VideoKnowledgeWorkspace() {
     return (
       <section className="video-knowledge-failure">
         <CircleAlert size={30} />
-        <h1>没有找到这个视频</h1>
+        <h1>无法打开这个视频</h1>
         <p>{error}</p>
         <div>
           <Link href="/library">
             <ArrowLeft size={16} />
-            返回视频资料库
+            返回视频资料
           </Link>
           <button type="button" onClick={() => void loadWorkspace()}>
             <RotateCcw size={15} />
@@ -291,45 +248,61 @@ export default function VideoKnowledgeWorkspace() {
   if (!workspace) return null;
 
   const { item } = workspace;
-  const cardConfig = CARD_TYPE_CONFIG[note?.card_type || 'general'];
+  const isGallery = item.media_type === 'gallery' || item.media_type === 'image';
+  const emptyTab = activeTab === 'transcript'
+    ? { title: '暂无完整文案', copy: isGallery ? '图文作品可直接使用图片问答。' : '提取后即可查看和搜索文案。', Icon: FileText }
+    : activeTab === 'summary'
+      ? { title: '暂无摘要笔记', copy: isGallery ? '先从图片问答开始。' : '生成文案后可整理摘要。', Icon: BookOpenText }
+      : activeTab === 'plan'
+        ? { title: '暂无行动计划', copy: isGallery ? '先从图片问答开始。' : '生成文案后可创建计划。', Icon: CalendarCheck2 }
+        : { title: '暂无可用内容', copy: '请返回视频资料重新同步。', Icon: Sparkles };
+  const EmptyTabIcon = emptyTab.Icon;
 
   return (
     <div className="video-knowledge-page">
       <header className="video-knowledge-topbar">
         <Link href="/library" className="video-knowledge-back">
           <ArrowLeft size={16} />
-          视频资料库
+          视频资料
         </Link>
-        <div className="video-knowledge-storage">
-          <DatabaseZap size={14} />
-          视频按需临时读取，服务器与数据库均不保存视频文件
-        </div>
       </header>
 
       <section className="video-knowledge-shell">
         <div className="video-knowledge-media">
           <div className="video-knowledge-stage">
-            {item.media_url ? (
-              <OnDemandVideoPlayer
+            {item.media_type === 'gallery' ? (
+              <DouyinGalleryViewer
+                images={item.gallery_images || []}
+                fallbackImage={item.cover_proxy_url || item.cover_url}
+                title={item.title}
+              />
+            ) : item.media_url ? (
+              <DesktopMediaVideoPlayer
                 key={item.media_url}
+                awemeId={item.aweme_id}
                 mediaUrl={item.media_url}
-                coverUrl={item.cover_url}
+                coverUrl={item.cover_proxy_url || item.cover_url}
                 title={item.title}
                 sourceUrl={item.source_url}
+                onRefreshMedia={loadWorkspace}
               />
-            ) : item.cover_url ? (
+            ) : item.cover_proxy_url || item.cover_url ? (
               <div className="video-knowledge-no-media">
-                <img src={item.cover_url} alt={`${item.title} 视频封面`} />
-                <span><CircleAlert size={16} />下载器中没有可播放文件</span>
+                <img
+                  src={item.cover_proxy_url || item.cover_url}
+                  alt={`${item.title} 视频封面`}
+                  referrerPolicy="no-referrer"
+                />
+                <span><CircleAlert size={16} />这个作品的媒体暂时无法读取</span>
               </div>
             ) : (
               <div className="video-knowledge-no-media">
                 <Play size={44} />
-                <span>下载器中没有可播放文件</span>
+                <span>这个作品的媒体暂时无法读取</span>
               </div>
             )}
             <span className="video-knowledge-source-pill">
-              抖音 · {item.source_mode === 'collect' ? '收藏' : item.source_mode === 'like' ? '喜欢' : '我的作品'}
+              {formatSourceIdentity(item)}
             </span>
           </div>
 
@@ -359,17 +332,19 @@ export default function VideoKnowledgeWorkspace() {
               <FileText size={14} />
               {note
                 ? `${(note.transcript_raw?.length || 0).toLocaleString('zh-CN')} 字完整文案`
+                : item.media_type === 'gallery'
+                  ? `${item.gallery_images?.length || 0} 张图片`
                 : '等待生成完整文案'}
             </span>
-            {note?.ai_initialized ? (
+            {note?.ai_initialized && !summaryGenerationFailed ? (
               <span>
                 <Sparkles size={14} />
-                {cardConfig.label} · 已完成 AI 理解
+                摘要笔记已就绪
               </span>
             ) : note ? (
               <span>
                 <Sparkles size={14} />
-                文案已就绪 · 可直接问 AI
+                文案已就绪
               </span>
             ) : null}
             {plan && progress && (
@@ -390,7 +365,7 @@ export default function VideoKnowledgeWorkspace() {
                 ) : (
                   <Sparkles size={14} />
                 )}
-                {initializingAi ? 'AI 正在整理' : '生成 AI 总结与知识卡'}
+                {initializingAi ? '整理中' : '生成摘要笔记'}
               </button>
             )}
           </div>
@@ -420,43 +395,66 @@ export default function VideoKnowledgeWorkspace() {
           </nav>
 
           <div className="video-knowledge-tabpanel" role="tabpanel">
-            {!note ? (
-              <div className="video-knowledge-prepare">
-                <span className="video-knowledge-prepare-mark" aria-hidden>
-                  <WandSparkles size={28} />
-                </span>
-                <small>先补齐这条视频的完整文案</small>
-                <h2>文案就绪后，就能直接提问和创建计划</h2>
-                <p>
-                  系统会临时读取视频完成云端语音识别，处理结束立即清理，只保存完整文案；AI 总结与知识卡由你之后按需生成。
-                </p>
-                <button
-                  type="button"
-                  onClick={() => void prepareVideo()}
-                  disabled={extracting || !item.can_extract}
-                >
-                  {extracting ? (
-                    <LoaderCircle size={17} className="animate-spin" />
-                  ) : (
-                    <Sparkles size={17} />
-                  )}
-                  {extracting ? '正在提取完整文案' : '补提文案并开启工作区'}
-                </button>
-                {!item.can_extract && <span>请先在视频资料库重新同步这条视频</span>}
-              </div>
-            ) : activeTab === 'chat' ? (
-              <ContentChat
-                noteId={note.id}
-                cardType={note.card_type}
-                title={note.title}
-              />
+            {activeTab === 'assistant' && !hasTranscript && visualSource ? (
+              <section className="video-knowledge-assistant">
+                <header>
+                  <div>
+                    <strong>
+                      {visualSource.mediaType === 'gallery'
+                        ? `${visualSource.imageCount} 张图片`
+                        : '视频画面'}
+                    </strong>
+                  </div>
+                </header>
+                <ContentChat
+                  title={item.title}
+                  visualSource={visualSource}
+                />
+              </section>
+            ) : !note ? (
+              <section className="video-knowledge-empty-tab">
+                <span aria-hidden><EmptyTabIcon size={22} /></span>
+                <h2>{emptyTab.title}</h2>
+                <p>{emptyTab.copy}</p>
+                {isGallery ? (
+                  <button type="button" onClick={() => setActiveTab('assistant')}>
+                    返回图片问答
+                  </button>
+                ) : item.can_extract ? (
+                  <button
+                    type="button"
+                    onClick={() => void prepareVideo()}
+                    disabled={extracting}
+                  >
+                    {extracting && <LoaderCircle size={16} className="animate-spin" />}
+                    {extracting ? '正在提取' : '提取完整文案'}
+                  </button>
+                ) : (
+                  <Link href="/library">返回视频资料</Link>
+                )}
+              </section>
+            ) : activeTab === 'assistant' ? (
+              <section className="video-knowledge-assistant">
+                <header>
+                  <div>
+                    <small>当前依据</small>
+                    <strong>这 1 条视频的完整文案</strong>
+                  </div>
+                  <Link href={`/agent?source_ids=${encodeURIComponent(note.id)}`}>
+                    加入多视频任务
+                    <ArrowUpRight size={14} />
+                  </Link>
+                </header>
+                <ContentChat
+                  noteId={note.id}
+                  cardType={note.card_type}
+                  title={note.title}
+                />
+              </section>
             ) : activeTab === 'transcript' ? (
               <section className="video-knowledge-transcript">
                 <header>
-                  <div>
-                    <small>完整来源</small>
-                    <h2>视频文案</h2>
-                  </div>
+                  <h2>完整文案</h2>
                   <span>{(note.transcript_raw?.length || 0).toLocaleString('zh-CN')} 字</span>
                 </header>
                 {note.transcript_raw ? (
@@ -468,27 +466,104 @@ export default function VideoKnowledgeWorkspace() {
                   <p className="video-knowledge-empty-copy">这条内容目前没有可用文案。</p>
                 )}
               </section>
+            ) : activeTab === 'summary' ? (
+              <section className="video-knowledge-summary">
+                <header>
+                  <h2>摘要笔记</h2>
+                  {note.ai_initialized && !summaryGenerationFailed && (
+                    <Link href={`/notes?id=${encodeURIComponent(note.id)}`}>
+                      打开笔记
+                      <ArrowUpRight size={14} />
+                    </Link>
+                  )}
+                </header>
+
+                {note.ai_initialized && !summaryGenerationFailed ? (
+                  <article>
+                    {(note.key_insight || note.conclusion) && (
+                      <div className="video-knowledge-summary-lead">
+                        <p>{note.key_insight || note.conclusion}</p>
+                      </div>
+                    )}
+                    {note.sections?.map((section, index) => (
+                      <section key={`${section.title}-${index}`}>
+                        <span>{String(index + 1).padStart(2, '0')}</span>
+                        <div>
+                          <h3>{section.title}</h3>
+                          <p>{section.content}</p>
+                        </div>
+                      </section>
+                    ))}
+                    {note.conclusion && note.conclusion !== note.key_insight && (
+                      <footer>
+                        <small>结论</small>
+                        <p>{note.conclusion}</p>
+                      </footer>
+                    )}
+                  </article>
+                ) : summaryGenerationFailed ? (
+                  <div className="video-knowledge-summary-failure" role="status">
+                    <span aria-hidden="true"><RotateCcw size={20} /></span>
+                    <div>
+                      <h3>摘要生成失败</h3>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void initializeAi()}
+                      disabled={initializingAi}
+                    >
+                      {initializingAi
+                        ? <LoaderCircle size={16} className="animate-spin" />
+                        : <RotateCcw size={16} />}
+                      {initializingAi ? '正在重新整理' : '重新生成摘要'}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="video-knowledge-summary-empty">
+                    <BookOpenText size={28} />
+                    <h3>还没有摘要</h3>
+                    <button
+                      type="button"
+                      onClick={() => void initializeAi()}
+                      disabled={initializingAi}
+                    >
+                      {initializingAi
+                        ? <LoaderCircle size={16} className="animate-spin" />
+                        : <Sparkles size={16} />}
+                      {initializingAi ? '正在整理' : '生成摘要笔记'}
+                    </button>
+                  </div>
+                )}
+
+                {item.media_type !== 'gallery'
+                  && item.media_type !== 'image'
+                  && (
+                    <VideoAnalysisEntry
+                      noteId={note.id}
+                      hasSummary={note.ai_initialized && !summaryGenerationFailed}
+                      existing={note.detailed_video_analysis}
+                      onCompleted={loadWorkspace}
+                    />
+                  )}
+              </section>
             ) : (
               <section className="video-plan-agent">
                 <header className="video-plan-agent-header">
-                  <span className="video-plan-agent-mark" aria-hidden>
-                    <Bot size={20} />
-                  </span>
-                  <div>
-                    <small>{plan ? '调整计划' : '行动计划'}</small>
-                    <h2>{plan ? '一句话调整节奏' : 'AI 帮你排好下一步'}</h2>
-                    <p>说清周期或每天投入多少时间就可以</p>
-                  </div>
+                  <h2>{plan ? '调整计划' : '创建行动计划'}</h2>
                   {plan && (
                     <Link href={`/plans?id=${plan.id}`}>
-                      计划工作台
+                      打开行动计划
                       <ChevronRight size={14} />
                     </Link>
                   )}
                 </header>
 
                 <form onSubmit={(event) => void submitPlanInstruction(event)} className="video-plan-agent-composer">
+                  <label htmlFor="video-plan-instruction">
+                    <span>{plan ? '你想怎么调整？' : '你想怎么执行？'}</span>
+                  </label>
                   <textarea
+                    id="video-plan-instruction"
                     value={instruction}
                     onChange={(event) => setInstruction(event.target.value.slice(0, 500))}
                     maxLength={500}
@@ -496,7 +571,7 @@ export default function VideoKnowledgeWorkspace() {
                     placeholder={plan
                       ? '例如：保留已完成内容，剩余任务改成每天 30 分钟'
                       : '例如：从明天开始，做 7 天，每天 30 分钟'}
-                    aria-label="输入对计划 Agent 的要求"
+                    aria-label="输入计划调整要求"
                     disabled={agentRunning}
                   />
                   <div>
@@ -565,13 +640,7 @@ export default function VideoKnowledgeWorkspace() {
                       <ChevronRight size={15} />
                     </Link>
                   </div>
-                ) : (
-                  <div className="video-plan-empty">
-                    <Clock3 size={22} />
-                    <strong>写一句要求就能开始</strong>
-                    <p>AI 会结合视频内容，自动安排周期、时间和任务。</p>
-                  </div>
-                )}
+                ) : null}
               </section>
             )}
           </div>

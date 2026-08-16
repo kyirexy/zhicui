@@ -156,7 +156,7 @@ export default function LibraryChat({
         >
           <Layers3 size={15} />
           <span>
-            <strong>全部已有文案</strong>
+            <strong>全部抖音文案</strong>
             <small>无需勾选 · {allSources.length} 条</small>
           </span>
         </button>

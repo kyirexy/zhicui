@@ -3,8 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ArrowUpRight, DownloadSimple } from '@phosphor-icons/react';
-import { DESKTOP_DOWNLOAD_URL } from '@/lib/desktopRuntime';
+import { ArrowUpRight, DownloadSimple, ShieldCheck } from '@phosphor-icons/react';
 import { isNativeAndroidApp } from '@/lib/douyinNative';
 import styles from './MarketingFooter.module.css';
 
@@ -15,6 +14,10 @@ export default function AppFooter() {
   useEffect(() => {
     setNativeAndroid(isNativeAndroidApp());
   }, []);
+
+  if (pathname?.startsWith('/login')) {
+    return null;
+  }
 
   if (pathname === '/' && nativeAndroid === false) {
     return (
@@ -28,16 +31,13 @@ export default function AppFooter() {
             </div>
           </div>
           <nav aria-label="页脚导航">
-            <a href={DESKTOP_DOWNLOAD_URL}>
+            <a href="/#download">
               <DownloadSimple size={16} weight="light" />
-              Windows
+              下载客户端
             </a>
-            <a href="/download/zhicui.apk">
-              <DownloadSimple size={16} weight="light" />
-              Android
-            </a>
-            <Link href="/login">
-              账号登录
+            <Link href="/admin">
+              <ShieldCheck size={16} weight="light" />
+              管理员入口
               <ArrowUpRight size={15} weight="light" />
             </Link>
           </nav>

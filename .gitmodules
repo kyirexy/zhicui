@@ -1,0 +1,7 @@
+[submodule "integrations/OmniRoute"]
+	path = integrations/OmniRoute
+	url = https://github.com/diegosouzapw/OmniRoute.git
+	branch = main
+[submodule "integrations/XHS-Downloader"]
+	path = integrations/XHS-Downloader
+	url = https://github.com/JoeanAmier/XHS-Downloader.git

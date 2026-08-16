@@ -10,8 +10,6 @@ import {
   CheckCircle,
   FileText,
   GlobeHemisphereWest,
-  LightbulbFilament,
-  ListChecks,
   MagnifyingGlass,
   PaperPlaneTilt,
   Quotes,
@@ -20,7 +18,7 @@ import {
   TrashSimple,
   WarningCircle,
 } from '@phosphor-icons/react';
-import { askNote } from '@/lib/api';
+import { askNote, askVisualLibraryItem } from '@/lib/api';
 import type {
   CardType,
   NoteAnswerMode,
@@ -33,9 +31,14 @@ import type {
 } from '@/lib/types';
 
 interface ContentChatProps {
-  noteId: string;
-  cardType: CardType;
+  noteId?: string;
+  cardType?: CardType;
   title?: string;
+  visualSource?: {
+    itemId: string;
+    mediaType: 'gallery' | 'video';
+    imageCount?: number;
+  };
 }
 
 interface ChatMessage extends NoteChatTurn {
@@ -56,20 +59,6 @@ interface ActiveRequest {
 }
 
 const MAX_STORED_MESSAGES = 18;
-
-const COMMON_QUESTIONS = [
-  '基于完整文稿，用三句话概括最重要的信息',
-  '查一下视频提到的项目或工具链接',
-  '哪些观点需要我进一步验证？',
-];
-
-const TYPE_QUESTIONS: Partial<Record<CardType, string[]>> = {
-  recipe: ['把做法整理成按顺序的步骤', '有哪些容易失败的地方？', '原文提到了哪些用量或火候？'],
-  insight: ['这个观点的核心逻辑是什么？', '它适用于哪些具体场景？', '有哪些可能的反例或局限？'],
-  history: ['按时间线梳理关键事件', '涉及了哪些人物和因果关系？', '哪些细节值得进一步核实？'],
-  product: ['总结产品的优点、缺点和适合人群', '原文给出了哪些购买依据？', '有哪些风险或营销话术要注意？'],
-  plan: ['我今天最应该先做什么？', '把计划拆成前三个行动', '执行时最容易卡在哪里？'],
-};
 
 function parseSourceContext(value: unknown): NoteSourceContext | undefined {
   if (!value || typeof value !== 'object') return undefined;
@@ -96,10 +85,19 @@ function parseSourceContext(value: unknown): NoteSourceContext | undefined {
     agent_trace: Array.isArray(context.agent_trace)
       ? context.agent_trace as ResearchAgentStage[]
       : [],
+    source_mode: context.source_mode === 'visual' ? 'visual' : 'text',
+    media_type: context.media_type === 'gallery' ? 'gallery' : context.media_type === 'video' ? 'video' : undefined,
+    visual_evidence_count: Number(context.visual_evidence_count || 0),
   };
 }
 
 function transcriptCoverageLabel(context: NoteSourceContext): string {
+  if (context.source_mode === 'visual') {
+    const count = context.visual_evidence_count || 0;
+    return context.media_type === 'gallery'
+      ? `已读取 ${count} 张图集图片`
+      : `已读取 ${count} 张视频画面`;
+  }
   const size = context.transcript_chars.toLocaleString('zh-CN');
   if (context.transcript_mode === 'full') {
     return `完整文稿 ${size} 字已直接阅读`;
@@ -126,7 +124,7 @@ function parseStoredMessages(value: string): ChatMessage[] {
       id: item.id as string,
       role: item.role as ChatMessage['role'],
       content: item.content as string,
-      answerMode: item.answerMode === 'creative' || item.answerMode === 'grounded'
+      answerMode: item.answerMode === 'creative' || item.answerMode === 'grounded' || item.answerMode === 'visual'
         ? item.answerMode
         : undefined,
       evidence: Array.isArray(item.evidence) ? item.evidence as NoteEvidence[] : undefined,
@@ -145,24 +143,24 @@ function parseStoredMessages(value: string): ChatMessage[] {
     }));
 }
 
-export default function ContentChat({ noteId, cardType, title }: ContentChatProps) {
+export default function ContentChat({ noteId, title, visualSource }: ContentChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const [lastQuestion, setLastQuestion] = useState('');
-  const [researchScope, setResearchScope] = useState<ResearchScope>('auto');
   const [restoredKey, setRestoredKey] = useState<string | null>(null);
   const nextId = useRef(1);
   const requestSequence = useRef(0);
   const activeRequest = useRef<ActiveRequest | null>(null);
   const messageEndRef = useRef<HTMLDivElement>(null);
-  const storageKey = `zhicui_note_chat_${noteId}`;
+  const sourceKey = noteId || visualSource?.itemId || 'unknown';
+  const isVisual = Boolean(visualSource && !noteId);
+  const storageKey = isVisual
+    ? `zhicui_visual_chat_${sourceKey}`
+    : `zhicui_note_chat_${sourceKey}`;
 
-  const suggestions = useMemo(
-    () => TYPE_QUESTIONS[cardType] ?? COMMON_QUESTIONS,
-    [cardType],
-  );
+  const researchScope: ResearchScope = 'video_only';
   const followUpSuggestions = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const message = messages[index];
@@ -177,7 +175,7 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
     requestSequence.current += 1;
     activeRequest.current?.controller.abort();
     activeRequest.current = null;
-  }, [noteId]);
+  }, [sourceKey]);
 
   useEffect(() => {
     setRestoredKey(null);
@@ -250,13 +248,20 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
     activeRequest.current = { id: requestId, controller };
 
     try {
-      const response = await askNote(
-        noteId,
-        question,
-        history,
-        controller.signal,
-        researchScope,
-      );
+      const response = isVisual && visualSource
+        ? await askVisualLibraryItem(
+            visualSource.itemId,
+            question,
+            history,
+            controller.signal,
+          )
+        : await askNote(
+            noteId!,
+            question,
+            history,
+            controller.signal,
+            researchScope,
+          );
       if (requestSequence.current !== requestId) return;
 
       const answer = response.data;
@@ -274,7 +279,9 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
             sourceContext: parseSourceContext(answer.source_context),
             webSources: answer.web_sources ?? [],
             agentTrace: answer.agent_trace ?? [],
-            researchScope: answer.research_scope ?? researchScope,
+            researchScope: answer.research_scope === 'visual_only'
+              ? 'video_only'
+              : answer.research_scope ?? researchScope,
           },
         ]);
         setLastQuestion('');
@@ -314,7 +321,7 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
   };
 
   return (
-    <section className="content-chat" aria-labelledby={`content-chat-${noteId}`}>
+    <section className="content-chat" aria-labelledby={`content-chat-${sourceKey}`}>
       <div className="content-chat__ambient" aria-hidden />
       <div className="content-chat__fixed-head">
         <header className="content-chat__header">
@@ -323,15 +330,17 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
-              <h3 id={`content-chat-${noteId}`} className="content-chat__title">向完整视频文稿提问</h3>
-              <span className="content-chat__grounded">
+              <h3 id={`content-chat-${sourceKey}`} className="content-chat__title">
+                {isVisual ? '问问这组图片' : '向完整视频文稿提问'}
+              </h3>
+              {!isVisual && <span className="content-chat__grounded">
                 <ShieldCheck size={13} weight="duotone" aria-hidden />
-                完整文稿 + AI 理解
-              </span>
+                完整文稿优先
+              </span>}
             </div>
-            <p className="content-chat__subtitle">
-              {title ? `基于《${title}》的完整文稿追问` : '扫描完整视频文稿，并结合 AI 已提炼的卡片信息回答。'}
-            </p>
+            {!isVisual && <p className="content-chat__subtitle">
+              {title ? `基于《${title}》的完整文稿追问` : '读取完整视频文稿；摘要笔记只在已有时辅助理解。'}
+            </p>}
           </div>
           {messages.length > 0 && (
             <button type="button" onClick={clearConversation} className="content-chat__clear" aria-label="清空当前对话">
@@ -341,7 +350,7 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
           )}
         </header>
 
-        <div className="content-chat__source-contract" aria-label="回答使用的信息来源">
+        {!isVisual && <div className="content-chat__source-contract" aria-label="回答使用的信息来源">
           <span>
             <FileText size={15} weight="duotone" aria-hidden />
             完整视频文稿
@@ -349,59 +358,12 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
           <i aria-hidden>+</i>
           <span>
             <Brain size={15} weight="duotone" aria-hidden />
-            AI 卡片理解
+            可选摘要笔记
           </span>
-        </div>
-        <div className="content-chat__research-scope" role="group" aria-label="回答范围">
-          <button
-            type="button"
-            className={researchScope === 'auto' ? 'is-active' : ''}
-            aria-pressed={researchScope === 'auto'}
-            disabled={sending}
-            onClick={() => setResearchScope('auto')}
-          >
-            <GlobeHemisphereWest size={15} weight="duotone" aria-hidden />
-            自动查证
-            <small>缺信息时联网</small>
-          </button>
-          <button
-            type="button"
-            className={researchScope === 'video_only' ? 'is-active' : ''}
-            aria-pressed={researchScope === 'video_only'}
-            disabled={sending}
-            onClick={() => setResearchScope('video_only')}
-          >
-            <FileText size={15} weight="duotone" aria-hidden />
-            仅视频
-            <small>不访问外部网页</small>
-          </button>
-        </div>
+        </div>}
       </div>
 
       <div className="content-chat__scroll-region">
-        {messages.length === 0 && (
-          <div className="content-chat__suggestions" aria-label="推荐问题">
-            {suggestions.map((question, index) => (
-              <button
-                key={question}
-                type="button"
-                onClick={() => void submitQuestion(question)}
-                className="content-chat__suggestion"
-                disabled={sending}
-              >
-                <span className="content-chat__suggestion-icon" aria-hidden>
-                  {index === 0
-                    ? <Sparkle size={17} weight="duotone" />
-                    : index === 1
-                      ? <LightbulbFilament size={17} weight="duotone" />
-                      : <ListChecks size={17} weight="duotone" />}
-                </span>
-                <span>{question}</span>
-              </button>
-            ))}
-          </div>
-        )}
-
         {messages.length > 0 && (
           <div className="content-chat__messages" role="log" aria-live="polite" aria-relevant="additions">
             {messages.map((message) => (
@@ -411,7 +373,7 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
                 </span>
                 <div className="content-chat__bubble">
                   <p>{message.content}</p>
-                  {message.role === 'assistant' && (
+                  {message.role === 'assistant' && message.answerMode !== 'visual' && (
                     <div className={`content-chat__answer-state ${
                       message.answerMode === 'creative'
                         ? 'is-creative'
@@ -437,7 +399,7 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
                       </span>
                     </div>
                   )}
-                  {message.role === 'assistant' && message.agentTrace && message.agentTrace.length > 0 && (
+                  {message.role === 'assistant' && message.answerMode !== 'visual' && message.agentTrace && message.agentTrace.length > 0 && (
                     <div className="content-chat__agent-trace" aria-label="Agent 执行过程">
                       {message.agentTrace.map((stage) => (
                         <span key={`${stage.stage}-${stage.label}`} title={stage.detail}>
@@ -447,7 +409,7 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
                       ))}
                     </div>
                   )}
-                  {message.role === 'assistant' && message.sourceContext && (
+                  {message.role === 'assistant' && message.answerMode !== 'visual' && message.sourceContext && (
                     <div className="content-chat__source-context" aria-label="本次回答的来源覆盖范围">
                       <span>
                         <MagnifyingGlass size={13} weight="duotone" aria-hidden />
@@ -455,7 +417,9 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
                       </span>
                       <span className={message.sourceContext.ai_summary_used ? 'is-active' : ''}>
                         <Brain size={13} weight="duotone" aria-hidden />
-                        {message.sourceContext.ai_summary_used ? '已融合 AI 卡片理解' : '没有可用的 AI 卡片理解'}
+                        {message.sourceContext.source_mode === 'visual'
+                          ? '未使用或伪造文案'
+                          : message.sourceContext.ai_summary_used ? '已参考摘要笔记' : '仅依据完整文稿'}
                       </span>
                     </div>
                   )}
@@ -475,7 +439,7 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
                                 ? typeof item.position_percent === 'number'
                                   ? `视频转录 · 文稿约 ${item.position_percent}% 处`
                                   : '视频转录原文'
-                                : 'AI 卡片理解'}
+                                : '摘要笔记'}
                             </small>
                           </blockquote>
                         ))}
@@ -513,13 +477,11 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
             {sending && (
               <div className="content-chat__thinking" role="status">
                 <span className="content-chat__thinking-icon" aria-hidden>
-                  {researchScope === 'auto'
-                    ? <GlobeHemisphereWest size={16} weight="fill" />
-                    : <Sparkle size={16} weight="fill" />}
+                  <Sparkle size={16} weight="fill" />
                 </span>
-                {researchScope === 'auto'
-                  ? '正在阅读文稿，必要时联网查证'
-                  : '正在扫描完整文稿与 AI 卡片理解'}
+                {isVisual
+                  ? '正在识别图片'
+                  : '正在阅读完整文稿'}
                 <span className="content-chat__dots" aria-hidden><i /><i /><i /></span>
               </div>
             )}
@@ -561,8 +523,8 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
             onKeyDown={handleKeyDown}
             rows={1}
             maxLength={600}
-            placeholder="基于完整视频文稿提问…"
-            aria-label="输入关于完整视频文稿的问题"
+            placeholder={isVisual ? '问问图片内容…' : '基于完整视频文稿提问…'}
+            aria-label={isVisual ? '输入关于当前作品图片的问题' : '输入关于完整视频文稿的问题'}
             disabled={sending}
           />
           <span className="content-chat__count" aria-hidden>{input.length}/600</span>
@@ -570,9 +532,6 @@ export default function ContentChat({ noteId, cardType, title }: ContentChatProp
             <PaperPlaneTilt size={19} weight="fill" aria-hidden />
           </button>
         </form>
-        <p className="content-chat__hint">
-          Enter 发送 · {researchScope === 'auto' ? '缺失的链接和当前信息会自动查证' : '只使用视频文稿与卡片理解'}
-        </p>
       </div>
     </section>
   );

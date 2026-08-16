@@ -3,13 +3,14 @@ VideoCapsule FastAPI application entry point.
 """
 
 import os
+import threading
 import time
 import traceback
+from types import SimpleNamespace
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exception_handlers import (
     http_exception_handler,
-    request_validation_exception_handler,
 )
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +18,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes import router
 from app.api.agent_routes import router as agent_router
+from app.api.video_analysis_routes import router as video_analysis_router
 from app.core.database import Base, SessionLocal, engine
 from sqlalchemy import inspect, text
 
@@ -33,7 +35,20 @@ from app.models.feedback import Feedback  # noqa: F401
 from app.models.library_hidden_item import LibraryHiddenItem  # noqa: F401
 from app.models.douyin_account_binding import DouyinAccountBinding  # noqa: F401
 from app.models.video_source_ledger import VideoSourceLedger  # noqa: F401
+from app.models.creator_sync import (  # noqa: F401
+    CreatorSource,
+    CreatorSourceItem,
+    CreatorSyncRun,
+)
 from app.models.agent_thread import AgentMessage, AgentThread  # noqa: F401
+from app.models.knowledge_entry import KnowledgeEntry  # noqa: F401
+from app.models.user_ai_provider_config import UserAIProviderConfig  # noqa: F401
+from app.models.chat_model import (  # noqa: F401
+    ChatModelChargeReservation,
+    ChatModelFreeUsage,
+    ChatModelOffering,
+)
+from app.models import video_analysis as video_analysis_models  # noqa: F401
 from app.models.agent_automation import (  # noqa: F401
     AgentAutomation,
     AgentAutomationRun,
@@ -44,8 +59,14 @@ from app.services import (
     agent_service,
     auth_service,
     automation_runner,
+    creator_sync_worker,
+    chat_model_catalog_service,
     error_log_service,
+    video_analysis_catalog_service,
+    video_analysis_service,
+    video_analysis_worker,
 )
+from app.services.video_analysis_engine import probe_note_duration_ms
 
 
 def create_app() -> FastAPI:
@@ -113,7 +134,22 @@ def create_app() -> FastAPI:
             status_code=422,
             **request_log_context(request),
         )
-        return await request_validation_exception_handler(request, exc)
+        # FastAPI's default 422 body includes each rejected field's raw
+        # ``input``.  That can echo an invalid API key/password back through
+        # the response.  Return only structural validation facts.
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": [
+                    {
+                        "loc": list(issue.get("loc", [])),
+                        "msg": str(issue.get("msg") or "请求参数无效")[:240],
+                        "type": str(issue.get("type") or "invalid")[:120],
+                    }
+                    for issue in exc.errors()[:12]
+                ]
+            },
+        )
 
     @app.exception_handler(Exception)
     async def logged_unhandled_exception(request: Request, exc: Exception):
@@ -176,6 +212,7 @@ def create_app() -> FastAPI:
     # Register routes
     app.include_router(router)
     app.include_router(agent_router)
+    app.include_router(video_analysis_router)
 
     # Create database tables on startup
     @app.on_event("startup")
@@ -184,19 +221,180 @@ def create_app() -> FastAPI:
         _migrate_db()
         with SessionLocal() as db:
             agent_service.mark_stale_threads(db)
+            video_analysis_catalog_service.ensure_default_drafts(db)
+            chat_model_catalog_service.ensure_default_offering(db)
+        video_analysis_service.register_duration_probe(probe_note_duration_ms)
+        video_analysis_worker.register_completion_hook(
+            agent_service.handle_video_analysis_completion
+        )
+        video_analysis_worker.runner.start()
+        creator_sync_worker.runner.start()
+        threading.Thread(
+            target=_reconcile_video_analysis_agent_runs,
+            name="video-analysis-agent-reconcile",
+            daemon=True,
+        ).start()
         automation_runner.runner.start()
 
     @app.on_event("shutdown")
     def on_shutdown() -> None:
+        creator_sync_worker.runner.stop()
         automation_runner.runner.stop()
+        video_analysis_worker.runner.stop()
+        video_analysis_worker.unregister_completion_hook(
+            agent_service.handle_video_analysis_completion
+        )
+        video_analysis_service.register_duration_probe(None)
 
     return app
+
+
+def _reconcile_video_analysis_agent_runs() -> None:
+    """修复 Agent 报价卡、运行卡和完成后续答的进程崩溃窗口。"""
+    from app.models.video_analysis import VideoAnalysisRun
+
+    try:
+        with SessionLocal() as db:
+            rows = (
+                db.query(VideoAnalysisRun)
+                .filter(
+                    VideoAnalysisRun.trigger == "agent",
+                    VideoAnalysisRun.status.in_(
+                        [
+                            "prepared",
+                            "reserved",
+                            "queued",
+                            "running",
+                            "succeeded",
+                            "partial",
+                            "failed",
+                            "cancelled",
+                            "reauthorization_required",
+                        ]
+                    ),
+                    VideoAnalysisRun.agent_thread_id.is_not(None),
+                )
+                .order_by(VideoAnalysisRun.updated_at.desc())
+                .limit(500)
+                .all()
+            )
+            events = [
+                SimpleNamespace(
+                    run_id=row.id,
+                    user_id=row.user_id,
+                    item_id="",
+                    note_id="",
+                    status=row.status,
+                    recovery=True,
+                )
+                for row in rows
+            ]
+        for event in events:
+            agent_service.reconcile_video_analysis_agent_run(event)
+    except Exception:
+        error_log_service.record_error_safely(
+            source="backend",
+            severity="warning",
+            error_type="VideoAnalysisAgentReconcileError",
+            message="视频解析完成事件启动补偿失败",
+            status_code=500,
+            metadata={"operation": "video_analysis_agent_reconcile"},
+        )
+
+
+def _migrate_knowledge_entries(conn, insp, dialect_name: str) -> None:
+    """Add curated-page fields without replacing historical knowledge rows."""
+    if not insp.has_table("knowledge_entries"):
+        return
+
+    entry_cols = {column["name"] for column in insp.get_columns("knowledge_entries")}
+    additions = (
+        ("summary", "TEXT NOT NULL DEFAULT ''"),
+        ("status", "VARCHAR(32) NOT NULL DEFAULT 'canonical'"),
+        ("origin", "VARCHAR(32) NOT NULL DEFAULT 'manual'"),
+        ("source_note_id", "VARCHAR(36) NULL"),
+    )
+    for column_name, definition in additions:
+        if column_name not in entry_cols:
+            conn.execute(text(
+                f"ALTER TABLE knowledge_entries ADD COLUMN {column_name} {definition}"
+            ))
+
+    # Defaults make old rows immediately readable as user-authored canonical
+    # pages. The UPDATE also repairs nullable columns from experimental builds.
+    conn.execute(text(
+        "UPDATE knowledge_entries SET "
+        "summary = COALESCE(summary, ''), "
+        "status = CASE WHEN status IS NULL OR status = '' "
+        "THEN 'canonical' ELSE status END, "
+        "origin = CASE WHEN origin IS NULL OR origin = '' "
+        "THEN 'manual' ELSE origin END"
+    ))
+    if insp.has_table("notes"):
+        # An application foreign key cannot express same-user ownership. Clear
+        # orphaned or cross-user links left by any experimental build before
+        # adding the unique index / PostgreSQL constraint.
+        conn.execute(text(
+            "UPDATE knowledge_entries SET source_note_id = NULL "
+            "WHERE source_note_id IS NOT NULL AND NOT EXISTS ("
+            "SELECT 1 FROM notes WHERE notes.id = knowledge_entries.source_note_id "
+            "AND notes.user_id = knowledge_entries.user_id)"
+        ))
+        conn.execute(text(
+            "UPDATE knowledge_entries SET source_note_id = NULL WHERE id IN ("
+            "SELECT id FROM (SELECT id, ROW_NUMBER() OVER ("
+            "PARTITION BY user_id, source_note_id ORDER BY updated_at DESC, id DESC"
+            ") AS source_rank FROM knowledge_entries "
+            "WHERE source_note_id IS NOT NULL) AS ranked_sources "
+            "WHERE source_rank > 1)"
+        ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_knowledge_entries_user_status_updated "
+        "ON knowledge_entries (user_id, status, updated_at)"
+    ))
+    conn.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_knowledge_entries_user_source_note "
+        "ON knowledge_entries (user_id, source_note_id)"
+    ))
+
+    if dialect_name == "sqlite" and insp.has_table("notes"):
+        # SQLite cannot add a foreign key with ALTER TABLE. Mirror the only
+        # delete-side behavior this optional link needs so upgraded databases
+        # do not retain dangling source IDs when a Note is removed.
+        conn.execute(text(
+            "CREATE TRIGGER IF NOT EXISTS "
+            "trg_knowledge_entries_source_note_delete "
+            "AFTER DELETE ON notes BEGIN "
+            "UPDATE knowledge_entries SET source_note_id = NULL "
+            "WHERE source_note_id = OLD.id; END"
+        ))
+    elif dialect_name == "postgresql" and insp.has_table("notes"):
+        # SQLite cannot add a foreign-key constraint with ALTER TABLE. Fresh
+        # SQLite databases still receive it from SQLAlchemy metadata; existing
+        # SQLite rows receive equivalent delete cleanup through the trigger.
+        conn.execute(text(
+            "DO $$ BEGIN "
+            "IF NOT EXISTS ("
+            "SELECT 1 FROM pg_constraint AS source_constraint "
+            "JOIN pg_attribute AS source_column "
+            "ON source_column.attrelid = source_constraint.conrelid "
+            "AND source_column.attnum = ANY(source_constraint.conkey) "
+            "WHERE source_constraint.conrelid = 'knowledge_entries'::regclass "
+            "AND source_constraint.contype = 'f' "
+            "AND source_column.attname = 'source_note_id'"
+            ") THEN "
+            "ALTER TABLE knowledge_entries ADD CONSTRAINT "
+            "fk_knowledge_entries_source_note_id_notes "
+            "FOREIGN KEY (source_note_id) REFERENCES notes(id) ON DELETE SET NULL; "
+            "END IF; END $$"
+        ))
 
 
 def _migrate_db() -> None:
     """Apply small cross-dialect additive migrations without Alembic."""
     insp = inspect(engine)
     with engine.begin() as conn:
+        _migrate_knowledge_entries(conn, insp, engine.dialect.name)
         # Older local SQLite builds ran with foreign_keys disabled. Remove
         # only orphan rows from the newly introduced Agent tables before
         # relying on cascade behavior going forward.
@@ -262,6 +460,16 @@ def _migrate_db() -> None:
                 conn.execute(text(
                     "ALTER TABLE notes ADD COLUMN "
                     "ai_initialized BOOLEAN NOT NULL DEFAULT TRUE"
+                ))
+        if insp.has_table("plans"):
+            plan_cols = {c["name"] for c in insp.get_columns("plans")}
+            if "start_date" not in plan_cols:
+                conn.execute(text(
+                    "ALTER TABLE plans ADD COLUMN start_date DATE NULL"
+                ))
+            if "completed_at" not in plan_cols:
+                conn.execute(text(
+                    "ALTER TABLE plans ADD COLUMN completed_at TIMESTAMP NULL"
                 ))
         if insp.has_table("video_source_ledgers"):
             ledger_cols = {
@@ -391,6 +599,34 @@ def _migrate_db() -> None:
                 "ix_agent_automation_runs_heartbeat_at "
                 "ON agent_automation_runs (heartbeat_at)"
             ))
+        if insp.has_table("vision_providers"):
+            provider_cols = {
+                c["name"] for c in insp.get_columns("vision_providers")
+            }
+            if "default_model" not in provider_cols:
+                conn.execute(text(
+                    "ALTER TABLE vision_providers ADD COLUMN "
+                    "default_model VARCHAR(160) NOT NULL DEFAULT ''"
+                ))
+        if insp.has_table("video_analysis_items"):
+            item_cols = {
+                c["name"] for c in insp.get_columns("video_analysis_items")
+            }
+            if "cancel_requested" not in item_cols:
+                conn.execute(text(
+                    "ALTER TABLE video_analysis_items ADD COLUMN "
+                    "cancel_requested BOOLEAN NOT NULL DEFAULT FALSE"
+                ))
+            if "cancel_requested_at" not in item_cols:
+                conn.execute(text(
+                    "ALTER TABLE video_analysis_items ADD COLUMN "
+                    "cancel_requested_at TIMESTAMP NULL"
+                ))
+            if "failure_cost_micros" not in item_cols:
+                conn.execute(text(
+                    "ALTER TABLE video_analysis_items ADD COLUMN "
+                    "failure_cost_micros BIGINT NOT NULL DEFAULT 0"
+                ))
 
 
 app = create_app()

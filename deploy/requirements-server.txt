@@ -13,6 +13,8 @@ python-jose[cryptography]>=3.3
 werkzeug>=3.0
 numpy>=1.24
 imageio-ffmpeg>=0.5
+scenedetect-headless==0.7.1
+opencv-python-headless==4.11.0.86
 bilibili-api-python>=16.0
 yt-dlp>=2024.0
 psycopg2-binary>=2.9

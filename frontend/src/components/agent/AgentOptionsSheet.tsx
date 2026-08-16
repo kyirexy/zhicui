@@ -1,7 +1,7 @@
 'use client';
 
 import type { KeyboardEvent } from 'react';
-import BottomSheet from '@/components/BottomSheet';
+import { Check } from '@phosphor-icons/react';
 import type {
   LibraryOutputStyle,
   LibraryResearchMode,
@@ -20,12 +20,13 @@ const RESEARCH_OPTIONS: Array<{
 const OUTPUT_OPTIONS: Array<{
   value: LibraryOutputStyle;
   label: string;
+  description: string;
 }> = [
-  { value: 'answer', label: '直接回答' },
-  { value: 'summary', label: '完整总结' },
-  { value: 'comparison', label: '差异对比' },
-  { value: 'action_plan', label: '行动方案' },
-  { value: 'custom', label: '自定义' },
+  { value: 'answer', label: '直接回答', description: '先给结论与依据' },
+  { value: 'summary', label: '完整总结', description: '保留内容结构' },
+  { value: 'comparison', label: '差异对比', description: '并列观点与差异' },
+  { value: 'action_plan', label: '行动方案', description: '整理可执行步骤' },
+  { value: 'custom', label: '自定义', description: '按你的要求输出' },
 ];
 
 const WEB_OPTIONS: Array<{
@@ -58,7 +59,6 @@ function handleRadioKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
 
 export default function AgentOptionsSheet({
   open,
-  onClose,
   researchMode,
   outputStyle,
   webScope,
@@ -68,7 +68,6 @@ export default function AgentOptionsSheet({
   onWebScopeChange,
 }: {
   open: boolean;
-  onClose: () => void;
   researchMode: LibraryResearchMode;
   outputStyle: LibraryOutputStyle;
   webScope: ResearchScope;
@@ -77,18 +76,18 @@ export default function AgentOptionsSheet({
   onOutputStyleChange: (value: LibraryOutputStyle) => void;
   onWebScopeChange: (value: ResearchScope) => void;
 }) {
+  if (!open) return null;
+
   return (
-    <BottomSheet
-      open={open}
-      onClose={onClose}
-      title="回答设置"
-      desktopDialog
-      panelClassName="agent-options-panel"
-    >
-      <div className="agent-options-sheet">
+    <section className="agent-options-menu" role="dialog" aria-label="回答设置">
+      <header>
+        <small>本次回答</small>
+        <strong>回答设置</strong>
+      </header>
+      <div className="agent-options-menu__body">
         <fieldset>
           <legend>分析深度</legend>
-          <div className="agent-options-sheet__grid" role="radiogroup">
+          <div className="agent-options-menu__list" role="radiogroup">
             {RESEARCH_OPTIONS.map((option) => (
               <button
                 key={option.value}
@@ -101,8 +100,8 @@ export default function AgentOptionsSheet({
                 onKeyDown={handleRadioKeyDown}
                 onClick={() => onResearchModeChange(option.value)}
               >
-                <strong>{option.label}</strong>
-                <small>{option.description}</small>
+                <span><strong>{option.label}</strong><small>{option.description}</small></span>
+                {researchMode === option.value && <Check size={15} weight="bold" aria-hidden="true" />}
               </button>
             ))}
           </div>
@@ -110,7 +109,7 @@ export default function AgentOptionsSheet({
 
         <fieldset>
           <legend>回答形式</legend>
-          <div className="agent-options-sheet__chips" role="radiogroup">
+          <div className="agent-options-menu__list" role="radiogroup">
             {OUTPUT_OPTIONS.map((option) => (
               <button
                 key={option.value}
@@ -123,7 +122,8 @@ export default function AgentOptionsSheet({
                 onKeyDown={handleRadioKeyDown}
                 onClick={() => onOutputStyleChange(option.value)}
               >
-                {option.label}
+                <span><strong>{option.label}</strong><small>{option.description}</small></span>
+                {outputStyle === option.value && <Check size={15} weight="bold" aria-hidden="true" />}
               </button>
             ))}
           </div>
@@ -131,7 +131,7 @@ export default function AgentOptionsSheet({
 
         <fieldset>
           <legend>资料边界</legend>
-          <div className="agent-options-sheet__grid" role="radiogroup">
+          <div className="agent-options-menu__list" role="radiogroup">
             {WEB_OPTIONS.map((option) => (
               <button
                 key={option.value}
@@ -144,17 +144,14 @@ export default function AgentOptionsSheet({
                 onKeyDown={handleRadioKeyDown}
                 onClick={() => onWebScopeChange(option.value)}
               >
-                <strong>{option.label}</strong>
-                <small>{option.description}</small>
+                <span><strong>{option.label}</strong><small>{option.description}</small></span>
+                {webScope === option.value && <Check size={15} weight="bold" aria-hidden="true" />}
               </button>
             ))}
           </div>
         </fieldset>
 
-        <button type="button" className="agent-options-sheet__done" onClick={onClose}>
-          完成
-        </button>
       </div>
-    </BottomSheet>
+    </section>
   );
 }

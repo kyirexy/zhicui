@@ -1,22 +1,103 @@
 'use client';
 
+import { Suspense, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
+import {
+  ArrowLeft,
+  ArrowsClockwise,
+  ChatCircleDots,
+  Cpu,
+  GearSix,
+  HardDrives,
+  Info,
+  MagnifyingGlass,
+  PaintBrushBroad,
+  SignOut,
+  UserCircle,
+  X,
+  type Icon as PhosphorIcon,
+} from '@phosphor-icons/react';
 import {
   Check,
-  Cpu,
-  Globe,
-  Monitor,
   RotateCcw,
   Rows3,
   Rows4,
-  Smartphone,
 } from 'lucide-react';
 import AppUpdateSettingsCard from '@/components/AppUpdateSettingsCard';
+import AgentSourceLimitSettingsCard from '@/components/AgentSourceLimitSettingsCard';
+import AutoSyncSettingsCard from '@/components/AutoSyncSettingsCard';
+import DesktopMediaSettingsCard from '@/components/DesktopMediaSettingsCard';
+import LocalDataSettingsCard from '@/components/LocalDataSettingsCard';
+import UserAIProviderSettingsCard from '@/components/UserAIProviderSettingsCard';
+import UserVisionProviderSettingsCard from '@/components/UserVisionProviderSettingsCard';
 import { useDesktopApp } from '@/components/DesktopAppFrame';
 import ThemeSelector from '@/components/theme/ThemeSelector';
+import { isNativeAndroidApp } from '@/lib/douyinNative';
+import { useAuth } from '@/lib/hooks/AuthContext';
 import { useSettings } from '@/lib/hooks/SettingsContext';
+import { useIsMobile } from '@/lib/hooks/useMediaQuery';
 import type { DesktopLayoutDensity } from '@/lib/types';
+import styles from './SettingsWorkspace.module.css';
 
 const WEB_APP_VERSION = '1.1.9';
+
+type SettingsSectionId = 'general' | 'appearance' | 'storage' | 'sync' | 'ai' | 'about';
+
+interface SettingsSection {
+  id: SettingsSectionId;
+  label: string;
+  description: string;
+  keywords: string;
+  icon: PhosphorIcon;
+}
+
+const SETTINGS_SECTIONS: SettingsSection[] = [
+  {
+    id: 'general',
+    label: '常规',
+    description: '当前设备和账号同步状态',
+    keywords: '应用 设备 连接 版本 桌面端 网页端',
+    icon: GearSix,
+  },
+  {
+    id: 'appearance',
+    label: '外观',
+    description: '调整主题和内容间距',
+    keywords: '主题 深色 浅色 系统 紧凑 舒展',
+    icon: PaintBrushBroad,
+  },
+  {
+    id: 'storage',
+    label: '存储与缓存',
+    description: '管理首页缓存和本地视频文件',
+    keywords: '本地 存储 缓存 首页 视频 下载 文件 备份',
+    icon: HardDrives,
+  },
+  {
+    id: 'sync',
+    label: '同步与问答',
+    description: '控制多渠道视频更新频率和问答列表数量',
+    keywords: '同步 定时 拉取 抖音 收藏 喜欢 作品 视频 数量 问答',
+    icon: ArrowsClockwise,
+  },
+  {
+    id: 'ai',
+    label: 'AI 服务',
+    description: '默认即可使用，需要时再接入自己的模型',
+    keywords: '模型 供应商 API Key Base OpenAI 基础 AI',
+    icon: Cpu,
+  },
+  {
+    id: 'about',
+    label: '版本更新',
+    description: '查看当前版本并检查更新',
+    keywords: '关于 更新 版本 Windows Android',
+    icon: Info,
+  },
+];
+
+const MOBILE_HIDDEN_SECTIONS = new Set<SettingsSectionId>(['appearance', 'ai']);
 
 const DENSITY_OPTIONS: Array<{
   value: DesktopLayoutDensity;
@@ -38,141 +119,250 @@ const DENSITY_OPTIONS: Array<{
   },
 ];
 
-export default function SettingsPage() {
+function SettingsWorkspace() {
   const { isDesktop } = useDesktopApp();
-  const {
-    settings,
-    updateDesktopDensity,
-    resetDesktopAppearance,
-  } = useSettings();
+  const { user, logout } = useAuth();
+  const { settings, updateDesktopDensity, resetDesktopAppearance } = useSettings();
+  const isMobile = useIsMobile();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [query, setQuery] = useState('');
+  const [nativeAndroid, setNativeAndroid] = useState(false);
+  const sectionParam = searchParams.get('section');
+
+  useEffect(() => {
+    setNativeAndroid(isNativeAndroidApp());
+  }, []);
+
+  useEffect(() => {
+    if (isMobile && MOBILE_HIDDEN_SECTIONS.has(sectionParam as SettingsSectionId)) {
+      router.replace('/settings?section=general', { scroll: false });
+    }
+  }, [isMobile, router, sectionParam]);
+
+  const availableSections = useMemo(
+    () => isMobile ? SETTINGS_SECTIONS.filter((section) => !MOBILE_HIDDEN_SECTIONS.has(section.id)) : SETTINGS_SECTIONS,
+    [isMobile],
+  );
+  const activeSection = availableSections.find((section) => section.id === sectionParam)
+    ?? availableSections[0];
+
+  const visibleSections = useMemo(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase('zh-CN');
+    if (!normalizedQuery) return availableSections;
+    return availableSections.filter((section) => (
+      `${section.label} ${section.description} ${section.keywords}`
+        .toLocaleLowerCase('zh-CN')
+        .includes(normalizedQuery)
+    ));
+  }, [availableSections, query]);
+
+  const selectSection = (id: SettingsSectionId) => {
+    setQuery('');
+    router.replace(`/settings?section=${id}`, { scroll: false });
+  };
 
   return (
-    <div className="desktop-core-page desktop-settings-page mx-auto max-w-3xl pb-4 md:pb-24">
-      <div className="mb-6 md:mb-8">
-        <h1 className="text-xl md:text-3xl font-bold text-foreground text-balance">设置</h1>
-        <p className="text-foreground-muted text-sm mt-1 text-pretty">调整外观，管理更新与连接状态</p>
-      </div>
+    <div className={`desktop-settings-page ${styles.workspace}`}>
+      <aside className={styles.rail} aria-label="设置分类">
+        <Link href="/" className={styles.backLink}>
+          <ArrowLeft size={16} aria-hidden="true" />
+          返回应用
+        </Link>
 
-      <div className="space-y-4">
-        <section className="settings-product-card">
-          <div className="settings-product-card__identity">
-            <img src="/icons/icon-192.png" alt="" width="48" height="48" />
-            <div>
-              <p className="text-base font-semibold text-foreground">知萃 KnowBrew</p>
-              <p className="text-xs text-foreground-muted mt-0.5">Web v{WEB_APP_VERSION}</p>
-            </div>
-          </div>
-          <p>
-            把抖音收藏、喜欢和自己的作品整理成完整文案，再继续提问、生成知识卡或行动计划。
-          </p>
-        </section>
-
-        <section className="appearance-settings-card" aria-labelledby="appearance-settings-title">
-          <header className="appearance-settings-card__header">
-            <div>
-              <span className="appearance-settings-card__eyebrow">
-                {isDesktop ? '当前 Windows 设备' : '当前设备'}
-              </span>
-              <h2 id="appearance-settings-title">外观与布局</h2>
-              <p>只保留三种主题，选择后立即生效并保存在这台设备。</p>
-            </div>
-            <button
-              type="button"
-              className="appearance-settings-card__reset"
-              onClick={resetDesktopAppearance}
-            >
-              <RotateCcw size={15} aria-hidden="true" />
-              恢复默认
+        <label className={styles.search}>
+          <MagnifyingGlass size={16} aria-hidden="true" />
+          <span className="sr-only">搜索设置</span>
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索设置…"
+          />
+          {query && (
+            <button type="button" onClick={() => setQuery('')} aria-label="清除搜索">
+              <X size={14} aria-hidden="true" />
             </button>
-          </header>
+          )}
+        </label>
 
-          <div className="appearance-settings-card__body">
-            <fieldset className="appearance-control-group">
-              <legend>应用主题</legend>
-              <ThemeSelector />
-            </fieldset>
-
-            <fieldset className="appearance-control-group">
-              <legend>桌面布局</legend>
-              <div className="appearance-option-grid">
-                {DENSITY_OPTIONS.map((option) => {
-                  const Icon = option.icon;
-                  const selected = settings.desktopDensity === option.value;
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      role="radio"
-                      aria-checked={selected}
-                      className={`appearance-option ${selected ? 'is-selected' : ''}`}
-                      onClick={() => updateDesktopDensity(option.value)}
-                    >
-                      <span className="appearance-option__icon" aria-hidden="true">
-                        <Icon size={18} />
-                      </span>
-                      <span className="appearance-option__copy">
-                        <strong>{option.label}</strong>
-                        <small>{option.description}</small>
-                      </span>
-                      <span className="appearance-option__check" aria-hidden="true">
-                        {selected && <Check size={14} strokeWidth={2.4} />}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </fieldset>
-
+        <p className={styles.groupLabel}>个人</p>
+        <nav className={styles.navigation}>
+          {visibleSections.map((section) => {
+            const Icon = section.icon;
+            const selected = section.id === activeSection.id;
+            return (
+              <button
+                key={section.id}
+                type="button"
+                className={`${styles.navButton} ${selected ? styles.navButtonActive : ''}`}
+                data-section-id={section.id}
+                aria-current={selected ? 'page' : undefined}
+                onClick={() => selectSection(section.id)}
+              >
+                <Icon size={17} weight={selected ? 'fill' : 'regular'} aria-hidden="true" />
+                <span>{section.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+        {visibleSections.length === 0 && (
+          <div className={styles.emptySearch}>
+            <p>没有找到相关设置</p>
+            <button type="button" onClick={() => setQuery('')}>清除搜索</button>
           </div>
-        </section>
+        )}
+        <div className={styles.railVersion}>知萃 · Web v{WEB_APP_VERSION}</div>
+      </aside>
 
-        <AppUpdateSettingsCard />
+      <main className={styles.content}>
+        <div className={styles.contentInner}>
+          <h1 className="sr-only">{activeSection.label}</h1>
 
-        <section className="settings-info-list">
-          <div className="flex items-center gap-3">
-            <Smartphone size={18} className="text-accent-emerald flex-shrink-0" />
-            <div>
-              <p className="text-sm font-semibold text-foreground">连接方式</p>
-              <p className="text-xs text-foreground-muted mt-0.5">
-                正式版通过 HTTPS 安全连接 luxai.cn，登录状态保存在当前设备
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Globe size={18} className="text-foreground-muted flex-shrink-0" />
-            <div>
-              <p className="text-sm font-semibold text-foreground">Web 版</p>
-              <p className="text-xs text-foreground-muted mt-0.5">
-                网页端、Android 与 Windows 桌面端共用账号、视频资料库、知识卡和计划
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Monitor size={18} className="text-foreground-muted flex-shrink-0" />
-            <div>
-              <p className="text-sm font-semibold text-foreground">Windows 桌面端</p>
-              <p className="text-xs text-foreground-muted mt-0.5">
-                支持在本机 Chrome 或 Edge 完成抖音扫码，启动后自动检查新版
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Cpu size={18} className="text-foreground-muted flex-shrink-0" />
-            <div>
-              <p className="text-sm font-semibold text-foreground">AI 引擎</p>
-              <p className="text-xs text-foreground-muted mt-0.5">
-                使用管理端当前启用的模型配置，切换模型后无需重新安装 App
-              </p>
-            </div>
-          </div>
-        </section>
+          <div className={styles.sectionStack}>
+            {activeSection.id === 'general' && (
+              <>
+                <section className={styles.summaryCard} aria-label="当前应用状态">
+                  <div className={styles.summaryRow}>
+                    <div>
+                      <strong>当前使用</strong>
+                      <span>这些设置只影响这台设备</span>
+                    </div>
+                    <b>{nativeAndroid ? 'Android App' : isDesktop ? 'Windows 桌面端' : '网页端'}</b>
+                  </div>
+                  <div className={styles.summaryRow}>
+                    <div>
+                      <strong>账号内容</strong>
+                      <span>视频资料、知识和计划跟随账号</span>
+                    </div>
+                    <b className={styles.healthy}>自动同步</b>
+                  </div>
+                  <div className={styles.summaryRow}>
+                    <div>
+                      <strong>网页版本</strong>
+                      <span>客户端版本可在“版本更新”中查看</span>
+                    </div>
+                    <b className="tabular-nums">v{WEB_APP_VERSION}</b>
+                  </div>
+                </section>
 
-        <div className="settings-footnote">
-          <p className="text-xs text-foreground-muted leading-relaxed text-center">
-            Android 与 Windows 桌面端会自动检查新版，也可以随时在本页手动检查。
-          </p>
+                <section className={styles.mobileActions} aria-label="账号与帮助">
+                  <div className={styles.mobileAccount}>
+                    <span aria-hidden="true"><UserCircle size={22} /></span>
+                    <div>
+                      <strong>{user?.username || '我的账号'}</strong>
+                      <small>{user?.email || '内容已安全同步'}</small>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => window.dispatchEvent(new Event('zhicui:open-feedback'))}
+                  >
+                    <ChatCircleDots size={19} aria-hidden="true" />
+                    <span>意见反馈</span>
+                  </button>
+                  <button type="button" onClick={() => selectSection('about')}>
+                    <Info size={19} aria-hidden="true" />
+                    <span>检查更新</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.mobileLogout}
+                    onClick={() => {
+                      logout();
+                      router.replace('/login');
+                    }}
+                  >
+                    <SignOut size={19} aria-hidden="true" />
+                    <span>退出登录</span>
+                  </button>
+                </section>
+              </>
+            )}
+
+            {activeSection.id === 'appearance' && (
+              <section className="appearance-settings-card" aria-labelledby="appearance-settings-title">
+                <header className="appearance-settings-card__header">
+                  <div>
+                    <h2 id="appearance-settings-title">显示方式</h2>
+                    <p>修改后立即生效，只保存在当前设备。</p>
+                  </div>
+                  <button type="button" className="appearance-settings-card__reset" onClick={resetDesktopAppearance}>
+                    <RotateCcw size={15} aria-hidden="true" />
+                    恢复默认
+                  </button>
+                </header>
+                <div className="appearance-settings-card__body">
+                  <fieldset className="appearance-control-group">
+                    <legend>应用主题</legend>
+                    <ThemeSelector />
+                  </fieldset>
+                  <fieldset className="appearance-control-group">
+                    <legend>桌面布局</legend>
+                    <div className="appearance-option-grid">
+                      {DENSITY_OPTIONS.map((option) => {
+                        const Icon = option.icon;
+                        const selected = settings.desktopDensity === option.value;
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            role="radio"
+                            aria-checked={selected}
+                            className={`appearance-option ${selected ? 'is-selected' : ''}`}
+                            onClick={() => updateDesktopDensity(option.value)}
+                          >
+                            <span className="appearance-option__icon" aria-hidden="true"><Icon size={18} /></span>
+                            <span className="appearance-option__copy">
+                              <strong>{option.label}</strong>
+                              <small>{option.description}</small>
+                            </span>
+                            <span className="appearance-option__check" aria-hidden="true">
+                              {selected && <Check size={14} strokeWidth={2.4} />}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </fieldset>
+                </div>
+              </section>
+            )}
+
+            {activeSection.id === 'storage' && (
+              <>
+                <LocalDataSettingsCard />
+                <DesktopMediaSettingsCard />
+              </>
+            )}
+
+            {activeSection.id === 'sync' && (
+              <>
+                <AgentSourceLimitSettingsCard />
+                <AutoSyncSettingsCard />
+              </>
+            )}
+            {activeSection.id === 'ai' && !isMobile && (
+              <section className={styles.technicalSection}>
+                <UserAIProviderSettingsCard />
+                <UserVisionProviderSettingsCard />
+              </section>
+            )}
+
+            {activeSection.id === 'about' && (
+              <AppUpdateSettingsCard />
+            )}
+          </div>
         </div>
-      </div>
+      </main>
     </div>
+  );
+}
+
+export default function SettingsPage() {
+  return (
+    <Suspense fallback={<div className={styles.loading}>正在打开设置…</div>}>
+      <SettingsWorkspace />
+    </Suspense>
   );
 }

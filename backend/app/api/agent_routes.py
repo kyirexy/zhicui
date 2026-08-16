@@ -2,25 +2,40 @@
 
 from __future__ import annotations
 
+import json
+import queue
 import secrets
+import threading
+import time
 import traceback
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.auth import get_current_user
-from app.core.database import get_db
+from app.core.database import SessionLocal, get_db
+from app.core.request_context import reset_request_context, set_request_context
 from app.models.user import User
+from app.models.note import Note
 from app.services import (
     activity_service,
     auth_service,
     agent_service,
     automation_runner,
     automation_service,
+    chat_credit_billing_service,
+    chat_model_catalog_service,
+    creator_sync_service,
     email_delivery,
+    error_log_service,
+    library_hidden_service,
+    user_ai_provider_service,
 )
 
 
@@ -29,6 +44,64 @@ router = APIRouter(prefix="/api/agent", tags=["video-agent"])
 
 def _ok(data: Any) -> dict[str, Any]:
     return {"success": True, "data": data, "error": None}
+
+
+def _agent_failure_metadata(user_id: str) -> dict[str, str]:
+    """Best-effort diagnostics that must never mask the original failure."""
+    metadata = {"operation": "agent_ask"}
+    try:
+        with SessionLocal() as log_db:
+            llm_config = user_ai_provider_service.effective_config(
+                log_db,
+                user_id,
+            )
+    except Exception:
+        return metadata
+    metadata["provider"] = str(llm_config.get("provider", ""))
+    metadata["model"] = str(llm_config.get("model", ""))
+    return metadata
+
+
+def _reserve_chat_charge(db: Session, user_id: str):
+    if user_ai_provider_service.uses_custom_provider(db, user_id):
+        return None
+    offering = chat_model_catalog_service.selected_offering(db, user_id)
+    return chat_credit_billing_service.reserve(
+        db,
+        user_id=user_id,
+        offering=offering,
+        request_id=str(uuid.uuid4()),
+    )
+
+
+def _release_chat_charge_safely(db: Session, charge) -> None:
+    if charge is None:
+        return
+    try:
+        chat_credit_billing_service.release(db, charge)
+    except Exception:
+        db.rollback()
+
+
+def _sse_data(event: dict[str, Any]) -> str:
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
+def _answer_stream_chunks(content: str) -> list[str]:
+    """Split finalized Markdown at natural boundaries for stable rendering."""
+    chunks: list[str] = []
+    current: list[str] = []
+    boundaries = set("，。！？；：、,.!?;:\n")
+    for character in content:
+        current.append(character)
+        if (
+            len(current) >= 8 and character in boundaries
+        ) or len(current) >= 18:
+            chunks.append("".join(current))
+            current = []
+    if current:
+        chunks.append("".join(current))
+    return chunks
 
 
 class ThreadCreateRequest(BaseModel):
@@ -53,6 +126,23 @@ class ThreadMessageRequest(BaseModel):
     ] = "answer"
     custom_instruction: str = Field(default="", max_length=600)
     web_scope: Literal["auto", "video_only"] = "auto"
+
+
+class VideoAnalysisDecisionRequest(BaseModel):
+    action: Literal["approve", "text_only", "cancel", "reprepare"]
+    idempotency_key: str = Field(default="", max_length=160)
+    offering_id: str | None = Field(default=None, max_length=36)
+    use_byok: bool = False
+
+
+class SourceSearchRequest(BaseModel):
+    query: str = Field(..., min_length=2, max_length=200)
+    scope: Literal[
+        "all", "all_ready", "yesterday", "yesterday_new",
+        "collect", "like", "post",
+    ] = "all_ready"
+    timezone: str = Field(default="Asia/Shanghai", max_length=64)
+    limit: int = Field(default=30, ge=1, le=50)
 
 
 class AutomationCreateRequest(BaseModel):
@@ -91,6 +181,10 @@ class EmailVerificationConfirmRequest(BaseModel):
     token: str = Field(..., min_length=20, max_length=2048)
 
 
+class SourceBatchDeleteRequest(BaseModel):
+    note_ids: list[str] = Field(..., min_length=1, max_length=50)
+
+
 @router.get("/sources")
 def list_agent_sources(
     scope: Literal[
@@ -99,10 +193,24 @@ def list_agent_sources(
     ] = Query("all_ready"),
     q: str = Query("", max_length=80),
     timezone: str = Query("Asia/Shanghai", max_length=64),
-    limit: int = Query(100, ge=1, le=200),
+    limit: int = Query(100, ge=1, le=1000),
+    include_id: list[str] | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
+    raw_include_ids = include_id or []
+    if len(raw_include_ids) > 100:
+        raise HTTPException(status_code=422, detail="一次最多补齐 100 条已选资料")
+    clean_include_ids: list[str] = []
+    for raw_note_id in raw_include_ids:
+        note_id = str(raw_note_id or "").strip()
+        try:
+            valid_uuid = str(UUID(note_id))
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise HTTPException(status_code=422, detail="已选资料标识格式无效") from exc
+        if len(note_id) != 36 or valid_uuid != note_id.lower():
+            raise HTTPException(status_code=422, detail="已选资料标识格式无效")
+        clean_include_ids.append(note_id)
     try:
         result = agent_service.list_sources(
             db,
@@ -111,6 +219,95 @@ def list_agent_sources(
             search=q,
             timezone_name=timezone,
             limit=limit,
+            include_ids=clean_include_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _ok(result)
+
+
+@router.delete("/sources/{note_id}")
+def delete_agent_source(
+    note_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    note = db.query(Note).filter(
+        Note.id == note_id,
+        Note.user_id == current_user.id,
+    ).first()
+    if note is None:
+        raise HTTPException(status_code=404, detail="视频资料不存在或已删除")
+    source = note.to_dict()
+    platform = str(source.get("platform") or "").strip().lower()
+    video_id = str(note.video_id or "").strip()
+    if platform == "douyin" and video_id:
+        library_hidden_service.hide_aweme_ids(
+            db, current_user.id, [video_id], "permanent",
+        )
+    creator_sync_service.mark_note_permanently_removed(
+        db, user_id=current_user.id, note_id=note.id
+    )
+    db.delete(note)
+    db.commit()
+    return _ok({"deleted": True, "note_id": note_id, "permanent": True})
+
+
+@router.post("/sources/batch-delete")
+def batch_delete_agent_sources(
+    body: SourceBatchDeleteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    clean_ids = list(dict.fromkeys(str(value or "").strip() for value in body.note_ids))
+    try:
+        clean_ids = [str(UUID(value)) for value in clean_ids]
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise HTTPException(status_code=422, detail="视频资料标识格式无效") from exc
+    notes = db.query(Note).filter(
+        Note.user_id == current_user.id,
+        Note.id.in_(clean_ids),
+    ).all()
+    douyin_ids = [
+        str(note.video_id or "").strip()
+        for note in notes
+        if str(note.to_dict().get("platform") or "").strip().lower() == "douyin"
+        and str(note.video_id or "").strip()
+    ]
+    if douyin_ids:
+        library_hidden_service.hide_aweme_ids(
+            db, current_user.id, douyin_ids, "permanent",
+        )
+    for note in notes:
+        creator_sync_service.mark_note_permanently_removed(
+            db, user_id=current_user.id, note_id=note.id
+        )
+    deleted_ids = [note.id for note in notes]
+    for note in notes:
+        db.delete(note)
+    db.commit()
+    return _ok({
+        "deleted": len(deleted_ids),
+        "deleted_ids": deleted_ids,
+        "missing_ids": [value for value in clean_ids if value not in set(deleted_ids)],
+        "permanent": True,
+    })
+
+
+@router.post("/source-search")
+def search_agent_sources(
+    body: SourceSearchRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    try:
+        result = agent_service.smart_search_sources(
+            db,
+            user_id=current_user.id,
+            query=body.query,
+            scope=body.scope,
+            timezone_name=body.timezone,
+            limit=body.limit,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -212,13 +409,16 @@ def delete_agent_thread(
 def send_agent_message(
     thread_id: str,
     body: ThreadMessageRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     thread = agent_service.get_thread(db, thread_id, current_user.id)
     if thread is None:
         raise HTTPException(status_code=404, detail="Agent 任务不存在")
+    charge = None
     try:
+        charge = _reserve_chat_charge(db, str(current_user.id))
         user_message, assistant_message = agent_service.ask_thread(
             db,
             thread=thread,
@@ -228,10 +428,35 @@ def send_agent_message(
             custom_instruction=body.custom_instruction,
             web_scope=body.web_scope,
         )
+        if charge is not None:
+            chat_credit_billing_service.capture(db, charge)
+        charge = None
+    except agent_service.AgentVideoAnalysisTerminal as exc:
+        _release_chat_charge_safely(db, charge)
+        return _ok(exc.payload)
+    except agent_service.AgentThreadConflictError as exc:
+        _release_chat_charge_safely(db, charge)
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+            headers={"Retry-After": "3"},
+        ) from exc
     except ValueError as exc:
+        _release_chat_charge_safely(db, charge)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
+        _release_chat_charge_safely(db, charge)
         traceback.print_exc()
+        error_log_service.record_exception_safely(
+            exc,
+            source="llm",
+            status_code=502,
+            method="POST",
+            path="/api/agent/threads/{thread_id}/messages",
+            user_id=current_user.id,
+            ip=request.client.host if request.client else None,
+            metadata=_agent_failure_metadata(current_user.id),
+        )
         raise HTTPException(
             status_code=502,
             detail="视频 Agent 暂时没有完成回答，请稍后重试。",
@@ -246,6 +471,211 @@ def send_agent_message(
         "user_message": user_message.to_dict(),
         "assistant_message": assistant_message.to_dict(),
     })
+
+
+@router.post("/threads/{thread_id}/messages/stream")
+def stream_agent_message(
+    thread_id: str,
+    body: ThreadMessageRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    """Stream real research milestones, then the validated final answer.
+
+    The LLM's final call returns structured JSON containing the answer and its
+    citations. Streaming that raw JSON would expose broken partial syntax, so
+    milestones are emitted while research runs and only the validated answer
+    text is progressively revealed once its evidence has been checked.
+    """
+    thread = agent_service.get_thread(db, thread_id, current_user.id)
+    if thread is None:
+        raise HTTPException(status_code=404, detail="Agent 任务不存在")
+
+    user_id = str(current_user.id)
+    client_ip = request.client.host if request.client else None
+    request_body = body.model_dump()
+    events: queue.Queue[dict[str, Any] | None] = queue.Queue()
+
+    def emit(event: dict[str, Any]) -> None:
+        events.put(event)
+
+    def run_agent() -> None:
+        context_tokens = set_request_context(
+            user_id,
+            f"/api/agent/threads/{thread_id}/messages/stream",
+        )
+        charge = None
+        try:
+            with SessionLocal() as worker_db:
+                worker_thread = agent_service.get_thread(
+                    worker_db,
+                    thread_id,
+                    user_id,
+                )
+                if worker_thread is None:
+                    emit({
+                        "type": "error",
+                        "status": 404,
+                        "message": "Agent 任务不存在",
+                    })
+                    return
+
+                charge = _reserve_chat_charge(worker_db, user_id)
+                user_message, assistant_message = agent_service.ask_thread(
+                    worker_db,
+                    thread=worker_thread,
+                    content=request_body["content"],
+                    research_mode=request_body["research_mode"],
+                    output_style=request_body["output_style"],
+                    custom_instruction=request_body["custom_instruction"],
+                    web_scope=request_body["web_scope"],
+                    progress_callback=lambda progress: emit({
+                        "type": "progress",
+                        **progress,
+                    }),
+                )
+                if charge is not None:
+                    chat_credit_billing_service.capture(worker_db, charge)
+                charge = None
+
+                assistant_payload = assistant_message.to_dict()
+                emit({
+                    "type": "assistant_start",
+                    "message": {**assistant_payload, "content": ""},
+                })
+                for chunk in _answer_stream_chunks(assistant_message.content):
+                    emit({"type": "delta", "delta": chunk})
+                    # A very short yield keeps markdown updates observable while
+                    # adding less than a second for a typical response.
+                    time.sleep(0.02)
+
+                result = {
+                    "thread": agent_service.serialize_thread(
+                        worker_db,
+                        worker_thread,
+                        include_messages=True,
+                        include_sources=True,
+                    ),
+                    "user_message": user_message.to_dict(),
+                    "assistant_message": assistant_payload,
+                }
+                emit({"type": "done", "data": result})
+        except agent_service.AgentVideoAnalysisTerminal as exc:
+            with SessionLocal() as release_db:
+                _release_chat_charge_safely(release_db, charge)
+            emit({"type": exc.event_type, "data": exc.payload})
+        except agent_service.AgentThreadConflictError as exc:
+            with SessionLocal() as release_db:
+                _release_chat_charge_safely(release_db, charge)
+            emit({"type": "error", "status": 409, "message": str(exc)})
+        except ValueError as exc:
+            with SessionLocal() as release_db:
+                _release_chat_charge_safely(release_db, charge)
+            emit({"type": "error", "status": 422, "message": str(exc)})
+        except Exception as exc:
+            with SessionLocal() as release_db:
+                _release_chat_charge_safely(release_db, charge)
+            traceback.print_exc()
+            error_log_service.record_exception_safely(
+                exc,
+                source="llm",
+                status_code=502,
+                method="POST",
+                path="/api/agent/threads/{thread_id}/messages/stream",
+                user_id=user_id,
+                ip=client_ip,
+                metadata=_agent_failure_metadata(user_id),
+            )
+            emit({
+                "type": "error",
+                "status": 502,
+                "message": "视频 Agent 暂时没有完成回答，请稍后重试。",
+            })
+        finally:
+            reset_request_context(context_tokens)
+            events.put(None)
+
+    threading.Thread(
+        target=run_agent,
+        name=f"agent-stream-{thread_id[:8]}",
+        daemon=True,
+    ).start()
+
+    def event_stream():
+        yield _sse_data({
+            "type": "progress",
+            "stage": "queued",
+            "message": "问题已接收，正在准备视频资料",
+        })
+        while True:
+            try:
+                event = events.get(timeout=15)
+            except queue.Empty:
+                yield ": keep-alive\n\n"
+                continue
+            if event is None:
+                break
+            yield _sse_data(event)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/threads/{thread_id}/video-analysis/{run_id}/decision")
+def decide_agent_video_analysis(
+    thread_id: str,
+    run_id: str,
+    body: VideoAnalysisDecisionRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    thread = agent_service.get_thread(db, thread_id, current_user.id)
+    if thread is None:
+        raise HTTPException(status_code=404, detail="Agent 任务不存在")
+    try:
+        result = agent_service.decide_agent_video_analysis(
+            db,
+            thread=thread,
+            user_id=current_user.id,
+            run_id=run_id,
+            action=body.action,
+            idempotency_key=body.idempotency_key,
+            offering_id=body.offering_id,
+            use_byok=body.use_byok,
+        )
+    except agent_service.AgentThreadConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=int(getattr(exc, "status_code", 422)),
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        traceback.print_exc()
+        error_log_service.record_exception_safely(
+            exc,
+            source="backend",
+            status_code=502,
+            method="POST",
+            path="/api/agent/threads/{thread_id}/video-analysis/{run_id}/decision",
+            user_id=current_user.id,
+            ip=request.client.host if request.client else None,
+            metadata={"operation": "agent_video_analysis_decision"},
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="详细解析操作暂时没有完成，请稍后重试。",
+        ) from exc
+    return _ok(result)
 
 
 @router.get("/automations/status")

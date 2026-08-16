@@ -3,10 +3,11 @@
 import type { CSSProperties } from 'react';
 import Link from 'next/link';
 import {
+  Captions,
   CheckCircle2,
   Clock3,
-  FileText,
   LoaderCircle,
+  Sparkles,
   TriangleAlert,
 } from 'lucide-react';
 import LibraryCoverImage from '@/components/LibraryCoverImage';
@@ -36,6 +37,7 @@ export default function LibraryExtractionLiveProgress({
   const summary = summarizeLibraryExtraction(job);
   const recentResults = getRecentCompletedResults(job, items);
   const isTranscriptJob = job.operation === 'transcript';
+  const isStructuredJob = job.operation === 'full';
   const progressStyle = {
     '--library-live-progress': summary.percent / 100,
   } as CSSProperties;
@@ -44,7 +46,11 @@ export default function LibraryExtractionLiveProgress({
     <section
       className="library-live-progress"
       aria-live="polite"
-      aria-label={isTranscriptJob ? '文案实时提取进度' : 'AI 实时处理进度'}
+      aria-label={isTranscriptJob
+        ? '文案实时提取进度'
+        : isStructuredJob
+          ? '结构化文案实时提取进度'
+          : 'AI 实时处理进度'}
     >
       <div className="library-live-progress-heading">
         <span className="library-live-progress-icon" aria-hidden="true">
@@ -53,7 +59,13 @@ export default function LibraryExtractionLiveProgress({
             : <CheckCircle2 size={17} />}
         </span>
         <div>
-          <strong>{isTranscriptJob ? '文案正在逐条就绪' : 'AI 正在逐条完成'}</strong>
+          <strong>
+            {isTranscriptJob
+              ? '文案正在逐条就绪'
+              : isStructuredJob
+                ? '结构化文案正在逐条完成'
+                : 'AI 正在逐条完成'}
+          </strong>
           <p>
             {summary.completed > 0
               ? `已经完成 ${summary.completed} 条，可以先查看和提问，不用等全部结束。`
@@ -101,7 +113,7 @@ export default function LibraryExtractionLiveProgress({
       {recentResults.length > 0 && (
         <div className="library-live-results">
           <p>
-            <FileText size={13} />
+            {isTranscriptJob ? <Captions size={13} /> : <Sparkles size={13} />}
             刚刚完成
           </p>
           <div>
@@ -116,13 +128,18 @@ export default function LibraryExtractionLiveProgress({
                   src={item.cover_proxy_url || item.cover_url}
                   fallbackClassName="library-live-result-cover"
                   iconSize={17}
+                  retryable={false}
                 />
                 <span>
                   <strong title={item.title}>{item.title}</strong>
                   <small>
                     <CheckCircle2 size={12} />
                     {formatCount(transcriptChars)}
-                    {isTranscriptJob ? ' · 现在可提问' : ' · AI 已完成'}
+                    {isTranscriptJob
+                      ? ' · 现在可提问'
+                      : isStructuredJob
+                        ? ' · 结构化文案已完成'
+                        : ' · AI 已完成'}
                   </small>
                 </span>
               </Link>

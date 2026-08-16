@@ -5,15 +5,17 @@ API route definitions for VideoCapsule.
 from __future__ import annotations
 
 import json
+import importlib.util
 import time
 import traceback
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib.parse import unquote
 
 import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
@@ -27,16 +29,25 @@ from app.services import (
     activity_service,
     app_release_service,
     audit_service,
+    chat_credit_billing_service,
+    chat_model_catalog_service,
+    creator_connectors,
+    creator_sync_service,
+    creator_sync_worker,
     douyin_binding_service,
     douyin_library,
     error_log_service,
     feedback_service,
+    image_memory_cache,
     library_extraction_service,
     library_hidden_service,
     llm_usage_service,
+    knowledge_service,
     note_service,
+    platform_library_service,
     plan_service,
     settings_service,
+    user_ai_provider_service,
     video_source_ledger_service,
     video_extractor,
 )
@@ -45,6 +56,90 @@ from app.services.video_extractor import _detect_platform
 from app.services.wechat_extractor import extract_wechat_article
 
 router = APIRouter()
+
+_COVER_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _cover_placeholder_response() -> Response:
+    """Return a retryable image error when the remote cover is unavailable."""
+    svg = """<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#eef5f1"/><stop offset="1" stop-color="#dcebe3"/></linearGradient></defs>
+<rect width="640" height="360" fill="url(#g)"/><rect x="270" y="130" width="100" height="100" rx="22" fill="#fff" fill-opacity=".72"/>
+<path d="M309 164v32l27-16-27-16Z" fill="#43866a"/><path d="M286 215h68" stroke="#8aab9d" stroke-width="8" stroke-linecap="round"/>
+</svg>"""
+    return Response(
+        content=svg.encode("utf-8"),
+        status_code=503,
+        media_type="image/svg+xml",
+        headers={
+            "Cache-Control": "private, no-store",
+            "Retry-After": "1",
+            "X-Content-Type-Options": "nosniff",
+            "X-Zhicui-Cover-Fallback": "1",
+        },
+    )
+
+
+def _proxy_douyin_image(target_url: str, session_scope: str) -> Response:
+    """Read one loopback image proxy with bounded buffering and browser caching."""
+    cache_key = f"{session_scope}:{target_url}"
+    cached = image_memory_cache.get(cache_key)
+    if cached is not None:
+        return Response(
+            content=cached.content,
+            media_type=cached.content_type,
+            headers={
+                "Cache-Control": "private, max-age=1800, stale-while-revalidate=60",
+                "X-Content-Type-Options": "nosniff",
+                "X-Zhicui-Image-Cache": "hit",
+            },
+        )
+    try:
+        response = http_requests.get(
+            target_url,
+            headers={
+                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+                "Accept-Encoding": "identity",
+                **douyin_library.companion_headers(session_scope),
+            },
+            stream=True,
+            timeout=(5, 45),
+        )
+        response.raise_for_status()
+    except Exception:
+        return _cover_placeholder_response()
+
+    content_type = response.headers.get("Content-Type", "image/jpeg")
+    if not content_type.lower().startswith("image/"):
+        response.close()
+        return _cover_placeholder_response()
+    try:
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in response.iter_content(chunk_size=64 * 1024):
+            if not chunk:
+                continue
+            total += len(chunk)
+            if total > _COVER_MAX_BYTES:
+                return _cover_placeholder_response()
+            chunks.append(chunk)
+        image_bytes = b"".join(chunks)
+    except Exception:
+        return _cover_placeholder_response()
+    finally:
+        response.close()
+    if not image_bytes:
+        return _cover_placeholder_response()
+    image_memory_cache.put(cache_key, content_type, image_bytes)
+    return Response(
+        content=image_bytes,
+        media_type=content_type,
+        headers={
+            "Cache-Control": "private, max-age=1800, stale-while-revalidate=60",
+            "X-Content-Type-Options": "nosniff",
+            "X-Zhicui-Image-Cache": "miss",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +161,29 @@ class ExtractRequest(BaseModel):
     url: str = Field(..., min_length=1, description="Douyin share link or text containing one")
 
 
+class PlatformLibraryImportRequest(BaseModel):
+    urls: list[str] = Field(..., min_length=1, max_length=10)
+
+    @field_validator("urls")
+    @classmethod
+    def validate_urls(cls, values: list[str]) -> list[str]:
+        cleaned = [value.strip() for value in values if value and value.strip()]
+        if not cleaned:
+            raise ValueError("请至少填写一条 B站或小红书链接")
+        if len(cleaned) > platform_library_service.MAX_IMPORT_URLS:
+            raise ValueError("每次最多导入 10 条链接")
+        return cleaned
+
+
+class CreatorSourceRequest(BaseModel):
+    platform: Literal["douyin", "bilibili", "xiaohongshu"]
+    profile_ref: str = Field(..., min_length=1, max_length=1024)
+
+
+class CreatorSyncRunRequest(BaseModel):
+    limit: Literal[20, 50, 100] = 50
+
+
 class NoteChatHistoryItem(BaseModel):
     role: Literal["user", "assistant"]
     content: str = Field(..., min_length=1, max_length=1000)
@@ -75,6 +193,11 @@ class NoteAskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=600)
     history: list[NoteChatHistoryItem] = Field(default_factory=list, max_length=6)
     research_scope: Literal["auto", "video_only"] = "auto"
+
+
+class VisualAskRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=600)
+    history: list[NoteChatHistoryItem] = Field(default_factory=list, max_length=6)
 
 
 class LibraryCollectRequest(BaseModel):
@@ -185,6 +308,49 @@ class FeedbackCreateRequest(BaseModel):
     user_agent: str = Field(default="", max_length=512)
     viewport: str = Field(default="", max_length=64)
     app_version: str = Field(default="", max_length=64)
+
+
+class KnowledgeEntryCreateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=256)
+    summary: str = Field(default="", max_length=4_000)
+    content: str = Field(..., min_length=1, max_length=100_000)
+    source_label: str = Field(default="", max_length=256)
+
+
+class KnowledgeEntryUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=256)
+    summary: str | None = Field(default=None, max_length=4_000)
+    content: str | None = Field(default=None, min_length=1, max_length=100_000)
+    source_label: str | None = Field(default=None, max_length=256)
+
+
+class UserAIProviderRequest(BaseModel):
+    mode: Literal["platform", "custom"] = "platform"
+    provider_name: str = Field(default="OpenAI Compatible", max_length=80)
+    model: str = Field(default="", max_length=160)
+    api_base: str = Field(default="", max_length=512)
+    api_key: str = Field(default="", max_length=4096)
+
+
+class UserChatModelRequest(BaseModel):
+    offering_id: str = Field(..., min_length=36, max_length=36)
+
+
+class AdminChatModelRequest(BaseModel):
+    code: str = Field(..., min_length=2, max_length=80)
+    name: str = Field(..., min_length=1, max_length=120)
+    description: str = Field(default="", max_length=300)
+    provider_mode: Literal["platform", "omniroute"] = "platform"
+    model_id: str = Field(..., min_length=1, max_length=160)
+    enabled: bool = True
+    visible_to_users: bool = True
+    is_default: bool = False
+    is_free: bool = False
+    free_daily_limit: int = Field(default=0, ge=0, le=100_000)
+    points_per_request: int = Field(default=0, ge=0, le=100_000_000)
+    supports_images: bool = False
+    supports_tools: bool = False
+    sort_order: int = Field(default=100, ge=0, le=100_000)
 
 
 # ---------------------------------------------------------------------------
@@ -1022,6 +1188,91 @@ def extract_stream(
 
 
 # ---------------------------------------------------------------------------
+# Bilibili / Xiaohongshu video-library imports
+# ---------------------------------------------------------------------------
+
+# Cross-platform imports live on the primary router so every documented
+# backend entry point exposes the same Bilibili/Xiaohongshu API surface.
+@router.post("/api/library/imports")
+def import_platform_library_items(
+    body: PlatformLibraryImportRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Import up to ten Bilibili/Xiaohongshu links without implicit LLM work."""
+    try:
+        result = platform_library_service.import_many(
+            db, user_id=current_user.id, values=body.urls,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _ok(result)
+
+
+@router.get("/api/library/imports")
+def list_platform_library_items(
+    platform: Literal["all", "bilibili", "xiaohongshu"] = Query("all"),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    notes = platform_library_service.list_notes(
+        db, user_id=current_user.id, platform=platform,
+    )
+    return _ok({
+        "items": [platform_library_service.serialize_item(note) for note in notes],
+        "total": len(notes),
+    })
+
+
+@router.get("/api/library/imports/{note_id}")
+def get_platform_library_item(
+    note_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    workspace = platform_library_service.get_workspace(
+        db, user_id=current_user.id, note_id=note_id,
+    )
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="视频资料不存在")
+    return _ok(workspace)
+
+
+@router.post("/api/library/imports/{note_id}/initialize")
+def initialize_platform_library_item(
+    note_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        note, reused = platform_library_service.initialize_ai(
+            db, user_id=current_user.id, note_id=note_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=502, detail="摘要笔记生成失败，请稍后重试") from exc
+    return _ok({"note": note.to_dict(), "already_existed": reused})
+
+
+@router.delete("/api/library/imports/{note_id}")
+def delete_platform_library_item(
+    note_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    deleted = platform_library_service.delete_import(
+        db, user_id=current_user.id, note_id=note_id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="视频资料不存在")
+    return _ok({"deleted": True, "database_media_deleted": False})
+
+
+# ---------------------------------------------------------------------------
 # Douyin batch library endpoints
 # ---------------------------------------------------------------------------
 
@@ -1535,75 +1786,73 @@ def stream_douyin_library_cover(
     db: Session = Depends(get_db),
 ):
     """Proxy a cover image without exposing loopback URLs or storing files."""
+    signature_is_current = douyin_library.verify_media_signature(
+        aweme_id,
+        binding,
+        expires,
+        signature,
+    )
+    signature_is_authentic = signature_is_current or douyin_library.verify_media_signature(
+        aweme_id,
+        binding,
+        expires,
+        signature,
+        allow_expired=True,
+    )
+    if not signature_is_authentic:
+        raise HTTPException(status_code=403, detail="视频封面地址已失效，请刷新页面")
+    account_binding = douyin_binding_service.get_by_id(db, binding)
+    if account_binding is None:
+        raise HTTPException(status_code=404, detail="抖音账号绑定不存在")
+    if not signature_is_current:
+        # An <img> cannot attach the JWT stored by the SPA. A valid old signed
+        # capability is therefore renewed here and followed transparently by
+        # the browser instead of leaving a long-open page with a permanent 403.
+        return RedirectResponse(
+            url=douyin_library.public_cover_url(aweme_id, binding),
+            status_code=307,
+            headers={"Cache-Control": "private, no-store"},
+        )
+    target_url = douyin_library.companion_cover_url(aweme_id)
+    return _proxy_douyin_image(
+        target_url,
+        account_binding.session_scope,
+    )
+
+
+@router.get("/api/library/douyin/gallery/{aweme_id}/{image_index}")
+def stream_douyin_library_gallery_image(
+    aweme_id: str = Path(
+        ...,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    ),
+    image_index: int = Path(..., ge=0, le=29),
+    expires: int = Query(..., ge=1),
+    signature: str = Query(..., min_length=64, max_length=64),
+    binding: str = Query(
+        ...,
+        min_length=24,
+        max_length=24,
+        pattern=r"^dyb-[0-9a-f]{20}$",
+    ),
+    db: Session = Depends(get_db),
+):
+    """Proxy one gallery image without exposing the loopback sidecar."""
     if not douyin_library.verify_media_signature(
         aweme_id,
         binding,
         expires,
         signature,
     ):
-        raise HTTPException(status_code=403, detail="视频封面地址已失效，请刷新页面")
+        raise HTTPException(status_code=403, detail="图文地址已失效，请刷新页面")
     account_binding = douyin_binding_service.get_by_id(db, binding)
     if account_binding is None:
         raise HTTPException(status_code=404, detail="抖音账号绑定不存在")
-    try:
-        item = douyin_library.get_item(
-            account_binding.session_scope,
-            account_binding.id,
-            aweme_id,
-        )
-    except douyin_library.DouyinLibraryError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    target_url = str((item or {}).get("cover_url") or "").strip()
-    if not target_url.startswith(("http://", "https://")):
-        raise HTTPException(status_code=404, detail="视频暂无可用封面")
-
-    request_headers = {
-        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-        "Accept-Encoding": "identity",
-        "Referer": "https://www.douyin.com/",
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/126.0.0.0 Safari/537.36"
-        ),
-    }
-    companion_base = settings.DOUYIN_DOWNLOADER_URL.strip().rstrip("/")
-    if companion_base and target_url.startswith(f"{companion_base}/"):
-        request_headers.update(
-            douyin_library.companion_headers(account_binding.session_scope)
-        )
-        request_headers.pop("Referer", None)
-    try:
-        response = http_requests.get(
-            target_url,
-            headers=request_headers,
-            stream=True,
-            timeout=(8, 45),
-        )
-        response.raise_for_status()
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"视频封面读取失败：{exc}") from exc
-
-    content_type = response.headers.get("Content-Type", "image/jpeg")
-    if not content_type.lower().startswith("image/"):
-        response.close()
-        raise HTTPException(status_code=502, detail="视频封面返回了无效格式")
-
-    def body():
-        try:
-            for chunk in response.iter_content(chunk_size=64 * 1024):
-                if chunk:
-                    yield chunk
-        finally:
-            response.close()
-
-    return StreamingResponse(
-        body(),
-        media_type=content_type,
-        headers={
-            "Cache-Control": "private, max-age=1800",
-            "X-Content-Type-Options": "nosniff",
-        },
+    return _proxy_douyin_image(
+        douyin_library.companion_gallery_image_url(aweme_id, image_index),
+        account_binding.session_scope,
     )
 
 
@@ -1618,7 +1867,11 @@ def list_douyin_library_items(
     mode: Literal["like", "collect", "post"] | None = Query(default=None),
     sort: Literal["collection", "published"] = Query(
         default="collection",
-        description="收藏来源默认按最近收藏；也可切换为发布时间",
+        description="喜欢和收藏默认按来源顺序；也可切换为发布时间",
+    ),
+    refresh_order: bool = Query(
+        default=False,
+        description="显式选择来源顺序时刷新抖音返回的喜欢或收藏顺序",
     ),
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
@@ -1632,6 +1885,7 @@ def list_douyin_library_items(
             0,
             mode=mode,
             sort_by=sort,
+            refresh_order=refresh_order,
         )
     except douyin_library.DouyinLibraryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -1875,6 +2129,91 @@ def get_douyin_library_item(
     })
 
 
+@router.post("/api/library/douyin/items/{aweme_id}/visual-ask")
+def ask_douyin_library_visual_item(
+    body: VisualAskRequest,
+    aweme_id: str = Path(
+        ...,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    ),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """没有可用文案时，临时携带当前作品图片或抽样帧进行问答。"""
+    if library_hidden_service.is_hidden(db, current_user.id, aweme_id):
+        raise HTTPException(status_code=404, detail="作品不存在或尚未同步")
+
+    binding = douyin_binding_service.get_or_create(db, current_user.id)
+    try:
+        item = douyin_library.get_item(
+            binding.session_scope,
+            binding.id,
+            aweme_id,
+        )
+    except douyin_library.DouyinLibraryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if item is None:
+        raise HTTPException(status_code=404, detail="作品不存在或尚未同步")
+
+    media_type = str(item.get("media_type") or "video")
+    try:
+        if media_type == "gallery":
+            images = douyin_library.gallery_image_data_urls(
+                binding.session_scope,
+                aweme_id,
+                len(item.get("gallery_images") or []),
+                max_images=8,
+            )
+        else:
+            images = ai_juicer.extract_video_frames(
+                douyin_library.companion_media_url(aweme_id),
+                max_frames=8,
+                request_headers=douyin_library.companion_headers(
+                    binding.session_scope
+                ),
+            )
+        if not images:
+            raise ValueError(
+                "当前作品暂时没有可读取的图片或视频画面，请稍后重试"
+            )
+        result = ai_juicer.answer_visual_question(
+            title=str(item.get("title") or ""),
+            caption=str(item.get("caption") or ""),
+            images=images,
+            media_type=media_type,
+            question=body.question,
+            history=[entry.model_dump() for entry in body.history[-6:]],
+            llm_config=user_ai_provider_service.effective_vision_config(
+                db,
+                current_user.id,
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except douyin_library.DouyinLibraryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        traceback.print_exc()
+        error_log_service.record_exception_safely(
+            exc,
+            source="visual_content_qa",
+            status_code=502,
+            metadata={
+                "aweme_id": aweme_id,
+                "media_type": media_type,
+                "user_id": current_user.id,
+            },
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="图片问答暂时不可用，请确认当前模型支持图片理解后重试",
+        ) from exc
+
+    return _ok({"item_id": aweme_id, **result})
+
+
 @router.post("/api/library/douyin/extract")
 def extract_douyin_library_item(
     body: LibraryExtractRequest,
@@ -2007,6 +2346,425 @@ def ask_video_library(
         "source_context": result["source_context"],
         "web_sources": result.get("web_sources", []),
         "web_scope": result.get("web_scope", body.web_scope),
+    })
+
+
+@router.get("/api/knowledge")
+def list_personal_knowledge(
+    view: Literal["pages", "inbox"] = Query("pages"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=50),
+    q: str = Query(default="", max_length=120),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    return _ok(knowledge_service.list_knowledge(
+        db,
+        current_user.id,
+        view=view,
+        page=page,
+        per_page=per_page,
+        search=q,
+    ))
+
+
+@router.post("/api/knowledge/entries")
+def create_knowledge_entry(
+    body: KnowledgeEntryCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        entry = knowledge_service.create_entry(
+            db,
+            current_user.id,
+            title=body.title,
+            summary=body.summary,
+            content=body.content,
+            source_label=body.source_label,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _ok(knowledge_service.serialize_entry(entry))
+
+
+@router.get("/api/knowledge/entries/{entry_id}")
+def get_knowledge_entry(
+    entry_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    item = knowledge_service.get_entry_item(db, current_user.id, entry_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="知识条目不存在")
+    return _ok(item)
+
+
+@router.patch("/api/knowledge/entries/{entry_id}")
+def update_knowledge_entry(
+    entry_id: str,
+    body: KnowledgeEntryUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    entry = knowledge_service.get_entry(db, current_user.id, entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="知识条目不存在")
+    if (
+        body.title is None
+        and body.summary is None
+        and body.content is None
+        and body.source_label is None
+    ):
+        raise HTTPException(status_code=422, detail="至少提供一个更新字段")
+    try:
+        updated = knowledge_service.update_entry(
+            db,
+            entry,
+            title=body.title,
+            summary=body.summary,
+            content=body.content,
+            source_label=body.source_label,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _ok(knowledge_service.get_entry_item(db, current_user.id, updated.id))
+
+
+@router.get("/api/knowledge/candidates/{note_id}")
+def get_knowledge_candidate(
+    note_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    item = knowledge_service.get_candidate_item(db, current_user.id, note_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="待整理内容不存在")
+    return _ok(item)
+
+
+@router.post("/api/knowledge/candidates/{note_id}/save")
+def save_knowledge_candidate(
+    note_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        entry = knowledge_service.save_candidate(db, current_user.id, note_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    item = knowledge_service.get_entry_item(db, current_user.id, entry.id)
+    return _ok(item)
+
+
+@router.delete("/api/knowledge/entries/{entry_id}")
+def delete_knowledge_entry(
+    entry_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    entry = knowledge_service.get_entry(db, current_user.id, entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="知识条目不存在")
+    knowledge_service.delete_entry(db, entry)
+    return _ok({"deleted": True})
+
+
+# ---------------------------------------------------------------------------
+# Saved creator sources — manual, user-triggered background sync only
+# ---------------------------------------------------------------------------
+
+def _creator_http_error(exc: creator_sync_service.CreatorSyncError) -> HTTPException:
+    return HTTPException(
+        status_code=exc.status_code,
+        detail={"code": exc.code, "message": str(exc)},
+    )
+
+
+@router.post("/api/creator-sources/resolve")
+def resolve_creator_source(
+    body: CreatorSourceRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        return _ok(creator_sync_service.resolve_source(
+            db,
+            user_id=current_user.id,
+            platform=body.platform,
+            profile_ref=body.profile_ref,
+        ))
+    except creator_sync_service.CreatorSyncError as exc:
+        raise _creator_http_error(exc) from exc
+
+
+@router.get("/api/creator-sources")
+def get_creator_sources(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    return _ok({
+        "catalog": creator_sync_service.catalog(db),
+        "items": creator_sync_service.list_sources(db, user_id=current_user.id),
+    })
+
+
+@router.post("/api/creator-sources")
+def create_creator_source(
+    body: CreatorSourceRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        source, reused = creator_sync_service.save_source(
+            db,
+            user_id=current_user.id,
+            platform=body.platform,
+            profile_ref=body.profile_ref,
+        )
+        return _ok({"item": source.to_dict(), "reused": reused})
+    except creator_sync_service.CreatorSyncError as exc:
+        raise _creator_http_error(exc) from exc
+
+
+@router.delete("/api/creator-sources/{source_id}")
+def delete_creator_source(
+    source_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        deleted = creator_sync_service.disable_source(
+            db, user_id=current_user.id, source_id=source_id
+        )
+    except creator_sync_service.CreatorSyncError as exc:
+        raise _creator_http_error(exc) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="博主不存在")
+    return _ok({"deleted": True, "materials_preserved": True})
+
+
+@router.post("/api/creator-sources/{source_id}/runs")
+def create_creator_sync_run(
+    body: CreatorSyncRunRequest,
+    source_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        run, reused = creator_sync_service.create_run(
+            db,
+            user_id=current_user.id,
+            source_id=source_id,
+            limit=body.limit,
+        )
+    except creator_sync_service.CreatorSyncError as exc:
+        raise _creator_http_error(exc) from exc
+    creator_sync_worker.runner.submit(run.id)
+    return _ok({"run": run.to_dict(), "reused": reused})
+
+
+@router.get("/api/creator-sync-runs")
+def get_creator_sync_runs(
+    status: Literal["active", "recent"] = Query("active"),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        runs = creator_sync_service.list_runs(db, user_id=current_user.id, status=status)
+    except creator_sync_service.CreatorSyncError as exc:
+        raise _creator_http_error(exc) from exc
+    return _ok({"items": [run.to_dict() for run in runs]})
+
+
+@router.get("/api/creator-sync-runs/{run_id}")
+def get_creator_sync_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    run = creator_sync_service.get_run(db, user_id=current_user.id, run_id=run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="同步任务不存在")
+    return _ok(run.to_dict())
+
+
+@router.delete("/api/creator-sync-runs/{run_id}")
+def cancel_creator_sync_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    run = creator_sync_service.request_cancel(
+        db, user_id=current_user.id, run_id=run_id
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail="同步任务不存在")
+    return _ok(run.to_dict())
+
+
+@router.get("/api/user/ai-provider")
+def get_user_ai_provider(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    return _ok(user_ai_provider_service.serialize(db, current_user.id))
+
+
+@router.get("/api/user/chat-models")
+def get_user_chat_models(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    models = chat_model_catalog_service.list_published(db)
+    selected = chat_model_catalog_service.selected_offering(db, current_user.id)
+    return _ok({
+        "items": [
+            chat_model_catalog_service.serialize_user(db, model, current_user.id)
+            for model in models
+        ],
+        "selected_offering_id": selected.id,
+        "account": chat_credit_billing_service.account_summary(db, current_user.id),
+    })
+
+
+@router.put("/api/user/chat-model")
+def put_user_chat_model(
+    body: UserChatModelRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        selected = chat_model_catalog_service.select_for_user(
+            db, current_user.id, body.offering_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _ok({
+        "selected_offering_id": selected.id,
+        "item": chat_model_catalog_service.serialize_user(db, selected, current_user.id),
+    })
+
+
+@router.get("/api/user/ai-routing/workspace")
+def get_user_ai_routing_workspace(
+    refresh: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """兼容旧客户端：只返回管理员发布的明确模型，不返回智能路由。"""
+    del refresh
+    models = chat_model_catalog_service.list_published(db)
+    return _ok({
+        "status": {"configured": True, "online": True, "partial": False, "latency_ms": 0, "message": "模型目录已就绪"},
+        "models": [
+            {
+                **chat_model_catalog_service.serialize_user(db, model, current_user.id),
+                "provider": "知萃平台",
+                "available": True,
+                "free": bool(model.is_free),
+                "free_type": "daily" if model.is_free else "",
+                "monthly_tokens": 0,
+                "credit_tokens": 0,
+                "context_length": 0,
+                "capabilities": [
+                    capability
+                    for capability, enabled in (
+                        ("images", model.supports_images),
+                        ("tools", model.supports_tools),
+                    )
+                    if enabled
+                ],
+            }
+            for model in models
+        ],
+        "routes": [],
+        "rankings": [],
+        "summary": {"model_count": len(models)},
+        "sections": {"models": True},
+        "advanced_console_url": "",
+    })
+
+
+@router.put("/api/user/ai-provider")
+def put_user_ai_provider(
+    body: UserAIProviderRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        data = user_ai_provider_service.save(
+            db,
+            current_user.id,
+            mode=body.mode,
+            provider_name=body.provider_name,
+            model=body.model,
+            api_base=body.api_base,
+            api_key=body.api_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _ok(data)
+
+
+@router.delete("/api/user/ai-provider")
+def reset_user_ai_provider(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    return _ok(user_ai_provider_service.reset(db, current_user.id))
+
+
+@router.post("/api/user/ai-provider/test")
+def test_user_ai_provider(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    cfg = user_ai_provider_service.effective_config(db, current_user.id)
+    try:
+        from litellm import completion
+
+        response = completion(
+            model=cfg["runtime_model"],
+            api_base=cfg["api_base"] or None,
+            api_key=cfg["api_key"] or None,
+            messages=[{"role": "user", "content": "只回复 OK"}],
+            max_tokens=8,
+            temperature=0,
+            timeout=20,
+        )
+        message = response.choices[0].message
+        content = str(message.content or "").strip()
+        reasoning_content = str(
+            getattr(message, "reasoning_content", "") or ""
+        ).strip()
+        # 部分推理模型会先把最小测试额度全部用于 reasoning_content，
+        # content 暂时为空。连接测试只验证路由和模型是否真实响应，
+        # 因此这种响应也应判定为连接成功。
+        if not content and not reasoning_content and not getattr(message, "tool_calls", None):
+            raise RuntimeError("模型没有返回可见内容")
+    except Exception as exc:
+        error_log_service.record_exception_safely(
+            exc,
+            source="llm",
+            status_code=502,
+            user_id=current_user.id,
+            metadata={
+                "provider": cfg.get("provider", ""),
+                "model": cfg.get("model", ""),
+                "operation": "user_provider_test",
+            },
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="连接测试失败，请检查网关状态、模型名称和访问权限",
+        ) from exc
+    return _ok({
+        "connected": True,
+        "provider": cfg["provider"],
+        "model": cfg["model"],
     })
 
 
@@ -2172,9 +2930,47 @@ class AddTaskRequest(BaseModel):
     priority: Literal["low", "medium", "high"] = "medium"
 
 
+class CreatePlanRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=256)
+    start_date: str | None = Field(
+        default=None,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+    )
+    total_days: int = Field(default=0, ge=0, le=3650)
+    first_task: AddTaskRequest | None = None
+
+
 class UpdatePlanRequest(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=256)
     status: Literal["active", "done"] | None = None
+    start_date: str | None = Field(
+        default=None,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+    )
+    total_days: int | None = Field(default=None, ge=0, le=3650)
+
+
+class ReorderPlanTasksRequest(BaseModel):
+    task_ids: list[str] = Field(..., max_length=2000)
+
+
+class PlanFocusSelection(BaseModel):
+    plan_id: str = Field(..., min_length=1, max_length=64)
+    task_id: str = Field(..., min_length=1, max_length=96)
+
+
+class ReplacePlanFocusRequest(BaseModel):
+    date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    tasks: list[PlanFocusSelection] = Field(default_factory=list, max_length=3)
+
+
+class PlanCoachPreviewRequest(BaseModel):
+    instruction: str = Field(..., min_length=2, max_length=1000)
+
+
+class PlanCoachApplyRequest(BaseModel):
+    base_updated_at: str = Field(..., min_length=10, max_length=64)
+    operations: list[dict[str, Any]] = Field(..., min_length=1, max_length=1)
 
 
 class UpdateTaskRequest(BaseModel):
@@ -2188,6 +2984,71 @@ class UpdateTaskRequest(BaseModel):
     duration_minutes: int | None = Field(default=None, ge=1, le=10080)
     frequency: str | None = Field(default=None, max_length=120)
     priority: Literal["low", "medium", "high"] | None = None
+
+
+@router.post("/api/plans")
+def create_manual_plan(
+    body: CreatePlanRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    task_payloads: list[dict[str, Any]] = []
+    if body.first_task is not None:
+        task_payload = body.first_task.model_dump(exclude_none=True)
+        task_payload["id"] = f"t-{uuid.uuid4().hex[:8]}"
+        task_payload["done"] = False
+        task_payloads.append(task_payload)
+    try:
+        plan = plan_service.create_plan(
+            db,
+            note_id=None,
+            title=body.title,
+            tasks=task_payloads,
+            total_days=body.total_days,
+            start_date=body.start_date,
+            user_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _ok(plan.to_dict())
+
+
+@router.put("/api/plans/focus")
+def replace_plan_focus(
+    body: ReplacePlanFocusRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        overview = plan_service.replace_daily_focus(
+            db,
+            user_id=current_user.id,
+            focus_date=body.date,
+            selections=[item.model_dump() for item in body.tasks],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _ok(overview)
+
+
+@router.get("/api/plans/review")
+def get_plan_weekly_review(
+    week_start: str | None = Query(
+        default=None,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+    ),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        review = plan_service.get_weekly_review(
+            db,
+            user_id=current_user.id,
+            week_start=week_start,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _ok(review)
 
 
 @router.get("/api/plans")
@@ -2224,10 +3085,23 @@ def get_plan_stats(
 
 @router.get("/api/plans/overview")
 def get_plan_overview(
+    for_date: str | None = Query(
+        default=None,
+        alias="date",
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+    ),
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
-    return _ok(plan_service.get_plan_overview(db, user_id=current_user.id))
+    try:
+        overview = plan_service.get_plan_overview(
+            db,
+            user_id=current_user.id,
+            for_date=for_date,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _ok(overview)
 
 
 @router.get("/api/plans/{plan_id}")
@@ -2254,6 +3128,101 @@ def update_plan(
             db,
             plan_id,
             updates=updates,
+            user_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    return _ok(plan.to_dict())
+
+
+@router.post("/api/plans/{plan_id}/coach/preview")
+def preview_plan_coaching(
+    plan_id: str,
+    body: PlanCoachPreviewRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    plan = plan_service.get_plan(db, plan_id, user_id=current_user.id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    note = (
+        note_service.get_note(db, plan.note_id, user_id=current_user.id)
+        if plan.note_id
+        else None
+    )
+    try:
+        result = ai_juicer.generate_or_revise_plan(
+            title=note.video_title if note else plan.title,
+            transcript=note.transcript_raw if note else None,
+            ai_summary=note.ai_summary if note else None,
+            instruction=body.instruction,
+            existing_plan=plan.to_dict(),
+        )
+        proposed = result["plan"]
+        fields, tasks, total_days = ai_juicer.plan_to_storage(proposed)
+        preview = plan_service.build_coaching_preview(
+            plan,
+            proposed_title=str(proposed.get("goal") or plan.title),
+            proposed_fields=fields,
+            proposed_tasks=tasks,
+            proposed_days=(
+                proposed.get("days")
+                if isinstance(proposed.get("days"), list)
+                else []
+            ),
+            proposed_total_days=total_days,
+            change_summary=result["change_summary"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=502,
+            detail="AI 暂时无法给出调整方案，请稍后重试",
+        ) from exc
+    preview["source_context"] = result.get("source_context") or {}
+    return _ok(preview)
+
+
+@router.post("/api/plans/{plan_id}/coach/apply")
+def apply_plan_coaching(
+    plan_id: str,
+    body: PlanCoachApplyRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        plan = plan_service.apply_coaching_preview(
+            db,
+            plan_id=plan_id,
+            user_id=current_user.id,
+            base_updated_at=body.base_updated_at,
+            operations=body.operations,
+        )
+    except plan_service.PlanConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    return _ok(plan.to_dict())
+
+
+@router.put("/api/plans/{plan_id}/tasks/order")
+def reorder_plan_tasks(
+    plan_id: str,
+    body: ReorderPlanTasksRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        plan = plan_service.reorder_tasks(
+            db,
+            plan_id,
+            task_ids=body.task_ids,
             user_id=current_user.id,
         )
     except ValueError as exc:
@@ -2451,6 +3420,98 @@ class AdminUserPatch(BaseModel):
 class AdminFeedbackUpdateRequest(BaseModel):
     status: Literal["pending", "processing", "resolved", "closed"] | None = None
     admin_reply: str | None = Field(default=None, max_length=2000)
+
+
+@router.get("/api/admin/chat-models")
+def admin_list_chat_models(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    del current_user
+    chat_model_catalog_service.ensure_default_offering(db)
+    return _ok({
+        "items": [
+            chat_model_catalog_service.serialize_admin(item)
+            for item in chat_model_catalog_service.list_admin(db)
+        ]
+    })
+
+
+def _save_admin_chat_model(
+    body: AdminChatModelRequest,
+    *,
+    offering_id: str | None,
+    request: Request,
+    db: Session,
+    current_user: UserModel,
+) -> dict:
+    try:
+        item = chat_model_catalog_service.save(
+            db,
+            offering_id=offering_id,
+            **body.model_dump(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    audit_service.log_action(
+        db,
+        admin_user_id=current_user.id,
+        action="chat_model_update" if offering_id else "chat_model_create",
+        target_type="chat_model",
+        target_id=item.id,
+        detail={"name": item.name, "model_id": item.model_id, "enabled": item.enabled},
+        ip=_client_ip(request),
+    )
+    return _ok(chat_model_catalog_service.serialize_admin(item))
+
+
+@router.post("/api/admin/chat-models")
+def admin_create_chat_model(
+    body: AdminChatModelRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    return _save_admin_chat_model(
+        body, offering_id=None, request=request, db=db, current_user=current_user
+    )
+
+
+@router.put("/api/admin/chat-models/{offering_id}")
+def admin_update_chat_model(
+    offering_id: str,
+    body: AdminChatModelRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    return _save_admin_chat_model(
+        body, offering_id=offering_id, request=request, db=db, current_user=current_user
+    )
+
+
+@router.delete("/api/admin/chat-models/{offering_id}")
+def admin_delete_chat_model(
+    offering_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    try:
+        deleted = chat_model_catalog_service.delete(db, offering_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="聊天模型不存在")
+    audit_service.log_action(
+        db,
+        admin_user_id=current_user.id,
+        action="chat_model_delete",
+        target_type="chat_model",
+        target_id=offering_id,
+        ip=_client_ip(request),
+    )
+    return _ok({"deleted": True})
 
 
 @router.get("/api/admin/stats")
@@ -2741,12 +3802,127 @@ class ExtractionConfigRequest(BaseModel):
     )
 
 
+class CreatorSyncConfigRequest(BaseModel):
+    enabled: bool = False
+    xhs_cookie: str | None = Field(default=None, max_length=16384)
+    douyin_concurrency: int = Field(default=1, ge=1, le=4)
+    bilibili_concurrency: int = Field(default=2, ge=1, le=4)
+    xiaohongshu_concurrency: int = Field(default=1, ge=1, le=4)
+
+
+class CreatorConnectorTestRequest(BaseModel):
+    platform: Literal["douyin", "bilibili", "xiaohongshu"]
+    profile_ref: str | None = Field(default=None, max_length=1024)
+
+
 @router.get("/api/admin/llm-config")
 def admin_get_llm_config(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_admin),
 ) -> dict:
     return _ok(settings_service.get_llm_config_masked(db))
+
+
+@router.get("/api/admin/creator-sync-config")
+def admin_get_creator_sync_config(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    return _ok(settings_service.get_creator_sync_config(db))
+
+
+@router.put("/api/admin/creator-sync-config")
+def admin_put_creator_sync_config(
+    body: CreatorSyncConfigRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    value = settings_service.set_creator_sync_config(
+        db,
+        enabled=body.enabled,
+        xhs_cookie=body.xhs_cookie,
+        douyin_concurrency=body.douyin_concurrency,
+        bilibili_concurrency=body.bilibili_concurrency,
+        xiaohongshu_concurrency=body.xiaohongshu_concurrency,
+    )
+    audit_service.log_action(
+        db,
+        admin_user_id=current_user.id,
+        action="creator_sync_config_update",
+        target_type="config",
+        target_id="creator-sync",
+        detail={
+            "enabled": value["enabled"],
+            "concurrency": value["concurrency"],
+            "xhs_cookie": "***updated***" if body.xhs_cookie else "unchanged",
+        },
+        ip=_client_ip(request),
+    )
+    return _ok(value)
+
+
+@router.post("/api/admin/creator-sync-config/test")
+def admin_test_creator_sync_connector(
+    body: CreatorConnectorTestRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    config = settings_service.get_creator_sync_config(db, include_secret=True)
+    tested_at = datetime.now(timezone.utc).isoformat()
+    if body.platform == "xiaohongshu" and not config.get("xhs_cookie"):
+        settings_service.record_creator_connector_test(
+            db, platform=body.platform, healthy=False, tested_at=tested_at
+        )
+        return _err("请先配置小红书专用服务账号 Cookie")
+    if body.profile_ref:
+        binding = (
+            douyin_binding_service.get_or_create(db, current_user.id)
+            if body.platform == "douyin"
+            else None
+        )
+        try:
+            preview = creator_connectors.resolve_creator(
+                body.platform,
+                body.profile_ref,
+                douyin_session_scope=binding.session_scope if binding else "",
+                xhs_cookie=str(config.get("xhs_cookie") or ""),
+            )
+        except creator_connectors.CreatorConnectorError as exc:
+            settings_service.record_creator_connector_test(
+                db, platform=body.platform, healthy=False, tested_at=tested_at
+            )
+            return _err(str(exc))
+        settings_service.record_creator_connector_test(
+            db, platform=body.platform, healthy=True, tested_at=tested_at
+        )
+        return _ok({"healthy": True, "preview": preview})
+    if body.platform == "douyin":
+        binding = douyin_binding_service.get_or_create(db, current_user.id)
+        state = douyin_library.connection_status(binding.session_scope)
+        healthy = bool(state.get("connected"))
+        settings_service.record_creator_connector_test(
+            db, platform=body.platform, healthy=healthy, tested_at=tested_at
+        )
+        return _ok({
+            "healthy": healthy,
+            "platform": body.platform,
+            "message": "连接器可用" if state.get("connected") else "抖音连接器不可用",
+        })
+    if body.platform == "bilibili":
+        healthy = importlib.util.find_spec("yt_dlp") is not None
+        settings_service.record_creator_connector_test(
+            db, platform=body.platform, healthy=healthy, tested_at=tested_at
+        )
+        return _ok({
+            "healthy": healthy,
+            "platform": body.platform,
+            "message": "yt-dlp 已就绪" if healthy else "服务器未安装 yt-dlp",
+        })
+    settings_service.record_creator_connector_test(
+        db, platform=body.platform, healthy=False, tested_at=tested_at
+    )
+    return _err("小红书需要填写一个公开视频博主主页进行真实测试")
 
 
 @router.put("/api/admin/llm-config")

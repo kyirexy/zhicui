@@ -1,0 +1,206 @@
+.card {
+  overflow: hidden;
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  background: var(--card-bg);
+}
+
+.header {
+  display: flex;
+  padding: 20px 22px 17px;
+  border-bottom: 1px solid var(--card-border);
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.mark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  place-items: center;
+  color: var(--accent-emerald);
+  background: var(--accent-mint-soft);
+}
+
+.header h2 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: .96rem;
+  font-weight: 690;
+  text-wrap: balance;
+}
+
+.header p {
+  max-width: 54ch;
+  margin: 5px 0 0;
+  color: var(--foreground-muted);
+  font-size: 0.75rem;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.body {
+  padding: 0 22px 18px;
+}
+
+.preference {
+  display: grid;
+  min-height: 72px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+}
+
+.preference > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.preference strong {
+  color: var(--foreground);
+  font-size: 0.84rem;
+  font-weight: 670;
+}
+
+.preference > div > span {
+  color: var(--foreground-muted);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.switch {
+  position: relative;
+  display: block;
+  width: 48px;
+  height: 44px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.switch::before {
+  position: absolute;
+  top: 9px;
+  left: 2px;
+  width: 44px;
+  height: 26px;
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--foreground) 14%, transparent);
+  content: '';
+  transition: background-color 180ms ease-out;
+}
+
+.switch > span {
+  position: absolute;
+  top: 12px;
+  left: 5px;
+  z-index: 1;
+  display: grid;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  place-items: center;
+  color: var(--accent-emerald);
+  background: var(--card-bg);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--foreground) 18%, transparent);
+  transition: transform 180ms ease-out;
+}
+
+.switchActive::before { background: var(--accent-emerald); }
+.switchActive > span { transform: translateX(18px); }
+.switch:focus-visible { outline: 2px solid var(--accent-emerald); outline-offset: 2px; border-radius: 13px; }
+
+.details {
+  border-top: 1px solid var(--card-border);
+  border-bottom: 1px solid var(--card-border);
+}
+
+.details summary {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--foreground-secondary);
+  font-size: 0.73rem;
+  font-weight: 650;
+  cursor: pointer;
+  list-style: none;
+}
+
+.details summary::-webkit-details-marker { display: none; }
+.details summary:focus-visible { outline: 2px solid var(--accent-emerald); outline-offset: -2px; }
+.details summary svg { color: var(--foreground-muted); transition: transform 160ms ease-out; }
+.details[open] summary svg { transform: rotate(90deg); }
+
+.details > div {
+  display: grid;
+  padding: 0 0 14px;
+  gap: 7px;
+}
+
+.details p {
+  display: flex;
+  margin: 0;
+  align-items: flex-start;
+  gap: 7px;
+  color: var(--foreground-muted);
+  font-size: 0.7rem;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.details p svg {
+  margin-top: 2px;
+  flex: 0 0 auto;
+  color: var(--accent-emerald);
+}
+
+.footer {
+  display: flex;
+  min-height: 44px;
+  margin-top: 10px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.footer button {
+  display: inline-flex;
+  min-height: 44px;
+  padding: 0 4px;
+  border: 0;
+  align-items: center;
+  gap: 7px;
+  color: var(--foreground-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.footer button:hover { color: var(--foreground); }
+.footer button:active { transform: translateY(1px); }
+.footer button:focus-visible { outline: 2px solid var(--accent-emerald); outline-offset: 2px; border-radius: 6px; }
+.footer span { color: var(--accent-emerald); font-size: 0.7rem; text-align: right; }
+
+@media (max-width: 640px) {
+  .header { padding-right: 16px; padding-left: 16px; }
+  .body { padding-right: 16px; padding-left: 16px; }
+  .footer { align-items: flex-start; flex-direction: column; }
+  .footer span { text-align: left; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switch::before,
+  .switch > span,
+  .details summary svg { transition-duration: 0.01ms; }
+}

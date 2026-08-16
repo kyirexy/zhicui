@@ -1,0 +1,610 @@
+.entry {
+  margin-top: 16px;
+  border-top: 1px solid var(--card-border);
+  padding-top: 14px;
+}
+
+.entryTrigger {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 9px;
+  padding: 0 10px;
+  color: var(--accent-emerald);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.entryTrigger:hover,
+.entryTrigger:focus-visible {
+  background: color-mix(in srgb, var(--accent-emerald) 8%, transparent);
+}
+
+.entryTrigger:focus-visible,
+.recommendation button:focus-visible,
+.completedInline button:focus-visible,
+.attentionInline button:focus-visible,
+.failedInline button:focus-visible,
+.methodPicker button:focus-visible,
+.quoteActions button:focus-visible,
+.balanceWarning button:focus-visible {
+  outline: 2px solid var(--accent-emerald);
+  outline-offset: 2px;
+}
+
+.recommendation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border: 1px solid color-mix(in srgb, var(--accent-emerald) 25%, var(--card-border));
+  border-radius: 12px;
+  padding: 13px 14px;
+  background: color-mix(in srgb, var(--accent-emerald) 5%, var(--card-bg));
+}
+
+.recommendation > div:first-child {
+  min-width: 0;
+}
+
+.recommendation small {
+  display: block;
+  color: var(--accent-emerald);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.recommendation strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--foreground);
+  font-size: 13px;
+}
+
+.recommendation p {
+  max-width: 58ch;
+  margin: 4px 0 0;
+  color: var(--foreground-muted);
+  font-size: 12px;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.recommendation > div:last-of-type {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.recommendation button,
+.completedInline button,
+.attentionInline button,
+.failedInline button {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 11px;
+  color: var(--foreground-muted);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.recommendation .primaryTextAction {
+  color: #fff;
+  background: var(--accent-emerald);
+}
+
+.recommendation button:disabled,
+.quoteActions button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.runInline,
+.completedInline,
+.attentionInline,
+.failedInline {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 58px;
+  border-radius: 10px;
+  padding: 8px 10px;
+  color: var(--accent-emerald);
+  background: color-mix(in srgb, var(--accent-emerald) 6%, transparent);
+}
+
+.runInline {
+  grid-template-columns: 22px minmax(0, 1fr);
+}
+
+.failedInline {
+  color: var(--accent-rose, #d34d4d);
+  background: color-mix(in srgb, var(--accent-rose, #d34d4d) 6%, transparent);
+}
+
+.attentionInline {
+  color: var(--accent-amber, #b97800);
+  background: color-mix(in srgb, var(--accent-amber, #b97800) 8%, transparent);
+}
+
+.runInline span,
+.completedInline span,
+.attentionInline span,
+.failedInline span {
+  min-width: 0;
+}
+
+.runInline strong,
+.completedInline strong,
+.attentionInline strong,
+.failedInline strong {
+  display: block;
+  color: var(--foreground);
+  font-size: 13px;
+}
+
+.runInline small,
+.completedInline small,
+.attentionInline small,
+.failedInline small {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--foreground-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quotePanel {
+  background: var(--card-bg);
+}
+
+.quoteBody {
+  display: grid;
+  gap: 14px;
+}
+
+.quoteHero {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.quoteHeroIcon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--accent-emerald);
+  background: color-mix(in srgb, var(--accent-emerald) 10%, transparent);
+}
+
+.quoteHero small {
+  color: var(--foreground-muted);
+  font-size: 11px;
+}
+
+.quoteHero h3 {
+  margin: 2px 0 0;
+  color: var(--foreground);
+  font-size: 16px;
+}
+
+.quoteHero p {
+  margin: 5px 0 0;
+  color: var(--foreground-muted);
+  font-size: 12px;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.methodPicker {
+  border-top: 1px solid var(--card-border);
+  border-bottom: 1px solid var(--card-border);
+  padding: 10px 0;
+}
+
+.methodPicker summary {
+  min-height: 36px;
+  color: var(--accent-emerald);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.methodPicker > div {
+  display: grid;
+  gap: 6px;
+}
+
+.methodPicker button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 20px;
+  align-items: center;
+  min-height: 54px;
+  border: 1px solid var(--card-border);
+  border-radius: 9px;
+  padding: 8px 10px;
+  color: var(--foreground);
+  background: var(--background);
+  text-align: left;
+  cursor: pointer;
+}
+
+.methodPicker button[aria-checked='true'] {
+  border-color: var(--accent-emerald);
+  background: color-mix(in srgb, var(--accent-emerald) 6%, var(--background));
+}
+
+.methodPicker button span {
+  display: grid;
+  gap: 2px;
+}
+
+.methodPicker button strong {
+  font-size: 12px;
+}
+
+.methodPicker button small {
+  color: var(--foreground-muted);
+  font-size: 11px;
+}
+
+.methodPicker button svg {
+  color: var(--accent-emerald);
+}
+
+.quoteLoading {
+  display: flex;
+  min-height: 112px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--foreground-muted);
+  font-size: 13px;
+}
+
+.quoteSummary {
+  border-radius: 11px;
+  padding: 13px;
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+}
+
+.quoteSummary dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 18px;
+  margin: 0;
+}
+
+.quoteSummary dl div {
+  display: grid;
+  gap: 2px;
+}
+
+.quoteSummary dt {
+  color: var(--foreground-muted);
+  font-size: 11px;
+}
+
+.quoteSummary dd {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 680;
+}
+
+.quoteSummary > p {
+  margin: 10px 0 0;
+  color: var(--foreground-muted);
+  font-size: 11px;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.quoteSummary .byokNotice {
+  color: color-mix(in srgb, var(--accent-amber, #b97800) 82%, var(--foreground));
+}
+
+.balanceWarning {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 9px;
+  border: 1px solid color-mix(in srgb, var(--accent-amber, #b97800) 28%, var(--card-border));
+  border-radius: 10px;
+  padding: 11px;
+  color: var(--accent-amber, #b97800);
+  background: color-mix(in srgb, var(--accent-amber, #b97800) 7%, transparent);
+}
+
+.balanceWarning strong {
+  color: var(--foreground);
+  font-size: 12px;
+}
+
+.balanceWarning p {
+  margin: 3px 0 0;
+  color: var(--foreground-muted);
+  font-size: 11px;
+}
+
+.balanceWarning div div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.balanceWarning button {
+  min-height: 36px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  padding: 0 10px;
+  color: var(--foreground);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.inlineError {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--accent-rose, #d34d4d);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.quoteActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.quoteActions button {
+  display: inline-flex;
+  min-height: 46px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--card-border);
+  border-radius: 9px;
+  color: var(--foreground);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 680;
+}
+
+.quoteActions .primaryAction {
+  border-color: var(--accent-emerald);
+  color: #fff;
+  background: var(--accent-emerald);
+}
+
+@media (max-width: 620px) {
+  .recommendation {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .recommendation > div:last-of-type {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .recommendation button {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .entryTrigger,
+  .recommendation button {
+    transition: none;
+  }
+}
+
+.taskList {
+  display: grid;
+  gap: 18px;
+}
+
+.taskList section h3 {
+  margin: 0 0 7px;
+  color: var(--foreground-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.taskList section > div {
+  display: grid;
+  gap: 6px;
+}
+
+.taskRow {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  min-height: 62px;
+  border-radius: 10px;
+  padding: 10px 8px;
+  color: var(--accent-emerald);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+}
+
+.taskRow[data-status='failed'],
+.taskRow[data-status='cancelled'] {
+  color: var(--accent-rose, #d34d4d);
+}
+
+.taskRow[data-status='reauthorization_required'] {
+  color: var(--accent-amber, #b97800);
+  background: color-mix(in srgb, var(--accent-amber, #b97800) 7%, transparent);
+}
+
+.taskIcon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+}
+
+.taskCopy {
+  min-width: 0;
+}
+
+.taskCopy strong,
+.taskCopy span,
+.taskCopy small {
+  display: block;
+}
+
+.taskCopy strong {
+  color: var(--foreground);
+  font-size: 13px;
+}
+
+.taskCopy span {
+  margin-top: 2px;
+  color: var(--foreground-muted);
+  font-size: 11px;
+}
+
+.taskCopy small {
+  margin-top: 4px;
+  color: var(--foreground-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.taskCopy .taskError {
+  color: var(--accent-rose, #d34d4d);
+}
+
+.taskActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+}
+
+.taskActions button {
+  display: inline-flex;
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 8px;
+  color: var(--foreground-muted);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.taskActions button:hover,
+.taskActions button:focus-visible {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+
+.taskActions button:focus-visible {
+  outline: 2px solid var(--accent-emerald);
+  outline-offset: 2px;
+}
+
+.taskActions button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.taskEmpty {
+  display: flex;
+  min-height: 120px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--foreground-muted);
+  font-size: 13px;
+}
+
+.taskFootnote {
+  margin: 0;
+  border-top: 1px solid var(--card-border);
+  padding-top: 12px;
+  color: var(--foreground-muted);
+  font-size: 11px;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+.taskItems { margin-top: .55rem; }
+.taskItems summary { min-height: 36px; display: inline-flex; align-items: center; color: var(--accent-emerald); font-size: .68rem; font-weight: 650; cursor: pointer; }
+.taskItems > div { display: grid; gap: .35rem; padding: .15rem 0 .3rem; }
+.taskItems > div > span { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .5rem .6rem; border-radius: .55rem; background: color-mix(in srgb, var(--foreground) 4%, transparent); }
+.taskItems > div > span > span { min-width: 0; display: grid; gap: .15rem; }
+.taskItems strong { overflow: hidden; color: var(--foreground); font-size: .68rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.taskItems small { color: var(--foreground-muted); font-size: .62rem; }
+.taskItems b { flex-shrink: 0; color: var(--foreground-muted); font-size: .65rem; font-variant-numeric: tabular-nums; }
+
+.completionToast {
+  position: fixed;
+  z-index: 65;
+  right: 1rem;
+  bottom: calc(5rem + env(safe-area-inset-bottom));
+  width: min(26rem, calc(100vw - 2rem));
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: .75rem;
+  padding: .9rem;
+  border: 1px solid color-mix(in srgb, var(--accent-emerald) 32%, var(--card-border));
+  border-radius: .9rem;
+  background: color-mix(in srgb, var(--card-bg) 94%, transparent);
+  color: var(--accent-emerald);
+  box-shadow: 0 18px 50px rgb(0 0 0 / .18);
+  backdrop-filter: blur(18px);
+}
+.completionToast > div { min-width: 0; }
+.completionToast strong { display: block; color: var(--foreground); font-size: .78rem; }
+.completionToast p { margin: .28rem 0 0; color: var(--foreground-muted); font-size: .69rem; line-height: 1.5; }
+.completionToast span { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .55rem; }
+.completionToast a, .completionToast span button { min-height: 36px; display: inline-flex; align-items: center; border: 0; border-radius: .55rem; padding: 0 .65rem; background: color-mix(in srgb, var(--accent-emerald) 9%, transparent); color: var(--accent-emerald); font-size: .69rem; font-weight: 650; text-decoration: none; }
+.completionToast > button { width: 36px; height: 36px; display: grid; place-items: center; border: 0; border-radius: .55rem; background: transparent; color: var(--foreground-muted); }
+.completionToast a:focus-visible, .completionToast button:focus-visible { outline: 2px solid var(--accent-emerald); outline-offset: 2px; }
+
+@media (min-width: 768px) {
+  .completionToast { bottom: 1.5rem; }
+}
+
+@media (max-width: 620px) {
+  .completedInline button,
+  .attentionInline button,
+  .failedInline button,
+  .methodPicker summary,
+  .balanceWarning button,
+  .taskItems summary,
+  .completionToast a,
+  .completionToast span button {
+    min-height: 44px;
+  }
+  .completionToast > button { width: 44px; height: 44px; }
+}

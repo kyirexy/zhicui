@@ -1,17 +1,16 @@
 {
   "schema_version": 1,
   "platform": "android",
-  "version": "1.2.1",
-  "build": 13,
-  "published_at": "2026-07-30T03:57:55.410Z",
+  "version": "1.2.5",
+  "build": 17,
+  "published_at": "2026-08-09T11:28:53.403Z",
   "download_url": "https://luxai.cn/download/zhicui.apk",
-  "size_bytes": 11291975,
+  "size_bytes": 9401616,
   "mandatory": false,
   "release_notes": [
-    "重新适配手机底部安全区，页面内容不再被导航遮挡。",
-    "视频库保持双列浏览，同时放大标题、状态和主要触控区域。",
-    "反馈入口移入手机底部导航，不再遮挡视频卡片和计划操作。",
-    "设置页统一展示 Android、Windows 与 Web 的版本更新入口。",
-    "Android 启动和回到前台时自动检查新版本，并展示中文更新日志。"
+    "移动端统一为纯白与中性灰界面，保留绿色品牌标识。",
+    "首页、视频、研伴、知识、计划与设置完成 360–430px 适配。",
+    "行动计划默认进入今日，四象限改为可同时查看的 2×2 布局。",
+    "手机端隐藏技术型 AI 配置，反馈、更新与账号操作集中到设置。"
   ]
 }

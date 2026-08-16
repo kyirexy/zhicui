@@ -16,6 +16,8 @@ import {
   type DensityLevel,
   type AppTheme,
   type DesktopLayoutDensity,
+  type LibraryAutoSyncIntervalMinutes,
+  type AgentSourceDisplayLimit,
   DEFAULT_USER_SETTINGS,
 } from '@/lib/types';
 
@@ -26,6 +28,9 @@ interface SettingsContextValue {
   updateDensity: (density: DensityLevel) => void;
   updateTheme: (theme: AppTheme) => void;
   updateDesktopDensity: (density: DesktopLayoutDensity) => void;
+  updateLocalWorkspaceCache: (enabled: boolean) => void;
+  updateLibraryAutoSyncInterval: (interval: LibraryAutoSyncIntervalMinutes) => void;
+  updateAgentSourceDisplayLimit: (limit: AgentSourceDisplayLimit) => void;
   resetDesktopAppearance: () => void;
   resetSettings: () => void;
 }
@@ -41,6 +46,21 @@ const DESKTOP_DENSITY_OPTIONS = new Set<DesktopLayoutDensity>([
   'comfortable',
   'compact',
 ]);
+const MIN_LIBRARY_AUTO_SYNC_MINUTES = 15;
+const MAX_LIBRARY_AUTO_SYNC_MINUTES = 7 * 24 * 60;
+const AGENT_SOURCE_DISPLAY_LIMITS = new Set<AgentSourceDisplayLimit>([100, 200, 500, 1000]);
+
+function normalizeLibraryAutoSyncInterval(value: unknown): LibraryAutoSyncIntervalMinutes {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_USER_SETTINGS.libraryAutoSyncIntervalMinutes;
+  const minutes = Math.trunc(parsed);
+  if (minutes === 0) return 0;
+  if (minutes < 0) return DEFAULT_USER_SETTINGS.libraryAutoSyncIntervalMinutes;
+  return Math.max(
+    MIN_LIBRARY_AUTO_SYNC_MINUTES,
+    Math.min(MAX_LIBRARY_AUTO_SYNC_MINUTES, minutes),
+  );
+}
 
 function resolveLegacyTheme(value: Partial<UserSettings>): AppTheme {
   if (THEME_OPTIONS.has(value.theme as AppTheme)) {
@@ -74,6 +94,12 @@ function normalizeSettings(value: UserSettings): UserSettings {
     desktopDensity: DESKTOP_DENSITY_OPTIONS.has(value?.desktopDensity)
       ? value.desktopDensity
       : DEFAULT_USER_SETTINGS.desktopDensity,
+    libraryAutoSyncIntervalMinutes: normalizeLibraryAutoSyncInterval(
+      value?.libraryAutoSyncIntervalMinutes,
+    ),
+    agentSourceDisplayLimit: AGENT_SOURCE_DISPLAY_LIMITS.has(value?.agentSourceDisplayLimit)
+      ? value.agentSourceDisplayLimit
+      : DEFAULT_USER_SETTINGS.agentSourceDisplayLimit,
   };
 }
 
@@ -93,6 +119,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       storedSettings.theme !== settings.theme
       || 'desktopSidebar' in storedSettings
       || storedSettings.desktopDensity !== settings.desktopDensity
+      || storedSettings.localWorkspaceCache !== settings.localWorkspaceCache
+      || storedSettings.libraryAutoSyncIntervalMinutes !== settings.libraryAutoSyncIntervalMinutes
+      || storedSettings.agentSourceDisplayLimit !== settings.agentSourceDisplayLimit
     ) {
       setSettings(settings);
     }
@@ -113,6 +142,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       root.setAttribute('data-desktop-sidebar', resolvedTheme);
       root.style.colorScheme = resolvedTheme;
       setEffectiveTheme(resolvedTheme);
+      void window.zhicuiDesktop?.setTitlebarTheme?.(resolvedTheme).catch(() => {
+        // Web、旧版桌面端或窗口销毁期间不影响页面主题切换。
+      });
 
       try {
         window.localStorage.setItem('theme', settings.theme);
@@ -151,6 +183,35 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     [setSettings],
   );
 
+  const updateLocalWorkspaceCache = useCallback(
+    (localWorkspaceCache: boolean) => (
+      setSettings((prev) => ({ ...normalizeSettings(prev), localWorkspaceCache }))
+    ),
+    [setSettings],
+  );
+
+  const updateLibraryAutoSyncInterval = useCallback(
+    (libraryAutoSyncIntervalMinutes: LibraryAutoSyncIntervalMinutes) => (
+      setSettings((prev) => ({
+        ...normalizeSettings(prev),
+        libraryAutoSyncIntervalMinutes: normalizeLibraryAutoSyncInterval(
+          libraryAutoSyncIntervalMinutes,
+        ),
+      }))
+    ),
+    [setSettings],
+  );
+
+  const updateAgentSourceDisplayLimit = useCallback(
+    (agentSourceDisplayLimit: AgentSourceDisplayLimit) => (
+      setSettings((prev) => ({
+        ...normalizeSettings(prev),
+        agentSourceDisplayLimit,
+      }))
+    ),
+    [setSettings],
+  );
+
   const resetDesktopAppearance = useCallback(
     () => setSettings((prev) => ({
       ...normalizeSettings(prev),
@@ -174,6 +235,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         updateDensity,
         updateTheme,
         updateDesktopDensity,
+        updateLocalWorkspaceCache,
+        updateLibraryAutoSyncInterval,
+        updateAgentSourceDisplayLimit,
         resetDesktopAppearance,
         resetSettings,
       }}

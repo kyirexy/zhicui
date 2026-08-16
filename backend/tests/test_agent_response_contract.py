@@ -195,6 +195,44 @@ class AgentPipelineBoundaryTests(unittest.TestCase):
 
         self.assertNotIn("PRIVATE MODEL REASONING", str(raised.exception))
 
+    def test_empty_visible_content_retries_once_and_returns_recovery(self) -> None:
+        empty = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=None))]
+        )
+        recovered = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"answer":"OK"}'))]
+        )
+        llm_config = {
+            "provider": "deepseek",
+            "model": "deepseek-chat",
+            "api_base": "",
+            "api_key": "",
+        }
+
+        with (
+            patch.object(ai_juicer, "_get_llm_config", return_value=llm_config),
+            patch.object(
+                ai_juicer.settings_service,
+                "to_litellm_model",
+                return_value="deepseek/deepseek-chat",
+            ),
+            patch.object(
+                ai_juicer,
+                "_completion_with_usage",
+                side_effect=[empty, recovered],
+            ) as completion_mock,
+        ):
+            result = ai_juicer._call_llm(
+                system="system",
+                user="question",
+                operation="boundary_test",
+            )
+
+        self.assertEqual(result, '{"answer":"OK"}')
+        self.assertEqual(completion_mock.call_count, 2)
+        recovery_kwargs = completion_mock.call_args_list[1].args[1]
+        self.assertGreaterEqual(recovery_kwargs["max_tokens"], 4096)
+
     def test_deep_map_drops_unknown_and_inexact_findings(self) -> None:
         exact_quote = "视频原文中可以逐字核对的观点。"
         supplied_sources = {

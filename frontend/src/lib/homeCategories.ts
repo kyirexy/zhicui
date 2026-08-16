@@ -35,7 +35,7 @@ export const HOME_CATEGORIES: HomeCategory[] = [
     desc: '提炼 Cursor、Claude Code、Agent 工作流里的步骤、提示词和避坑经验。',
     image: '/images/categories/ai-programming.webp',
     icon: 'Code2',
-    accent: '#10b981',
+    accent: '#303034',
     samples: [
       {
         title: '什么是 Vibe Coding？',
@@ -93,7 +93,7 @@ export const HOME_CATEGORIES: HomeCategory[] = [
     desc: '把健身、学习路线、备考和挑战类视频拆成按天执行的任务流。',
     image: '/images/categories/training-plan.webp',
     icon: 'Target',
-    accent: '#6366f1',
+    accent: '#55555c',
     samples: [
       {
         title: '清华大学《Vibe Coding 氛围编程》公开课',
@@ -109,7 +109,7 @@ export const HOME_CATEGORIES: HomeCategory[] = [
     desc: '从成长、商业、表达和判断力内容里提炼核心观点与行动建议。',
     image: '/images/categories/cognitive-insight.webp',
     icon: 'Lightbulb',
-    accent: '#34d399',
+    accent: '#74747b',
     samples: [
       {
         title: '厌蠢是赚钱的敌人',

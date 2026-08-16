@@ -1,0 +1,192 @@
+.page {
+  width: min(100%, 1040px);
+  padding-bottom: max(var(--ui-space-8), env(safe-area-inset-bottom, 0px));
+}
+
+.picker {
+  margin-top: var(--ui-space-6);
+}
+
+.picker :global(.style-picker) {
+  gap: 0;
+}
+
+.picker :global(.style-picker__section) {
+  padding: var(--ui-space-6) 0;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.picker :global(.style-picker__section:first-child) {
+  padding-top: 0;
+}
+
+.picker :global(.style-picker__section:last-child) {
+  border-bottom: 0;
+}
+
+.picker :global(.style-picker__heading) {
+  margin-bottom: var(--ui-space-4);
+  align-items: center;
+  color: var(--ui-text-muted);
+}
+
+.picker :global(.style-picker__heading > svg) {
+  margin: 0;
+  color: var(--ui-text-muted);
+}
+
+.picker :global(.style-picker__heading h3) {
+  color: var(--ui-text);
+  font-size: 0.9375rem;
+  font-weight: 700;
+}
+
+.picker :global(.style-picker__heading p),
+.picker :global(.style-choice__description),
+.picker :global(.style-choice__recommended),
+.picker :global(.density-choice small) {
+  display: none;
+}
+
+.picker :global(.style-picker__filters) {
+  gap: var(--ui-space-2);
+  margin: 0 0 var(--ui-space-4);
+}
+
+.picker :global(.style-picker__filters button) {
+  min-height: var(--ui-control-lg);
+  padding: 0 var(--ui-space-4);
+  border-color: var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  color: var(--ui-text-secondary);
+  background: var(--ui-surface);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.picker :global(.style-picker__filters button span) {
+  display: none;
+}
+
+.picker :global(.style-picker__filters button.is-active) {
+  border-color: var(--ui-accent);
+  color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+}
+
+.picker :global(.style-picker__grid) {
+  gap: var(--ui-space-3);
+}
+
+.picker :global(.style-choice) {
+  padding: var(--ui-space-2);
+  border-color: var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface);
+  box-shadow: none;
+  transition: border-color var(--ui-duration-normal), background-color var(--ui-duration-normal);
+}
+
+.picker :global(.style-choice:hover) {
+  border-color: color-mix(in srgb, var(--ui-accent) 42%, var(--ui-border));
+  transform: none;
+}
+
+.picker :global(.style-choice.is-active) {
+  border-color: var(--ui-accent);
+  background: color-mix(in srgb, var(--ui-accent-soft) 38%, var(--ui-surface));
+  box-shadow: inset 3px 0 0 var(--ui-accent);
+}
+
+.picker :global(.style-choice__copy) {
+  padding: var(--ui-space-3) var(--ui-space-2) var(--ui-space-2);
+}
+
+.picker :global(.style-choice__name strong) {
+  color: var(--ui-text);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.picker :global(.style-choice__check) {
+  color: var(--ui-accent);
+  filter: none;
+}
+
+.picker :global(.style-choice:hover .style-icon) {
+  transform: none;
+}
+
+.picker :global(.density-picker) {
+  gap: var(--ui-space-3);
+}
+
+.picker :global(.density-choice) {
+  min-height: 64px;
+  padding: var(--ui-space-4);
+  border-color: var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  color: var(--ui-text-secondary);
+  background: var(--ui-surface);
+  transition: border-color var(--ui-duration-normal), background-color var(--ui-duration-normal);
+}
+
+.picker :global(.density-choice:hover) {
+  border-color: color-mix(in srgb, var(--ui-accent) 42%, var(--ui-border));
+  transform: none;
+}
+
+.picker :global(.density-choice.is-active) {
+  border-color: var(--ui-accent);
+  background: color-mix(in srgb, var(--ui-accent-soft) 38%, var(--ui-surface));
+  box-shadow: inset 3px 0 0 var(--ui-accent);
+}
+
+.picker :global(.density-choice strong) {
+  color: var(--ui-text);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.picker :global(.style-picker__filters button:focus-visible),
+.picker :global(.style-choice:focus-visible),
+.picker :global(.density-choice:focus-visible) {
+  outline: 3px solid var(--ui-focus);
+  outline-offset: 2px;
+}
+
+@media (max-width: 767px) {
+  .picker {
+    margin-top: var(--ui-space-5);
+  }
+
+  .picker :global(.style-picker__section) {
+    padding-block: var(--ui-space-5);
+  }
+
+  .picker :global(.style-picker__grid) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .picker :global(.style-picker__grid .style-choice:last-child:nth-child(odd)) {
+    grid-column: auto;
+  }
+
+  .picker :global(.density-picker) {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 420px) {
+  .picker :global(.style-picker__grid) {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .picker :global(.style-picker__filters button),
+  .picker :global(.style-choice),
+  .picker :global(.density-choice) {
+    transition: none;
+  }
+}

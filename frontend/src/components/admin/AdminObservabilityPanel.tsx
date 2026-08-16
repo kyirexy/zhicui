@@ -9,6 +9,7 @@ import {
   ChevronDown,
   Clock3,
   RefreshCw,
+  ScanSearch,
   ServerCrash,
   ShieldCheck,
   Users,
@@ -23,8 +24,9 @@ import {
   type LlmUsageReport,
   type UserActivityReport,
 } from '@/lib/api';
+import AdminVideoAnalysisUsageView from './AdminVideoAnalysisUsageView';
 
-type View = 'usage' | 'activity' | 'errors' | 'audit';
+type View = 'usage' | 'analysis' | 'activity' | 'errors' | 'audit';
 
 export const ADMIN_ACTION_LABELS: Record<string, string> = {
   user_enable: '启用用户',
@@ -127,7 +129,7 @@ export default function AdminObservabilityPanel() {
       );
       if (result.success && result.data) setErrorReport(result.data);
       else setError(result.error || '错误日志加载失败');
-    } else {
+    } else if (view === 'audit') {
       const result = await listAdminAuditLogs(auditPage, 20, auditAction || undefined);
       if (result.success && result.data) {
         setAudit(result.data.items);
@@ -157,7 +159,7 @@ export default function AdminObservabilityPanel() {
             查看模型 Token、用户操作、脱敏后的系统错误，以及管理员的安全审计记录。
           </p>
         </div>
-        {view !== 'audit' && (
+        {view !== 'audit' && view !== 'analysis' && (
           <label className="flex items-center gap-2 text-xs text-foreground-muted">
             时间范围
             <select
@@ -187,6 +189,9 @@ export default function AdminObservabilityPanel() {
         <ViewButton active={view === 'usage'} onClick={() => setView('usage')} icon={BarChart3}>
           Token 用量
         </ViewButton>
+        <ViewButton active={view === 'analysis'} onClick={() => setView('analysis')} icon={ScanSearch}>
+          视频解析
+        </ViewButton>
         <ViewButton active={view === 'activity'} onClick={() => setView('activity')} icon={Users}>
           用户操作
         </ViewButton>
@@ -214,6 +219,7 @@ export default function AdminObservabilityPanel() {
           onRefresh={refresh}
         />
       )}
+      {view === 'analysis' && <AdminVideoAnalysisUsageView />}
       {view === 'activity' && (
         <ActivityView
           report={activity}

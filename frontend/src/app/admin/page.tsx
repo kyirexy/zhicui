@@ -1,7 +1,31 @@
 'use client';
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import { useRouter } from 'next/navigation';
+import {
+  Activity,
+  AudioLines,
+  Bot,
+  Boxes,
+  ChartNoAxesCombined,
+  Clock3,
+  Database,
+  Download,
+  ExternalLink,
+  FileText,
+  HeartPulse,
+  LayoutDashboard,
+  ListTodo,
+  Menu,
+  MessageSquareText,
+  RefreshCw,
+  Settings2,
+  ShieldCheck,
+  Users,
+  X,
+  type LucideIcon,
+} from 'lucide-react';
 import {
   getAdminStats,
   listAdminUsers,
@@ -18,10 +42,13 @@ import {
   getLlmConfig,
   getAsrConfig,
   getExtractionConfig,
+  getCreatorSyncAdminConfig,
   putAsrConfig,
   putExtractionConfig,
+  putCreatorSyncAdminConfig,
   listAdminAuditLogs,
   testAsrConfig,
+  testCreatorSyncConnector,
   getSystemInfo,
   getNote,
   getPlan,
@@ -34,6 +61,7 @@ import {
   type LlmConfig,
   type AsrConfig,
   type ExtractionConfig,
+  type CreatorSyncAdminConfig,
   type AdminAuditLog,
   type ConfigTestResult,
   type SystemInfo,
@@ -44,22 +72,53 @@ import { getPlanProgress, type NoteDetail, type PlanData } from '@/lib/types';
 import AdminLlmConfigPanel from '@/components/admin/AdminLlmConfigPanel';
 import AdminObservabilityPanel, { ADMIN_ACTION_LABELS } from '@/components/admin/AdminObservabilityPanel';
 import AdminFeedbackPanel from '@/components/admin/AdminFeedbackPanel';
+import AdminAnalysisAccountCard from '@/components/admin/AdminAnalysisAccountCard';
+import AdminVideoAnalysisPanel from '@/components/admin/AdminVideoAnalysisPanel';
+import AdminChatModelPanel from '@/components/admin/AdminChatModelPanel';
+import styles from './AdminWorkspace.module.css';
 
-type Tab = 'dashboard' | 'users' | 'feedback' | 'notes' | 'plans' | 'export' | 'ops' | 'llm' | 'asr' | 'observability' | 'settings';
+type Tab = 'dashboard' | 'users' | 'feedback' | 'notes' | 'plans' | 'export' | 'ops' | 'models' | 'llm' | 'asr' | 'observability' | 'settings';
 
-const NAV: { key: Tab; label: string; icon: string }[] = [
-  { key: 'dashboard', label: '仪表盘', icon: '📊' },
-  { key: 'users', label: '用户管理', icon: '👥' },
-  { key: 'feedback', label: '用户反馈', icon: '💬' },
-  { key: 'notes', label: '笔记管理', icon: '📝' },
-  { key: 'plans', label: '计划管理', icon: '📋' },
-  { key: 'export', label: '数据导出', icon: '📤' },
-  { key: 'ops', label: '系统运维', icon: '🩺' },
-  { key: 'llm', label: 'LLM 配置', icon: '🤖' },
-  { key: 'asr', label: 'ASR 配置', icon: '🎙️' },
-  { key: 'observability', label: '用量与日志', icon: '📈' },
-  { key: 'settings', label: '系统设置', icon: '⚙️' },
+interface AdminNavItem {
+  key: Tab;
+  label: string;
+  description: string;
+  icon: LucideIcon;
+}
+
+const NAV_GROUPS: Array<{ label: string; items: AdminNavItem[] }> = [
+  {
+    label: '总览',
+    items: [
+      { key: 'dashboard', label: '运营概览', description: '核心数据与近期动态', icon: LayoutDashboard },
+    ],
+  },
+  {
+    label: '内容与用户',
+    items: [
+      { key: 'users', label: '用户管理', description: '账号、权限与状态', icon: Users },
+      { key: 'feedback', label: '用户反馈', description: '问题、建议与回复', icon: MessageSquareText },
+      { key: 'notes', label: '笔记管理', description: '内容检查与重新生成', icon: FileText },
+      { key: 'plans', label: '计划管理', description: '行动计划与完成状态', icon: ListTodo },
+      { key: 'export', label: '数据导出', description: '按当前条件导出 CSV', icon: Download },
+    ],
+  },
+  {
+    label: '系统与模型',
+    items: [
+      { key: 'ops', label: '系统运维', description: '数据库与密钥状态', icon: HeartPulse },
+      { key: 'models', label: '聊天模型', description: '发布、定价与用户权限', icon: Boxes },
+      { key: 'llm', label: 'AI 模型配置', description: '文字、视觉模型与解析方案', icon: Bot },
+      { key: 'asr', label: 'ASR 配置', description: '语音识别与并发设置', icon: AudioLines },
+      { key: 'observability', label: '用量与日志', description: '调用、活动与错误追踪', icon: ChartNoAxesCombined },
+      { key: 'settings', label: '系统设置', description: '运行环境与安全信息', icon: Settings2 },
+    ],
+  },
 ];
+
+const NAV = NAV_GROUPS.flatMap((group) => (
+  group.items.map((item) => ({ ...item, group: group.label }))
+));
 
 const CARD_TYPE_LABELS: Record<string, string> = {
   recipe: '食谱', insight: '洞察', history: '历史', product: '好物', plan: '计划', general: '通用',
@@ -109,6 +168,7 @@ export default function AdminPage() {
   const [llm, setLlm] = useState<LlmConfig | null>(null);
   const [asr, setAsr] = useState<AsrConfig | null>(null);
   const [extractionConfig, setExtractionConfig] = useState<ExtractionConfig | null>(null);
+  const [creatorSyncConfig, setCreatorSyncConfig] = useState<CreatorSyncAdminConfig | null>(null);
 
   // 系统
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
@@ -136,12 +196,18 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (!user?.is_admin) return;
-    if (tab === 'dashboard') refreshRecentActivity();
+    if (tab === 'dashboard') {
+      refreshRecentActivity();
+      refreshOps();
+    }
     if (tab === 'notes') refreshNotes(1);
     if (tab === 'plans' && plans.length === 0) refreshPlans('');
     if (tab === 'llm' && !llm) refreshLlm();
     if (tab === 'asr' && (!asr || !extractionConfig)) refreshAsr();
-    if (tab === 'settings' && !systemInfo) refreshSystemInfo();
+    if (tab === 'settings') {
+      if (!systemInfo) refreshSystemInfo();
+      if (!creatorSyncConfig) refreshCreatorSyncConfig();
+    }
     if (tab === 'ops') refreshOps();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
@@ -178,6 +244,10 @@ export default function AdminPage() {
     }
   }
   async function refreshSystemInfo() { const r = await getSystemInfo(); if (r.success && r.data) setSystemInfo(r.data); }
+  async function refreshCreatorSyncConfig() {
+    const result = await getCreatorSyncAdminConfig();
+    if (result.success && result.data) setCreatorSyncConfig(result.data);
+  }
   async function refreshOps() { const r = await getAdminOps(); if (r.success && r.data) setOps(r.data); }
 
   function flash(m: string) { setMsg(m); setErr(''); setTimeout(() => setMsg(''), 3000); }
@@ -336,59 +406,143 @@ export default function AdminPage() {
   }
 
   const activeAdminCount = users.filter(u => u.is_admin && u.is_active).length;
+  const activeNav = NAV.find((item) => item.key === tab) ?? NAV[0];
 
   return (
-    <div className="flex min-h-screen bg-background">
-      <aside className={`fixed lg:static z-40 w-60 h-screen admin-sidebar flex flex-col transition-transform duration-300 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
-        <div className="p-5 border-b border-card-border">
-          <div className="text-lg font-bold text-foreground">知萃</div>
-          <div className="text-xs text-foreground-muted">管理端</div>
+    <div className={`${styles.workspace} admin-workspace-root flex min-h-screen`}>
+      <aside className={`${styles.sidebar} fixed lg:static z-40 w-64 h-screen flex flex-col transition-transform duration-200 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
+        <div className={styles.brand}>
+          <span className={styles.brandMark} aria-hidden="true">知</span>
+          <span>
+            <strong>知萃管理中心</strong>
+          </span>
         </div>
-        <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-          {NAV.map(n => (
-            <button
-              key={n.key}
-              onClick={() => { setTab(n.key); setSidebarOpen(false); setErr(''); setMsg(''); }}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${tab === n.key ? 'bg-accent-emerald/15 text-accent-emerald font-semibold' : 'text-foreground-muted hover:text-foreground hover:bg-[var(--admin-surface-2)]'}`}
-            >
-              <span className="text-base">{n.icon}</span>
-              {n.label}
-            </button>
+        <nav className={styles.navigation} aria-label="管理端导航">
+          {NAV_GROUPS.map((group) => (
+            <section key={group.label} className={styles.navGroup}>
+              <p>{group.label}</p>
+              {group.items.map((item) => {
+                const Icon = item.icon;
+                const active = tab === item.key;
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    aria-current={active ? 'page' : undefined}
+                    aria-label={`${item.label}：${item.description}`}
+                    onClick={() => { setTab(item.key); setSidebarOpen(false); setErr(''); setMsg(''); }}
+                    className={active ? styles.navItemActive : styles.navItem}
+                  >
+                    <Icon size={18} strokeWidth={1.8} aria-hidden="true" />
+                    <span>
+                      <strong>{item.label}</strong>
+                    </span>
+                  </button>
+                );
+              })}
+            </section>
           ))}
         </nav>
-        <div className="p-4 border-t border-card-border text-xs">
-          <div className="font-medium text-foreground truncate">{user.username || user.email}</div>
-          <div className="text-foreground-muted">管理员</div>
+        <div className={styles.account}>
+          <span className={styles.accountAvatar} aria-hidden="true">
+            {(user.username || user.email).slice(0, 1).toUpperCase()}
+          </span>
+          <span>
+            <strong>{user.username || user.email}</strong>
+            <small>管理员</small>
+          </span>
+          <ShieldCheck size={17} aria-label="管理员账号" />
         </div>
       </aside>
 
-      {sidebarOpen && <div className="fixed inset-0 bg-black/40 z-30 lg:hidden" onClick={() => setSidebarOpen(false)} />}
+      {sidebarOpen && <button type="button" aria-label="关闭管理端导航" className={styles.scrim} onClick={() => setSidebarOpen(false)} />}
 
-      <main className="flex-1 min-w-0">
-        <header className="lg:hidden flex items-center gap-3 p-4 border-b border-card-border admin-sidebar sticky top-0 z-20">
-          <button onClick={() => setSidebarOpen(true)} className="text-foreground text-lg">☰</button>
-          <span className="font-semibold text-foreground">知萃管理端</span>
+      <main className={`${styles.main} flex-1 min-w-0`}>
+        <header className={styles.mobileHeader}>
+          <button type="button" onClick={() => setSidebarOpen(true)} aria-label="打开管理端导航">
+            <Menu size={20} aria-hidden="true" />
+          </button>
+          <span>
+            <strong>{activeNav.label}</strong>
+          </span>
+          <Link href="/" aria-label="返回产品首页">
+            <ExternalLink size={18} aria-hidden="true" />
+          </Link>
         </header>
 
-        <div className="mx-auto max-w-6xl p-4 sm:p-6">
+        <div className={styles.contextBar}>
+          <span>{activeNav.group}</span>
+          <i aria-hidden="true" />
+          <strong>{activeNav.label}</strong>
+          <Link href="/">
+            返回产品端
+            <ExternalLink size={14} aria-hidden="true" />
+          </Link>
+        </div>
+
+        <div className={`${styles.content} mx-auto p-4 sm:p-6`}>
           {(err || msg) && (
-            <p className={`text-xs rounded-lg px-3 py-2 mb-4 ${err ? 'text-accent-rose bg-accent-rose/5' : 'text-accent-emerald bg-accent-emerald/5'}`}>
+            <p role={err ? 'alert' : 'status'} className={`${styles.notice} ${err ? styles.noticeError : styles.noticeSuccess}`}>
               {err || msg}
             </p>
           )}
 
           {/* 仪表盘 */}
           {tab === 'dashboard' && stats && (
-            <div className="space-y-4">
-              <h1 className="text-2xl font-bold text-foreground">仪表盘</h1>
-              <div className="grid grid-cols-3 gap-3">
-                <StatCard label="用户" value={stats.users} icon="👥" color="var(--accent-emerald)" />
-                <StatCard label="笔记" value={stats.notes} icon="📝" color="var(--accent-amber)" />
-                <StatCard label="计划" value={stats.plans} icon="📋" color="var(--accent-indigo)" />
+            <div className={`${styles.dashboard} space-y-4`}>
+              <header className={styles.dashboardHeading}>
+                <div>
+                  <h1>运营概览</h1>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void refreshStats();
+                    void refreshRecentActivity();
+                    void refreshOps();
+                  }}
+                >
+                  <RefreshCw size={15} aria-hidden="true" />
+                  刷新数据
+                </button>
+              </header>
+
+              <div className={styles.dashboardOverview}>
+                <section className={`${styles.summaryPanel} admin-panel`} aria-label="核心数据">
+                  <StatCard label="注册用户" value={stats.users} icon={Users} featured />
+                  <StatCard label="知识笔记" value={stats.notes} icon={FileText} />
+                  <StatCard label="行动计划" value={stats.plans} icon={ListTodo} />
+                </section>
+
+                <section className={`${styles.healthPanel} admin-panel`} aria-label="系统状态">
+                  <header>
+                    <span>
+                      <Activity size={17} aria-hidden="true" />
+                      <strong>运行状态</strong>
+                    </span>
+                    <button type="button" onClick={() => setTab('ops')}>查看运维</button>
+                  </header>
+                  {ops ? (
+                    <div>
+                      <SystemStatusRow icon={Database} label="数据存储" value={ops.db_type} ok />
+                      <SystemStatusRow icon={Bot} label="LLM 服务" value={ops.keys.llm_key_set ? '已配置' : '需要配置'} ok={ops.keys.llm_key_set} />
+                      <SystemStatusRow icon={AudioLines} label="语音识别" value={ops.keys.asr_key_set ? '已配置' : '需要配置'} ok={ops.keys.asr_key_set} />
+                      <SystemStatusRow icon={ShieldCheck} label="安全密钥" value={ops.keys.encryption_key_set && ops.keys.jwt_secret_set ? '完整' : '需要检查'} ok={ops.keys.encryption_key_set && ops.keys.jwt_secret_set} />
+                    </div>
+                  ) : (
+                    <div className={styles.healthLoading}>正在读取系统状态…</div>
+                  )}
+                </section>
               </div>
               {stats.type_dist && Object.keys(stats.type_dist).length > 0 && (
-                <div className="admin-panel p-4">
-                  <div className="text-xs text-foreground-muted mb-2">笔记类型分布</div>
+                <div className={`${styles.distributionPanel} admin-panel p-4`}>
+                  <div className={styles.panelTitle}>
+                    <span>
+                      <ChartNoAxesCombined size={17} aria-hidden="true" />
+                      <strong>笔记类型分布</strong>
+                    </span>
+                    <small>共 {stats.notes} 条</small>
+                  </div>
                   <div className="space-y-1.5">
                     {Object.entries(stats.type_dist).map(([k, v]) => {
                       const max = Math.max(...Object.values(stats.type_dist));
@@ -405,10 +559,13 @@ export default function AdminPage() {
                   </div>
                 </div>
               )}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className={styles.recentGrid}>
                 {stats.recent_users && stats.recent_users.length > 0 && (
-                  <div className="admin-panel p-4">
-                    <div className="text-xs text-foreground-muted mb-3">最近注册用户</div>
+                  <div className={`${styles.recentPanel} admin-panel p-4`}>
+                    <div className={styles.panelTitle}>
+                      <span><Users size={17} aria-hidden="true" /><strong>最近注册用户</strong></span>
+                      <button type="button" onClick={() => setTab('users')}>查看全部</button>
+                    </div>
                     <div className="space-y-2">
                       {stats.recent_users.map((u, i) => (
                         <div key={i} className="flex items-center justify-between text-sm">
@@ -420,8 +577,11 @@ export default function AdminPage() {
                   </div>
                 )}
                 {recentActivity.length > 0 && (
-                  <div className="admin-panel p-4">
-                    <div className="text-xs text-foreground-muted mb-3">最近管理活动</div>
+                  <div className={`${styles.recentPanel} admin-panel p-4`}>
+                    <div className={styles.panelTitle}>
+                      <span><Clock3 size={17} aria-hidden="true" /><strong>最近管理活动</strong></span>
+                      <button type="button" onClick={() => setTab('observability')}>查看日志</button>
+                    </div>
                     <div className="space-y-2">
                       {recentActivity.map(a => (
                         <div key={a.id} className="flex items-center justify-between text-sm">
@@ -442,9 +602,9 @@ export default function AdminPage() {
           {/* 用户管理 */}
           {tab === 'users' && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className={`${styles.sectionHeader} flex items-center justify-between gap-3 flex-wrap`}>
                 <h1 className="text-2xl font-bold text-foreground">用户管理 <span className="text-sm font-normal text-foreground-muted">共 {userTotal} 人</span></h1>
-                <div className="flex gap-2">
+                <div className={`${styles.filters} flex gap-2`}>
                   <input
                     value={userSearchInput}
                     onChange={e => setUserSearchInput(e.target.value)}
@@ -508,9 +668,9 @@ export default function AdminPage() {
           {/* 笔记管理 */}
           {tab === 'notes' && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className={`${styles.sectionHeader} flex items-center justify-between gap-3 flex-wrap`}>
                 <h1 className="text-2xl font-bold text-foreground">笔记管理 <span className="text-sm font-normal text-foreground-muted">共 {notesTotal} 条</span></h1>
-                <div className="flex gap-2">
+                <div className={`${styles.filters} flex gap-2`}>
                   <input
                     value={noteSearch}
                     onChange={e => setNoteSearch(e.target.value)}
@@ -591,9 +751,9 @@ export default function AdminPage() {
           {/* 计划管理 */}
           {tab === 'plans' && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className={`${styles.sectionHeader} flex items-center justify-between gap-3 flex-wrap`}>
                 <h1 className="text-2xl font-bold text-foreground">计划管理 <span className="text-sm font-normal text-foreground-muted">共 {plansTotal} 个</span></h1>
-                <div className="flex gap-2">
+                <div className={`${styles.filters} flex gap-2`}>
                   <input
                     value={planSearchInput}
                     onChange={e => setPlanSearchInput(e.target.value)}
@@ -640,9 +800,9 @@ export default function AdminPage() {
               <h1 className="text-2xl font-bold text-foreground">数据导出</h1>
               <p className="text-xs text-foreground-muted">导出当前筛选条件下的全量数据为 CSV（含 BOM，Excel 直接可读）。</p>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <ExportCard title="用户列表" desc="用户名、邮箱、角色、状态、注册时间" icon="👥" onClick={() => exportCsv('users')} loading={exportingKind === 'users'} disabled={exportingKind !== null} />
-                <ExportCard title="笔记列表" desc="标题、类型、作者、转录标记、创建时间" icon="📝" onClick={() => exportCsv('notes')} loading={exportingKind === 'notes'} disabled={exportingKind !== null} />
-                <ExportCard title="计划列表" desc="标题、作者、状态、天数、创建时间" icon="📋" onClick={() => exportCsv('plans')} loading={exportingKind === 'plans'} disabled={exportingKind !== null} />
+                <ExportCard title="用户列表" desc="用户名、邮箱、角色、状态、注册时间" icon={Users} onClick={() => exportCsv('users')} loading={exportingKind === 'users'} disabled={exportingKind !== null} />
+                <ExportCard title="笔记列表" desc="标题、类型、作者、转录标记、创建时间" icon={FileText} onClick={() => exportCsv('notes')} loading={exportingKind === 'notes'} disabled={exportingKind !== null} />
+                <ExportCard title="计划列表" desc="标题、作者、状态、天数、创建时间" icon={ListTodo} onClick={() => exportCsv('plans')} loading={exportingKind === 'plans'} disabled={exportingKind !== null} />
               </div>
             </div>
           )}
@@ -657,10 +817,10 @@ export default function AdminPage() {
               <div className="admin-panel p-5">
                 <h2 className="text-base font-semibold text-foreground mb-3">数据库表行数</h2>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <StatCard label="用户" value={ops.table_counts.users} icon="👥" color="var(--accent-emerald)" />
-                  <StatCard label="笔记" value={ops.table_counts.notes} icon="📝" color="var(--accent-amber)" />
-                  <StatCard label="计划" value={ops.table_counts.plans} icon="📋" color="var(--accent-indigo)" />
-                  <StatCard label="审计日志" value={ops.table_counts.audit_logs} icon="🔒" color="var(--accent-slate)" />
+                  <StatCard label="用户" value={ops.table_counts.users} icon={Users} />
+                  <StatCard label="笔记" value={ops.table_counts.notes} icon={FileText} />
+                  <StatCard label="计划" value={ops.table_counts.plans} icon={ListTodo} />
+                  <StatCard label="审计日志" value={ops.table_counts.audit_logs} icon={Clock3} />
                 </div>
                 <div className="mt-3"><InfoRow label="数据库类型" value={ops.db_type} /></div>
               </div>
@@ -692,14 +852,21 @@ export default function AdminPage() {
             </div>
           )}
 
-          {/* LLM 配置 */}
+          {/* 用户可见模型目录与底层 Provider 配置分开管理。 */}
+          {tab === 'models' && (
+            <AdminChatModelPanel onMessage={flash} onError={setErr} />
+          )}
+
           {tab === 'llm' && (
-            <AdminLlmConfigPanel
-              config={llm}
-              onConfigChange={setLlm}
-              onMessage={flash}
-              onError={setErr}
-            />
+            <div className="space-y-7">
+              <AdminLlmConfigPanel
+                config={llm}
+                onConfigChange={setLlm}
+                onMessage={flash}
+                onError={setErr}
+              />
+              <AdminVideoAnalysisPanel onMessage={flash} onError={setErr} />
+            </div>
           )}
 
           {/* ASR 配置 */}
@@ -753,6 +920,27 @@ export default function AdminPage() {
           {tab === 'settings' && systemInfo && (
             <div className="space-y-4">
               <h1 className="text-2xl font-bold text-foreground">系统设置</h1>
+
+              {creatorSyncConfig && (
+                <CreatorSyncConfigPanel
+                  config={creatorSyncConfig}
+                  onSave={async (value) => {
+                    const result = await putCreatorSyncAdminConfig(value);
+                    if (result.success && result.data) {
+                      setCreatorSyncConfig(result.data);
+                      flash('博主同步配置已保存');
+                      return true;
+                    }
+                    setErr(result.error || '博主同步配置保存失败');
+                    return false;
+                  }}
+                  onTest={async (platform, profileRef) => {
+                    const result = await testCreatorSyncConnector(platform, profileRef);
+                    await refreshCreatorSyncConfig();
+                    return result;
+                  }}
+                />
+              )}
 
               <div className="admin-panel p-5">
                 <h2 className="text-base font-semibold text-foreground mb-3">数据库</h2>
@@ -846,6 +1034,7 @@ export default function AdminPage() {
                     </div>
                   )}
                 </div>
+                <AdminAnalysisAccountCard userId={userDetail.id} />
                 <ResetPasswordForm onSubmit={async (pwd) => resetPassword(userDetail.id, pwd)} />
                 <EditUserForm
                   initialUsername={userDetail.username || ''}
@@ -965,14 +1154,47 @@ export default function AdminPage() {
   );
 }
 
-function StatCard({ label, value, icon, color = 'var(--accent-emerald)' }: { label: string; value: number; icon?: string; color?: string }) {
+function StatCard({
+  label,
+  value,
+  icon: Icon,
+  featured = false,
+}: {
+  label: string;
+  value: number;
+  icon: LucideIcon;
+  featured?: boolean;
+}) {
   return (
-    <div className="admin-stat p-4 pl-5" style={{ '--stat-color': color } as CSSProperties}>
-      <div className="flex items-center gap-2 mb-1">
-        {icon && <span className="text-base">{icon}</span>}
-        <div className="text-2xl font-bold text-foreground">{value}</div>
-      </div>
-      <div className="text-xs text-foreground-muted">{label}</div>
+    <article className={`${styles.metric} ${featured ? styles.metricFeatured : ''}`}>
+      <span className={styles.metricIcon} aria-hidden="true">
+        <Icon size={featured ? 22 : 18} strokeWidth={1.7} />
+      </span>
+      <span>
+        <strong className="tabular-nums">{value.toLocaleString('zh-CN')}</strong>
+        <small>{label}</small>
+      </span>
+    </article>
+  );
+}
+
+function SystemStatusRow({
+  icon: Icon,
+  label,
+  value,
+  ok,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: string;
+  ok: boolean;
+}) {
+  return (
+    <div className={styles.statusRow}>
+      <Icon size={16} aria-hidden="true" />
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <i className={ok ? styles.statusOk : styles.statusWarning} aria-label={ok ? '状态正常' : '需要处理'} />
     </div>
   );
 }
@@ -987,18 +1209,19 @@ function ExportCard({
 }: {
   title: string;
   desc: string;
-  icon: string;
+  icon: LucideIcon;
   onClick: () => void;
   loading?: boolean;
   disabled?: boolean;
 }) {
+  const Icon = icon;
   return (
     <button
       onClick={onClick}
       disabled={disabled}
-      className="admin-panel p-5 text-left hover:-translate-y-0.5 transition-transform disabled:cursor-wait disabled:opacity-60 disabled:hover:translate-y-0"
+      className={`${styles.exportCard} admin-panel p-5 text-left disabled:cursor-wait disabled:opacity-60`}
     >
-      <div className="text-2xl mb-2">{icon}</div>
+      <span className={styles.exportIcon}><Icon size={20} aria-hidden="true" /></span>
       <div className="text-base font-bold text-foreground mb-1">{title}</div>
       <div className="text-xs text-foreground-muted">{desc}</div>
       <div className="mt-3 text-xs text-accent-emerald font-semibold">
@@ -1022,13 +1245,18 @@ function Drawer({ title, onClose, children, wide }: { title: string; onClose: ()
     <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
         className={`relative h-full ${wide ? 'max-w-2xl' : 'max-w-md'} w-full admin-sidebar overflow-y-auto p-6 shadow-2xl`}
         style={{ animation: 'adminDrawerIn 220ms cubic-bezier(0.32,0.72,0,1)' }}
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-bold text-foreground">{title}</h2>
-          <button onClick={onClose} className="text-foreground-muted hover:text-foreground text-xl leading-none">✕</button>
+          <button type="button" onClick={onClose} aria-label={`关闭${title}`} className={styles.drawerClose}>
+            <X size={18} aria-hidden="true" />
+          </button>
         </div>
         {children}
       </div>
@@ -1120,6 +1348,147 @@ interface ConfigField {
   value: string;
   placeholder?: string;
   secret?: boolean;
+}
+
+function CreatorSyncConfigPanel({
+  config,
+  onSave,
+  onTest,
+}: {
+  config: CreatorSyncAdminConfig;
+  onSave: (value: {
+    enabled: boolean;
+    xhs_cookie?: string;
+    douyin_concurrency: number;
+    bilibili_concurrency: number;
+    xiaohongshu_concurrency: number;
+  }) => Promise<boolean>;
+  onTest: (
+    platform: 'douyin' | 'bilibili' | 'xiaohongshu',
+    profileRef?: string,
+  ) => Promise<ApiResponse<{ healthy: boolean; message?: string }>>;
+}) {
+  const [enabled, setEnabled] = useState(config.enabled);
+  const [cookie, setCookie] = useState('');
+  const [concurrency, setConcurrency] = useState(config.concurrency);
+  const [testPlatform, setTestPlatform] = useState<'douyin' | 'bilibili' | 'xiaohongshu'>('bilibili');
+  const [testProfile, setTestProfile] = useState('');
+  const [localMessage, setLocalMessage] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const platformLabels = { douyin: '抖音', bilibili: 'B站', xiaohongshu: '小红书' } as const;
+
+  return (
+    <section className="admin-panel p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-balance text-base font-semibold text-foreground">博主同步连接器</h2>
+          <p className="mt-1 max-w-2xl text-pretty text-xs leading-5 text-foreground-muted">
+            用户只能手动同步已保存博主；系统仅保留作品资料与普通文稿，不自动生成摘要或画面解析。
+          </p>
+        </div>
+        <label className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border border-card-border px-3 text-sm text-foreground">
+          <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
+          开放功能
+        </label>
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {(Object.keys(platformLabels) as Array<keyof typeof platformLabels>).map((platform) => (
+          <div key={platform}>
+            <div className="mb-1 flex items-center justify-between gap-2 text-xs text-foreground-muted">
+              <span>{platformLabels[platform]}并发</span>
+              <span>{config.platforms[platform] ? '已通过测试' : '待测试'}</span>
+            </div>
+            <label>
+              <span className="sr-only">{platformLabels[platform]}并发数</span>
+              <input
+                type="number"
+                min={1}
+                max={4}
+                value={concurrency[platform]}
+                onChange={(event) => setConcurrency((current) => ({
+                  ...current,
+                  [platform]: Math.max(1, Math.min(4, Math.round(Number(event.target.value) || 1))),
+                }))}
+                className="min-h-11 w-full rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground focus:border-accent-emerald/50 focus:outline-none"
+              />
+            </label>
+          </div>
+        ))}
+      </div>
+
+      <label className="mt-3 block">
+        <span className="mb-1 block text-xs text-foreground-muted">
+          小红书服务 Cookie（当前 {config.xhs_cookie_masked || '未配置'}）
+        </span>
+        <input
+          type="password"
+          value={cookie}
+          onChange={(event) => setCookie(event.target.value)}
+          placeholder="留空表示不修改"
+          className="min-h-11 w-full rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground focus:border-accent-emerald/50 focus:outline-none"
+        />
+      </label>
+
+      <div className="mt-4 border-t border-card-border pt-4">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[140px_minmax(0,1fr)_auto]">
+          <select
+            value={testPlatform}
+            onChange={(event) => setTestPlatform(event.target.value as typeof testPlatform)}
+            className="min-h-11 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground"
+            aria-label="测试平台"
+          >
+            <option value="bilibili">B站</option>
+            <option value="douyin">抖音</option>
+            <option value="xiaohongshu">小红书</option>
+          </select>
+          <input
+            value={testProfile}
+            onChange={(event) => setTestProfile(event.target.value)}
+            placeholder="测试博主主页（可选）"
+            className="min-h-11 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground focus:border-accent-emerald/50 focus:outline-none"
+          />
+          <button
+            type="button"
+            disabled={testing}
+            onClick={async () => {
+              setTesting(true);
+              const result = await onTest(testPlatform, testProfile);
+              setTesting(false);
+              setLocalMessage(result.success && result.data?.healthy
+                ? '连接测试通过'
+                : result.error || result.data?.message || '连接测试未通过');
+            }}
+            className="min-h-11 rounded-lg border border-card-border px-4 text-sm font-semibold text-foreground disabled:opacity-50"
+          >
+            {testing ? '测试中…' : '测试连接'}
+          </button>
+        </div>
+      </div>
+
+      {localMessage && <p className="mt-3 text-xs text-foreground-muted" role="status">{localMessage}</p>}
+      <button
+        type="button"
+        disabled={saving}
+        onClick={async () => {
+          setSaving(true);
+          const saved = await onSave({
+            enabled,
+            ...(cookie.trim() ? { xhs_cookie: cookie.trim() } : {}),
+            douyin_concurrency: concurrency.douyin,
+            bilibili_concurrency: concurrency.bilibili,
+            xiaohongshu_concurrency: concurrency.xiaohongshu,
+          });
+          setSaving(false);
+          if (saved) setCookie('');
+        }}
+        className="mt-4 min-h-11 rounded-lg bg-accent-emerald px-4 text-sm font-semibold text-white hover:bg-accent-emerald/90 disabled:opacity-50"
+      >
+        {saving ? '保存中…' : '保存连接器设置'}
+      </button>
+    </section>
+  );
 }
 
 function ExtractionConcurrencyPanel({

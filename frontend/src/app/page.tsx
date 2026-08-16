@@ -5,7 +5,6 @@ import Link from 'next/link';
 import {
   ArrowRight,
   Check,
-  CheckSquare,
   FileText,
   Library,
   ListChecks,
@@ -18,10 +17,10 @@ import InputBar from '@/components/InputBar';
 import CardRenderer from '@/components/CardRenderer';
 import PipelineProgress from '@/components/PipelineProgress';
 import DesktopWorkspaceHome from '@/components/DesktopWorkspaceHome';
+import WorkspaceActionHome from '@/components/WorkspaceActionHome';
 import WebLandingPage from '@/components/WebLandingPage';
 import { useDesktopApp } from '@/components/DesktopAppFrame';
 import { useExtraction } from '@/lib/hooks/ExtractionContext';
-import { getPlanStats } from '@/lib/api';
 import { isNativeAndroidApp } from '@/lib/douyinNative';
 
 const LIBRARY_STEPS = [
@@ -81,8 +80,6 @@ export default function HomePage() {
     dismissError,
   } = useExtraction();
   const [singleExtractorOpen, setSingleExtractorOpen] = useState(false);
-  const [planReminder, setPlanReminder] = useState(false);
-  const [planReminderDue, setPlanReminderDue] = useState(0);
   const [nativeAndroid, setNativeAndroid] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -98,26 +95,6 @@ export default function HomePage() {
       }
     } catch {}
   }, [cardData, isDesktop, nativeAndroid, startExtraction]);
-
-  useEffect(() => {
-    if (isDesktop || nativeAndroid !== true) return;
-    const today = new Date().toISOString().slice(0, 10);
-    const lastDismiss = localStorage.getItem('vc-plan-reminder-dismissed');
-    if (lastDismiss === today) return;
-
-    getPlanStats().then((res) => {
-      if (res.success && res.data && res.data.due_today > 0) {
-        setPlanReminder(true);
-        setPlanReminderDue(res.data.due_today);
-      }
-    });
-  }, [isDesktop, nativeAndroid]);
-
-  const dismissReminder = () => {
-    const today = new Date().toISOString().slice(0, 10);
-    localStorage.setItem('vc-plan-reminder-dismissed', today);
-    setPlanReminder(false);
-  };
 
   const handleSubmit = useCallback((url: string) => {
     startExtraction(url);
@@ -148,6 +125,14 @@ export default function HomePage() {
   const showLanding = !isLoading && !cardData;
   const showSingleExtractor = singleExtractorOpen || isLoading || Boolean(cardData) || Boolean(error);
 
+  if (showLanding && !singleExtractorOpen) {
+    return (
+      <div className="relative min-h-[calc(100dvh-8rem)] pb-24">
+        <WorkspaceActionHome onOpenSingleLink={openSingleExtractor} />
+      </div>
+    );
+  }
+
   return (
     <div className="relative flex flex-col items-center pb-24 md:pb-32">
       <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none" aria-hidden="true">
@@ -155,35 +140,7 @@ export default function HomePage() {
         <div className="emerald-orb right-[-12rem] top-[24%] h-[30rem] w-[30rem] opacity-30 [animation-delay:-4s]" />
       </div>
 
-      {planReminder && (
-        <div className="relative z-20 mb-4 w-full max-w-3xl animate-slide-up">
-          <div className="flex items-start gap-3 rounded-2xl border border-accent-emerald/20 bg-accent-emerald/10 p-3 md:p-4">
-            <CheckSquare size={18} className="mt-0.5 flex-shrink-0 text-accent-emerald" />
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-foreground">
-                你今天有 {planReminderDue} 项计划任务到期
-              </p>
-              <p className="mt-0.5 text-xs text-foreground-muted">打开计划页面查看详情</p>
-            </div>
-            <Link
-              href="/plans"
-              className="min-h-[40px] flex-shrink-0 rounded-lg px-2 py-2 text-xs font-medium text-accent-emerald transition-colors hover:bg-accent-emerald/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-emerald/50"
-            >
-              查看
-            </Link>
-            <button
-              type="button"
-              onClick={dismissReminder}
-              className="flex min-h-[40px] min-w-[40px] flex-shrink-0 items-center justify-center rounded-lg text-foreground-muted/50 transition-colors hover:bg-white/5 hover:text-foreground-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-emerald/50"
-              aria-label="关闭提醒"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {showLanding && (
+      {showLanding && !singleExtractorOpen && (
         <>
           <section className="relative z-10 grid w-full max-w-[1380px] items-center gap-10 pb-10 pt-7 lg:grid-cols-[minmax(0,0.86fr)_minmax(0,1.14fr)] lg:gap-14 lg:pb-16 lg:pt-16">
             <div className="max-w-[39rem] animate-fade-up-blur">
@@ -191,7 +148,7 @@ export default function HomePage() {
                 <img
                   src="/logo.png"
                   alt="知萃"
-                  className="h-10 w-10 object-contain drop-shadow-[0_0_24px_rgba(16,185,129,0.22)] md:h-12 md:w-12"
+                  className="h-10 w-10 object-contain drop-shadow-[0_0_24px_rgba(48,48,52,0.22)] md:h-12 md:w-12"
                 />
                 <div>
                   <p className="text-base font-bold tracking-tight text-foreground">知萃</p>
@@ -200,7 +157,7 @@ export default function HomePage() {
               </div>
 
               <p className="mb-4 inline-flex items-center gap-2 text-xs font-semibold tracking-[0.12em] text-accent-emerald">
-                <span className="h-1.5 w-1.5 rounded-full bg-accent-emerald shadow-[0_0_0_5px_rgba(16,185,129,0.1)]" />
+                <span className="h-1.5 w-1.5 rounded-full bg-accent-emerald shadow-[0_0_0_5px_rgba(48,48,52,0.1)]" />
                 把收藏夹重新用起来
               </p>
 
@@ -302,7 +259,7 @@ export default function HomePage() {
       {showSingleExtractor && (
         <section
           id="single-link-extractor"
-          className="relative z-10 mt-8 w-full max-w-3xl animate-fade-up-blur rounded-[1.75rem] border border-card-border bg-card-bg/75 p-4 shadow-[0_24px_70px_-45px_rgba(16,185,129,0.42)] backdrop-blur-2xl md:mt-12 md:p-7"
+          className="relative z-10 mt-8 w-full max-w-3xl animate-fade-up-blur rounded-[1.75rem] border border-card-border bg-card-bg/75 p-4 shadow-[0_24px_70px_-45px_rgba(48,48,52,0.42)] backdrop-blur-2xl md:mt-12 md:p-7"
           aria-labelledby="single-link-title"
         >
           <div className="mb-5 flex items-start justify-between gap-4 px-1">
@@ -410,9 +367,9 @@ function LibraryWorkbenchPreview() {
         className="absolute -inset-5 -z-10 rounded-[3rem] bg-accent-emerald/[0.06] blur-3xl"
         aria-hidden="true"
       />
-      <div className="relative overflow-hidden rounded-[1.75rem] border border-card-border bg-card-bg/90 p-3 shadow-[0_34px_100px_-52px_rgba(16,185,129,0.55)] backdrop-blur-2xl md:rounded-[2rem] md:p-4">
+      <div className="relative overflow-hidden rounded-[1.75rem] border border-card-border bg-card-bg/90 p-3 shadow-[0_34px_100px_-52px_rgba(48,48,52,0.55)] backdrop-blur-2xl md:rounded-[2rem] md:p-4">
         <div
-          className="absolute inset-0 bg-[radial-gradient(circle_at_82%_0%,rgba(16,185,129,0.13),transparent_38%)]"
+          className="absolute inset-0 bg-[radial-gradient(circle_at_82%_0%,rgba(48,48,52,0.13),transparent_38%)]"
           aria-hidden="true"
         />
 
@@ -451,7 +408,7 @@ function LibraryWorkbenchPreview() {
                   key={video.title}
                   className="group min-w-0 overflow-hidden rounded-xl border border-card-border/70 bg-card-bg transition-transform duration-200 hover:-translate-y-0.5"
                 >
-                  <div className="relative aspect-[16/10] overflow-hidden bg-[radial-gradient(circle_at_78%_16%,rgba(16,185,129,0.28),transparent_42%),linear-gradient(145deg,rgba(16,185,129,0.09),rgba(15,23,42,0.12))]">
+                  <div className="relative aspect-[16/10] overflow-hidden bg-[radial-gradient(circle_at_78%_16%,rgba(48,48,52,0.28),transparent_42%),linear-gradient(145deg,rgba(48,48,52,0.09),rgba(15,23,42,0.12))]">
                     <span className="absolute left-2 top-2 font-mono text-[9px] font-semibold text-foreground-muted/55">
                       0{index + 1}
                     </span>

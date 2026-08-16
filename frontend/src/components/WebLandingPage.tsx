@@ -3,51 +3,41 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ArrowDown,
-  ArrowRight,
-  BookOpenText,
+  ChatCenteredText,
   CheckCircle,
-  ClockCountdown,
+  DeviceMobile,
   DownloadSimple,
   FileText,
-  FolderOpen,
   Monitor,
   Play,
-  Quotes,
   Sparkle,
   Target,
-  VideoCamera,
 } from '@phosphor-icons/react';
 import { QRCodeSVG } from 'qrcode.react';
-import { DESKTOP_DOWNLOAD_URL } from '@/lib/desktopRuntime';
+import {
+  CLIENT_RELEASE_FALLBACKS,
+  detectPreferredClient,
+  formatReleaseSize,
+  loadClientReleaseCatalog,
+  toAbsoluteDownloadUrl,
+  type ClientPlatform,
+} from '@/lib/clientReleases';
 import styles from './WebLandingPage.module.css';
 
-const ANDROID_DOWNLOAD_URL = '/download/zhicui.apk';
-const WINDOWS_VERSION = '1.0.3';
-const ANDROID_VERSION = '1.2.1';
-
-const WORKFLOW = [
+const CORE_FEATURES = [
   {
-    number: '01',
-    title: '选择要整理的内容',
-    description: '收藏、喜欢和自己的作品，由你决定同步哪一组、最近多少条。',
-    Icon: FolderOpen,
-  },
-  {
-    number: '02',
-    title: '完整文案逐条出现',
-    description: '处理好一条就先展示一条，不必等整批视频全部结束。',
+    title: '视频变成完整文案',
+    description: '批量整理收藏、喜欢和作品，处理好一条就先显示一条。',
     Icon: FileText,
   },
   {
-    number: '03',
-    title: '直接向视频资料提问',
-    description: 'AI 阅读完整文案，并把回答对应到真实的视频和原文依据。',
-    Icon: Quotes,
+    title: '对视频直接提问',
+    description: 'AI 基于完整视频文案回答，并保留对应的原文依据。',
+    Icon: ChatCenteredText,
   },
   {
-    number: '04',
-    title: '把答案变成行动',
-    description: '需要时再生成知识卡和计划，把“知道了”变成今天能做的事。',
+    title: '把结论变成行动',
+    description: '把有用结论保存为知识，或直接转成今天能执行的计划。',
     Icon: Target,
   },
 ] as const;
@@ -55,6 +45,8 @@ const WORKFLOW = [
 export default function WebLandingPage() {
   const rootRef = useRef<HTMLDivElement>(null);
   const [origin, setOrigin] = useState('https://luxai.cn');
+  const [releases, setReleases] = useState(CLIENT_RELEASE_FALLBACKS);
+  const [preferredClient, setPreferredClient] = useState<ClientPlatform | null>(null);
 
   useEffect(() => {
     setOrigin(window.location.origin);
@@ -84,6 +76,23 @@ export default function WebLandingPage() {
   }, []);
 
   useEffect(() => {
+    const controller = new AbortController();
+    const browserNavigator = navigator as Navigator & {
+      userAgentData?: { platform?: string };
+    };
+    setPreferredClient(detectPreferredClient(
+      browserNavigator.userAgent,
+      browserNavigator.userAgentData?.platform || browserNavigator.platform,
+    ));
+
+    void loadClientReleaseCatalog(controller.signal).then((catalog) => {
+      if (!controller.signal.aborted) setReleases(catalog);
+    });
+
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
     if (window.location.hash !== '#download') return undefined;
     const timeoutId = window.setTimeout(() => {
       document.getElementById('download')?.scrollIntoView({
@@ -94,7 +103,13 @@ export default function WebLandingPage() {
     return () => window.clearTimeout(timeoutId);
   }, []);
 
-  const androidUrl = `${origin}${ANDROID_DOWNLOAD_URL}`;
+  const androidUrl = toAbsoluteDownloadUrl(releases.android.downloadUrl, origin);
+  const androidDownloadHref = releases.android.downloadUrl
+    === CLIENT_RELEASE_FALLBACKS.android.downloadUrl
+    ? '/download/zhicui.apk'
+    : releases.android.downloadUrl;
+  const androidSize = formatReleaseSize(releases.android.sizeBytes);
+  const windowsSize = formatReleaseSize(releases.windows.sizeBytes);
 
   return (
     <div ref={rootRef} className={`${styles.page} marketing-home`}>
@@ -102,193 +117,152 @@ export default function WebLandingPage() {
 
       <section className={styles.hero} aria-labelledby="landing-title">
         <div className={styles.heroCopy} data-reveal>
-          <p className={styles.eyebrow}>
-            <span aria-hidden="true" />
-            让收藏继续产生价值
-          </p>
           <h1 id="landing-title">
-            <span className={styles.heroInk}>你收藏的不是视频，</span>
-            <span>是还没来得及用的知识。</span>
+            <span className={styles.heroInk}>把收藏视频，</span>
+            <span>变成能问、能用的知识。</span>
           </h1>
           <p className={styles.heroLead}>
-            知萃把抖音收藏、喜欢和个人作品整理成完整文案。你可以向一条或一组视频提问，再把有用的结论变成知识卡与行动计划。
+            自动整理完整文案，基于视频资料提问，再把有用结论保存为知识或行动计划。
           </p>
 
           <div className={styles.heroActions}>
-            <a className={styles.primaryAction} href={DESKTOP_DOWNLOAD_URL}>
+            <a
+              className={preferredClient === 'android' ? styles.secondaryAction : styles.primaryAction}
+              data-platform="windows"
+              href={releases.windows.downloadUrl}
+              aria-label={`下载 Windows 桌面端 v${releases.windows.version}`}
+            >
               <Monitor size={20} weight="light" aria-hidden="true" />
               <span>
                 <strong>下载 Windows 版</strong>
-                <small>推荐首次使用 · v{WINDOWS_VERSION}</small>
+                <small>
+                  {preferredClient === 'windows' ? '本机推荐 · ' : ''}
+                  v{releases.windows.version} · {windowsSize}
+                </small>
               </span>
               <i aria-hidden="true"><ArrowDown size={16} weight="bold" /></i>
             </a>
-            <a className={styles.secondaryAction} href={ANDROID_DOWNLOAD_URL}>
+            <a
+              className={preferredClient === 'android' ? styles.primaryAction : styles.secondaryAction}
+              data-platform="android"
+              href={androidDownloadHref}
+              aria-label={`下载 Android 移动端 v${releases.android.version}`}
+            >
+              <DeviceMobile size={20} weight="light" aria-hidden="true" />
               <span>
                 <strong>下载 Android 版</strong>
-                <small>随时提问、阅读和打卡</small>
+                <small>
+                  {preferredClient === 'android' ? '本机推荐 · ' : ''}
+                  v{releases.android.version} · {androidSize}
+                </small>
               </span>
-              <i aria-hidden="true"><ArrowRight size={16} weight="bold" /></i>
+              <i aria-hidden="true"><ArrowDown size={16} weight="bold" /></i>
             </a>
-          </div>
-
-          <div className={styles.heroFacts} aria-label="产品说明">
-            <span><CheckCircle size={16} weight="fill" />同步范围由你选择</span>
-            <span><CheckCircle size={16} weight="fill" />文案完成一条显示一条</span>
-            <span><CheckCircle size={16} weight="fill" />服务器不保存视频文件</span>
           </div>
         </div>
 
         <ProductStage />
       </section>
 
-      <section id="product" className={styles.statement} data-reveal>
-        <p>收藏夹的问题，从来不是内容不够多。</p>
-        <h2>
-          真正缺少的是一个人，
-          <span>帮你读完、找回，并推进下一步。</span>
-        </h2>
-        <div className={styles.statementAside}>
-          <span>从“以后再看”</span>
-          <ArrowRight size={20} weight="light" aria-hidden="true" />
-          <strong>到“现在就能用”</strong>
-        </div>
-      </section>
-
-      <section id="workflow" className={styles.workflow} aria-labelledby="workflow-title">
+      <section id="product" className={styles.core} aria-labelledby="core-title">
         <header className={styles.sectionHeading} data-reveal>
-          <p>一次连接，持续整理</p>
-          <h2 id="workflow-title">从收藏夹到行动，只保留四个步骤</h2>
-          <span>桌面端负责连接和批量同步；手机端负责随时查看、提问和执行。</span>
+          <p>核心功能</p>
+          <h2 id="core-title">从视频到行动，只做三件事</h2>
         </header>
 
-        <ol className={styles.workflowList}>
-          {WORKFLOW.map(({ number, title, description, Icon }, index) => (
-            <li
-              key={number}
-              className={index % 2 === 1 ? styles.offsetStep : undefined}
-              data-reveal
-            >
-              <div className={styles.stepNumber}>{number}</div>
-              <span className={styles.stepIcon} aria-hidden="true">
+        <ul className={styles.coreList}>
+          {CORE_FEATURES.map(({ title, description, Icon }) => (
+            <li key={title} data-reveal>
+              <span className={styles.coreIcon} aria-hidden="true">
                 <Icon size={23} weight="light" />
               </span>
               <h3>{title}</h3>
               <p>{description}</p>
             </li>
           ))}
-        </ol>
-      </section>
-
-      <section className={styles.evidence} aria-labelledby="evidence-title">
-        <div className={styles.evidenceCopy} data-reveal>
-          <p className={styles.eyebrow}>不是脱离原视频的万能回答</p>
-          <h2 id="evidence-title">先读你的视频，再给答案。</h2>
-          <p>
-            知萃默认依据你选择的视频文案回答。资料没有提到的内容，会明确标注为 AI 补充；需要时再允许联网查证。
-          </p>
-          <ul>
-            <li><BookOpenText size={18} weight="light" />查看完整文案，不只依赖摘要</li>
-            <li><VideoCamera size={18} weight="light" />引用对应视频和原文片段</li>
-            <li><Sparkle size={18} weight="light" />综合多条视频的共同点与分歧</li>
-          </ul>
-        </div>
-
-        <div className={styles.answerShell} data-reveal>
-          <article className={styles.answerCard}>
-            <header>
-              <span><Sparkle size={18} weight="fill" /></span>
-              <div>
-                <strong>视频资料 Agent</strong>
-                <small>正在参考 8 条完整文案</small>
-              </div>
-            </header>
-            <div className={styles.question}>
-              这些健身视频里，新手今天应该先练什么？
-            </div>
-            <div className={styles.answer}>
-              <strong>先完成一次 20 分钟的全身基础训练。</strong>
-              <p>
-                其中 5 条视频都建议新手先稳定频率，再逐渐增加动作数量。今天可以从深蹲、推和拉三类动作各选一个。
-              </p>
-              <div>
-                <span><FileText size={14} weight="light" />已核对 8 条文案</span>
-                <span><Quotes size={14} weight="light" />引用 5 个片段</span>
-              </div>
-            </div>
-            <footer>
-              <span>查看原文依据</span>
-              <span>转成行动计划</span>
-            </footer>
-          </article>
-        </div>
+        </ul>
       </section>
 
       <section id="download" className={styles.downloadSection} aria-labelledby="download-title">
         <header className={styles.sectionHeading} data-reveal>
-          <p>选择你的使用方式</p>
-          <h2 id="download-title">电脑负责整理，手机陪你行动</h2>
-          <span>两个客户端共用同一个知萃账号，文案、问答、知识卡和计划保持同步。</span>
+          <p>客户端下载</p>
+          <h2 id="download-title">在电脑整理，在手机继续</h2>
+          <span>同一账号，文案、问答和计划自动同步。</span>
         </header>
 
         <div className={styles.platformGrid}>
-          <article className={styles.windowsCard} data-reveal>
+          <article
+            className={`${styles.platformCard} ${styles.windowsCard}`}
+            data-recommended={preferredClient === 'windows' ? 'true' : undefined}
+            data-reveal
+          >
             <div className={styles.platformTop}>
               <span className={styles.platformIcon}><Monitor size={28} weight="light" /></span>
-              <span className={styles.recommended}>建议先安装</span>
+              <span className={preferredClient === 'windows' ? styles.recommended : styles.platformLabel}>
+                {preferredClient === 'windows' ? '本机推荐' : '桌面工作台'}
+              </span>
             </div>
             <h3>Windows 桌面端</h3>
-            <p>完成抖音扫码绑定、批量同步与深度视频问答，是知萃最完整的使用方式。</p>
-            <ul>
-              <li><CheckCircle size={17} weight="fill" />使用本机 Chrome 扫码绑定抖音</li>
-              <li><CheckCircle size={17} weight="fill" />批量同步最近 1–100 条视频</li>
-              <li><CheckCircle size={17} weight="fill" />后台整理文案并自动检查更新</li>
-            </ul>
-            <a href={DESKTOP_DOWNLOAD_URL}>
-              <DownloadSimple size={19} weight="light" />
-              下载 Windows 版
-              <span>v{WINDOWS_VERSION} · Windows 10/11 x64</span>
-            </a>
-          </article>
-
-          <article className={styles.androidCard} data-reveal>
-            <div className={styles.androidCopy}>
-              <div className={styles.platformTop}>
-                <span className={styles.platformIcon}><ClockCountdown size={28} weight="light" /></span>
-              </div>
-              <h3>Android 移动端</h3>
-              <p>在手机上查看同步结果、播放原视频、阅读文案、向视频提问，并完成每日计划。</p>
-              <a href={ANDROID_DOWNLOAD_URL}>
+            <p>批量同步视频、整理完整文案并进行深度提问。</p>
+            <div className={styles.releaseMeta} aria-label="Windows 版本信息">
+              <span>v{releases.windows.version} 公测</span>
+              <span>{windowsSize}</span>
+              <span>Windows 10/11 {releases.windows.architecture || 'x64'}</span>
+            </div>
+            <div className={styles.platformFooter}>
+              <a href={releases.windows.downloadUrl}>
                 <DownloadSimple size={19} weight="light" />
-                下载 Android APK
-                <span>v{ANDROID_VERSION}</span>
+                <strong>下载 Windows 安装包</strong>
+                <ArrowDown size={16} weight="bold" aria-hidden="true" />
               </a>
+              {releases.windows.codeSigned === false ? (
+                <small>未签名公测版，首次安装可能出现 Windows 安全提示。</small>
+              ) : null}
             </div>
-            <div className={styles.qrPanel}>
-              <QRCodeSVG
-                value={androidUrl}
-                size={116}
-                bgColor="transparent"
-                fgColor="#173d32"
-                level="M"
-                marginSize={1}
-                title="知萃 Android 下载二维码"
-              />
-              <span>电脑访问时扫码安装</span>
+          </article>
+
+          <article
+            className={`${styles.platformCard} ${styles.androidCard}`}
+            data-recommended={preferredClient === 'android' ? 'true' : undefined}
+            data-reveal
+          >
+            <div className={styles.platformTop}>
+              <span className={styles.platformIcon}><DeviceMobile size={28} weight="light" /></span>
+              <span className={preferredClient === 'android' ? styles.recommended : styles.platformLabel}>
+                {preferredClient === 'android' ? '本机推荐' : '移动端'}
+              </span>
+            </div>
+            <h3>Android 移动端</h3>
+            <p>随时阅读完整文案、向视频提问并执行每日计划。</p>
+            <div className={styles.releaseMeta} aria-label="Android 版本信息">
+              <span>v{releases.android.version}</span>
+              <span>{androidSize}</span>
+              <span>APK</span>
+            </div>
+            <div className={`${styles.platformFooter} ${styles.androidFooter}`}>
+              <div>
+                <a href={androidDownloadHref}>
+                  <DownloadSimple size={19} weight="light" />
+                  <strong>下载 Android APK</strong>
+                  <ArrowDown size={16} weight="bold" aria-hidden="true" />
+                </a>
+                <small>下载后按系统提示完成安装。</small>
+              </div>
+              <div className={styles.qrPanel}>
+                <QRCodeSVG
+                  value={androidUrl}
+                  size={104}
+                  bgColor="transparent"
+                  fgColor="#242426"
+                  level="M"
+                  marginSize={1}
+                  title="知萃 Android 下载二维码"
+                />
+                <span>扫码下载</span>
+              </div>
             </div>
           </article>
         </div>
-      </section>
-
-      <section className={styles.finalCta} data-reveal>
-        <div>
-          <p>别再让收藏夹替你保存遗忘。</p>
-          <h2>从最近 50 条开始，把它们真正用起来。</h2>
-        </div>
-        <a href={DESKTOP_DOWNLOAD_URL}>
-          下载 Windows 版
-          <i aria-hidden="true"><ArrowDown size={17} weight="bold" /></i>
-        </a>
       </section>
     </div>
   );
@@ -316,7 +290,7 @@ function ProductStage() {
               <img src="/logo.png" alt="" />
               <i /><i className={styles.activeNav} /><i /><i /><i />
             </aside>
-            <main>
+            <div className={styles.windowMain}>
               <div className={styles.libraryTop}>
                 <div>
                   <span>批量视频库</span>
@@ -348,7 +322,7 @@ function ProductStage() {
                   <span>回答已核对原文依据</span>
                 </div>
               </section>
-            </main>
+            </div>
           </div>
         </div>
       </div>

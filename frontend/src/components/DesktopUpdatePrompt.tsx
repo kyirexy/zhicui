@@ -2,17 +2,22 @@
 
 import { RefreshCw, RotateCw, X } from 'lucide-react';
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
+import { usePathname } from 'next/navigation';
+import { useAuth } from '@/lib/hooks/AuthContext';
 import type { DesktopUpdateResult } from '@/lib/desktopRuntime';
 
 const DISMISSED_VERSION_KEY = 'zhicui_desktop_update_dismissed_version';
 
 export default function DesktopUpdatePrompt() {
+  const pathname = usePathname();
+  const { user, loading: authLoading } = useAuth();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [update, setUpdate] = useState<DesktopUpdateResult | null>(null);
   const [installing, setInstalling] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
+    if (authLoading || !user || pathname.startsWith('/login')) return undefined;
     const bridge = window.zhicuiDesktop;
     if (!bridge) return undefined;
     let active = true;
@@ -34,7 +39,7 @@ export default function DesktopUpdatePrompt() {
       active = false;
       unsubscribe();
     };
-  }, []);
+  }, [authLoading, pathname, user]);
 
   useEffect(() => {
     if (update && !dialogRef.current?.open) {

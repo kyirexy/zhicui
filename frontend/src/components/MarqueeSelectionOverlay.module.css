@@ -1,0 +1,27 @@
+.overlay {
+  position: fixed;
+  z-index: 98;
+  box-sizing: border-box;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  border: 1px solid var(--ui-accent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ui-accent) 12%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--ui-accent) 12%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, white 20%, transparent);
+}
+
+.overlay[data-visible="true"] {
+  opacity: 1;
+  visibility: visible;
+}
+
+@media (forced-colors: active) {
+  .overlay {
+    border: 2px solid Highlight;
+    background: transparent;
+    box-shadow: none;
+  }
+}

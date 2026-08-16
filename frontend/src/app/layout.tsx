@@ -22,14 +22,13 @@ const inter = localFont({
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 1,
-  themeColor: '#f7faf8',
+  themeColor: '#ffffff',
 };
 
 export const metadata: Metadata = {
   title: '知萃 · 把收藏夹里的视频变成能问、能用的知识',
-  description: '同步你选择的抖音收藏、喜欢或作品，自动提取完整文稿，基于视频资料提问，并把有用内容转成知识卡与行动计划。',
-  keywords: ['知萃', '抖音收藏整理', '批量视频文案', 'AI视频问答', '知识卡片', '行动计划'],
+  description: '同步你选择的抖音收藏、喜欢或作品，自动提取完整文稿，基于一条或多条视频提问，并把有用内容转成行动计划。',
+  keywords: ['知萃', '抖音收藏整理', '批量视频文案', 'AI视频问答', '视频资料助手', '行动计划'],
   manifest: '/manifest.json',
 };
 
@@ -41,6 +40,7 @@ export default function RootLayout({
   return (
     <html
       lang="zh-CN"
+      translate="no"
       className={inter.variable}
       data-scroll-behavior="smooth"
       data-theme="light"
@@ -48,6 +48,7 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <head>
+        <meta name="google" content="notranslate" />
         <link rel="icon" href="/icons/icon-192.png" type="image/png" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
         <meta name="apple-mobile-web-app-capable" content="yes" />

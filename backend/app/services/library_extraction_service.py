@@ -1,6 +1,7 @@
 """Concurrent, metadata-only extraction for the Douyin video library."""
 from __future__ import annotations
 
+import json
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -51,6 +52,19 @@ def _item_lock(user_id: str, aweme_id: str) -> threading.Lock:
             lock = threading.Lock()
             _ITEM_LOCKS[key] = lock
         return lock
+
+
+def _has_retryable_ai_failure(note: Any) -> bool:
+    """Recognise current and legacy fallback cards so AI can be retried."""
+    try:
+        payload = json.loads(note.ai_summary or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return False
+    return (
+        payload.get("generation_status") == "fallback"
+        or "AI 暂时无法生成结构化卡片" in str(payload.get("key_insight") or "")
+        or "AI 处理暂时不可用" in str(payload.get("conclusion") or "")
+    )
 
 
 def _persist_generated_note(
@@ -222,6 +236,7 @@ def extract_library_item(
                 existing is not None
                 and operation in {"ai", "full"}
                 and existing.ai_initialized
+                and not _has_retryable_ai_failure(existing)
             ):
                 result = existing.to_dict()
                 result["already_existed"] = True
@@ -307,7 +322,7 @@ def extract_library_item(
                 user_id=user_id,
             )
             if existing is not None:
-                if existing.ai_initialized:
+                if existing.ai_initialized and not _has_retryable_ai_failure(existing):
                     result = existing.to_dict()
                     result["already_existed"] = True
                     return result

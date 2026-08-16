@@ -9,51 +9,79 @@ import {
   useState,
 } from 'react';
 import {
+  ArrowsOut,
   ArrowClockwise,
   CalendarBlank,
   CaretRight,
   ChatsCircle,
   CheckCircle,
+  ClipboardText,
   Clock,
   ClockCounterClockwise,
   EnvelopeSimple,
   FileText,
   FolderOpen,
+  ListChecks,
   MagnifyingGlass,
-  PaperPlaneTilt,
+  Notebook,
   PencilSimple,
   Play,
   Plus,
-  SidebarSimple,
-  SlidersHorizontal,
-  Stop,
+  Scales,
+  SelectionAll,
+  Sparkle,
+  SquaresFour,
   Trash,
   VideoCamera,
   X,
 } from '@phosphor-icons/react';
 import AgentMark from '@/components/agent/AgentMark';
-import AgentOptionsSheet from '@/components/agent/AgentOptionsSheet';
+import AgentComposer from '@/components/agent/AgentComposer';
+import type { AgentComposerHandle } from '@/components/agent/AgentComposer';
 import AgentMessageView from '@/components/agent/AgentMessageView';
+import AgentSourceSyncSheet from '@/components/agent/AgentSourceSyncSheet';
+import VideoAnalysisBatchAction from '@/components/VideoAnalysisBatchAction';
 import type { AgentMessageDeliveryState } from '@/components/agent/AgentMessageView';
+import type { AgentVideoAnalysisDecision } from '@/components/agent/AgentVideoAnalysisCard';
+import MarqueeSelectionOverlay from '@/components/MarqueeSelectionOverlay';
+import NativeModal from '@/components/NativeModal';
+import PlatformBrandIcon from '@/components/PlatformBrandIcon';
+import { MessageResponse } from '@/components/ai-elements/message';
 import styles from '@/components/agent/AgentWorkspace.module.css';
+import {
+  deriveAgentStudioResults,
+  studioResultTypeLabel,
+  type AgentStudioResult,
+} from '@/lib/agentStudio';
 import {
   createAgentAutomation,
   createAgentThread,
+  deleteAgentSources,
+  decideAgentVideoAnalysis,
   confirmAgentEmailVerification,
   deleteAgentAutomation,
   deleteAgentThread,
   getAgentThread,
   getAgentEmailStatus,
+  getUserAIProvider,
+  getUserChatModels,
   listAgentAutomationRuns,
   listAgentAutomations,
   listAgentSources,
   listAgentThreads,
   runAgentAutomation,
+  searchAgentSources,
   sendAgentEmailVerification,
-  sendAgentMessage,
+  selectUserChatModel,
+  streamAgentMessage,
   updateAgentAutomation,
+  type UserAIProviderConfig,
+  type UserChatModelCatalog,
 } from '@/lib/api';
 import { useAuth } from '@/lib/hooks/AuthContext';
+import { useSettings } from '@/lib/hooks/SettingsContext';
+import { useMarqueeSelection } from '@/lib/hooks/useMarqueeSelection';
+import { useVideoAnalysis } from '@/lib/hooks/VideoAnalysisContext';
 import type {
   AgentAutomation,
   AgentAutomationCreate,
@@ -64,16 +92,73 @@ import type {
   AgentSource,
   AgentSourceMode,
   AgentSourceScope,
+  AgentStreamProgress,
   AgentThread,
   LibraryOutputStyle,
   LibraryResearchMode,
   ResearchScope,
+  VideoAnalysisItem,
+  VideoAnalysisRun,
+  VideoAnalysisRunResult,
 } from '@/lib/types';
 
 const MAX_SELECTED_SOURCES = 100;
+type BrowseSourceScope = Exclude<AgentSourceScope, 'selected'>;
+type AgentSourcePlatform = 'all' | 'douyin' | 'bilibili' | 'xiaohongshu';
+
+const SOURCE_PLATFORMS: Array<{ value: AgentSourcePlatform; label: string }> = [
+  { value: 'all', label: '全部' },
+  { value: 'douyin', label: '抖音' },
+  { value: 'bilibili', label: 'B站' },
+  { value: 'xiaohongshu', label: '小红书' },
+];
+
+function SourcePlatformIcon({ platform }: { platform: AgentSourcePlatform }) {
+  if (platform === 'all') return <SquaresFour size={20} weight="fill" aria-hidden="true" />;
+  return (
+    <PlatformBrandIcon
+      platform={platform}
+      size={platform === 'xiaohongshu' ? 28 : 20}
+    />
+  );
+}
+
+function agentSourcePlatform(source: AgentSource): Exclude<AgentSourcePlatform, 'all'> | 'unknown' {
+  const explicit = String(source.platform || '').toLowerCase();
+  if (explicit === 'douyin' || explicit === 'bilibili' || explicit === 'xiaohongshu') {
+    return explicit;
+  }
+  const url = String(source.source_url || '').toLowerCase();
+  if (url.includes('bilibili.com') || url.includes('b23.tv')) return 'bilibili';
+  if (url.includes('xiaohongshu.com') || url.includes('xhslink.com')) return 'xiaohongshu';
+  if (url.includes('douyin.com') || url.includes('iesdouyin.com')) return 'douyin';
+  return 'unknown';
+}
+type DraftSourceMode = 'scope' | 'selected';
+
+function isBrowseSourceScope(value: string | null): value is BrowseSourceScope {
+  return SOURCE_SCOPES.some((scope) => scope.value === value);
+}
+
+function useEventCallback<Args extends unknown[], Result>(
+  handler: (...args: Args) => Result,
+): (...args: Args) => Result {
+  const handlerRef = useRef(handler);
+  useEffect(() => {
+    handlerRef.current = handler;
+  }, [handler]);
+  return useCallback((...args: Args) => handlerRef.current(...args), []);
+}
+
+const SOURCE_MATCH_LABELS = {
+  title: '标题',
+  author: '作者',
+  summary: '摘要',
+  transcript: '文稿',
+} as const;
 
 const SOURCE_SCOPES: Array<{
-  value: AgentSourceScope;
+  value: BrowseSourceScope;
   label: string;
   description: string;
 }> = [
@@ -102,11 +187,6 @@ const SOURCE_SCOPES: Array<{
     label: '我的作品',
     description: '参考已同步的个人作品',
   },
-  {
-    value: 'selected',
-    label: '手选',
-    description: '最多选择 100 条视频',
-  },
 ];
 
 const STARTERS = [
@@ -122,6 +202,42 @@ const OUTPUT_LABELS: Record<LibraryOutputStyle, string> = {
   action_plan: '行动方案',
   custom: '自定义',
 };
+
+const STUDIO_SHORTCUTS: Array<{
+  value: Exclude<LibraryOutputStyle, 'answer' | 'custom'>;
+  label: string;
+  description: string;
+  prompt: string;
+  Icon: typeof Notebook;
+}> = [
+  {
+    value: 'summary',
+    label: '完整总结',
+    description: '把核心观点和依据收拢成一份可复用笔记',
+    prompt: '请把当前视频资料整理成一份结构清晰的完整总结，保留关键结论及其视频依据。',
+    Icon: Notebook,
+  },
+  {
+    value: 'comparison',
+    label: '观点对比',
+    description: '并排呈现共识、分歧与各自依据',
+    prompt: '请对比当前视频中的主要观点，分别列出共识、分歧和各自依据。',
+    Icon: Scales,
+  },
+  {
+    value: 'action_plan',
+    label: '行动方案',
+    description: '把可执行的方法排成有先后的步骤',
+    prompt: '请把当前视频中可执行的方法整理成有先后顺序的行动方案，并标注依据不足或需要验证的部分。',
+    Icon: ListChecks,
+  },
+];
+
+interface SubmitQuestionOptions {
+  outputStyle?: LibraryOutputStyle;
+  customInstruction?: string;
+  revealStudioOnComplete?: boolean;
+}
 
 const AUTOMATION_SOURCE_MODES: Array<{
   value: AgentSourceMode;
@@ -146,6 +262,7 @@ function sourceScopeLabel(
   scope: AgentSourceScope | AgentAutomationSourceScope,
 ): string {
   if (scope === 'yesterday') return '昨天新整理进知萃';
+  if (scope === 'selected') return '手选视频';
   return SOURCE_SCOPES.find((item) => item.value === scope)?.label || '视频资料';
 }
 
@@ -209,40 +326,227 @@ function createOptimisticMessage(
   };
 }
 
+function createStreamingAssistantMessage(threadId: string): AgentMessage {
+  return {
+    id: `streaming-${Date.now()}`,
+    thread_id: threadId,
+    role: 'assistant',
+    content: '',
+    created_at: new Date().toISOString(),
+  };
+}
+
+function threadHasBackgroundWork(thread: AgentThread | null | undefined): boolean {
+  return thread?.status === 'running' || thread?.status === 'running_analysis';
+}
+
+function threadBlocksNewQuestion(thread: AgentThread | null | undefined): boolean {
+  return threadHasBackgroundWork(thread) || thread?.status === 'awaiting_approval';
+}
+
+function agentVideoAnalysisRunId(message: AgentMessage): string {
+  const payload = message.result?.video_analysis;
+  if (!payload || typeof payload !== 'object' || !('run' in payload)) return '';
+  const run = payload.run;
+  return run && typeof run === 'object' && 'id' in run && typeof run.id === 'string'
+    ? run.id
+    : '';
+}
+
+function agentVideoAnalysisRunResult(value: unknown): VideoAnalysisRunResult | null {
+  if (!value || typeof value !== 'object' || !('run' in value)) return null;
+  const rawRun = (value as { run?: unknown }).run;
+  if (
+    !rawRun
+    || typeof rawRun !== 'object'
+    || !('id' in rawRun)
+    || !('status' in rawRun)
+    || typeof rawRun.id !== 'string'
+    || typeof rawRun.status !== 'string'
+  ) return null;
+  const rawItems = (value as { items?: unknown }).items;
+  const items = Array.isArray(rawItems) ? rawItems as VideoAnalysisItem[] : [];
+  return {
+    run: { ...(rawRun as VideoAnalysisRun), items },
+    items,
+  };
+}
+
+function threadConversationMessages(thread: AgentThread): AgentMessage[] {
+  const threadMessages = thread.messages || [];
+  if (threadHasBackgroundWork(thread) || thread.status === 'awaiting_approval') {
+    return threadMessages;
+  }
+  const completedTurnIds = new Set(
+    threadMessages
+      .filter((message) => message.role === 'assistant' && message.turn_id)
+      .map((message) => message.turn_id as string),
+  );
+  const orphanedUsers = threadMessages.filter(
+    (message) => (
+      message.role === 'user'
+      && Boolean(message.turn_id)
+      && !completedTurnIds.has(message.turn_id as string)
+    ),
+  );
+  const latestOrphanId = orphanedUsers.at(-1)?.id;
+  return threadMessages.filter((message) => (
+    !orphanedUsers.some((orphan) => orphan.id === message.id)
+    || message.id === latestOrphanId
+  ));
+}
+
+function restoredDeliveryStates(
+  thread: AgentThread,
+): Record<string, AgentMessageDeliveryState> {
+  if (threadHasBackgroundWork(thread) || thread.status === 'awaiting_approval') return {};
+  const visibleMessages = threadConversationMessages(thread);
+  const completedTurnIds = new Set(
+    visibleMessages
+      .filter((message) => message.role === 'assistant' && message.turn_id)
+      .map((message) => message.turn_id as string),
+  );
+  const failedUser = [...visibleMessages].reverse().find((message) => (
+    message.role === 'user'
+    && Boolean(message.turn_id)
+    && !completedTurnIds.has(message.turn_id as string)
+  ));
+  return failedUser ? { [failedUser.id]: 'failed' } : {};
+}
+
+function restoredDeliveryErrors(thread: AgentThread): Record<string, string> {
+  const [failedMessageId] = Object.keys(restoredDeliveryStates(thread));
+  return failedMessageId
+    ? { [failedMessageId]: '此前回答没有完成，可以直接重新生成' }
+    : {};
+}
+
+interface AgentSourceOptionProps {
+  source: AgentSource;
+  selected: boolean;
+  onToggle: (noteId: string) => void;
+  disabled?: boolean;
+}
+
+function AgentSourceOption({ source, selected, onToggle, disabled = false }: AgentSourceOptionProps) {
+  return (
+    <label
+      className={`video-agent-source-item ${selected ? 'is-selected' : ''}`}
+      data-marquee-id={source.note_id}
+    >
+      <input type="checkbox" checked={selected} disabled={disabled} onChange={() => onToggle(source.note_id)} aria-label={`${selected ? '取消选择' : '选择'}${source.title}`} />
+      <span className="video-agent-source-cover">
+        <VideoCamera size={17} aria-hidden="true" />
+        {source.cover_url && <img src={source.cover_url} alt="" loading="lazy" onError={(event) => { event.currentTarget.hidden = true; }} />}
+      </span>
+      <span className="video-agent-source-copy">
+        <strong>{source.title}</strong>
+        <small>
+          {source.author_name || '抖音视频'}
+          {' · '}
+          {source.transcript_chars.toLocaleString('zh-CN')} 字
+        </small>
+        {source.visual_analysis && (
+          <small className="video-agent-source-visual-status">
+            <Sparkle size={11} weight="fill" aria-hidden="true" />
+            已解析画面
+            {source.visual_analysis.scene_count ? ` · ${source.visual_analysis.scene_count} 个场景` : ''}
+          </small>
+        )}
+        {source.match?.snippet && (
+          <small className="video-agent-source-match">
+            <b>
+              命中{source.match.fields.map(
+                (field) => SOURCE_MATCH_LABELS[field],
+              ).join('、')}
+            </b>
+            {source.match.snippet}
+          </small>
+        )}
+      </span>
+    </label>
+  );
+}
+
 export default function VideoAgentWorkspace() {
   const { user } = useAuth();
+  const { settings } = useSettings();
+  const { trackRun: trackVideoAnalysisRun } = useVideoAnalysis();
   const [threads, setThreads] = useState<AgentThread[]>([]);
   const [activeThread, setActiveThread] = useState<AgentThread | null>(null);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [messageDeliveryStates, setMessageDeliveryStates] = useState<
     Record<string, AgentMessageDeliveryState>
   >({});
+  const [messageDeliveryErrors, setMessageDeliveryErrors] = useState<
+    Record<string, string>
+  >({});
+  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
+  const [streamProgress, setStreamProgress] = useState<AgentStreamProgress | null>(null);
   const [threadsLoading, setThreadsLoading] = useState(true);
   const [threadLoading, setThreadLoading] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
+  const [isCompact, setIsCompact] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [sourceSyncOpen, setSourceSyncOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
-  const [optionsOpen, setOptionsOpen] = useState(false);
+  const [studioOpen, setStudioOpen] = useState(false);
   const [automationOpen, setAutomationOpen] = useState(false);
 
-  const [draftScope, setDraftScope] = useState<AgentSourceScope>('all_ready');
+  const [browseScope, setBrowseScope] = useState<BrowseSourceScope>('all_ready');
+  const [sourcePlatform, setSourcePlatform] = useState<AgentSourcePlatform>('all');
+  const [draftSourceMode, setDraftSourceMode] = useState<DraftSourceMode>('scope');
   const [sources, setSources] = useState<AgentSource[]>([]);
   const [sourceCount, setSourceCount] = useState(0);
+  const [scopeReadyCount, setScopeReadyCount] = useState(0);
   const [sourceQuery, setSourceQuery] = useState('');
+  const [sourceAppliedQuery, setSourceAppliedQuery] = useState('');
+  const [sourceSearchMode, setSourceSearchMode] = useState<
+    'browse' | 'smart' | 'keyword_fallback'
+  >('browse');
+  const [sourceExpandedQueries, setSourceExpandedQueries] = useState<string[]>([]);
+  const [sourceScannedCount, setSourceScannedCount] = useState(0);
   const [sourceLoading, setSourceLoading] = useState(true);
   const [sourceError, setSourceError] = useState('');
   const [selectedSourceIds, setSelectedSourceIds] = useState<Set<string>>(new Set());
+  const [sourceRegistry, setSourceRegistry] = useState<Record<string, AgentSource>>({});
 
-  const [question, setQuestion] = useState('');
+  const [aiProviderConfig, setAiProviderConfig] = useState<
+    UserAIProviderConfig | null
+  >(null);
+  const [chatModelCatalog, setChatModelCatalog] = useState<UserChatModelCatalog | null>(null);
+  const [modelCatalogLoading, setModelCatalogLoading] = useState(true);
+  const [modelSaving, setModelSaving] = useState(false);
+  const [modelError, setModelError] = useState('');
   const [researchMode, setResearchMode] = useState<LibraryResearchMode>('fast');
   const [outputStyle, setOutputStyle] = useState<LibraryOutputStyle>('answer');
   const [webScope, setWebScope] = useState<ResearchScope>('auto');
   const [customInstruction, setCustomInstruction] = useState('');
   const [sending, setSending] = useState(false);
+  const [studioGeneratingType, setStudioGeneratingType] = useState<
+    LibraryOutputStyle | null
+  >(null);
+  const [selectedStudioResultId, setSelectedStudioResultId] = useState<
+    string | null
+  >(null);
+  const [studioCustomOpen, setStudioCustomOpen] = useState(false);
   const [backgroundThreadId, setBackgroundThreadId] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [pendingThreadDelete, setPendingThreadDelete] = useState<string | null>(null);
+  const [destructivePending, setDestructivePending] = useState(false);
+  const [pendingBatchDeleteIds, setPendingBatchDeleteIds] = useState<string[] | null>(null);
+  const [deletingBatch, setDeletingBatch] = useState(false);
+  const [removeSelectionMode, setRemoveSelectionMode] = useState(false);
+  const [analysisDecisionMessageId, setAnalysisDecisionMessageId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!error && !notice) return;
+    const timeout = window.setTimeout(() => {
+      setError('');
+      setNotice('');
+    }, error ? 5000 : 3200);
+    return () => window.clearTimeout(timeout);
+  }, [error, notice]);
 
   const [automations, setAutomations] = useState<AgentAutomation[]>([]);
   const [automationRuns, setAutomationRuns] = useState<
@@ -271,21 +575,39 @@ export default function VideoAgentWorkspace() {
   });
 
   const abortRef = useRef<AbortController | null>(null);
+  const sourceRequestRef = useRef<AbortController | null>(null);
+  const requestedSourceIdsRef = useRef<string[]>([]);
+  const sourceHandoffNoticeSettledRef = useRef(false);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
-  const questionRef = useRef<HTMLTextAreaElement | null>(null);
+  const questionRef = useRef<AgentComposerHandle | null>(null);
   const historyTriggerRef = useRef<HTMLButtonElement | null>(null);
   const historyCloseRef = useRef<HTMLButtonElement | null>(null);
   const historyWasOpenRef = useRef(false);
   const sourcesCloseRef = useRef<HTMLButtonElement | null>(null);
   const lastSourcesTriggerRef = useRef<HTMLButtonElement | null>(null);
   const sourcesWereOpenRef = useRef(false);
+  const sourceSelectionSurfaceRef = useRef<HTMLDivElement | null>(null);
+  const studioCloseRef = useRef<HTMLButtonElement | null>(null);
+  const lastStudioTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const studioWasOpenRef = useRef(false);
+
+  const rememberSources = useCallback((items: AgentSource[] | undefined) => {
+    if (!items?.length) return;
+    setSourceRegistry((current) => {
+      const next = { ...current };
+      items.forEach((item) => {
+        next[item.note_id] = item;
+      });
+      return next;
+    });
+  }, []);
 
   const loadThreads = useCallback(async (selectFirst = false) => {
     setThreadsLoading(true);
     const response = await listAgentThreads();
     setThreadsLoading(false);
     if (!response.success || !response.data) {
-      setError(response.error || '暂时无法读取视频 Agent 任务');
+      setError(response.error || '暂时无法读取视频研伴会话');
       return;
     }
     const nextThreads = response.data.items || [];
@@ -294,33 +616,65 @@ export default function VideoAgentWorkspace() {
       const detailResponse = await getAgentThread(nextThreads[0].id);
       if (detailResponse.success && detailResponse.data) {
         setActiveThread(detailResponse.data);
-        setMessages(detailResponse.data.messages || []);
-        setMessageDeliveryStates({});
-        if (detailResponse.data.status === 'running') {
+        setMessages(threadConversationMessages(detailResponse.data));
+        setMessageDeliveryStates(restoredDeliveryStates(detailResponse.data));
+        setMessageDeliveryErrors(restoredDeliveryErrors(detailResponse.data));
+        setStreamingMessageId(null);
+        setStreamProgress(null);
+        setDraftSourceMode('scope');
+        setSelectedSourceIds(new Set());
+        rememberSources(detailResponse.data.sources);
+        if (threadHasBackgroundWork(detailResponse.data)) {
           setBackgroundThreadId(detailResponse.data.id);
         }
       }
     }
-  }, [activeThread]);
+  }, [activeThread, rememberSources]);
 
   const loadSources = useCallback(async (
-    scope: AgentSourceScope,
-    query: string,
+    scope: BrowseSourceScope,
+    includeIds: string[] = [],
   ) => {
-    const requestScope = scope === 'selected' ? 'all_ready' : scope;
+    sourceRequestRef.current?.abort();
+    const controller = new AbortController();
+    sourceRequestRef.current = controller;
     setSourceLoading(true);
     setSourceError('');
-    const response = await listAgentSources(requestScope, query);
+    const response = await listAgentSources(
+      scope,
+      '',
+      controller.signal,
+      includeIds,
+      settings.agentSourceDisplayLimit,
+    );
+    if (controller.signal.aborted) return;
     setSourceLoading(false);
+    sourceRequestRef.current = null;
     if (!response.success || !response.data) {
       setSources([]);
       setSourceCount(0);
+      setScopeReadyCount(0);
       setSourceError(response.error || '暂时无法读取可用视频资料');
       return;
     }
     setSources(response.data.items || []);
     setSourceCount(response.data.ready_count ?? response.data.total ?? 0);
-  }, []);
+    setScopeReadyCount(response.data.ready_count ?? response.data.total ?? 0);
+    setSourceAppliedQuery('');
+    setSourceSearchMode('browse');
+    setSourceExpandedQueries([]);
+    setSourceScannedCount(response.data.total ?? 0);
+    rememberSources([
+      ...(response.data.included_items || []),
+      ...(response.data.items || []),
+    ]);
+  }, [rememberSources, settings.agentSourceDisplayLimit]);
+
+  useEffect(() => {
+    const refreshVisualStatuses = () => void loadSources(browseScope);
+    window.addEventListener('vc:video-analysis-updated', refreshVisualStatuses);
+    return () => window.removeEventListener('vc:video-analysis-updated', refreshVisualStatuses);
+  }, [browseScope, loadSources]);
 
   const loadAutomations = useCallback(async () => {
     setAutomationsLoading(true);
@@ -411,7 +765,53 @@ export default function VideoAgentWorkspace() {
   }, [loadEmailStatus]);
 
   useEffect(() => {
-    const requestedThreadId = new URLSearchParams(window.location.search).get('thread');
+    const searchParams = new URLSearchParams(window.location.search);
+    const requestedSourceIds = Array.from(new Set(
+      (searchParams.get('source_ids') || '')
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean),
+    )).slice(0, MAX_SELECTED_SOURCES);
+    const requestedThreadId = searchParams.get('thread');
+    const requestedScopeParam = searchParams.get('source_scope');
+    const requestedScope = isBrowseSourceScope(requestedScopeParam)
+      ? requestedScopeParam
+      : null;
+    const forceNewThread = searchParams.get('new') === '1';
+    requestedSourceIdsRef.current = requestedSourceIds;
+    sourceHandoffNoticeSettledRef.current = requestedSourceIds.length === 0;
+
+    if (requestedScope) setBrowseScope(requestedScope);
+
+    if (requestedSourceIds.length > 0) {
+      void loadThreads(false);
+      setActiveThread(null);
+      setMessages([]);
+      setMessageDeliveryStates({});
+      setMessageDeliveryErrors({});
+      setStreamingMessageId(null);
+      setStreamProgress(null);
+      setDraftSourceMode('selected');
+      setSelectedSourceIds(new Set(requestedSourceIds));
+      setNotice(`已带入 ${requestedSourceIds.length} 条视频，正在核对资料状态。`);
+      return;
+    }
+
+    if (forceNewThread || requestedScope) {
+      void loadThreads(false);
+      setActiveThread(null);
+      setMessages([]);
+      setMessageDeliveryStates({});
+      setMessageDeliveryErrors({});
+      setStreamingMessageId(null);
+      setStreamProgress(null);
+      setDraftSourceMode('scope');
+      setSelectedSourceIds(new Set());
+      setNotice(`已开启新会话，将整体参考${sourceScopeLabel(requestedScope || 'all_ready')}。`);
+      window.requestAnimationFrame(() => questionRef.current?.focus());
+      return;
+    }
+
     if (!requestedThreadId) {
       void loadThreads(true);
       return;
@@ -428,11 +828,14 @@ export default function VideoAgentWorkspace() {
         return;
       }
       setActiveThread(response.data);
-      setMessages(response.data.messages || []);
-      setMessageDeliveryStates({});
-      setDraftScope(response.data.source_scope);
-      setSelectedSourceIds(new Set(response.data.source_ids || []));
-      if (response.data.status === 'running') {
+      setMessages(threadConversationMessages(response.data));
+      setMessageDeliveryStates(restoredDeliveryStates(response.data));
+      setMessageDeliveryErrors(restoredDeliveryErrors(response.data));
+      setStreamingMessageId(null);
+      setStreamProgress(null);
+      setSelectedSourceIds(new Set());
+      rememberSources(response.data.sources);
+      if (threadHasBackgroundWork(response.data)) {
         setBackgroundThreadId(response.data.id);
       }
     });
@@ -442,15 +845,58 @@ export default function VideoAgentWorkspace() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadSources(draftScope, sourceQuery);
-    }, 220);
-    return () => window.clearTimeout(timer);
-  }, [draftScope, loadSources, sourceQuery]);
+    void loadSources(browseScope, requestedSourceIdsRef.current);
+  }, [browseScope, loadSources]);
 
   useEffect(() => {
-    const media = window.matchMedia('(max-width: 959px)');
-    const updateViewport = () => setIsMobile(media.matches);
+    const requestedSourceIds = requestedSourceIdsRef.current;
+    if (
+      sourceHandoffNoticeSettledRef.current
+      || sourceLoading
+      || requestedSourceIds.length === 0
+    ) return;
+
+    sourceHandoffNoticeSettledRef.current = true;
+    const resolvedCount = requestedSourceIds.filter(
+      (noteId) => Boolean(sourceRegistry[noteId]),
+    ).length;
+    setNotice(resolvedCount === requestedSourceIds.length
+      ? `已带入 ${resolvedCount} 条视频，可以直接开始提问。`
+      : `已带入 ${requestedSourceIds.length} 条视频，其中 ${requestedSourceIds.length - resolvedCount} 条暂时不可用。`);
+  }, [sourceLoading, sourceRegistry]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    let active = true;
+    setModelCatalogLoading(true);
+    setModelError('');
+    void Promise.all([
+      getUserAIProvider(),
+      getUserChatModels(),
+    ]).then(([providerResponse, catalogResponse]) => {
+      if (!active) return;
+      if (providerResponse.success && providerResponse.data) {
+        setAiProviderConfig(providerResponse.data);
+      }
+      if (catalogResponse.success && catalogResponse.data) {
+        setChatModelCatalog(catalogResponse.data);
+      }
+      if (!providerResponse.success) {
+        setModelError(providerResponse.error || '暂时无法读取当前模型');
+      } else if (!catalogResponse.success) {
+        setModelError(catalogResponse.error || '模型目录暂时无法读取');
+      }
+    }).finally(() => {
+      if (active) setModelCatalogLoading(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 1279px)');
+    const updateViewport = () => setIsCompact(media.matches);
     updateViewport();
     media.addEventListener('change', updateViewport);
     return () => media.removeEventListener('change', updateViewport);
@@ -469,7 +915,7 @@ export default function VideoAgentWorkspace() {
   }, [historyOpen]);
 
   useEffect(() => {
-    if (!isMobile) {
+    if (!isCompact) {
       sourcesWereOpenRef.current = false;
       return;
     }
@@ -482,19 +928,64 @@ export default function VideoAgentWorkspace() {
       sourcesWereOpenRef.current = false;
       window.requestAnimationFrame(() => lastSourcesTriggerRef.current?.focus());
     }
-  }, [isMobile, sourcesOpen]);
+  }, [isCompact, sourcesOpen]);
 
   useEffect(() => {
-    if (!historyOpen && !sourcesOpen && !automationOpen) return;
+    if (!isCompact) {
+      studioWasOpenRef.current = false;
+      return;
+    }
+    if (studioOpen) {
+      studioWasOpenRef.current = true;
+      window.requestAnimationFrame(() => studioCloseRef.current?.focus());
+      return;
+    }
+    if (studioWasOpenRef.current) {
+      studioWasOpenRef.current = false;
+      window.requestAnimationFrame(() => lastStudioTriggerRef.current?.focus());
+    }
+  }, [isCompact, studioOpen]);
+
+  useEffect(() => {
+    if (!historyOpen && !sourcesOpen && !studioOpen && !automationOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       setHistoryOpen(false);
       setSourcesOpen(false);
+      setStudioOpen(false);
       setAutomationOpen(false);
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [automationOpen, historyOpen, sourcesOpen]);
+  }, [automationOpen, historyOpen, sourcesOpen, studioOpen]);
+
+  useEffect(() => {
+    if (!isCompact || (!sourcesOpen && !studioOpen)) return;
+    const panel = document.getElementById(
+      sourcesOpen ? 'video-agent-sources-panel' : 'video-agent-studio-panel',
+    );
+    if (!panel) return;
+
+    const trapFocus = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return;
+      const focusable = Array.from(panel.querySelectorAll<HTMLElement>(
+        'a[href], button:not(:disabled), textarea:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      )).filter((element) => element.getClientRects().length > 0);
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    window.addEventListener('keydown', trapFocus);
+    return () => window.removeEventListener('keydown', trapFocus);
+  }, [isCompact, sourcesOpen, studioOpen]);
 
   useEffect(() => {
     if (user?.email && !automationDraft.recipient_email) {
@@ -517,21 +1008,173 @@ export default function VideoAgentWorkspace() {
       block: 'nearest',
       behavior: reduceMotion ? 'auto' : 'smooth',
     });
-  }, [messages, sending]);
+  }, [messages.length, sending]);
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => () => {
+    abortRef.current?.abort();
+    sourceRequestRef.current?.abort();
+  }, []);
 
-  const activeScope = activeThread?.source_scope || draftScope;
+  const activeScope = activeThread?.source_scope
+    || (draftSourceMode === 'scope' ? browseScope : 'selected');
   const activeSourceCount = activeThread?.source_count
-    ?? (draftScope === 'selected' ? selectedSourceIds.size : sourceCount);
-  const canStartDraft = draftScope === 'selected'
-    ? selectedSourceIds.size > 0
-    : sourceCount > 0;
+    ?? (draftSourceMode === 'scope' ? scopeReadyCount : selectedSourceIds.size);
+  const canStartDraft = draftSourceMode === 'scope'
+    ? !sourceLoading && scopeReadyCount > 0
+    : selectedSourceIds.size > 0
+      && Array.from(selectedSourceIds).every((noteId) => Boolean(sourceRegistry[noteId]));
+  const canGenerateStudioResult = activeThread
+    ? activeSourceCount > 0
+    : canStartDraft;
+  const studioActionsDisabled = !canGenerateStudioResult
+    || sending
+    || Boolean(backgroundThreadId);
+
+  const availableChatModels = chatModelCatalog?.items || [];
+
+  const selectedChatModel = aiProviderConfig?.mode === 'custom'
+    ? '__custom__'
+    : chatModelCatalog?.selected_offering_id
+      || aiProviderConfig?.selected_offering_id
+      || '';
+
+  const changeChatModel = async (modelId: string) => {
+    if (modelSaving || modelId === selectedChatModel || modelId === '__custom__') return;
+    setModelSaving(true);
+    setModelError('');
+    const response = await selectUserChatModel(modelId);
+    setModelSaving(false);
+    if (!response.success || !response.data) {
+      setModelError(response.error || '模型切换失败，请稍后重试');
+      return;
+    }
+    setChatModelCatalog((current) => current ? {
+      ...current,
+      selected_offering_id: response.data!.selected_offering_id,
+    } : current);
+    setAiProviderConfig((current) => current ? {
+      ...current,
+      mode: 'platform',
+      model: response.data!.selected_offering_id,
+      selected_offering_id: response.data!.selected_offering_id,
+      selected_offering_name: response.data!.item.name,
+    } : current);
+    const selectedModel = availableChatModels.find((model) => model.id === modelId);
+    setNotice(`已切换到 ${selectedModel?.name || modelId}`);
+  };
 
   const selectedSources = useMemo(
-    () => sources.filter((source) => selectedSourceIds.has(source.note_id)),
-    [selectedSourceIds, sources],
+    () => Array.from(selectedSourceIds)
+      .map((noteId) => sourceRegistry[noteId])
+      .filter((source): source is AgentSource => Boolean(source)),
+    [selectedSourceIds, sourceRegistry],
   );
+  const platformSources = useMemo(
+    () => sourcePlatform === 'all'
+      ? sources
+      : sources.filter((source) => agentSourcePlatform(source) === sourcePlatform),
+    [sourcePlatform, sources],
+  );
+  const visibleSelectedSources = useMemo(
+    () => sourcePlatform === 'all'
+      ? selectedSources
+      : selectedSources.filter((source) => agentSourcePlatform(source) === sourcePlatform),
+    [selectedSources, sourcePlatform],
+  );
+  const sourceMarquee = useMarqueeSelection({
+    containerRef: sourceSelectionSurfaceRef,
+    selectedIds: selectedSourceIds,
+    maxSelection: MAX_SELECTED_SOURCES,
+    alwaysAdditive: true,
+    disabled: sourceLoading
+      || Boolean(sourceError)
+      || (platformSources.length === 0 && visibleSelectedSources.length === 0),
+    isDisabled: () => sourceLoading,
+    onSelectionChange: (nextSelection) => {
+      setSelectedSourceIds(nextSelection);
+      setDraftSourceMode('selected');
+      setPendingBatchDeleteIds(null);
+      setNotice((current) => (
+        current === `每个任务最多参考 ${MAX_SELECTED_SOURCES} 条视频` ? '' : current
+      ));
+    },
+    onLimitReached: () => {
+      setNotice(`每个任务最多参考 ${MAX_SELECTED_SOURCES} 条视频`);
+    },
+  });
+  const displayedSourceSelection = sourceMarquee.previewSelectedIds ?? selectedSourceIds;
+  const visibleSelectionTargetIds = useMemo(
+    () => platformSources.slice(0, MAX_SELECTED_SOURCES).map((source) => source.note_id),
+    [platformSources],
+  );
+  const allVisibleSourcesSelected = visibleSelectionTargetIds.length > 0
+    && visibleSelectionTargetIds.every((noteId) => selectedSourceIds.has(noteId));
+
+  const studioResults = useMemo(
+    () => deriveAgentStudioResults(messages),
+    [messages],
+  );
+  const artifactCount = studioResults.filter((result) => result.isArtifact).length;
+  const selectedStudioResult = useMemo<AgentStudioResult | null>(() => (
+    studioResults.find((result) => result.id === selectedStudioResultId)
+    ?? studioResults.find((result) => result.isArtifact)
+    ?? studioResults[0]
+    ?? null
+  ), [selectedStudioResultId, studioResults]);
+
+  const openSourcesPanel = (trigger?: HTMLButtonElement | null) => {
+    if (!isCompact) {
+      document
+        .getElementById('video-agent-sources-panel')
+        ?.querySelector<HTMLElement>('input, select, button')
+        ?.focus();
+      return;
+    }
+    lastSourcesTriggerRef.current = trigger ?? null;
+    studioWasOpenRef.current = false;
+    lastStudioTriggerRef.current = null;
+    setStudioOpen(false);
+    setSourcesOpen(true);
+  };
+
+  const openStudioPanel = (trigger?: HTMLButtonElement | null) => {
+    if (!isCompact) {
+      document
+        .getElementById('video-agent-studio-panel')
+        ?.querySelector<HTMLElement>('button')
+        ?.focus();
+      return;
+    }
+    lastStudioTriggerRef.current = trigger ?? null;
+    sourcesWereOpenRef.current = false;
+    lastSourcesTriggerRef.current = null;
+    setSourcesOpen(false);
+    setStudioOpen(true);
+  };
+
+  const copyStudioResult = async (result: AgentStudioResult) => {
+    try {
+      await navigator.clipboard.writeText(result.content);
+      setNotice('成果已复制到剪贴板');
+    } catch {
+      setError('浏览器没有允许复制，请在对话中手动选择内容');
+    }
+  };
+
+  const revealStudioResultInConversation = (result: AgentStudioResult) => {
+    setStudioOpen(false);
+    window.requestAnimationFrame(() => {
+      const reduceMotion = window.matchMedia(
+        '(prefers-reduced-motion: reduce)',
+      ).matches;
+      document
+        .getElementById(`agent-message-${result.message.id}`)
+        ?.scrollIntoView({
+          block: 'center',
+          behavior: reduceMotion ? 'auto' : 'smooth',
+        });
+    });
+  };
 
   const openThread = async (threadId: string) => {
     abortRef.current?.abort();
@@ -545,18 +1188,24 @@ export default function VideoAgentWorkspace() {
       return;
     }
     setActiveThread(response.data);
-    setMessages(response.data.messages || []);
-    setMessageDeliveryStates({});
-    setDraftScope(response.data.source_scope);
-    setSelectedSourceIds(new Set(response.data.source_ids || []));
-    if (response.data.status === 'running') {
-      setBackgroundThreadId(response.data.id);
-    }
+    setMessages(threadConversationMessages(response.data));
+    setMessageDeliveryStates(restoredDeliveryStates(response.data));
+    setMessageDeliveryErrors(restoredDeliveryErrors(response.data));
+    setStreamingMessageId(null);
+    setStreamProgress(null);
+    setDraftSourceMode('scope');
+    setSelectedSourceIds(new Set());
+    rememberSources(response.data.sources);
+    setBackgroundThreadId(
+      threadHasBackgroundWork(response.data) ? response.data.id : null,
+    );
     setHistoryOpen(false);
+    setSourcesOpen(false);
+    setStudioOpen(false);
     window.requestAnimationFrame(() => questionRef.current?.focus());
   };
 
-  const startNewTask = (nextScope = draftScope) => {
+  const startNewTask = () => {
     if (backgroundThreadId) {
       setNotice('上一条回答仍在后台处理中；完成后会自动更新，再开始新任务。');
       return;
@@ -566,21 +1215,82 @@ export default function VideoAgentWorkspace() {
     setActiveThread(null);
     setMessages([]);
     setMessageDeliveryStates({});
-    setQuestion('');
+    setMessageDeliveryErrors({});
+    setStreamingMessageId(null);
+    setStreamProgress(null);
+    questionRef.current?.clear();
     setError('');
-    setNotice(`新任务将参考“${sourceScopeLabel(nextScope)}”`);
+    setNotice(draftSourceMode === 'scope'
+      ? `新会话将整体参考${sourceScopeLabel(browseScope)}`
+      : `新会话将参考已选的 ${selectedSourceIds.size} 条视频`);
     setHistoryOpen(false);
     setSourcesOpen(false);
+    setStudioOpen(false);
+    setSelectedStudioResultId(null);
     window.requestAnimationFrame(() => questionRef.current?.focus());
   };
 
-  const chooseDraftScope = (scope: AgentSourceScope) => {
-    setDraftScope(scope);
+  const chooseBrowseScope = (scope: BrowseSourceScope) => {
+    sourceRequestRef.current?.abort();
+    setBrowseScope(scope);
     setSourceQuery('');
+    setSourceAppliedQuery('');
+    setSourceSearchMode('browse');
+    setSourceExpandedQueries([]);
     setSourceError('');
     if (activeThread) {
-      setNotice('资料范围已准备好，点击“用这个范围开始新任务”后生效，当前对话资料不会被替换。');
+      setNotice('筛选只影响新研究候选，当前对话的视频快照不会改变。');
     }
+  };
+
+  const runSmartSourceSearch = async (event?: FormEvent) => {
+    event?.preventDefault();
+    const query = sourceQuery.trim();
+    if (query.length < 2) {
+      setSourceError('请至少输入两个字，描述你想找的视频');
+      return;
+    }
+
+    sourceRequestRef.current?.abort();
+    const controller = new AbortController();
+    sourceRequestRef.current = controller;
+    setSourceLoading(true);
+    setSourceError('');
+    const response = await searchAgentSources({
+      query,
+      scope: browseScope,
+      limit: 50,
+    }, controller.signal);
+    if (controller.signal.aborted) return;
+    sourceRequestRef.current = null;
+    setSourceLoading(false);
+
+    if (!response.success || !response.data) {
+      setSources([]);
+      setSourceCount(0);
+      setSourceError(response.error || '智能搜索暂时不可用，请稍后重试');
+      return;
+    }
+
+    const items = response.data.items || [];
+    setSources(items);
+    setSourceCount(response.data.matched_count ?? items.length);
+    setScopeReadyCount(response.data.ready_count ?? scopeReadyCount);
+    setSourceAppliedQuery(response.data.query || query);
+    setSourceSearchMode(response.data.search_mode);
+    setSourceExpandedQueries(response.data.expanded_queries || []);
+    setSourceScannedCount(response.data.scanned_count || 0);
+    rememberSources(items);
+  };
+
+  const clearSourceSearch = () => {
+    sourceRequestRef.current?.abort();
+    setSourceQuery('');
+    setSourceAppliedQuery('');
+    setSourceSearchMode('browse');
+    setSourceExpandedQueries([]);
+    setSourceError('');
+    void loadSources(browseScope);
   };
 
   const toggleSource = (noteId: string) => {
@@ -588,6 +1298,7 @@ export default function VideoAgentWorkspace() {
       const next = new Set(current);
       if (next.has(noteId)) {
         next.delete(noteId);
+        setPendingBatchDeleteIds(null);
         return next;
       }
       if (next.size >= MAX_SELECTED_SOURCES) {
@@ -595,8 +1306,95 @@ export default function VideoAgentWorkspace() {
         return current;
       }
       next.add(noteId);
+      setDraftSourceMode('selected');
+      setPendingBatchDeleteIds(null);
       return next;
     });
+  };
+
+  const permanentlyDeleteSelectedSources = async () => {
+    if (deletingBatch || selectedSourceIds.size === 0) return;
+    if (!pendingBatchDeleteIds) {
+      const snapshot = Array.from(selectedSourceIds);
+      setPendingBatchDeleteIds(snapshot);
+      setNotice(`再次点击“确认永久移除”，将删除已选的 ${selectedSourceIds.size} 条视频`);
+      return;
+    }
+    setDeletingBatch(true);
+    const targetIds = [...pendingBatchDeleteIds];
+    const result = await deleteAgentSources(targetIds);
+    const deletedIds = new Set(result.success ? (result.data?.deleted_ids || []) : []);
+    const failedIds = targetIds.filter((noteId) => !deletedIds.has(noteId));
+    setDeletingBatch(false);
+    setPendingBatchDeleteIds(null);
+    setSources((current) => current.filter((item) => !deletedIds.has(item.note_id)));
+    setSourceRegistry((current) => {
+      const next = { ...current };
+      deletedIds.forEach((noteId) => delete next[noteId]);
+      return next;
+    });
+    setSelectedSourceIds(new Set(failedIds));
+    setSourceCount((current) => Math.max(0, current - deletedIds.size));
+    setScopeReadyCount((current) => Math.max(0, current - deletedIds.size));
+    if (failedIds.length > 0) setError(`已永久移除 ${deletedIds.size} 条，${failedIds.length} 条删除失败`);
+    else {
+      setDraftSourceMode('selected');
+      setRemoveSelectionMode(false);
+      setNotice(`已永久移除 ${deletedIds.size} 条视频`);
+    }
+  };
+
+  const toggleVisibleSources = () => {
+    setDraftSourceMode('selected');
+    setSelectedSourceIds((current) => {
+      const next = new Set(current);
+      if (visibleSelectionTargetIds.length > 0
+        && visibleSelectionTargetIds.every((noteId) => next.has(noteId))) {
+        visibleSelectionTargetIds.forEach((noteId) => next.delete(noteId));
+        setPendingBatchDeleteIds(null);
+        return next;
+      }
+      for (const noteId of visibleSelectionTargetIds) {
+        if (next.size >= MAX_SELECTED_SOURCES) break;
+        next.add(noteId);
+      }
+      return next;
+    });
+  };
+
+  const clearSelectedSources = () => {
+    setPendingBatchDeleteIds(null);
+    setSelectedSourceIds(new Set());
+    setDraftSourceMode('selected');
+    setNotice('已取消全部选择，可以继续手选视频');
+  };
+
+  const enterRemoveSelectionMode = () => {
+    setPendingBatchDeleteIds(null);
+    setSelectedSourceIds(new Set());
+    setDraftSourceMode('selected');
+    setRemoveSelectionMode(true);
+  };
+
+  const leaveRemoveSelectionMode = () => {
+    setPendingBatchDeleteIds(null);
+    setSelectedSourceIds(new Set());
+    setRemoveSelectionMode(false);
+  };
+
+  const useOverallSourceScope = () => {
+    setPendingBatchDeleteIds(null);
+    setDraftSourceMode('scope');
+    setRemoveSelectionMode(false);
+    setNotice(`新会话将整体参考${sourceScopeLabel(browseScope)}`);
+  };
+
+  const useManualSourceSelection = () => {
+    setPendingBatchDeleteIds(null);
+    setDraftSourceMode('selected');
+    setNotice(selectedSourceIds.size > 0
+      ? `新会话将只参考已选的 ${selectedSourceIds.size} 条视频`
+      : '请从下方勾选视频；桌面端也可以拖动框选');
   };
 
   const refreshThreadList = useCallback(async () => {
@@ -624,11 +1422,14 @@ export default function VideoAgentWorkspace() {
 
       if (activeThread?.id === threadId) {
         setActiveThread(response.data);
-        setMessages(response.data.messages || []);
-        setMessageDeliveryStates({});
+        setMessages(threadConversationMessages(response.data));
+        setMessageDeliveryStates(restoredDeliveryStates(response.data));
+        setMessageDeliveryErrors(restoredDeliveryErrors(response.data));
+        setStreamingMessageId(null);
+        setStreamProgress(null);
       }
 
-      if (response.data.status === 'running') {
+      if (threadHasBackgroundWork(response.data)) {
         timer = window.setTimeout(pollThread, 2000);
         return;
       }
@@ -638,8 +1439,10 @@ export default function VideoAgentWorkspace() {
       ));
       setNotice(
         response.data.status === 'ready'
-          ? '后台回答已完成，内容已自动更新。'
-          : '后台回答没有完成，你可以重新提问。',
+          ? '详细解析或后台回答已完成，内容已自动更新。'
+          : response.data.status === 'awaiting_approval'
+            ? '详细解析需要你的确认。'
+            : '后台回答没有完成，你可以重新提问。',
       );
       void refreshThreadList();
     };
@@ -654,45 +1457,54 @@ export default function VideoAgentWorkspace() {
   const submitQuestion = async (
     event?: FormEvent,
     suggestion?: string,
+    options?: SubmitQuestionOptions,
   ) => {
     event?.preventDefault();
-    const content = (suggestion ?? question).trim();
-    if (!content || sending) return;
-    if (backgroundThreadId || activeThread?.status === 'running') {
-      if (!backgroundThreadId && activeThread?.id) {
+    const content = (
+      suggestion ?? questionRef.current?.getValue() ?? ''
+    ).trim();
+    const requestedOutputStyle = options?.outputStyle ?? outputStyle;
+    const requestedCustomInstruction = options?.customInstruction
+      ?? customInstruction;
+    if (!content || sending || modelSaving) return;
+    if (backgroundThreadId || threadBlocksNewQuestion(activeThread)) {
+      if (!backgroundThreadId && threadHasBackgroundWork(activeThread) && activeThread?.id) {
         setBackgroundThreadId(activeThread.id);
       }
-      setNotice('上一条回答仍在后台处理中；完成后会自动更新，再继续提问。');
+      setNotice(
+        activeThread?.status === 'awaiting_approval'
+          ? '请先处理上一条问题中的详细解析审批。'
+          : '上一条回答仍在后台处理中；完成后会自动更新，再继续提问。',
+      );
       return;
     }
     if (!activeThread && !canStartDraft) {
+      setStudioOpen(false);
       setSourcesOpen(true);
-      setError(
-        draftScope === 'selected'
-          ? '请先选择至少一条已有完整文案的视频'
-          : '当前范围还没有可用文案，请先同步视频',
-      );
+      setError(draftSourceMode === 'scope'
+        ? `${sourceScopeLabel(browseScope)}里还没有文案就绪的视频`
+        : '请至少勾选一条已有完整文案的视频，或改用整体范围');
       return;
     }
 
     setSending(true);
     setError('');
     setNotice('');
-    setQuestion('');
+    questionRef.current?.clear();
 
     let thread = activeThread;
     if (!thread) {
       const created = await createAgentThread({
         title: content.slice(0, 48),
-        source_scope: draftScope,
-        source_ids: draftScope === 'selected'
+        source_scope: draftSourceMode === 'scope' ? browseScope : 'selected',
+        source_ids: draftSourceMode === 'selected'
           ? Array.from(selectedSourceIds).slice(0, MAX_SELECTED_SOURCES)
-          : undefined,
+          : [],
       });
       if (!created.success || !created.data) {
         setSending(false);
-        setQuestion(content);
-        setError(created.error || '暂时无法创建视频 Agent 任务');
+        questionRef.current?.setValue(content);
+        setError(created.error || '暂时无法创建视频研伴会话');
         return;
       }
       thread = created.data;
@@ -701,57 +1513,209 @@ export default function VideoAgentWorkspace() {
     }
 
     const optimistic = createOptimisticMessage(thread.id, content);
-    setMessages((current) => [...current, optimistic]);
+    const streamingAssistant = createStreamingAssistantMessage(thread.id);
+    setMessages((current) => [...current, optimistic, streamingAssistant]);
     setMessageDeliveryStates((current) => ({
       ...current,
       [optimistic.id]: 'sending',
     }));
-    const controller = new AbortController();
-    abortRef.current = controller;
-    const response = await sendAgentMessage(
-      thread.id,
-      {
-        content,
-        research_mode: researchMode,
-        output_style: outputStyle,
-        custom_instruction: customInstruction,
-        web_scope: webScope,
-      },
-      controller.signal,
-    );
-    if (controller.signal.aborted) return;
-    setSending(false);
-    abortRef.current = null;
-    if (!response.success || !response.data) {
-      setMessageDeliveryStates((current) => ({
-        ...current,
-        [optimistic.id]: 'failed',
-      }));
-      setError(response.error || '视频 Agent 暂时无法回答，请稍后重试');
-      return;
-    }
-
-    const nextThread = response.data.thread;
-    setActiveThread(nextThread);
-    setMessageDeliveryStates((current) => {
+    setMessageDeliveryErrors((current) => {
       const next = { ...current };
       delete next[optimistic.id];
       return next;
     });
+    setStreamingMessageId(streamingAssistant.id);
+    setStreamProgress({
+      stage: 'queued',
+      message: '正在连接视频研伴',
+    });
+    const controller = new AbortController();
+    abortRef.current = controller;
+    let bufferedDelta = '';
+    let deltaFlushTimer: number | undefined;
+    const flushBufferedDelta = () => {
+      if (!bufferedDelta) return;
+      const nextDelta = bufferedDelta;
+      bufferedDelta = '';
+      deltaFlushTimer = undefined;
+      setMessages((current) => current.map((message) => (
+        message.id === streamingAssistant.id
+          ? { ...message, content: `${message.content}${nextDelta}` }
+          : message
+      )));
+    };
+    let response: Awaited<ReturnType<typeof streamAgentMessage>>;
+    try {
+      response = await streamAgentMessage(
+        thread.id,
+        {
+          content,
+          research_mode: researchMode,
+          output_style: requestedOutputStyle,
+          custom_instruction: requestedCustomInstruction,
+          web_scope: webScope,
+        },
+        {
+          onProgress: (progress) => {
+            setStreamProgress(progress);
+            setMessageDeliveryStates((current) => {
+              const next = { ...current };
+              delete next[optimistic.id];
+              return next;
+            });
+          },
+          onAssistantStart: (assistantMessage) => {
+            setMessages((current) => current.map((message) => (
+              message.id === streamingAssistant.id
+                ? { ...assistantMessage, id: streamingAssistant.id, content: message.content }
+                : message
+            )));
+          },
+          onDelta: (delta) => {
+            bufferedDelta += delta;
+            if (deltaFlushTimer === undefined) {
+              deltaFlushTimer = window.setTimeout(flushBufferedDelta, 32);
+            }
+          },
+          onApprovalRequired: () => {
+            setStreamProgress({
+              stage: 'finalizing',
+              message: '需要确认后才能读取视频画面',
+            });
+          },
+          onAnalysisStarted: () => {
+            setStreamProgress({
+              stage: 'finalizing',
+              message: '详细解析已进入后台',
+            });
+          },
+        },
+        controller.signal,
+      );
+    } finally {
+      if (deltaFlushTimer !== undefined) {
+        window.clearTimeout(deltaFlushTimer);
+      }
+      flushBufferedDelta();
+      if (abortRef.current === controller) abortRef.current = null;
+      setSending(false);
+    }
+    if (controller.signal.aborted) {
+      setMessages((current) => current.filter(
+        (message) => message.id !== streamingAssistant.id,
+      ));
+      setMessageDeliveryStates((current) => {
+        const next = { ...current };
+        delete next[optimistic.id];
+        return next;
+      });
+      setStreamingMessageId(null);
+      setStreamProgress(null);
+      return;
+    }
+    if (!response.success || !response.data) {
+      setMessages((current) => current.filter(
+        (message) => message.id !== streamingAssistant.id,
+      ));
+      setStreamingMessageId(null);
+      setStreamProgress(null);
+      if (response.status === 409) {
+        setMessages((current) => current.filter(
+          (message) => message.id !== optimistic.id,
+        ));
+        setMessageDeliveryStates((current) => {
+          const next = { ...current };
+          delete next[optimistic.id];
+          return next;
+        });
+        questionRef.current?.setValue(content);
+        setBackgroundThreadId(thread.id);
+        setNotice(response.error || '上一条回答仍在生成，请稍候再发送');
+        return;
+      }
+      setMessageDeliveryStates((current) => ({
+        ...current,
+        [optimistic.id]: 'failed',
+      }));
+      setMessageDeliveryErrors((current) => ({
+        ...current,
+        [optimistic.id]: response.error || '视频研伴暂时无法回答，请稍后重试',
+      }));
+      return;
+    }
+
+    const nextThread = response.data.thread;
+    if (response.data.terminal === 'analysis_started') {
+      const tracked = agentVideoAnalysisRunResult(response.data.video_analysis);
+      if (tracked) trackVideoAnalysisRun(tracked);
+    }
+    const nextMessages = threadConversationMessages(nextThread);
+    setActiveThread(nextThread);
+    setMessageDeliveryStates({});
+    setMessageDeliveryErrors({});
+    setStreamingMessageId(null);
+    setStreamProgress(null);
     setMessages(
-      nextThread.messages?.length
-        ? nextThread.messages
+      nextMessages.length
+        ? nextMessages
         : [
             optimistic,
             response.data.assistant_message,
           ],
     );
+    if (threadHasBackgroundWork(nextThread)) {
+      setBackgroundThreadId(nextThread.id);
+      setNotice('详细解析已进入后台，完成后会自动继续回答。');
+    } else if (nextThread.status === 'awaiting_approval') {
+      setBackgroundThreadId(null);
+      setNotice('这次回答需要读取画面，请在消息中确认解析方式。');
+    }
+    if (requestedOutputStyle !== 'answer' && !response.data.terminal) {
+      setSelectedStudioResultId(response.data.assistant_message.id);
+    }
+    if (options?.revealStudioOnComplete && isCompact) {
+      setSourcesOpen(false);
+      setStudioOpen(true);
+    }
     void refreshThreadList();
+  };
+
+  const generateStudioResult = async (
+    style: Exclude<LibraryOutputStyle, 'answer'>,
+    prompt?: string,
+  ) => {
+    if (sending || backgroundThreadId || threadBlocksNewQuestion(activeThread)) {
+      setNotice('上一份成果仍在生成，完成后再继续。');
+      return;
+    }
+    if (style === 'custom' && !customInstruction.trim()) {
+      setStudioCustomOpen(true);
+      return;
+    }
+    const shortcut = STUDIO_SHORTCUTS.find((item) => item.value === style);
+    const content = prompt
+      ?? shortcut?.prompt
+      ?? '请基于当前视频资料生成一份便于保存和复用的成果。';
+    setStudioGeneratingType(style);
+    try {
+      await submitQuestion(undefined, content, {
+        outputStyle: style,
+        customInstruction: style === 'custom' ? customInstruction.trim() : '',
+        revealStudioOnComplete: true,
+      });
+    } finally {
+      setStudioGeneratingType(null);
+    }
   };
 
   const removeOptimisticMessage = (messageId: string) => {
     setMessages((current) => current.filter((message) => message.id !== messageId));
     setMessageDeliveryStates((current) => {
+      const next = { ...current };
+      delete next[messageId];
+      return next;
+    });
+    setMessageDeliveryErrors((current) => {
       const next = { ...current };
       delete next[messageId];
       return next;
@@ -765,16 +1729,75 @@ export default function VideoAgentWorkspace() {
 
   const editMessage = (message: AgentMessage) => {
     removeOptimisticMessage(message.id);
-    setQuestion(message.content);
+    questionRef.current?.setValue(message.content);
     setError('');
     window.requestAnimationFrame(() => questionRef.current?.focus());
   };
+
+  const handleMessageFollowUp = useEventCallback((followUp: string) => {
+    void submitQuestion(undefined, followUp);
+  });
+  const handleMessageRetry = useEventCallback((message: AgentMessage) => {
+    retryMessage(message);
+  });
+  const handleMessageEdit = useEventCallback((message: AgentMessage) => {
+    editMessage(message);
+  });
+
+  const handleVideoAnalysisDecision = useEventCallback(async (
+    message: AgentMessage,
+    action: AgentVideoAnalysisDecision,
+    options?: { offeringId?: string; useByok?: boolean },
+  ) => {
+    const threadId = activeThread?.id || message.thread_id;
+    const runId = agentVideoAnalysisRunId(message);
+    if (!threadId || !runId || analysisDecisionMessageId) return;
+    setAnalysisDecisionMessageId(message.id);
+    setError('');
+    const response = await decideAgentVideoAnalysis(threadId, runId, {
+      action,
+      idempotency_key: `agent-ui:${runId}`,
+      offering_id: options?.offeringId,
+      use_byok: Boolean(options?.useByok),
+    });
+    setAnalysisDecisionMessageId(null);
+    if (!response.success || !response.data) {
+      setError(response.error || '详细解析操作暂时没有完成');
+      return;
+    }
+    const nextThread = response.data.thread;
+    if (threadHasBackgroundWork(nextThread)) {
+      const tracked = agentVideoAnalysisRunResult(response.data.video_analysis);
+      if (tracked) trackVideoAnalysisRun(tracked);
+    }
+    setActiveThread(nextThread);
+    setMessages(threadConversationMessages(nextThread));
+    setMessageDeliveryStates({});
+    setMessageDeliveryErrors({});
+    if (threadHasBackgroundWork(nextThread)) {
+      setBackgroundThreadId(nextThread.id);
+      setNotice('详细解析已开始；完成后会自动继续回答。');
+    } else {
+      setBackgroundThreadId(null);
+      setNotice(
+        nextThread.status === 'awaiting_approval'
+          ? '新方案已报价，请确认后开始。'
+          : action === 'cancel'
+            ? '已取消本次提问。'
+            : '已按现有文案完成回答。',
+      );
+    }
+    void refreshThreadList();
+  });
 
   const stopSending = () => {
     const threadId = activeThread?.id;
     abortRef.current?.abort();
     abortRef.current = null;
     setSending(false);
+    setStudioGeneratingType(null);
+    setStreamingMessageId(null);
+    setStreamProgress(null);
     if (threadId) {
       setBackgroundThreadId(threadId);
       setActiveThread((current) => (
@@ -786,12 +1809,33 @@ export default function VideoAgentWorkspace() {
     setNotice('已停止等待；后台仍在处理这条回答，完成后会自动更新。');
   };
 
+  const handleComposerSubmit = useEventCallback((content: string) => {
+    void submitQuestion(undefined, content);
+  });
+  const handleComposerModelChange = useEventCallback((modelId: string) => {
+    void changeChatModel(modelId);
+  });
+  const handleComposerOpenSources = useEventCallback((trigger: HTMLButtonElement) => {
+    openSourcesPanel(trigger);
+  });
+  const handleComposerApplyOptions = useEventCallback((
+    nextResearchMode: LibraryResearchMode,
+    nextOutputStyle: LibraryOutputStyle,
+    nextWebScope: ResearchScope,
+  ) => {
+    setResearchMode(nextResearchMode);
+    setOutputStyle(nextOutputStyle);
+    setWebScope(nextWebScope);
+  });
+  const handleComposerStop = useEventCallback(() => {
+    stopSending();
+  });
+
   const removeThread = async (threadId: string) => {
-    if (pendingThreadDelete !== threadId) {
-      setPendingThreadDelete(threadId);
-      return;
-    }
+    if (pendingThreadDelete !== threadId || destructivePending) return;
+    setDestructivePending(true);
     const response = await deleteAgentThread(threadId);
+    setDestructivePending(false);
     setPendingThreadDelete(null);
     if (!response.success) {
       setError(response.error || '删除任务失败');
@@ -935,11 +1979,10 @@ export default function VideoAgentWorkspace() {
   };
 
   const removeAutomation = async (automationId: string) => {
-    if (pendingAutomationDelete !== automationId) {
-      setPendingAutomationDelete(automationId);
-      return;
-    }
+    if (pendingAutomationDelete !== automationId || destructivePending) return;
+    setDestructivePending(true);
     const response = await deleteAgentAutomation(automationId);
+    setDestructivePending(false);
     setPendingAutomationDelete(null);
     if (!response.success) {
       setAutomationError(response.error || '删除定时摘要失败');
@@ -949,17 +1992,32 @@ export default function VideoAgentWorkspace() {
     if (editingAutomationId === automationId) resetAutomationDraft();
   };
 
+  const threadDeleteTarget = pendingThreadDelete
+    ? threads.find((thread) => thread.id === pendingThreadDelete) || null
+    : null;
+  const automationDeleteTarget = pendingAutomationDelete
+    ? automations.find((automation) => automation.id === pendingAutomationDelete) || null
+    : null;
+
+  const closeDeleteConfirmation = () => {
+    if (destructivePending) return;
+    setPendingThreadDelete(null);
+    setPendingAutomationDelete(null);
+  };
+
   return (
     <div className={`${styles.root} video-agent-page video-agent-refined desktop-core-page`}>
       <div
         className={`video-agent-backdrop ${
-          historyOpen || (isMobile && sourcesOpen) || automationOpen
+          (isCompact && (historyOpen || sourcesOpen || studioOpen))
+          || automationOpen
             ? 'is-visible'
             : ''
         }`}
         onClick={() => {
           setHistoryOpen(false);
           setSourcesOpen(false);
+          setStudioOpen(false);
           setAutomationOpen(false);
         }}
         aria-hidden="true"
@@ -967,21 +2025,20 @@ export default function VideoAgentWorkspace() {
 
       <section
         className="video-agent-shell"
-        aria-label="视频 Agent 工作台"
+        aria-label="视频研伴"
       >
         <aside
           id="video-agent-history-panel"
           className={`video-agent-history ${historyOpen ? 'is-open' : ''}`}
           role="dialog"
-          aria-modal={historyOpen || undefined}
-          aria-label="最近视频任务"
+          aria-modal={isCompact && historyOpen ? true : undefined}
+          aria-label="会话记录"
           aria-hidden={!historyOpen}
           inert={!historyOpen}
         >
           <header className="video-agent-panel-heading">
             <div>
-              <span>视频 Agent</span>
-              <strong>最近任务</strong>
+              <strong>会话记录</strong>
             </div>
             <button
               ref={historyCloseRef}
@@ -994,13 +2051,8 @@ export default function VideoAgentWorkspace() {
             </button>
           </header>
 
-          <button
-            type="button"
-            className="video-agent-new-task"
-            onClick={() => startNewTask()}
-          >
-            <Plus size={17} weight="bold" />
-            新建视频任务
+          <button type="button" className="video-agent-new-task" onClick={() => startNewTask()}>
+            <Plus size={15} weight="bold" /> 新建会话
           </button>
 
           <div className="video-agent-history-list">
@@ -1011,8 +2063,8 @@ export default function VideoAgentWorkspace() {
             ) : threads.length === 0 ? (
               <div className="video-agent-rail-empty">
                 <ChatsCircle size={22} />
-                <strong>还没有任务</strong>
-                <span>第一次提问后会保存在这里</span>
+                <strong>还没有会话</strong>
+                <span>提问后会保存在这里</span>
               </div>
             ) : (
               threads.map((thread) => (
@@ -1033,20 +2085,13 @@ export default function VideoAgentWorkspace() {
                   </button>
                   <button
                     type="button"
-                    className={`video-agent-history-delete ${
-                      pendingThreadDelete === thread.id ? 'is-confirming' : ''
-                    }`}
-                    onClick={() => void removeThread(thread.id)}
-                    aria-label={
-                      pendingThreadDelete === thread.id
-                        ? '再次点击确认删除'
-                        : '删除任务'
-                    }
-                    title={
-                      pendingThreadDelete === thread.id
-                        ? '再次点击确认删除'
-                        : '删除任务'
-                    }
+                    className="video-agent-history-delete"
+                    onClick={() => {
+                      setPendingAutomationDelete(null);
+                      setPendingThreadDelete(thread.id);
+                    }}
+                    aria-label={`删除会话：${thread.title || '未命名会话'}`}
+                    title="删除会话"
                   >
                     <Trash size={14} />
                   </button>
@@ -1055,44 +2100,37 @@ export default function VideoAgentWorkspace() {
             )}
           </div>
 
-          <button
-            type="button"
-            className="video-agent-automation-entry"
-            onClick={() => setAutomationOpen(true)}
-          >
-            <ClockCounterClockwise size={18} />
-            <span>
-              <strong>定时摘要</strong>
-              <small>每天生成摘要，可提交到邮箱</small>
-            </span>
-            <CaretRight size={15} />
-          </button>
         </aside>
 
-        <main className="video-agent-main">
+        <main
+          className="video-agent-main"
+          aria-hidden={isCompact && (sourcesOpen || studioOpen)}
+          inert={isCompact && (sourcesOpen || studioOpen)}
+        >
           <header className="video-agent-topbar">
             <div className="video-agent-topbar-leading">
-              <button
-                ref={historyTriggerRef}
-                type="button"
-                className="video-agent-topbar-icon is-history"
-                onClick={() => setHistoryOpen(true)}
-                aria-expanded={historyOpen}
-                aria-controls="video-agent-history-panel"
-                aria-label="打开最近任务"
-                title="最近任务"
-              >
-                <SidebarSimple size={19} />
-              </button>
               <span className="video-agent-avatar" aria-hidden="true">
                 <AgentMark variant="nav" />
               </span>
-              <div>
-                <h1>{activeThread?.title || '向你的视频资料提问'}</h1>
+              <div className="video-agent-conversation-heading">
+                <button
+                  ref={historyTriggerRef}
+                  type="button"
+                  className="video-agent-conversation-trigger"
+                  onClick={() => setHistoryOpen((current) => !current)}
+                  aria-expanded={historyOpen}
+                  aria-controls="video-agent-history-panel"
+                  title="查看会话记录"
+                >
+                  <h1>{activeThread?.title || '视频研伴'}</h1>
+                  <CaretRight size={14} aria-hidden="true" />
+                </button>
                 <p>
                   {activeThread
-                    ? '本对话使用创建时的资料快照'
-                    : '先选择视频资料，再开始提问'}
+                    ? `${sourceScopeLabel(activeScope)} · ${activeSourceCount} 条视频`
+                    : draftSourceMode === 'scope'
+                      ? `使用${sourceScopeLabel(browseScope)}`
+                      : `使用已选 ${selectedSourceIds.size} 条视频`}
                 </p>
               </div>
             </div>
@@ -1100,14 +2138,12 @@ export default function VideoAgentWorkspace() {
               <button
                 type="button"
                 className="is-icon"
-                onClick={() => window.dispatchEvent(
-                  new CustomEvent('zhicui:open-feedback'),
-                )}
-                aria-label="提交反馈"
-                title="提交反馈"
+                onClick={() => startNewTask()}
+                aria-label="新建会话"
+                title="新建会话"
               >
-                <ChatsCircle size={16} />
-                <span className="sr-only">反馈</span>
+                <Plus size={17} weight="bold" />
+                <span className="sr-only">新建会话</span>
               </button>
               <button
                 type="button"
@@ -1123,17 +2159,9 @@ export default function VideoAgentWorkspace() {
                 type="button"
                 className="is-source"
                 onClick={(event) => {
-                  if (isMobile) {
-                    lastSourcesTriggerRef.current = event.currentTarget;
-                    setSourcesOpen(true);
-                    return;
-                  }
-                  document
-                    .getElementById('video-agent-sources-panel')
-                    ?.querySelector<HTMLElement>('button, input')
-                    ?.focus();
+                  openSourcesPanel(event.currentTarget);
                 }}
-                aria-expanded={isMobile ? sourcesOpen : undefined}
+                aria-expanded={isCompact ? sourcesOpen : undefined}
                 aria-controls="video-agent-sources-panel"
                 aria-label={
                   activeThread
@@ -1149,8 +2177,51 @@ export default function VideoAgentWorkspace() {
                 </span>
                 <b>{activeSourceCount}</b>
               </button>
+              <button
+                type="button"
+                className="is-studio"
+                onClick={(event) => openStudioPanel(event.currentTarget)}
+                aria-expanded={isCompact ? studioOpen : undefined}
+                aria-controls="video-agent-studio-panel"
+                aria-label={`打开成果面板，当前有 ${artifactCount} 份成果`}
+              >
+                <Sparkle size={16} weight="fill" />
+                <span>成果</span>
+                <b>{artifactCount}</b>
+              </button>
             </div>
           </header>
+
+          <nav className="video-agent-mobile-tabs" aria-label="视频研伴功能">
+            <button
+              type="button"
+              onClick={(event) => openSourcesPanel(event.currentTarget)}
+              aria-controls="video-agent-sources-panel"
+              aria-expanded={sourcesOpen}
+            >
+              <VideoCamera size={16} />
+              视频
+              <b>{activeSourceCount}</b>
+            </button>
+            <button type="button" className="is-active" aria-current="page">
+              <ChatsCircle size={16} />
+              对话
+            </button>
+            <button
+              type="button"
+              onClick={(event) => openStudioPanel(event.currentTarget)}
+              aria-controls="video-agent-studio-panel"
+              aria-expanded={studioOpen}
+            >
+              <Sparkle size={16} weight="fill" />
+              成果
+              <b>{artifactCount}</b>
+            </button>
+            <button type="button" onClick={() => setAutomationOpen(true)}>
+              <Clock size={16} />
+              摘要
+            </button>
+          </nav>
 
           {(notice || error) && (
             <div
@@ -1187,12 +2258,7 @@ export default function VideoAgentWorkspace() {
                 <span className="video-agent-welcome-mark" aria-hidden="true">
                   <AgentMark variant="hero" />
                 </span>
-                <p>只依据你整理进知萃的视频资料</p>
-                <h2>问你的收藏，而不是问一个空白 AI</h2>
-                <span className="video-agent-welcome-copy">
-                  选择全部资料、昨天新整理进知萃的内容，或手选几条视频。
-                  回答会标出实际阅读的文案和原文依据。
-                </span>
+                <h2>选择视频，直接提问</h2>
                 {canStartDraft ? (
                   <div className="video-agent-starters">
                     {STARTERS.map((starter) => (
@@ -1210,7 +2276,7 @@ export default function VideoAgentWorkspace() {
                   <div className="video-agent-welcome-empty">
                     <span>还没有可阅读的视频文案</span>
                     <a href="/library">
-                      去视频库同步
+                      添加视频
                       <CaretRight size={15} />
                     </a>
                   </div>
@@ -1222,17 +2288,22 @@ export default function VideoAgentWorkspace() {
                   key={message.id}
                   message={message}
                   deliveryState={messageDeliveryStates[message.id]}
-                  disabled={sending || Boolean(backgroundThreadId)}
-                  onFollowUp={(followUp) => {
-                    void submitQuestion(undefined, followUp);
-                  }}
-                  onRetry={retryMessage}
-                  onEdit={editMessage}
+                  deliveryError={messageDeliveryErrors[message.id]}
+                  streaming={message.id === streamingMessageId}
+                  disabled={
+                    sending
+                    || Boolean(backgroundThreadId)
+                    || analysisDecisionMessageId === message.id
+                  }
+                  onFollowUp={handleMessageFollowUp}
+                  onRetry={handleMessageRetry}
+                  onEdit={handleMessageEdit}
+                  onVideoAnalysisDecision={handleVideoAnalysisDecision}
                 />
               ))
             )}
 
-            {sending && (
+            {sending && !streamingMessageId && (
               <div className="video-agent-thinking" role="status">
                 <span><i /><i /><i /></span>
                 {researchMode === 'deep'
@@ -1249,192 +2320,250 @@ export default function VideoAgentWorkspace() {
             <div ref={messageEndRef} />
           </div>
 
-          <footer className="video-agent-composer-region">
-            <form className="video-agent-composer" onSubmit={submitQuestion}>
-              <textarea
-                ref={questionRef}
-                rows={2}
-                maxLength={600}
-                value={question}
-                onChange={(event) => setQuestion(event.target.value)}
-                onKeyDown={(event) => {
-                  if (
-                    event.key === 'Enter'
-                    && !event.shiftKey
-                    && !event.nativeEvent.isComposing
-                    && !sending
-                    && !backgroundThreadId
-                  ) {
-                    event.preventDefault();
-                    void submitQuestion();
-                  }
-                }}
-                placeholder={
-                  sending || backgroundThreadId
-                    ? '可以先写下一问，当前回答完成后再发送'
-                    : '问这些视频，或让知萃把结论变成计划…'
-                }
-                aria-label="向视频 Agent 提问"
-                aria-describedby="video-agent-composer-hint"
-              />
-
-              {outputStyle === 'custom' && (
-                <input
-                  className="video-agent-custom-instruction"
-                  value={customInstruction}
-                  maxLength={600}
-                  onChange={(event) => setCustomInstruction(event.target.value)}
-                  placeholder="写下你希望的结构、重点或语气"
-                />
-              )}
-
-              <div className="video-agent-composer-toolbar">
-                <div className="video-agent-composer-controls">
-                  <button
-                    type="button"
-                    className="video-agent-composer-context"
-                    onClick={(event) => {
-                      if (isMobile) {
-                        lastSourcesTriggerRef.current = event.currentTarget;
-                        setSourcesOpen(true);
-                        return;
-                      }
-                      document
-                        .getElementById('video-agent-sources-panel')
-                        ?.querySelector<HTMLElement>('button, input')
-                        ?.focus();
-                    }}
-                    aria-expanded={isMobile ? sourcesOpen : undefined}
-                    aria-controls="video-agent-sources-panel"
-                    aria-label={`当前参考${sourceScopeLabel(activeScope)}，共${activeSourceCount}条视频`}
-                  >
-                    <FolderOpen size={16} aria-hidden="true" />
-                    <span>{sourceScopeLabel(activeScope)}</span>
-                    <b>{activeSourceCount}</b>
-                  </button>
-                  <button
-                    type="button"
-                    className="video-agent-options-trigger"
-                    disabled={sending || Boolean(backgroundThreadId)}
-                    onClick={() => setOptionsOpen(true)}
-                    aria-label={`调整回答方式：${researchMode === 'deep' ? '深度' : '快速'}，${OUTPUT_LABELS[outputStyle]}，${webScope === 'auto' ? '按需查证' : '仅视频'}`}
-                  >
-                    <SlidersHorizontal size={16} aria-hidden="true" />
-                    <span>回答设置</span>
-                    <small>
-                      {OUTPUT_LABELS[outputStyle]}
-                      {' · '}
-                      {webScope === 'auto' ? '按需查证' : '仅视频'}
-                    </small>
-                  </button>
-                </div>
-                {sending ? (
-                  <button
-                    type="button"
-                    className="video-agent-send is-stop"
-                    onClick={stopSending}
-                    aria-label="停止等待，后台继续处理"
-                    title="停止等待，后台继续处理"
-                  >
-                    <Stop size={16} weight="fill" />
-                  </button>
-                ) : (
-                  <button
-                    type="submit"
-                    className="video-agent-send"
-                    disabled={!question.trim() || Boolean(backgroundThreadId)}
-                    aria-label="发送问题"
-                  >
-                    <PaperPlaneTilt size={17} weight="fill" />
-                  </button>
-                )}
-              </div>
-            </form>
-            <p id="video-agent-composer-hint">
-              回答优先使用视频资料，联网内容会单独标明
-            </p>
-          </footer>
+          <AgentComposer
+            ref={questionRef}
+            activeSourceCount={activeSourceCount}
+            accountPoints={chatModelCatalog?.account.available_points || 0}
+            aiProviderConfig={aiProviderConfig}
+            availableModels={availableChatModels}
+            backgroundActive={
+              Boolean(backgroundThreadId) || activeThread?.status === 'awaiting_approval'
+            }
+            customInstruction={customInstruction}
+            modelCatalogLoading={modelCatalogLoading}
+            modelError={modelError}
+            modelSaving={modelSaving}
+            outputLabel={OUTPUT_LABELS[outputStyle]}
+            outputStyle={outputStyle}
+            researchMode={researchMode}
+            researchLabel={researchMode === 'deep' ? '深度' : '快速'}
+            selectedModel={selectedChatModel}
+            sourceLabel={sourceScopeLabel(activeScope)}
+            sourcesExpanded={isCompact ? sourcesOpen : undefined}
+            statusMessage={
+              modelCatalogLoading
+                ? '正在准备回答'
+                : modelSaving
+                  ? '正在切换回答方式'
+                  : sending
+                    ? streamProgress?.message || '正在准备回答'
+                    : `${researchMode === 'deep' ? '深度研究' : '快速回答'} · ${activeSourceCount} 条视频`
+            }
+            webLabel={webScope === 'auto' ? '按需查证' : '仅视频'}
+            webScope={webScope}
+            sending={sending}
+            onChangeCustomInstruction={setCustomInstruction}
+            onChangeModel={handleComposerModelChange}
+            onApplyOptions={handleComposerApplyOptions}
+            onOpenSources={handleComposerOpenSources}
+            onStop={handleComposerStop}
+            onSubmitQuestion={handleComposerSubmit}
+          />
         </main>
 
         <aside
           id="video-agent-sources-panel"
           className={`video-agent-sources ${sourcesOpen ? 'is-open' : ''}`}
-          role={isMobile ? 'dialog' : undefined}
-          aria-modal={isMobile && sourcesOpen ? true : undefined}
-          aria-hidden={isMobile ? !sourcesOpen : false}
-          inert={isMobile && !sourcesOpen}
+          role={isCompact ? 'dialog' : undefined}
+          aria-modal={isCompact && sourcesOpen ? true : undefined}
+          aria-labelledby="video-agent-sources-title"
+          aria-hidden={isCompact ? !sourcesOpen : false}
+          inert={isCompact && !sourcesOpen}
         >
           <header className="video-agent-panel-heading">
             <div>
-              <span>{activeThread ? '新任务资料' : '资料范围'}</span>
-              <strong>
-                {activeThread
-                  ? '为下一个任务选择资料'
-                  : '选择 Agent 要读什么'}
+              <strong id="video-agent-sources-title">
+                选择视频
               </strong>
             </div>
-            <button
-              ref={sourcesCloseRef}
-              type="button"
-              className="video-agent-mobile-close"
-              onClick={() => setSourcesOpen(false)}
-              aria-label="关闭资料面板"
-            >
-              <X size={18} />
-            </button>
-          </header>
-
-          <div className="video-agent-scope-list" role="group" aria-label="视频资料范围">
-            {SOURCE_SCOPES.map((option) => (
+            <div className="video-agent-source-heading-actions">
               <button
                 type="button"
-                aria-pressed={draftScope === option.value}
-                className={draftScope === option.value ? 'is-active' : ''}
-                key={option.value}
-                onClick={() => chooseDraftScope(option.value)}
+                className="video-agent-source-sync-link"
+                onClick={() => setSourceSyncOpen(true)}
+                aria-label="同步视频"
+                title="同步视频"
               >
-                <span>
-                  <strong>{option.label}</strong>
-                  <small>{option.description}</small>
-                </span>
-                <i aria-hidden="true" />
+                <ArrowClockwise size={18} aria-hidden="true" />
+              </button>
+              <button
+                ref={sourcesCloseRef}
+                type="button"
+                className="video-agent-mobile-close"
+                onClick={() => { leaveRemoveSelectionMode(); setSourcesOpen(false); }}
+                aria-label="关闭资料面板"
+              >
+                <X size={18} />
+              </button>
+            </div>
+          </header>
+
+          <nav className="video-agent-platform-tabs" aria-label="视频平台">
+            {SOURCE_PLATFORMS.map((platform) => (
+              <button
+                key={platform.value}
+                type="button"
+                className={sourcePlatform === platform.value ? 'is-active' : ''}
+                aria-current={sourcePlatform === platform.value ? 'page' : undefined}
+                onClick={() => { setPendingBatchDeleteIds(null); setSourcePlatform(platform.value); }}
+                disabled={deletingBatch}
+                aria-label={platform.label}
+                title={platform.label}
+              >
+                <SourcePlatformIcon platform={platform.value} />
+                <span className="video-agent-platform-label">{platform.label}</span>
               </button>
             ))}
+          </nav>
+
+          <form className="video-agent-source-search" onSubmit={runSmartSourceSearch}>
+            <input
+              type="search"
+              value={sourceQuery}
+              onChange={(event) => setSourceQuery(event.target.value.slice(0, 120))}
+              placeholder="搜索标题或内容"
+              aria-label="搜索视频"
+            />
+            <button
+              type="submit"
+              disabled={sourceLoading || sourceQuery.trim().length < 2}
+              aria-label="搜索视频"
+            >
+              {sourceLoading
+                ? <ArrowClockwise size={15} className="animate-spin" />
+                : <MagnifyingGlass size={15} />}
+            </button>
+            {(sourceQuery || sourceAppliedQuery) && (
+              <button type="button" onClick={clearSourceSearch} aria-label="清空搜索">
+                <X size={15} />
+              </button>
+            )}
+          </form>
+
+          <div className="video-agent-source-mode" role="group" aria-label="新会话资料范围">
+            <button
+              type="button"
+              className={draftSourceMode === 'scope' ? 'is-active' : ''}
+              aria-pressed={draftSourceMode === 'scope'}
+              onClick={useOverallSourceScope}
+              disabled={deletingBatch || removeSelectionMode}
+            >
+              <FolderOpen size={16} aria-hidden="true" />
+              <span>
+                <strong>全部视频</strong>
+              </span>
+              <b>{sourcePlatform === 'all' ? scopeReadyCount : platformSources.length}</b>
+            </button>
+            <button
+              type="button"
+              className={draftSourceMode === 'selected' ? 'is-active' : ''}
+              aria-pressed={draftSourceMode === 'selected'}
+              onClick={useManualSourceSelection}
+              disabled={deletingBatch || removeSelectionMode}
+            >
+              <SelectionAll size={17} weight="duotone" aria-hidden="true" />
+              <span>
+                <strong>仅已选</strong>
+              </span>
+              <b>{selectedSourceIds.size}</b>
+            </button>
           </div>
 
-          {draftScope === 'selected' && (
-            <label className="video-agent-source-search">
-              <MagnifyingGlass size={15} />
-              <span className="sr-only">搜索视频资料</span>
-              <input
-                value={sourceQuery}
-                onChange={(event) => setSourceQuery(event.target.value)}
-                placeholder="搜索标题或作者"
-              />
-              {sourceQuery && (
+          <div className="video-agent-source-selection-bar">
+            {draftSourceMode === 'selected' ? (
+              <span className="video-agent-selection-count" role="status">
+                已选 <strong>{displayedSourceSelection.size}</strong>/{MAX_SELECTED_SOURCES}
+              </span>
+            ) : (
+              <span
+                className="video-agent-selection-count"
+                role="status"
+                title={sourceAppliedQuery
+                  ? `${sourceSearchMode === 'keyword_fallback' ? '关键词匹配' : '智能匹配'}，扫描 ${sourceScannedCount} 条${sourceExpandedQueries.length ? `，检索词：${sourceExpandedQueries.join('、')}` : ''}`
+                  : undefined}
+              >
+                {sourceLoading
+                  ? '正在读取'
+                  : `${platformSources.length} 条视频`}
+              </span>
+            )}
+            <div>
+              <button
+                type="button"
+                onClick={toggleVisibleSources}
+                disabled={platformSources.length === 0 || deletingBatch}
+              >
+                {allVisibleSourcesSelected ? '取消全选' : '全选'}
+              </button>
+              {draftSourceMode === 'selected' && (
+                <button type="button" onClick={clearSelectedSources} disabled={selectedSourceIds.size === 0 || deletingBatch}>清空全部</button>
+              )}
+              {!removeSelectionMode && (
                 <button
                   type="button"
-                  onClick={() => setSourceQuery('')}
-                  aria-label="清空搜索"
+                  className="is-remove-mode"
+                  onClick={enterRemoveSelectionMode}
+                  disabled={deletingBatch}
+                  aria-label="选择要永久移除的视频"
+                  title="永久移除视频"
                 >
-                  <X size={13} />
+                  <Trash size={14} aria-hidden="true" />
                 </button>
               )}
-            </label>
-          )}
-
-          <div className="video-agent-source-summary">
-            <span>
-              {sourceLoading
-                ? '正在读取'
-                : `${sourceCount} 个视频文案可用`}
-            </span>
-            {draftScope === 'selected' && (
-              <strong>{selectedSourceIds.size}/{MAX_SELECTED_SOURCES} 已选</strong>
-            )}
+            </div>
           </div>
 
-          <div className="video-agent-source-list">
+          {(selectedSourceIds.size > 0 || removeSelectionMode) && (
+            <div className={`video-agent-source-batch-actions ${pendingBatchDeleteIds ? 'is-confirming' : ''} ${removeSelectionMode ? 'is-removing' : ''}`}>
+              {pendingBatchDeleteIds ? (
+                <>
+                  <span>永久移除 {pendingBatchDeleteIds.length} 条？此操作不可撤销</span>
+                  <button type="button" onClick={() => setPendingBatchDeleteIds(null)} disabled={deletingBatch}>取消</button>
+                  <button type="button" className="is-danger-confirm" onClick={() => void permanentlyDeleteSelectedSources()} disabled={deletingBatch}>
+                    {deletingBatch ? '移除中' : '确认移除'}
+                  </button>
+                </>
+              ) : removeSelectionMode ? (
+                <>
+                  <button type="button" onClick={leaveRemoveSelectionMode} disabled={deletingBatch}>取消</button>
+                  <button
+                    type="button"
+                    className="is-danger"
+                    onClick={() => void permanentlyDeleteSelectedSources()}
+                    disabled={selectedSourceIds.size === 0 || deletingBatch}
+                  >
+                    <Trash size={14} aria-hidden="true" />
+                    永久移除 · {selectedSourceIds.size}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <VideoAnalysisBatchAction
+                    noteIds={Array.from(selectedSourceIds)}
+                    selectedCount={selectedSourceIds.size}
+                    unsupportedCount={0}
+                    disabled={deletingBatch}
+                    label={`解析画面 · ${selectedSourceIds.size}`}
+                    onStarted={(cachedOnly) => setNotice(cachedOnly
+                      ? '已复用现有画面解析结果，不消耗萃点'
+                      : '详细视频解析已进入后台，完成后会更新摘要与回答依据')}
+                  />
+                </>
+              )}
+            </div>
+          )}
+
+          <p id="video-agent-marquee-help" className="sr-only">
+            桌面端可用鼠标拖动框选视频来源，新圈选会追加到已选资料。
+          </p>
+          <div
+            ref={sourceSelectionSurfaceRef}
+            className="video-agent-source-list"
+            role="group"
+            aria-label="视频来源列表"
+            aria-describedby="video-agent-marquee-help"
+            {...sourceMarquee.surfaceProps}
+          >
             {sourceLoading ? (
               <div className="video-agent-source-skeleton" aria-label="正在整理资料">
                 <i /><i /><i /><i />
@@ -1446,105 +2575,81 @@ export default function VideoAgentWorkspace() {
                 <span>{sourceError}</span>
                 <button
                   type="button"
-                  onClick={() => void loadSources(draftScope, sourceQuery)}
+                  onClick={() => {
+                    if (sourceQuery.trim().length >= 2) {
+                      void runSmartSourceSearch();
+                    } else {
+                      void loadSources(browseScope);
+                    }
+                  }}
                 >
                   重新读取
                 </button>
               </div>
-            ) : sources.length === 0 ? (
+            ) : platformSources.length === 0 && visibleSelectedSources.length === 0 ? (
               <div className="video-agent-source-empty">
                 <VideoCamera size={22} />
-                <strong>这个范围还没有文案</strong>
-                <span>从视频库同步后，文案会自动出现在这里。</span>
-              </div>
-            ) : draftScope !== 'selected' ? (
-              <div className="video-agent-source-overview">
-                <span className="video-agent-source-overview-icon">
-                  <FolderOpen size={22} weight="duotone" />
+                <strong>
+                  {selectedSourceIds.size > 0
+                    ? '已选资料暂时不可用'
+                    : sourceAppliedQuery
+                      ? '没有找到匹配视频'
+                      : '还没有可用视频'}
+                </strong>
+                <span>
+                  {selectedSourceIds.size > 0
+                    ? `${selectedSourceIds.size} 条已选视频暂时不可用。`
+                    : sourceAppliedQuery
+                      ? '换个关键词试试。'
+                      : '同步视频后会显示在这里。'}
                 </span>
-                <strong>{sourceScopeLabel(draftScope)}已连接</strong>
-                <p>
-                  提问时会自动检索这个范围内的完整视频文案，
-                  不需要逐条勾选。
-                </p>
-                <div>
-                  {sources.slice(0, 3).map((source) => (
-                    <span key={source.note_id}>
-                      <i>
-                        <VideoCamera size={13} />
-                        {source.cover_url && (
-                          <img
-                            src={source.cover_url}
-                            alt=""
-                            loading="lazy"
-                            onError={(event) => {
-                              event.currentTarget.hidden = true;
-                            }}
-                          />
-                        )}
-                      </i>
-                      <b>{source.title}</b>
-                    </span>
-                  ))}
-                </div>
-                {sourceCount > 3 && (
-                  <small>以及另外 {sourceCount - 3} 个视频</small>
+                {!sourceAppliedQuery && selectedSourceIds.size === 0 && (
+                  <button type="button" onClick={() => setSourceSyncOpen(true)}>同步视频</button>
                 )}
               </div>
             ) : (
-              sources.map((source) => {
-                const selected = selectedSourceIds.has(source.note_id);
-                return (
-                  <button
-                    type="button"
-                    key={source.note_id}
-                    className={`video-agent-source-item ${
-                      draftScope === 'selected' && selected ? 'is-selected' : ''
-                    }`}
-                    onClick={() => {
-                      toggleSource(source.note_id);
-                    }}
-                    aria-pressed={selected}
-                  >
-                    <span className="video-agent-source-cover">
-                      <VideoCamera size={17} aria-hidden="true" />
-                      {source.cover_url && (
-                        <img
-                          src={source.cover_url}
-                          alt=""
-                          loading="lazy"
-                          onError={(event) => {
-                            event.currentTarget.hidden = true;
-                          }}
-                        />
-                      )}
-                    </span>
-                    <span className="video-agent-source-copy">
-                      <strong>{source.title}</strong>
-                      <small>
-                        {source.author_name || '抖音视频'}
-                        {' · '}
-                        {source.transcript_chars.toLocaleString('zh-CN')} 字
-                      </small>
-                    </span>
-                    <i aria-hidden="true">
-                      {selected && <CheckCircle size={16} weight="fill" />}
-                    </i>
-                  </button>
-                );
-              })
+              <>
+                {sourcePlatform === 'all' && selectedSourceIds.size > selectedSources.length && (
+                  <p className="video-agent-source-resolution-note" role="status">
+                    {selectedSourceIds.size - selectedSources.length} 条已选资料暂时无法读取，提交前会再次校验
+                  </p>
+                )}
+
+                <section
+                  className="video-agent-source-group"
+                  aria-labelledby="video-agent-available-sources-heading"
+                >
+                  <h3 id="video-agent-available-sources-heading">
+                    <span>可选视频</span>
+                    <strong>{platformSources.length}</strong>
+                  </h3>
+                  <div>
+                    {platformSources.map((source) => (
+                      <AgentSourceOption
+                        key={source.note_id}
+                        source={source}
+                        selected={displayedSourceSelection.has(source.note_id)}
+                        onToggle={toggleSource}
+                        disabled={deletingBatch}
+                      />
+                    ))}
+                  </div>
+                </section>
+              </>
             )}
           </div>
 
-          {activeThread ? (
+          {!removeSelectionMode && (activeThread ? (
             <button
               type="button"
               className="video-agent-apply-sources"
               disabled={!canStartDraft}
-              onClick={() => startNewTask(draftScope)}
+              onClick={startNewTask}
             >
               <Plus size={16} weight="bold" />
-              用这个范围开始新任务
+              {draftSourceMode === 'scope'
+                ? '开始整体提问'
+                : `用已选 ${selectedSourceIds.size} 条开始`}
             </button>
           ) : (
             <button
@@ -1553,28 +2658,275 @@ export default function VideoAgentWorkspace() {
               disabled={!canStartDraft}
               onClick={() => {
                 setSourcesOpen(false);
-                setNotice(`已选择“${sourceScopeLabel(draftScope)}”，现在可以直接提问。`);
+                setNotice(draftSourceMode === 'scope'
+                  ? `将整体参考${sourceScopeLabel(browseScope)}，现在可以直接提问。`
+                  : `已选择 ${selectedSourceIds.size} 条视频，现在可以直接提问。`);
                 window.requestAnimationFrame(() => questionRef.current?.focus());
               }}
             >
-              <CheckCircle size={16} weight="fill" />
-              使用这个范围
+              {draftSourceMode === 'scope'
+                ? <FolderOpen size={16} weight="fill" />
+                : <CheckCircle size={16} weight="fill" />}
+              {draftSourceMode === 'scope'
+                ? '整体提问'
+                : `使用已选 ${selectedSourceIds.size} 条`}
             </button>
+          ))}
+        </aside>
+
+        <MarqueeSelectionOverlay rect={sourceMarquee.marqueeRect} />
+
+        <aside
+          id="video-agent-studio-panel"
+          className={`video-agent-studio ${studioOpen ? 'is-open' : ''}`}
+          role={isCompact ? 'dialog' : undefined}
+          aria-modal={isCompact && studioOpen ? true : undefined}
+          aria-labelledby="video-agent-studio-title"
+          aria-hidden={isCompact ? !studioOpen : false}
+          inert={isCompact && !studioOpen}
+        >
+          <header className="video-agent-panel-heading">
+            <div>
+              <span>成果</span>
+              <strong id="video-agent-studio-title">
+                {artifactCount > 0
+                  ? `${artifactCount} 份可复用成果`
+                  : '把对话沉淀成可复用内容'}
+              </strong>
+            </div>
+            <button
+              ref={studioCloseRef}
+              type="button"
+              className="video-agent-mobile-close"
+              onClick={() => setStudioOpen(false)}
+              aria-label="关闭成果面板"
+            >
+              <X size={18} />
+            </button>
+          </header>
+
+          {isCompact && studioOpen && (notice || error) && (
+            <div
+              className={`video-agent-studio-feedback ${error ? 'is-error' : ''}`}
+              role={error ? 'alert' : 'status'}
+            >
+              {error ? <X size={15} /> : <CheckCircle size={15} />}
+              <span>{error || notice}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setError('');
+                  setNotice('');
+                }}
+                aria-label="关闭成果提示"
+              >
+                <X size={14} />
+              </button>
+            </div>
           )}
+
+          <div className="video-agent-studio-body">
+            <section
+              className="video-agent-studio-create"
+              aria-labelledby="video-agent-studio-create-title"
+            >
+              <div className="video-agent-studio-section-heading">
+                <div>
+                  <span>基于当前视频</span>
+                  <h2 id="video-agent-studio-create-title">生成新成果</h2>
+                </div>
+                <Sparkle size={17} weight="fill" aria-hidden="true" />
+              </div>
+
+              <div className="video-agent-studio-shortcuts">
+                {STUDIO_SHORTCUTS.map(({ value, label, description, Icon }) => (
+                  <button
+                    type="button"
+                    key={value}
+                    disabled={studioActionsDisabled}
+                    onClick={() => void generateStudioResult(value)}
+                    aria-label={`生成${label}：${description}`}
+                  >
+                    <span><Icon size={18} weight="duotone" /></span>
+                    <strong>{label}</strong>
+                    <small>{description}</small>
+                    <CaretRight size={14} aria-hidden="true" />
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className={studioCustomOpen ? 'is-active' : ''}
+                  disabled={studioActionsDisabled}
+                  onClick={() => setStudioCustomOpen((current) => !current)}
+                  aria-expanded={studioCustomOpen}
+                  aria-controls="video-agent-studio-custom"
+                >
+                  <span><FileText size={18} weight="duotone" /></span>
+                  <strong>自定义</strong>
+                  <small>指定结构、重点或使用场景</small>
+                  <CaretRight size={14} aria-hidden="true" />
+                </button>
+              </div>
+
+              {studioCustomOpen && (
+                <form
+                  id="video-agent-studio-custom"
+                  className="video-agent-studio-custom"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    if (!customInstruction.trim()) return;
+                    setStudioCustomOpen(false);
+                    void generateStudioResult(
+                      'custom',
+                      '请基于当前视频资料，严格按照我给出的自定义要求生成一份可复用成果。',
+                    );
+                  }}
+                >
+                  <label htmlFor="video-agent-studio-custom-input">
+                    你希望得到什么
+                  </label>
+                  <textarea
+                    id="video-agent-studio-custom-input"
+                    rows={3}
+                    maxLength={600}
+                    value={customInstruction}
+                    onChange={(event) => setCustomInstruction(event.target.value)}
+                    placeholder="例如：整理成一页项目复盘模板，包含结论、依据和下周动作"
+                  />
+                  <div>
+                    <span>{customInstruction.length}/600</span>
+                    <button
+                      type="submit"
+                      disabled={studioActionsDisabled || !customInstruction.trim()}
+                    >
+                      生成自定义成果
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {studioGeneratingType && (
+                <div className="video-agent-studio-generating" role="status">
+                  <span><i /><i /><i /></span>
+                  正在生成{studioResultTypeLabel(studioGeneratingType)}
+                </div>
+              )}
+            </section>
+
+            <section
+              className="video-agent-studio-library"
+              aria-labelledby="video-agent-studio-library-title"
+            >
+              <div className="video-agent-studio-section-heading">
+                <div>
+                  <span>当前研究</span>
+                  <h2 id="video-agent-studio-library-title">已生成</h2>
+                </div>
+                <b>{studioResults.length}</b>
+              </div>
+
+              {threadLoading ? (
+                <div className="video-agent-studio-skeleton" aria-label="正在恢复成果">
+                  <i /><i /><i />
+                </div>
+              ) : studioResults.length === 0 ? (
+                <div className="video-agent-studio-empty">
+                  <span><Sparkle size={22} weight="duotone" /></span>
+                  <strong>成果会保存在这里</strong>
+                  <p>
+                    先从上方生成总结、对比或行动方案。只展示真实生成并保存的内容。
+                  </p>
+                  {!canGenerateStudioResult && (
+                    <button
+                      type="button"
+                      onClick={(event) => openSourcesPanel(event.currentTarget)}
+                    >
+                      先选择视频
+                      <CaretRight size={14} />
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <div className="video-agent-studio-list">
+                    {studioResults.map((result) => (
+                      <button
+                        type="button"
+                        key={result.id}
+                        className={`${
+                          selectedStudioResult?.id === result.id ? 'is-selected' : ''
+                        } ${result.isArtifact ? 'is-artifact' : 'is-answer'}`}
+                        onClick={() => setSelectedStudioResultId(result.id)}
+                        aria-pressed={selectedStudioResult?.id === result.id}
+                      >
+                        <span className="video-agent-studio-result-type">
+                          {result.type === 'action_plan'
+                            ? <ListChecks size={15} />
+                            : result.type === 'comparison'
+                              ? <Scales size={15} />
+                              : result.type === 'summary'
+                                ? <Notebook size={15} />
+                                : <FileText size={15} />}
+                          {result.label}
+                        </span>
+                        <strong>{result.title}</strong>
+                        <small>{result.preview}</small>
+                        <i>
+                          {formatCompactTime(result.createdAt)}
+                          {' · '}
+                          {result.sourceCount} 个视频
+                        </i>
+                      </button>
+                    ))}
+                  </div>
+
+                  {selectedStudioResult && (
+                    <article className="video-agent-studio-detail">
+                      <header>
+                        <div>
+                          <span>{selectedStudioResult.label}</span>
+                          <h3>{selectedStudioResult.title}</h3>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void copyStudioResult(selectedStudioResult)}
+                          aria-label="复制当前成果"
+                          title="复制成果"
+                        >
+                          <ClipboardText size={16} />
+                        </button>
+                      </header>
+                      <div className="video-agent-studio-detail-meta">
+                        <span>{selectedStudioResult.sourceCount} 个视频</span>
+                        <span>{selectedStudioResult.evidenceCount} 条依据</span>
+                      </div>
+                      <MessageResponse className="video-agent-studio-markdown">
+                        {selectedStudioResult.content}
+                      </MessageResponse>
+                      <footer>
+                        <button
+                          type="button"
+                          onClick={() => void copyStudioResult(selectedStudioResult)}
+                        >
+                          <ClipboardText size={15} />
+                          复制成果
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => revealStudioResultInConversation(selectedStudioResult)}
+                        >
+                          <ArrowsOut size={15} />
+                          在对话中查看
+                        </button>
+                      </footer>
+                    </article>
+                  )}
+                </>
+              )}
+            </section>
+          </div>
         </aside>
       </section>
-
-      <AgentOptionsSheet
-        open={optionsOpen}
-        onClose={() => setOptionsOpen(false)}
-        researchMode={researchMode}
-        outputStyle={outputStyle}
-        webScope={webScope}
-        disabled={sending || Boolean(backgroundThreadId)}
-        onResearchModeChange={setResearchMode}
-        onOutputStyleChange={setOutputStyle}
-        onWebScopeChange={setWebScope}
-      />
 
       <section
         className={`video-agent-automation-sheet ${automationOpen ? 'is-open' : ''}`}
@@ -1702,7 +3054,7 @@ export default function VideoAgentWorkspace() {
                 ))}
               </div>
               <small className="video-agent-automation-field-note">
-                默认只总结收藏；需要时可切换到喜欢、我的作品或全部来源。
+                默认总结收藏内容。
               </small>
             </fieldset>
 
@@ -1823,7 +3175,7 @@ export default function VideoAgentWorkspace() {
               <div className="video-agent-automation-empty">
                 <CalendarBlank size={24} />
                 <strong>还没有定时摘要</strong>
-                <span>先建立一个任务，之后可以随时调整。</span>
+                <span>先创建一个摘要任务。</span>
               </div>
             ) : (
               automations.map((automation) => (
@@ -1905,15 +3257,14 @@ export default function VideoAgentWorkspace() {
                     </button>
                     <button
                       type="button"
-                      className={
-                        pendingAutomationDelete === automation.id
-                          ? 'is-confirming'
-                          : 'is-danger'
-                      }
-                      onClick={() => void removeAutomation(automation.id)}
+                      className="is-danger"
+                      onClick={() => {
+                        setPendingThreadDelete(null);
+                        setPendingAutomationDelete(automation.id);
+                      }}
                     >
                       <Trash size={14} />
-                      {pendingAutomationDelete === automation.id ? '确认删除' : '删除'}
+                      删除
                     </button>
                   </div>
                 </article>
@@ -1922,6 +3273,62 @@ export default function VideoAgentWorkspace() {
           </div>
         </div>
       </section>
+      <AgentSourceSyncSheet
+        open={sourceSyncOpen}
+        onClose={() => setSourceSyncOpen(false)}
+        onSynced={() => loadSources(browseScope)}
+        onManageSources={() => {
+          setSourceSyncOpen(false);
+          enterRemoveSelectionMode();
+        }}
+        onBackgrounded={(message) => setNotice(message)}
+        onCompleted={(message, success) => {
+          setNotice(success ? message : `后台同步未完成 · ${message}`);
+          if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+            new Notification(success ? '视频文稿已准备完成' : '视频同步需要处理', {
+              body: message,
+              icon: '/icons/icon-192.png',
+            });
+          }
+        }}
+      />
+      <NativeModal
+        open={Boolean(threadDeleteTarget || automationDeleteTarget)}
+        title={threadDeleteTarget ? '删除会话' : '删除定时摘要'}
+        onClose={closeDeleteConfirmation}
+        className={`video-agent-delete-dialog ${destructivePending ? 'is-pending' : ''}`}
+      >
+        <div className="video-agent-delete-confirm">
+          <p>
+            {threadDeleteTarget
+              ? `删除“${threadDeleteTarget.title || '未命名会话'}”后，该会话和对话记录将无法恢复。`
+              : automationDeleteTarget
+                ? `删除“${automationDeleteTarget.name}”后，将不再按计划生成摘要，且无法恢复。`
+                : ''}
+          </p>
+          <div>
+            <button
+              type="button"
+              onClick={closeDeleteConfirmation}
+              disabled={destructivePending}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              className="is-danger"
+              disabled={destructivePending}
+              onClick={() => {
+                if (threadDeleteTarget) void removeThread(threadDeleteTarget.id);
+                else if (automationDeleteTarget) void removeAutomation(automationDeleteTarget.id);
+              }}
+            >
+              {destructivePending && <ArrowClockwise size={15} className="animate-spin" />}
+              {destructivePending ? '正在删除' : '确认删除'}
+            </button>
+          </div>
+        </div>
+      </NativeModal>
     </div>
   );
 }

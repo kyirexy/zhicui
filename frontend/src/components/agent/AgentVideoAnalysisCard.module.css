@@ -1,0 +1,204 @@
+.card {
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent-primary, #303034) 24%, var(--border-color));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--card-bg, #fff) 92%, var(--accent-primary, #303034) 8%);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 15px 16px 10px;
+}
+
+.icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  place-items: center;
+  border-radius: 11px;
+  color: var(--accent-primary, #303034);
+  background: color-mix(in srgb, var(--accent-primary, #303034) 13%, transparent);
+}
+
+.header > div:last-child {
+  min-width: 0;
+}
+
+.header strong,
+.header small {
+  display: block;
+}
+
+.header strong {
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.header small {
+  margin-top: 3px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0 16px 12px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--border-color);
+}
+
+.metrics > div {
+  min-width: 0;
+  padding: 9px 10px;
+  background: var(--card-bg, #fff);
+}
+
+.metrics dt {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.metrics dd {
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.byokNotice {
+  margin: 0 16px 14px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent-primary, #303034) 22%, var(--border-color));
+  border-radius: 11px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--accent-primary, #303034) 7%, var(--card-bg, #fff));
+  font-size: 12px;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 16px 14px;
+}
+
+.actions button,
+.methodPicker button {
+  min-height: 44px;
+  border: 1px solid var(--border-color);
+  border-radius: 11px;
+  color: var(--text-primary);
+  background: var(--card-bg, #fff);
+  font: inherit;
+  cursor: pointer;
+}
+
+.actions button {
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.actions button:first-child {
+  border-color: transparent;
+  color: #fff;
+  background: var(--accent-primary, #303034);
+}
+
+.actions button:disabled,
+.methodPicker button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.methodPicker {
+  margin: 0 16px 14px;
+  border-top: 1px solid var(--border-color);
+}
+
+.methodPicker summary {
+  min-height: 44px;
+  padding: 12px 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.methodList {
+  display: grid;
+  gap: 7px;
+  padding-bottom: 2px;
+}
+
+.methodPicker button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 11px;
+  text-align: left;
+}
+
+.methodPicker button span {
+  min-width: 0;
+}
+
+.methodPicker button strong,
+.methodPicker button small {
+  display: block;
+}
+
+.methodPicker button strong {
+  font-size: 13px;
+}
+
+.methodPicker button small {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.methodState {
+  padding: 4px 0 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+@media (max-width: 560px) {
+  .metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .actions {
+    display: grid;
+  }
+
+  .actions button {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card * {
+    scroll-behavior: auto !important;
+  }
+}

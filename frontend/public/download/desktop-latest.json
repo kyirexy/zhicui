@@ -1,8 +1,11 @@
 {
+  "schema_version": 1,
   "platform": "windows",
   "architecture": "x64",
   "version": "1.0.3",
+  "download_url": "https://luxai.cn/download/Zhicui-Setup-1.0.3-x64.exe",
   "url": "https://luxai.cn/download/Zhicui-Setup-1.0.3-x64.exe",
+  "size_bytes": 101973732,
   "published_at": "2026-07-31T09:30:00.000Z",
   "notes": [
     "全新 Windows 工作台：统一导航、资料上下文与真实数据首页",

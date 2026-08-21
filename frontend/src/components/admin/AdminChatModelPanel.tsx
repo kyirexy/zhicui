@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useImperativeHandle, useRef, useState, forwardRef, type FormEvent, type ReactNode } from 'react';
 import { Bot, Check, CircleDollarSign, Pencil, Plus, Trash2, X } from 'lucide-react';
 import {
   createAdminChatModel,
@@ -33,7 +33,11 @@ interface Props {
   onError: (message: string) => void;
 }
 
-export default function AdminChatModelPanel({ onMessage, onError }: Props) {
+export interface AdminChatModelPanelHandle {
+  refresh: () => Promise<void>;
+}
+
+const AdminChatModelPanel = forwardRef<AdminChatModelPanelHandle, Props>(function AdminChatModelPanel({ onMessage, onError }, ref) {
   const [items, setItems] = useState<AdminChatModel[]>([]);
   const [form, setForm] = useState<AdminChatModelInput>(EMPTY_FORM);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -41,6 +45,7 @@ export default function AdminChatModelPanel({ onMessage, onError }: Props) {
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<AdminChatModel | null>(null);
   const deleteDialogRef = useRef<HTMLDialogElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
   const load = async () => {
     setLoading(true);
@@ -52,6 +57,8 @@ export default function AdminChatModelPanel({ onMessage, onError }: Props) {
 
   useEffect(() => { void load(); }, []);
 
+  useImperativeHandle(ref, () => ({ refresh: load }), []);
+
   const update = <K extends keyof AdminChatModelInput>(key: K, value: AdminChatModelInput[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
   };
@@ -59,6 +66,7 @@ export default function AdminChatModelPanel({ onMessage, onError }: Props) {
   const startCreate = () => {
     setEditingId(null);
     setForm(EMPTY_FORM);
+    formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const startEdit = (item: AdminChatModel) => {
@@ -79,13 +87,31 @@ export default function AdminChatModelPanel({ onMessage, onError }: Props) {
       supports_tools: item.supports_tools,
       sort_order: item.sort_order,
     });
+    formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    const code = form.code.trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9_-]{1,79}$/.test(code)) {
+      onError('模型代码只能包含小写字母、数字、下划线和短横线（至少 2 位）');
+      return;
+    }
+    if (!form.name.trim() || !form.model_id.trim()) {
+      onError('展示名称与真实模型 ID 不能为空');
+      return;
+    }
+    if (form.model_id.trim().toLowerCase() === 'auto' || form.model_id.trim().toLowerCase().startsWith('auto/')) {
+      onError('不支持智能选择（auto），请配置一个明确的模型 ID');
+      return;
+    }
     setSaving(true);
     const payload = {
       ...form,
+      code,
+      name: form.name.trim(),
+      model_id: form.model_id.trim(),
+      description: form.description.trim(),
       points_per_request: form.is_free ? 0 : form.points_per_request,
     };
     const response = editingId
@@ -129,7 +155,7 @@ export default function AdminChatModelPanel({ onMessage, onError }: Props) {
             只发布用户真正需要的模型。普通用户看不到 Provider 密钥、API 地址和未发布模型。
           </p>
         </div>
-        <button type="button" onClick={startCreate} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-accent-emerald px-4 text-sm font-semibold text-white hover:brightness-95 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-emerald">
+        <button type="button" onClick={startCreate} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-accent-brand px-4 text-sm font-semibold text-white hover:brightness-95 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-brand">
           <Plus size={16} aria-hidden="true" />发布模型
         </button>
       </header>
@@ -156,21 +182,24 @@ export default function AdminChatModelPanel({ onMessage, onError }: Props) {
                   <td className="p-3">
                     <div className="flex items-center gap-2 font-semibold text-foreground">
                       <Bot size={16} aria-hidden="true" />{item.name}
-                      {item.is_default ? <span className="rounded-md bg-accent-emerald/10 px-1.5 py-0.5 text-[11px] text-accent-emerald">默认</span> : null}
+                      {item.is_default ? <span className="rounded-md bg-accent-brand/10 px-1.5 py-0.5 text-[11px] text-accent-brand">默认</span> : null}
                     </div>
                     <small className="mt-1 block text-foreground-muted">{item.code}</small>
                   </td>
-                  <td className="p-3 text-foreground-secondary">
-                    <div className="max-w-56 truncate" title={item.model_id}>{item.model_id}</div>
+                  <td className="p-3">
+                    <div className="flex max-w-56 items-center gap-2">
+                      <span className="truncate" title={item.model_id}>{item.model_id}</span>
+                    </div>
                     <small className="text-foreground-muted">{item.provider_mode === 'platform' ? '平台配置' : 'OmniRoute'}</small>
                   </td>
                   <td className="p-3 tabular-nums">
                     {item.is_free ? `免费 · ${item.free_daily_limit || '不限'} 次/日` : `${item.points_per_request} 萃点/次`}
                   </td>
                   <td className="p-3">
-                    <span className={item.enabled && item.visible_to_users ? 'text-accent-emerald' : 'text-foreground-muted'}>
-                      {item.enabled && item.visible_to_users ? '已发布' : '未发布'}
-                    </span>
+                    <div className="flex flex-col gap-1">
+                      <span className={item.enabled ? 'text-foreground' : 'text-foreground-muted'}>{item.enabled ? '启用' : '停用'}</span>
+                      <span className={item.visible_to_users ? 'text-accent-brand' : 'text-foreground-muted'}>{item.visible_to_users ? '用户可见' : '用户不可见'}</span>
+                    </div>
                   </td>
                   <td className="p-3 text-right">
                     <button type="button" onClick={() => startEdit(item)} className="inline-flex min-h-9 items-center gap-1 rounded-lg px-2 text-xs text-foreground hover:bg-[var(--admin-surface-2)]">
@@ -186,7 +215,7 @@ export default function AdminChatModelPanel({ onMessage, onError }: Props) {
           </table>
         </div>
 
-        <form onSubmit={submit} className="admin-panel self-start p-4 sm:p-5">
+        <form ref={formRef} onSubmit={submit} className="admin-panel self-start p-4 sm:p-5">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-balance text-base font-semibold text-foreground">{editingId ? '编辑模型' : '发布模型'}</h2>
             {editingId ? <button type="button" onClick={startCreate} className="inline-flex size-10 items-center justify-center rounded-lg text-foreground-muted hover:bg-[var(--admin-surface-2)]" aria-label="关闭编辑"><X size={17} /></button> : null}
@@ -230,12 +259,14 @@ export default function AdminChatModelPanel({ onMessage, onError }: Props) {
       </dialog>
     </section>
   );
-}
+});
+
+export default AdminChatModelPanel;
 
 function Field({ label, children, className = '' }: { label: string; children: ReactNode; className?: string }) {
   return <label className={`grid gap-1.5 text-xs font-medium text-foreground-secondary ${className}`}><span>{label}</span><span className="[&>input]:min-h-11 [&>input]:w-full [&>input]:rounded-lg [&>input]:border [&>input]:border-card-border [&>input]:bg-[var(--admin-surface-2)] [&>input]:px-3 [&>input]:text-sm [&>input]:text-foreground [&>select]:min-h-11 [&>select]:w-full [&>select]:rounded-lg [&>select]:border [&>select]:border-card-border [&>select]:bg-[var(--admin-surface-2)] [&>select]:px-3 [&>select]:text-sm [&>select]:text-foreground [&>textarea]:w-full [&>textarea]:rounded-lg [&>textarea]:border [&>textarea]:border-card-border [&>textarea]:bg-[var(--admin-surface-2)] [&>textarea]:p-3 [&>textarea]:text-sm [&>textarea]:text-foreground">{children}</span></label>;
 }
 
 function CheckField({ checked, onChange, children }: { checked: boolean; onChange: (value: boolean) => void; children: ReactNode }) {
-  return <label className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg bg-[var(--admin-surface-2)] px-3 text-sm text-foreground"><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="size-4 accent-[var(--accent-emerald)]" />{children}</label>;
+  return <label className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg bg-[var(--admin-surface-2)] px-3 text-sm text-foreground"><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="size-4 accent-[var(--accent-brand)]" />{children}</label>;
 }

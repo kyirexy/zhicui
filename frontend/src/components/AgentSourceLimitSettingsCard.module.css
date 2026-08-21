@@ -40,7 +40,7 @@
   flex: 0 0 auto;
   border-radius: 9px;
   place-items: center;
-  color: var(--accent-mint-strong);
+  color: var(--accent-sky-strong);
   background: var(--background-secondary);
 }
 
@@ -74,14 +74,14 @@
 }
 
 .options button:focus-visible {
-  outline: 2px solid var(--accent-mint-strong);
+  outline: 2px solid var(--accent-sky-strong);
   outline-offset: 2px;
 }
 
 .options .selected {
-  border-color: color-mix(in srgb, var(--accent-mint-strong) 55%, var(--card-border));
-  color: var(--accent-mint-strong);
-  background: color-mix(in srgb, var(--accent-mint-strong) 8%, var(--card-bg));
+  border-color: color-mix(in srgb, var(--accent-sky-strong) 55%, var(--card-border));
+  color: var(--accent-sky-strong);
+  background: color-mix(in srgb, var(--accent-sky-strong) 8%, var(--card-bg));
 }
 
 .note { padding: 12px 20px 20px; }

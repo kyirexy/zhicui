@@ -12,7 +12,7 @@
   border: 0;
   border-radius: 9px;
   padding: 0 10px;
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
   background: transparent;
   font-size: 13px;
   font-weight: 650;
@@ -22,7 +22,7 @@
 
 .entryTrigger:hover,
 .entryTrigger:focus-visible {
-  background: color-mix(in srgb, var(--accent-emerald) 8%, transparent);
+  background: color-mix(in srgb, var(--accent-brand) 8%, transparent);
 }
 
 .entryTrigger:focus-visible,
@@ -33,7 +33,7 @@
 .methodPicker button:focus-visible,
 .quoteActions button:focus-visible,
 .balanceWarning button:focus-visible {
-  outline: 2px solid var(--accent-emerald);
+  outline: 2px solid var(--accent-brand);
   outline-offset: 2px;
 }
 
@@ -42,10 +42,10 @@
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  border: 1px solid color-mix(in srgb, var(--accent-emerald) 25%, var(--card-border));
+  border: 1px solid color-mix(in srgb, var(--accent-brand) 25%, var(--card-border));
   border-radius: 12px;
   padding: 13px 14px;
-  background: color-mix(in srgb, var(--accent-emerald) 5%, var(--card-bg));
+  background: color-mix(in srgb, var(--accent-brand) 5%, var(--card-bg));
 }
 
 .recommendation > div:first-child {
@@ -54,7 +54,7 @@
 
 .recommendation small {
   display: block;
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
   font-size: 11px;
   font-weight: 650;
 }
@@ -102,7 +102,7 @@
 
 .recommendation .primaryTextAction {
   color: #fff;
-  background: var(--accent-emerald);
+  background: var(--accent-brand);
 }
 
 .recommendation button:disabled,
@@ -122,8 +122,8 @@
   min-height: 58px;
   border-radius: 10px;
   padding: 8px 10px;
-  color: var(--accent-emerald);
-  background: color-mix(in srgb, var(--accent-emerald) 6%, transparent);
+  color: var(--accent-brand);
+  background: color-mix(in srgb, var(--accent-brand) 6%, transparent);
 }
 
 .runInline {
@@ -191,8 +191,8 @@
   height: 42px;
   place-items: center;
   border-radius: 10px;
-  color: var(--accent-emerald);
-  background: color-mix(in srgb, var(--accent-emerald) 10%, transparent);
+  color: var(--accent-brand);
+  background: color-mix(in srgb, var(--accent-brand) 10%, transparent);
 }
 
 .quoteHero small {
@@ -222,7 +222,7 @@
 
 .methodPicker summary {
   min-height: 36px;
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
   font-size: 12px;
   font-weight: 650;
   cursor: pointer;
@@ -248,8 +248,8 @@
 }
 
 .methodPicker button[aria-checked='true'] {
-  border-color: var(--accent-emerald);
-  background: color-mix(in srgb, var(--accent-emerald) 6%, var(--background));
+  border-color: var(--accent-brand);
+  background: color-mix(in srgb, var(--accent-brand) 6%, var(--background));
 }
 
 .methodPicker button span {
@@ -267,7 +267,7 @@
 }
 
 .methodPicker button svg {
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
 }
 
 .quoteLoading {
@@ -392,9 +392,9 @@
 }
 
 .quoteActions .primaryAction {
-  border-color: var(--accent-emerald);
+  border-color: var(--accent-brand);
   color: #fff;
-  background: var(--accent-emerald);
+  background: var(--accent-brand);
 }
 
 @media (max-width: 620px) {
@@ -445,7 +445,7 @@
   min-height: 62px;
   border-radius: 10px;
   padding: 10px 8px;
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
   background: color-mix(in srgb, var(--foreground) 4%, transparent);
 }
 
@@ -528,7 +528,7 @@
 }
 
 .taskActions button:focus-visible {
-  outline: 2px solid var(--accent-emerald);
+  outline: 2px solid var(--accent-brand);
   outline-offset: 2px;
 }
 
@@ -557,7 +557,7 @@
   text-wrap: pretty;
 }
 .taskItems { margin-top: .55rem; }
-.taskItems summary { min-height: 36px; display: inline-flex; align-items: center; color: var(--accent-emerald); font-size: .68rem; font-weight: 650; cursor: pointer; }
+.taskItems summary { min-height: 36px; display: inline-flex; align-items: center; color: var(--accent-brand); font-size: .68rem; font-weight: 650; cursor: pointer; }
 .taskItems > div { display: grid; gap: .35rem; padding: .15rem 0 .3rem; }
 .taskItems > div > span { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .5rem .6rem; border-radius: .55rem; background: color-mix(in srgb, var(--foreground) 4%, transparent); }
 .taskItems > div > span > span { min-width: 0; display: grid; gap: .15rem; }
@@ -576,10 +576,10 @@
   align-items: start;
   gap: .75rem;
   padding: .9rem;
-  border: 1px solid color-mix(in srgb, var(--accent-emerald) 32%, var(--card-border));
+  border: 1px solid color-mix(in srgb, var(--accent-brand) 32%, var(--card-border));
   border-radius: .9rem;
   background: color-mix(in srgb, var(--card-bg) 94%, transparent);
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
   box-shadow: 0 18px 50px rgb(0 0 0 / .18);
   backdrop-filter: blur(18px);
 }
@@ -587,9 +587,9 @@
 .completionToast strong { display: block; color: var(--foreground); font-size: .78rem; }
 .completionToast p { margin: .28rem 0 0; color: var(--foreground-muted); font-size: .69rem; line-height: 1.5; }
 .completionToast span { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .55rem; }
-.completionToast a, .completionToast span button { min-height: 36px; display: inline-flex; align-items: center; border: 0; border-radius: .55rem; padding: 0 .65rem; background: color-mix(in srgb, var(--accent-emerald) 9%, transparent); color: var(--accent-emerald); font-size: .69rem; font-weight: 650; text-decoration: none; }
+.completionToast a, .completionToast span button { min-height: 36px; display: inline-flex; align-items: center; border: 0; border-radius: .55rem; padding: 0 .65rem; background: color-mix(in srgb, var(--accent-brand) 9%, transparent); color: var(--accent-brand); font-size: .69rem; font-weight: 650; text-decoration: none; }
 .completionToast > button { width: 36px; height: 36px; display: grid; place-items: center; border: 0; border-radius: .55rem; background: transparent; color: var(--foreground-muted); }
-.completionToast a:focus-visible, .completionToast button:focus-visible { outline: 2px solid var(--accent-emerald); outline-offset: 2px; }
+.completionToast a:focus-visible, .completionToast button:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 2px; }
 
 @media (min-width: 768px) {
   .completionToast { bottom: 1.5rem; }

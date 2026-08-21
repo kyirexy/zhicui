@@ -795,6 +795,7 @@ export interface PlatformLibraryItem {
   degraded: boolean;
   ai_initialized: boolean;
   card_type?: CardType | null;
+  source_mode?: DouyinSourceMode | 'unknown' | 'import';
   note: NoteDetail;
 }
 
@@ -820,22 +821,71 @@ export interface PlatformLibraryImportResult {
 }
 
 export type CreatorSourcePlatform = 'douyin' | 'bilibili' | 'xiaohongshu';
+export type CreatorSyncOperation =
+  | 'recent_transcript'
+  | 'catalog_all'
+  | 'selected_transcript';
 export type CreatorSyncStage =
   | 'queued'
   | 'resolving'
   | 'discovering'
   | 'importing'
   | 'transcribing'
+  | 'retry_wait'
   | 'succeeded'
   | 'partial'
   | 'failed'
   | 'cancelled';
 
+export type CreatorCatalogItemStatus =
+  | 'all'
+  | 'untranscribed'
+  | 'imported'
+  | 'failed';
+
+export interface CreatorSourceSnapshot {
+  id?: string;
+  platform: CreatorSourcePlatform;
+  creator_id?: string;
+  profile_url: string;
+  display_name: string;
+  avatar_url: string;
+}
+
+export interface CreatorSyncNeedsAction {
+  required: boolean;
+  code: string;
+  message: string;
+}
+
 export interface CreatorSyncRunItem {
+  id?: string;
+  run_id?: string;
+  source_id?: string;
+  source_item_id?: string | null;
   external_id: string;
-  status: 'imported' | 'reused' | 'removed' | 'failed' | string;
+  status:
+    | 'pending'
+    | 'processing'
+    | 'importing'
+    | 'imported'
+    | 'succeeded'
+    | 'reused'
+    | 'removed'
+    | 'skipped_removed'
+    | 'failed'
+    | 'cancelled'
+    | string;
+  state?: CreatorSyncRunItem['status'];
   note_id?: string | null;
+  ordinal?: number;
+  attempt_count?: number;
+  max_attempts?: number;
   error_code?: string;
+  error_message?: string;
+  next_retry_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface CreatorSyncRun {
@@ -843,8 +893,14 @@ export interface CreatorSyncRun {
   source_id: string;
   platform: CreatorSourcePlatform;
   status: CreatorSyncStage;
+  operation: CreatorSyncOperation;
   requested_limit: 20 | 50 | 100;
+  target_count: number;
   checked_count: number;
+  discovered_count: number;
+  processed_count: number;
+  total_count: number | null;
+  discovery_complete: boolean;
   new_count: number;
   reused_count: number;
   failed_count: number;
@@ -852,11 +908,68 @@ export interface CreatorSyncRun {
   results: CreatorSyncRunItem[];
   error_code: string;
   error_message: string;
+  source_snapshot: CreatorSourceSnapshot;
+  needs_action: CreatorSyncNeedsAction;
+  attempt_count?: number;
+  next_retry_at?: string | null;
   cancellation_requested: boolean;
   created_at: string;
   started_at?: string | null;
   finished_at?: string | null;
   updated_at: string;
+}
+
+export interface CreatorSourceItemPart {
+  cid: string;
+  page: number;
+  title: string;
+  page_url: string;
+  id?: string;
+  url?: string;
+  duration_seconds?: number | null;
+}
+
+export interface CreatorSourceItem {
+  id: string;
+  source_id: string;
+  platform: CreatorSourcePlatform;
+  external_id: string;
+  source_url: string;
+  canonical_url?: string;
+  title: string;
+  cover_url: string;
+  description: string;
+  author_name: string;
+  published_at?: string | null;
+  duration_seconds?: number | null;
+  discovery_order?: number | null;
+  order_index?: number | null;
+  parts?: CreatorSourceItemPart[];
+  last_seen_run_id?: string | null;
+  is_available: boolean;
+  available?: boolean;
+  availability_status?: 'available' | 'unavailable' | 'removed' | string;
+  transcript_status?: Exclude<CreatorCatalogItemStatus, 'all'> | string;
+  status?: Exclude<CreatorCatalogItemStatus, 'all'> | 'unavailable' | string;
+  note_id?: string | null;
+  last_error?: string;
+  error_code?: string;
+  can_transcribe?: boolean;
+  discovered_at?: string | null;
+  first_seen_at?: string | null;
+  last_seen_at?: string | null;
+  removed_at?: string | null;
+  unavailable_at?: string | null;
+  updated_at: string;
+}
+
+export interface CreatorPaginatedResult<T> {
+  items: T[];
+  page: number;
+  per_page: number;
+  total: number;
+  total_pages: number;
+  next_cursor?: string | null;
 }
 
 export interface CreatorSource {
@@ -870,6 +983,15 @@ export interface CreatorSource {
   last_synced_at?: string | null;
   last_success_at?: string | null;
   last_error_code: string;
+  catalog_count?: number;
+  available_count?: number;
+  transcript_count?: number;
+  catalog_counts?: {
+    total: number;
+    untranscribed: number;
+    imported: number;
+    failed: number;
+  };
   created_at: string;
   updated_at: string;
   last_run?: CreatorSyncRun | null;
@@ -886,8 +1008,17 @@ export interface CreatorSourcePreview {
 export interface CreatorSourceCatalog {
   enabled: boolean;
   platforms: Record<CreatorSourcePlatform, boolean>;
+  catalog_operations?: {
+    recent_transcript?: Partial<Record<CreatorSourcePlatform, boolean>>;
+    selected_transcript?: Partial<Record<CreatorSourcePlatform, boolean>>;
+    catalog_all?: Partial<Record<CreatorSourcePlatform, boolean>>;
+  };
+  operations?: CreatorSyncOperation[];
+  catalog_platforms?: CreatorSourcePlatform[];
   limits: Array<20 | 50 | 100>;
   max_sources: number;
+  max_selected_items?: number;
+  catalog_page_size?: number;
 }
 
 export interface CreatorSourceListResult {
@@ -905,6 +1036,17 @@ export interface PlanAgentResult {
 export interface LibraryEvidence extends NoteEvidence {
   note_id: string;
   title: string;
+}
+
+export interface LibraryClaim {
+  claim_id: string;
+  kind: 'recurring' | 'common' | 'difference' | 'fact' | 'action' | 'uncertain' | string;
+  text: string;
+  explanation?: string;
+  supporting_note_ids: string[];
+  support_count: number;
+  research_source_count: number;
+  evidence: LibraryEvidence[];
 }
 
 export interface LibrarySourceContext {
@@ -928,7 +1070,7 @@ export interface LibrarySourceContext {
   sources: Array<{ note_id: string; title: string }>;
 }
 
-export type LibraryResearchMode = 'fast' | 'deep';
+export type LibraryResearchMode = 'auto' | 'fast' | 'deep';
 export type LibraryOutputStyle = 'answer' | 'summary' | 'comparison' | 'action_plan' | 'custom';
 export type AgentGroundingStatus = 'grounded' | 'partially_grounded' | 'ungrounded';
 
@@ -960,6 +1102,7 @@ export interface LibraryAgentStage {
 export interface LibraryAskResult {
   note_ids: string[];
   answer: string;
+  claims?: LibraryClaim[];
   grounded: boolean;
   grounding_status?: AgentGroundingStatus;
   citation_coverage?: AgentCitationCoverage;
@@ -1048,6 +1191,11 @@ export interface AgentSourceList {
   included_items?: AgentSource[];
   total: number;
   ready_count?: number;
+  channel_counts?: {
+    collect: number;
+    like: number;
+    post: number;
+  };
   scope?: Exclude<AgentSourceScope, 'selected'>;
   source_scope?: Exclude<AgentSourceScope, 'selected'>;
   scope_type?: Exclude<AgentSourceScope, 'selected'>;
@@ -1099,6 +1247,42 @@ export interface AgentMessage {
   };
 }
 
+export type AgentTurnStatus =
+  | 'queued'
+  | 'running'
+  | 'retry_wait'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export interface AgentTurn {
+  id: string;
+  thread_id: string;
+  client_turn_id: string;
+  status: AgentTurnStatus;
+  phase: string;
+  requested_mode: LibraryResearchMode;
+  resolved_mode?: 'fast' | 'deep' | null;
+  output_style: LibraryOutputStyle;
+  web_scope: ResearchScope;
+  attempt_count: number;
+  cancellation_requested: boolean;
+  source_total_count: number;
+  scanned_count: number;
+  mapped_count: number;
+  deep_read_count: number;
+  failed_source_count: number;
+  claim_count: number;
+  evidence_count: number;
+  last_event_seq: number;
+  error_code?: string | null;
+  error_message?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  updated_at: string;
+}
+
 export interface AgentThread {
   id: string;
   title: string;
@@ -1111,6 +1295,7 @@ export interface AgentThread {
   last_message?: string | null;
   messages?: AgentMessage[];
   sources?: AgentSource[];
+  active_turn?: AgentTurn | null;
   created_at: string;
   updated_at: string;
 }
@@ -1132,6 +1317,7 @@ export interface AgentThreadUpdate {
 
 export interface AgentMessageCreate {
   content: string;
+  client_turn_id?: string;
   research_mode?: LibraryResearchMode;
   output_style?: LibraryOutputStyle;
   custom_instruction?: string;
@@ -1142,6 +1328,7 @@ export interface AgentMessageResult {
   thread: AgentThread;
   user_message: AgentMessage;
   assistant_message: AgentMessage;
+  turn?: AgentTurn;
   terminal?: 'approval_required' | 'analysis_started' | 'done' | 'cancelled';
   video_analysis?: VideoAnalysisPrepareResult | VideoAnalysisRunResult | Record<string, unknown>;
 }
@@ -1168,6 +1355,14 @@ export interface AgentStreamProgress {
   context_source_count?: number;
   evidence_count?: number;
   web_source_count?: number;
+  turn_id?: string;
+  event_seq?: number;
+  resolved_mode?: 'fast' | 'deep';
+  source_total_count?: number;
+  scanned_count?: number;
+  mapped_count?: number;
+  deep_read_count?: number;
+  claim_count?: number;
 }
 
 export interface AgentAutomation {
@@ -1262,10 +1457,10 @@ export interface PaginatedResponse<T> {
 
 export const CARD_TYPE_CONFIG: Record<CardType, { emoji: string; label: string; accent: string }> = {
   recipe: { emoji: '🍳', label: '食谱', accent: '#f97316' },
-  insight: { emoji: '💡', label: '洞察', accent: '#303034' },
+  insight: { emoji: '💡', label: '洞察', accent: '#2563eb' },
   history: { emoji: '📚', label: '历史', accent: '#f59e0b' },
   product: { emoji: '🛒', label: '产品', accent: '#f43f5e' },
-  plan: { emoji: '📋', label: '计划', accent: '#55555c' },
+  plan: { emoji: '📋', label: '计划', accent: '#4f5bd5' },
   general: { emoji: '📝', label: '通用', accent: '#64748b' },
 };
 

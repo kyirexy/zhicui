@@ -8,6 +8,9 @@ import type {
   DesktopMediaSaveRequest,
   DesktopRuntimeInfo,
   DesktopUpdateResult,
+  DesktopZhicuiLoginResult,
+  DesktopZhicuiLoginStatus,
+  DesktopZhicuiSession,
   PlatformAccountCollectRequest,
   PlatformAccountRequest,
   PlatformAccountResult,
@@ -32,6 +35,16 @@ const bridge: ZhicuiDesktopBridge = {
     ipcRenderer.invoke(
       'desktop:cancel-douyin-login',
     ) as Promise<DesktopLoginResult>
+  ),
+  beginZhicuiWebLogin: () => (
+    ipcRenderer.invoke(
+      'desktop:begin-zhicui-login',
+    ) as Promise<DesktopZhicuiLoginResult>
+  ),
+  cancelZhicuiWebLogin: () => (
+    ipcRenderer.invoke(
+      'desktop:cancel-zhicui-login',
+    ) as Promise<DesktopZhicuiLoginResult>
   ),
   loginPlatformAccount: (request: PlatformAccountRequest) => (
     ipcRenderer.invoke(
@@ -121,6 +134,30 @@ const bridge: ZhicuiDesktopBridge = {
     };
     ipcRenderer.on('desktop:douyin-login-status', handler);
     return () => ipcRenderer.removeListener('desktop:douyin-login-status', handler);
+  },
+  onZhicuiLoginStatus: (
+    listener: (status: DesktopZhicuiLoginStatus) => void,
+  ) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      status: DesktopZhicuiLoginStatus,
+    ) => {
+      listener(status);
+    };
+    ipcRenderer.on('desktop:zhicui-login-status', handler);
+    return () => ipcRenderer.removeListener('desktop:zhicui-login-status', handler);
+  },
+  onZhicuiSession: (
+    listener: (session: DesktopZhicuiSession) => void,
+  ) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      session: DesktopZhicuiSession,
+    ) => {
+      listener(session);
+    };
+    ipcRenderer.on('desktop:zhicui-session', handler);
+    return () => ipcRenderer.removeListener('desktop:zhicui-session', handler);
   },
   onPlatformAccountStatus: (
     listener: (status: PlatformAccountStatus) => void,

@@ -7,7 +7,7 @@ interface ConclusionProps {
 
 export default function Conclusion({
   text,
-  accentColor = 'var(--accent-emerald)',
+  accentColor = 'var(--accent-brand)',
 }: ConclusionProps) {
   const lines = text.split('\n').filter((line) => line.trim());
 

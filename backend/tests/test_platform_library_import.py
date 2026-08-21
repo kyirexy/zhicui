@@ -118,6 +118,22 @@ class PlatformLibraryImportTests(unittest.TestCase):
         self.assertEqual(result["failed"], 1)
         self.assertNotIn("cookie", str(result).lower())
 
+    def test_import_preserves_account_source_mode(self) -> None:
+        with patch.object(
+            platform_library_service,
+            "_extract_bilibili",
+            return_value=self.bili_result(),
+        ):
+            result = platform_library_service.import_many(
+                self.db,
+                user_id=self.user_a.id,
+                values=["https://www.bilibili.com/video/BV1TEST"],
+                source_mode="collect",
+            )
+
+        self.assertEqual(result["success"], 1)
+        self.assertEqual(result["items"][0]["item"]["source_mode"], "collect")
+
     def test_xhs_video_keeps_caption_and_spoken_text(self) -> None:
         info = {
             "note_id": "xhs-video-1",

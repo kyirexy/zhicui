@@ -85,7 +85,7 @@ export default function AdminVideoAnalysisUsageView() {
     <div className="space-y-4">
       {error && <div className="rounded-xl border border-accent-rose/25 bg-accent-rose/7 px-4 py-3 text-sm text-accent-rose" role="alert">{error}</div>}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Metric label="解析次数" value={summary.runs.toLocaleString('zh-CN')} helper={`${summary.items} 个视频条目`} icon={ScanSearch} color="var(--accent-emerald)" />
+        <Metric label="解析次数" value={summary.runs.toLocaleString('zh-CN')} helper={`${summary.items} 个视频条目`} icon={ScanSearch} color="var(--accent-brand)" />
         <Metric label="缓存命中" value={summary.cache_hits.toLocaleString('zh-CN')} helper={`命中率 ${cacheRate}% · 0 萃点`} icon={DatabaseZap} color="var(--accent-indigo)" />
         <Metric label="萃点收入" value={formatPoints(summary.points_captured)} helper={`已退款 ${formatPoints(summary.points_refunded)}`} icon={Coins} color="var(--accent-amber)" />
         <Metric label="平台模型成本" value={formatMicros(summary.provider_cost_micros)} helper={`失败成本 ${formatMicros(summary.failure_cost_micros)}`} icon={BadgeDollarSign} color="var(--accent-rose)" />
@@ -108,7 +108,7 @@ export default function AdminVideoAnalysisUsageView() {
                   <td className="whitespace-nowrap p-3 text-xs text-foreground-muted">{formatDate(run.created_at)}</td>
                   <td className="p-3 font-medium text-foreground">{run.username || run.user_id?.slice(0, 8) || '-'}</td>
                   <td className="p-3 text-foreground-muted">{run.offering_name || run.offering_id || (run.use_byok ? '用户 BYOK' : '详细解析')}</td>
-                  <td className="p-3"><span className={run.status === 'succeeded' ? 'text-accent-emerald' : run.status === 'failed' ? 'text-accent-rose' : 'text-foreground-muted'}>{videoAnalysisStatusLabel(run.status)}</span></td>
+                  <td className="p-3"><span className={run.status === 'succeeded' ? 'text-accent-brand' : run.status === 'failed' ? 'text-accent-rose' : 'text-foreground-muted'}>{videoAnalysisStatusLabel(run.status)}</span></td>
                   <td className="p-3 text-right tabular-nums text-foreground-muted">{runItemCount(run)}</td>
                   <td className="p-3 text-right tabular-nums font-semibold text-foreground">{formatPoints(run.actual_points || 0)}</td>
                   <td className="p-3 text-right tabular-nums text-foreground-muted">{formatMicros(run.provider_cost_micros || 0)}</td>
@@ -129,7 +129,7 @@ export default function AdminVideoAnalysisUsageView() {
                 <span className="min-w-0"><strong className="block truncate font-medium text-foreground">{entry.reason || entry.kind}</strong><small className="mt-1 block text-foreground-muted">{entry.username || entry.user_id?.slice(0, 8) || '用户'} · {formatDate(entry.created_at)}</small></span>
                 {(() => {
                   const delta = Number(entry.available_delta ?? entry.reserved_delta ?? entry.points);
-                  return <b className={`shrink-0 tabular-nums ${delta < 0 ? 'text-accent-rose' : 'text-accent-emerald'}`}>{formatSignedPoints(delta)}</b>;
+                  return <b className={`shrink-0 tabular-nums ${delta < 0 ? 'text-accent-rose' : 'text-accent-brand'}`}>{formatSignedPoints(delta)}</b>;
                 })()}
               </div>
             ))}
@@ -156,6 +156,6 @@ function Metric({ label, value, helper, icon: Icon, color }: { label: string; va
 }
 
 function ResultRow({ icon: Icon, label, value, tone }: { icon: typeof CheckCircle2; label: string; value: number; tone: 'positive' | 'warning' | 'negative' | 'neutral' }) {
-  const color = tone === 'positive' ? 'text-accent-emerald' : tone === 'warning' ? 'text-accent-amber' : tone === 'negative' ? 'text-accent-rose' : 'text-foreground-muted';
+  const color = tone === 'positive' ? 'text-accent-brand' : tone === 'warning' ? 'text-accent-amber' : tone === 'negative' ? 'text-accent-rose' : 'text-foreground-muted';
   return <div className="flex items-center gap-2 rounded-lg bg-[var(--admin-surface-2)] px-3 py-2"><Icon size={15} className={color} /><dt className="flex-1 text-foreground-muted">{label}</dt><dd className="font-bold tabular-nums text-foreground">{value.toLocaleString('zh-CN')}</dd></div>;
 }

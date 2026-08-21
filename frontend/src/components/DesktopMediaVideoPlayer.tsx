@@ -71,6 +71,11 @@ export default function DesktopMediaVideoPlayer({
   const [choosingDownload, setChoosingDownload] = useState(false);
   const [mediaOrientation, setMediaOrientation] = useState<MediaOrientation>('unknown');
 
+  const applyMediaGeometry = useCallback((width: number, height: number) => {
+    if (!width || !height) return;
+    setMediaOrientation(getMediaOrientation(width, height));
+  }, []);
+
   const applyAsset = useCallback((nextAsset: DesktopMediaAsset) => {
     if (nextAsset.awemeId !== awemeId) return;
     setAsset(nextAsset);
@@ -256,7 +261,7 @@ export default function DesktopMediaVideoPlayer({
           onLoadedMetadata={(event) => {
             const { videoWidth, videoHeight } = event.currentTarget;
             videoDimensionsKnownRef.current = Boolean(videoWidth && videoHeight);
-            setMediaOrientation(getMediaOrientation(videoWidth, videoHeight));
+            applyMediaGeometry(videoWidth, videoHeight);
           }}
           onPlaying={() => {
             setStarted(true);
@@ -290,7 +295,7 @@ export default function DesktopMediaVideoPlayer({
               if (videoDimensionsKnownRef.current) return;
               const image = event.target as HTMLImageElement;
               if (image.tagName !== 'IMG') return;
-              setMediaOrientation(getMediaOrientation(image.naturalWidth, image.naturalHeight));
+              applyMediaGeometry(image.naturalWidth, image.naturalHeight);
             }}
           >
             <LibraryCoverImage

@@ -1,10 +1,10 @@
 .workspace {
   --library-control-height: 44px;
   --library-radius: 14px;
-  --library-mint: var(--accent-emerald);
+  --library-mint: var(--accent-brand);
   --library-action-radius: 9px;
-  --library-action-primary-bg: var(--accent-emerald);
-  --library-action-primary-hover: color-mix(in srgb, var(--accent-emerald) 88%, #242426);
+  --library-action-primary-bg: var(--accent-brand);
+  --library-action-primary-hover: color-mix(in srgb, var(--accent-brand) 88%, var(--foreground));
   --library-action-primary-fg: #fff;
   --library-action-surface: color-mix(in srgb, var(--card-bg) 94%, var(--foreground) 6%);
   --library-action-surface-hover: color-mix(in srgb, var(--card-bg) 88%, var(--foreground) 12%);
@@ -13,8 +13,8 @@
 }
 
 :global(html[data-theme='dark']) .workspace {
-  --library-action-primary-bg: var(--accent-emerald);
-  --library-action-primary-hover: color-mix(in srgb, var(--accent-emerald) 86%, #fff);
+  --library-action-primary-bg: var(--accent-brand);
+  --library-action-primary-hover: color-mix(in srgb, var(--accent-brand) 86%, #fff);
   --library-action-primary-fg: #fff;
 }
 
@@ -44,13 +44,13 @@
 }
 
 .workspace :global(.library-source-modes button:hover) {
-  background: color-mix(in srgb, var(--accent-emerald) 4%, var(--background-secondary));
+  background: color-mix(in srgb, var(--accent-brand) 4%, var(--background-secondary));
 }
 
 .workspace :global(.library-source-modes button.is-active) {
-  color: color-mix(in srgb, var(--accent-emerald) 78%, var(--foreground));
-  border-color: color-mix(in srgb, var(--accent-emerald) 42%, var(--card-border));
-  background: color-mix(in srgb, var(--accent-emerald) 7%, var(--card-bg));
+  color: color-mix(in srgb, var(--accent-brand) 78%, var(--foreground));
+  border-color: color-mix(in srgb, var(--accent-brand) 42%, var(--card-border));
+  background: color-mix(in srgb, var(--accent-brand) 7%, var(--card-bg));
 }
 
 .workspace :global(.library-source-modes strong) {
@@ -69,7 +69,7 @@
 .workspace :global(.library-source-main .library-pipeline-button) {
   min-width: 0;
   min-height: 48px;
-  border: 1px solid color-mix(in srgb, var(--accent-emerald) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-brand) 72%, transparent);
   border-radius: 10px;
   color: #fff;
   background: var(--library-mint);
@@ -168,12 +168,12 @@
   display: grid;
   margin-top: 10px;
   padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--accent-emerald) 22%, var(--card-border));
+  border: 1px solid color-mix(in srgb, var(--accent-brand) 22%, var(--card-border));
   border-radius: 10px;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  background: color-mix(in srgb, var(--accent-emerald) 4%, var(--background-secondary));
+  background: color-mix(in srgb, var(--accent-brand) 4%, var(--background-secondary));
 }
 
 .workspace :global(.library-sync-stage-icon) {
@@ -182,8 +182,8 @@
   height: 34px;
   border-radius: 9px;
   place-items: center;
-  color: var(--accent-emerald);
-  background: color-mix(in srgb, var(--accent-emerald) 11%, transparent);
+  color: var(--accent-brand);
+  background: color-mix(in srgb, var(--accent-brand) 11%, transparent);
 }
 
 .workspace :global(.library-sync-stage strong),
@@ -229,10 +229,10 @@
   min-height: 40px;
   margin-top: 10px;
   padding: 9px 12px;
-  border: 1px solid color-mix(in srgb, var(--accent-emerald) 18%, var(--card-border));
+  border: 1px solid var(--card-border);
   border-radius: 10px;
-  color: color-mix(in srgb, var(--accent-emerald) 76%, var(--foreground));
-  background: color-mix(in srgb, var(--accent-emerald) 4%, var(--card-bg));
+  color: var(--foreground-secondary);
+  background: var(--background-secondary);
   font-size: 0.76rem;
 }
 
@@ -309,15 +309,15 @@
 .workspace :global(.library-ai-launcher-mark) {
   width: 34px;
   height: 34px;
-  border: 1px solid color-mix(in srgb, var(--accent-emerald) 22%, var(--card-border));
+  border: 1px solid color-mix(in srgb, var(--accent-brand) 22%, var(--card-border));
   border-radius: 10px;
-  color: color-mix(in srgb, var(--accent-emerald) 82%, var(--foreground));
-  background: color-mix(in srgb, var(--accent-emerald) 6%, var(--card-bg));
+  color: color-mix(in srgb, var(--accent-brand) 82%, var(--foreground));
+  background: color-mix(in srgb, var(--accent-brand) 6%, var(--card-bg));
   box-shadow: none;
 }
 
 .workspace :global(.library-ai-launcher-action) {
-  color: color-mix(in srgb, var(--accent-emerald) 78%, var(--foreground));
+  color: color-mix(in srgb, var(--accent-brand) 78%, var(--foreground));
   background: transparent;
 }
 
@@ -351,7 +351,7 @@
 
 .workspace :global(.library-video-card.is-selected),
 .workspace :global(.library-video-card.is-extract-ready) {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-emerald) 8%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-brand) 8%, transparent);
 }
 
 .workspace :global(.library-video-cover) {
@@ -420,7 +420,7 @@
 
 .workspace :global(.library-copy-badge.is-ready) {
   color: #fff;
-  background: rgba(48, 48, 52, 0.92);
+  background: var(--accent-brand);
 }
 
 .workspace :global(.library-video-body) {
@@ -749,6 +749,7 @@
   max-width: none;
   max-height: calc(100dvh - 32px);
   margin: auto;
+  translate: 0 0;
   overflow: visible;
   border: 0;
   padding: 0;
@@ -792,13 +793,13 @@
 .sourceDialogHeader h2 {
   margin: 0;
   color: var(--foreground);
-  font-size: 1.0625rem;
+  font-size: 1.25rem;
   line-height: 1.35;
 }
 
 .sourceDialogHeader span {
   color: var(--foreground-muted);
-  font-size: 0.8125rem;
+  font-size: 0.9375rem;
 }
 
 .sourceDialogHeader button {
@@ -873,9 +874,9 @@
 }
 
 .sourceTabs button[data-active='true'] {
-  border-color: color-mix(in srgb, var(--accent-emerald) 24%, var(--card-border));
-  color: color-mix(in srgb, var(--accent-emerald) 82%, var(--foreground));
-  background: color-mix(in srgb, var(--accent-emerald) 8%, var(--card-bg));
+  border-color: color-mix(in srgb, var(--accent-brand) 24%, var(--card-border));
+  color: color-mix(in srgb, var(--accent-brand) 82%, var(--foreground));
+  background: color-mix(in srgb, var(--accent-brand) 8%, var(--card-bg));
 }
 
 .sourceTabs button small {
@@ -916,20 +917,23 @@
 
 .sourceControls:focus-visible {
   border-radius: 10px;
-  outline: 2px solid var(--accent-emerald);
+  outline: 2px solid var(--accent-brand);
   outline-offset: 3px;
 }
 
 .listHeader > div:first-child > span {
-  color: var(--accent-emerald);
+  color: var(--foreground-muted);
   font-size: 0.6875rem;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
 }
 
 .listHeader h1 {
   margin: 0;
   color: var(--foreground);
+  font-weight: 750;
+  letter-spacing: -0.01em;
   text-wrap: balance;
 }
 
@@ -1063,8 +1067,8 @@
   align-items: center;
   border-radius: 999px;
   padding: 2px 6px;
-  color: color-mix(in srgb, var(--accent-emerald) 78%, var(--foreground));
-  background: color-mix(in srgb, var(--accent-emerald) 10%, transparent);
+  color: color-mix(in srgb, var(--accent-brand) 78%, var(--foreground));
+  background: color-mix(in srgb, var(--accent-brand) 10%, transparent);
   font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
 }
@@ -1074,17 +1078,17 @@
   min-height: 50px;
   align-items: center;
   gap: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--accent-emerald) 18%, var(--card-border));
+  border-top: 1px solid color-mix(in srgb, var(--accent-brand) 18%, var(--card-border));
   padding: 10px 20px;
   color: var(--foreground-secondary);
-  background: color-mix(in srgb, var(--accent-emerald) 5%, var(--card-bg));
+  background: color-mix(in srgb, var(--accent-brand) 5%, var(--card-bg));
   font-size: 0.8125rem;
   line-height: 1.45;
 }
 
 .sourceNotice > svg {
   flex: 0 0 auto;
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
 }
 
 .sourceRail :global(.library-offline-note) {
@@ -1114,29 +1118,43 @@
 }
 
 .sourceRail :global(.library-source-modes) {
-  display: flex;
-  width: fit-content;
-  gap: 2px;
-  border: 1px solid var(--card-border);
-  border-radius: 9px;
-  padding: 3px;
-  background: var(--background-secondary);
-}
-
-.sourceRail :global(.library-source-modes button) {
-  min-width: 120px;
-  min-height: 40px;
-  justify-content: center;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+  gap: 8px;
   border: 0;
-  padding: 0 14px;
-  border-radius: 6px;
+  border-radius: 0;
+  padding: 0;
   background: transparent;
 }
 
+.sourceRail :global(.library-source-modes button) {
+  display: grid;
+  min-width: 0;
+  min-height: 68px;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  justify-content: start;
+  justify-items: start;
+  align-content: center;
+  border: 1px solid var(--card-border);
+  padding: 10px 12px;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--foreground) 2%, transparent);
+  color: var(--foreground-muted);
+  text-align: left;
+}
+
+.sourceRail :global(.library-source-modes button > svg) {
+  grid-row: 1 / span 2;
+  align-self: center;
+}
+
 .sourceRail :global(.library-source-modes button.is-active) {
-  border: 0;
-  color: color-mix(in srgb, var(--accent-emerald) 82%, var(--foreground));
-  background: var(--card-bg);
+  border-color: color-mix(in srgb, var(--accent-brand) 48%, transparent);
+  color: var(--accent-brand);
+  background: color-mix(in srgb, var(--accent-brand) 8%, transparent);
 }
 
 .sourceRail :global(.library-source-modes button > span) {
@@ -1145,12 +1163,24 @@
 
 .sourceRail :global(.library-source-modes strong) {
   overflow: hidden;
+  color: var(--foreground);
+  font-size: 0.9375rem;
+  font-weight: 740;
+  line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.sourceRail :global(.library-source-modes strong) {
-  font-size: 0.8125rem;
+.sourceRail :global(.library-source-modes small) {
+  display: block;
+  margin-top: 3px;
+  color: var(--foreground-muted);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.sourceRail :global(.library-source-modes button.is-active small) {
+  color: color-mix(in srgb, var(--accent-brand) 78%, var(--foreground-muted));
 }
 
 .sourceRail :global(.library-pipeline-action) {
@@ -1162,9 +1192,9 @@
   min-width: 164px;
   min-height: 40px;
   padding-inline: 16px;
-  border-color: var(--accent-emerald);
+  border-color: var(--accent-brand);
   color: #fff;
-  background: var(--accent-emerald);
+  background: var(--accent-brand);
 }
 
 .sourceRail :global(.library-pipeline-button) .syncCountBadge {
@@ -1470,7 +1500,7 @@
 }
 
 .platformTabs button[data-active='true']::after {
-  background: var(--accent-emerald);
+  background: var(--accent-brand);
 }
 
 .platformTabs button b {
@@ -1542,7 +1572,7 @@
 }
 
 .viewSwitch button[data-active='true'] {
-  color: color-mix(in srgb, var(--accent-emerald) 82%, var(--foreground));
+  color: color-mix(in srgb, var(--accent-brand) 82%, var(--foreground));
   background: var(--card-bg);
   box-shadow: inset 0 0 0 1px var(--library-action-border);
 }
@@ -1679,15 +1709,15 @@
 
 .unifiedList :global(.library-video-card:hover) {
   border-color: var(--card-border);
-  background: color-mix(in srgb, var(--accent-mint-soft) 55%, var(--card-bg));
+  background: color-mix(in srgb, var(--accent-sky-soft) 55%, var(--card-bg));
   box-shadow: none;
   transform: none;
 }
 
 .unifiedList :global(.library-video-card.is-selected) {
-  border-color: color-mix(in srgb, var(--accent-emerald) 56%, var(--card-border));
+  border-color: color-mix(in srgb, var(--accent-brand) 56%, var(--card-border));
   background: var(--card-bg);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-emerald) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-brand) 16%, transparent);
 }
 
 .unifiedList :global(.library-video-cover) {
@@ -1761,9 +1791,9 @@
 }
 
 .unifiedList :global(.library-video-card.is-selected .library-select-button .library-card-control-visual) {
-  border-color: var(--accent-emerald);
+  border-color: var(--accent-brand);
   color: #fff;
-  background: var(--accent-emerald);
+  background: var(--accent-brand);
 }
 
 .unifiedList :global(.library-select-button:disabled) {
@@ -1778,7 +1808,7 @@
 
 .unifiedList :global(.library-select-button:focus-visible .library-card-control-visual),
 .unifiedList :global(.library-play-button:focus-visible .library-card-control-visual) {
-  outline: 2px solid var(--accent-emerald);
+  outline: 2px solid var(--accent-brand);
   outline-offset: 2px;
 }
 
@@ -1863,11 +1893,11 @@
 }
 
 .unifiedList :global(.library-video-status.is-ready) {
-  color: color-mix(in srgb, var(--accent-emerald) 78%, var(--foreground));
+  color: color-mix(in srgb, var(--accent-brand) 78%, var(--foreground));
 }
 
 .unifiedList :global(.library-video-status.is-working) {
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
 }
 
 .unifiedList :global(.library-video-status.is-error) {
@@ -1930,14 +1960,14 @@
 }
 
 .unifiedList[data-layout='grid'] :global(.library-video-card:hover) {
-  border-color: color-mix(in srgb, var(--accent-emerald) 26%, var(--card-border));
+  border-color: color-mix(in srgb, var(--accent-brand) 26%, var(--card-border));
   background: var(--card-bg);
 }
 
 .unifiedList[data-layout='grid'] :global(.library-video-card.is-selected) {
-  border-color: color-mix(in srgb, var(--accent-emerald) 58%, var(--card-border));
+  border-color: color-mix(in srgb, var(--accent-brand) 58%, var(--card-border));
   background: var(--card-bg);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-emerald) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-brand) 18%, transparent);
 }
 
 .unifiedList[data-layout='grid'] :global(.library-video-cover) {
@@ -2056,7 +2086,7 @@
   flex: 0 0 36px;
   border-radius: var(--library-action-radius);
   place-items: center;
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
   background: var(--library-action-surface);
 }
 
@@ -2136,6 +2166,15 @@
   color: var(--accent-rose);
 }
 
+.batchActions .batchDirectRemoval {
+  display: inline-flex;
+  white-space: nowrap;
+}
+
+.batchActions .batchMore > div button.batchCompactRemoval {
+  display: none;
+}
+
 .batchActions .batchClose {
   width: 44px;
   border-color: transparent;
@@ -2186,7 +2225,7 @@
 .platformTabs button:focus-visible,
 .batchActions a:focus-visible,
 .batchActions button:focus-visible {
-  outline: 2px solid var(--accent-emerald);
+  outline: 2px solid var(--accent-brand);
   outline-offset: 2px;
 }
 
@@ -2234,6 +2273,7 @@
     height: auto;
     max-height: none;
     margin: 0;
+    translate: 0 0;
   }
 
   .sourceDialogCard {
@@ -2252,7 +2292,7 @@
   }
 
   .sourceDialogHeader span {
-    font-size: 0.75rem;
+    font-size: 0.875rem;
   }
 
   .sourceTabs {
@@ -2536,6 +2576,14 @@
 
   .batchActions .batchClose {
     width: auto;
+  }
+
+  .batchActions .batchDirectRemoval {
+    display: none;
+  }
+
+  .batchActions .batchMore > div button.batchCompactRemoval {
+    display: flex;
   }
 
   .batchMore > div {

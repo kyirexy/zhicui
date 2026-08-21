@@ -1,14 +1,19 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import {
   BookmarkSimple,
+  CheckCircle,
   CloudArrowDown,
   Heart,
   LinkSimple,
+  ShieldCheck,
+  SignIn,
   SpinnerGap,
   Trash,
   UserCirclePlus,
+  WarningCircle,
   X,
 } from '@phosphor-icons/react';
 import PlatformBrandIcon, { type PlatformBrand } from '@/components/PlatformBrandIcon';
@@ -17,13 +22,11 @@ import {
   collectDouyinLibrary,
   createCreatorSyncRun,
   deleteCreatorSource,
-  getCreatorSyncRun,
   getDouyinBatchExtraction,
   getDouyinCollectionJob,
   getDouyinLibraryStatus,
   importPlatformLibraryItems,
   listCreatorSources,
-  listCreatorSyncRuns,
   listDouyinLibraryItems,
   resolveCreatorSource,
   saveCreatorSource,
@@ -36,6 +39,13 @@ import type {
   CreatorSyncRun,
 } from '@/lib/types';
 import { useCreatorSync } from '@/lib/hooks/CreatorSyncContext';
+import { useAuth } from '@/lib/hooks/AuthContext';
+import {
+  supportsPlatformAccountSync,
+  type PlatformAccountSourceMode,
+  type PlatformAccountStage,
+  type PlatformAccountStatus,
+} from '@/lib/desktopRuntime';
 import styles from './AgentSourceSyncSheet.module.css';
 
 interface Props {
@@ -53,17 +63,27 @@ const platforms: Array<{ value: PlatformBrand; label: string }> = [
   { value: 'xiaohongshu', label: '小红书' },
 ];
 const syncCounts = [20, 50, 100] as const;
+const biliSyncCounts = [20, 50, 100] as const;
 const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 const terminalCreatorStages = new Set(['succeeded', 'partial', 'failed', 'cancelled']);
 
 function creatorProgress(run: CreatorSyncRun): string {
+  if (run.needs_action?.required) return run.needs_action.message || '需要你处理平台验证后重试';
+  if (run.status === 'retry_wait' || (run.status === 'queued' && run.next_retry_at)) {
+    return '连接暂时中断，后台将自动重试';
+  }
   if (run.status === 'queued') return '等待开始';
   if (run.status === 'resolving') return '正在确认博主';
-  if (run.status === 'discovering') return `正在检查最近 ${run.requested_limit} 条`;
-  if (run.status === 'importing') return `正在导入 ${run.checked_count}/${run.requested_limit}`;
+  if (run.status === 'discovering') {
+    return run.operation === 'catalog_all'
+      ? `正在发现全部公开作品 · 已发现 ${run.discovered_count || 0} 条`
+      : `正在检查最近 ${run.target_count || run.requested_limit} 条`;
+  }
+  if (run.status === 'importing') return `正在导入 ${run.processed_count || run.checked_count}/${run.target_count || run.requested_limit}`;
   if (run.status === 'transcribing') return `正在准备文稿 · 已新增 ${run.new_count}`;
   if (run.status === 'cancelled') return '同步已取消';
   if (run.status === 'failed') return run.error_message || '同步失败';
+  if (run.operation === 'catalog_all') return `清单已更新 · 共发现 ${run.total_count ?? run.discovered_count} 条`;
   return `完成 · 新增 ${run.new_count} · 已存在 ${run.reused_count} · 失败 ${run.failed_count}`;
 }
 
@@ -75,7 +95,13 @@ export default function AgentSourceSyncSheet({
   onBackgrounded,
   onCompleted,
 }: Props) {
-  const { trackRun: trackCreatorRun } = useCreatorSync();
+  const {
+    activeRuns: activeCreatorRuns,
+    recentRuns: recentCreatorRuns,
+    refreshActive: refreshCreatorRuns,
+    trackRun: trackCreatorRun,
+  } = useCreatorSync();
+  const { user } = useAuth();
   const [platform, setPlatform] = useState<PlatformBrand>('douyin');
   const [sourceKind, setSourceKind] = useState<'account' | 'creator'>('account');
   const [douyinMode, setDouyinMode] = useState<'collect' | 'like'>('like');
@@ -90,11 +116,77 @@ export default function AgentSourceSyncSheet({
   const [creatorRef, setCreatorRef] = useState('');
   const [creatorPreview, setCreatorPreview] = useState<CreatorSourcePreview | null>(null);
   const [activeCreatorRun, setActiveCreatorRun] = useState<CreatorSyncRun | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<CreatorSource | null>(null);
+  const [biliAccountMode, setBiliAccountMode] = useState<PlatformAccountSourceMode>('collect');
+  const [biliSyncCount, setBiliSyncCount] = useState<(typeof biliSyncCounts)[number]>(50);
+  const [biliConnected, setBiliConnected] = useState(false);
+  const [biliPending, setBiliPending] = useState(false);
+  const [biliStage, setBiliStage] = useState<PlatformAccountStage | 'idle'>('idle');
+  const [biliMessage, setBiliMessage] = useState('');
   const runningRef = useRef(false);
-  const creatorPollingRef = useRef('');
+  const removeDialogRef = useRef<HTMLDialogElement | null>(null);
+  const completedCreatorRef = useRef('');
+  const busy = pending || biliPending;
+
+  const biliAccountSyncAvailable = useMemo(() => {
+    return typeof window !== 'undefined' && supportsPlatformAccountSync(window.zhicuiDesktop);
+  }, []);
+  const profileKey = user?.id || 'guest';
+
+  const setBiliConnection = useCallback((connected: boolean) => {
+    setBiliConnected(connected);
+    if (typeof window !== 'undefined' && profileKey !== 'guest') {
+      try {
+        const key = `zhicui-platform-account-connections:${profileKey}`;
+        const stored = JSON.parse(window.localStorage.getItem(key) || '{}') as
+          Partial<Record<'bilibili' | 'xiaohongshu', boolean>>;
+        window.localStorage.setItem(key, JSON.stringify({ ...stored, bilibili: connected }));
+      } catch {
+        // localStorage 不可用时静默降级为会话内状态
+      }
+    }
+  }, [profileKey]);
+
+  useEffect(() => {
+    if (!open || !biliAccountSyncAvailable) return;
+    let disposed = false;
+    const restoreConnection = (connected: boolean) => {
+      setBiliConnected(connected);
+      setBiliStage(connected ? 'success' : 'idle');
+      setBiliMessage(connected ? '本机已连接 B站 账号' : '登录状态保存在本机，首次使用请先连接账号');
+    };
+    if (typeof window !== 'undefined' && profileKey !== 'guest') {
+      try {
+        const stored = JSON.parse(
+          window.localStorage.getItem(`zhicui-platform-account-connections:${profileKey}`) || '{}',
+        ) as Partial<Record<'bilibili' | 'xiaohongshu', boolean>>;
+        restoreConnection(Boolean(stored.bilibili));
+      } catch {
+        restoreConnection(false);
+      }
+    } else {
+      restoreConnection(false);
+    }
+    const unsubscribe = window.zhicuiDesktop?.onPlatformAccountStatus((status: PlatformAccountStatus) => {
+      if (status.platform !== 'bilibili' || disposed) return;
+      if (status.stage === 'success') {
+        setBiliConnection(true);
+      } else if (status.stage === 'disconnected') {
+        setBiliConnection(false);
+      } else {
+        setBiliConnected((current) => (status.stage === 'success' ? true : current));
+      }
+      setBiliStage(status.stage);
+      setBiliMessage(status.message);
+    });
+    return () => {
+      disposed = true;
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, [open, biliAccountSyncAvailable, profileKey, setBiliConnection]);
 
   const closeOrBackground = useCallback(() => {
-    if (pending) {
+    if (busy) {
       onBackgrounded(
         sourceKind === 'creator'
           ? '博主作品正在后台同步，完成后会提示'
@@ -102,7 +194,7 @@ export default function AgentSourceSyncSheet({
       );
     }
     onClose();
-  }, [onBackgrounded, onClose, pending, sourceKind]);
+  }, [onBackgrounded, onClose, busy, sourceKind]);
 
   const loadCreatorData = useCallback(async () => {
     const response = await listCreatorSources();
@@ -115,49 +207,50 @@ export default function AgentSourceSyncSheet({
     ));
   }, [platform]);
 
-  const pollCreatorRun = useCallback(async (runId: string) => {
-    if (!runId || creatorPollingRef.current === runId) return;
-    creatorPollingRef.current = runId;
-    try {
-      for (let attempt = 0; attempt < 900; attempt += 1) {
-        const response = await getCreatorSyncRun(runId);
-        if (response.success && response.data) {
-          const run = response.data;
-          setActiveCreatorRun(run);
-          setMessage(creatorProgress(run));
-          setFailed(run.status === 'failed');
-          if (terminalCreatorStages.has(run.status)) {
-            setPending(false);
-            await loadCreatorData();
-            await onSynced();
-            if (run.status !== 'cancelled') {
-              onCompleted(creatorProgress(run), run.status === 'succeeded' || run.status === 'partial');
-            }
-            return;
-          }
-        }
-        await delay(2_000);
-      }
-      onCompleted('博主同步仍在后台运行，稍后可重新打开查看', true);
-    } finally {
-      creatorPollingRef.current = '';
-    }
-  }, [loadCreatorData, onCompleted, onSynced]);
-
   useEffect(() => {
     if (!open) return;
     void loadCreatorData();
-    void listCreatorSyncRuns('active').then((response) => {
-      const run = response.data?.items[0];
-      if (!run) return;
+    void refreshCreatorRuns();
+  }, [loadCreatorData, open, refreshCreatorRuns]);
+
+  useEffect(() => {
+    if (!open) return;
+    const run = activeCreatorRuns[0];
+    if (run) {
       setSourceKind('creator');
       setPlatform(run.platform);
       setActiveCreatorRun(run);
       setPending(true);
       setMessage(creatorProgress(run));
-      void pollCreatorRun(run.id);
-    });
-  }, [loadCreatorData, open, pollCreatorRun]);
+      setFailed(false);
+      return;
+    }
+    if (!activeCreatorRun || terminalCreatorStages.has(activeCreatorRun.status)) return;
+    const completed = recentCreatorRuns.find((item) => item.id === activeCreatorRun.id);
+    if (!completed) return;
+    setActiveCreatorRun(completed);
+    setPending(false);
+    setMessage(creatorProgress(completed));
+    setFailed(completed.status === 'failed');
+    if (completedCreatorRef.current === completed.id) return;
+    completedCreatorRef.current = completed.id;
+    void loadCreatorData();
+    void onSynced();
+    if (completed.status !== 'cancelled') {
+      onCompleted(
+        creatorProgress(completed),
+        completed.status === 'succeeded' || completed.status === 'partial',
+      );
+    }
+  }, [
+    activeCreatorRun,
+    activeCreatorRuns,
+    loadCreatorData,
+    onCompleted,
+    onSynced,
+    open,
+    recentCreatorRuns,
+  ]);
 
   useEffect(() => {
     if (!open) return;
@@ -326,15 +419,24 @@ export default function AgentSourceSyncSheet({
     setMessage(response.data.reused ? '已恢复这个博主' : '博主已保存');
   };
 
-  const removeCreator = async (source: CreatorSource) => {
-    const confirmed = window.confirm(`移除“${source.display_name}”？已同步的视频资料会保留。`);
-    if (!confirmed) return;
-    const response = await deleteCreatorSource(source.id);
+  const requestRemoveCreator = (source: CreatorSource) => {
+    setRemoveTarget(source);
+    window.requestAnimationFrame(() => {
+      const dialog = removeDialogRef.current;
+      if (dialog && !dialog.open) dialog.showModal();
+    });
+  };
+
+  const removeCreator = async () => {
+    if (!removeTarget) return;
+    const response = await deleteCreatorSource(removeTarget.id);
     if (!response.success) {
       setFailed(true);
       setMessage(response.error || '移除博主失败');
       return;
     }
+    if (removeDialogRef.current?.open) removeDialogRef.current.close();
+    setRemoveTarget(null);
     await loadCreatorData();
     setMessage('已移除博主，现有资料保持不变');
   };
@@ -361,7 +463,6 @@ export default function AgentSourceSyncSheet({
     setMessage(creatorProgress(run));
     onBackgrounded(`正在同步该博主最近 ${syncCount} 条，完成后会提示`);
     onClose();
-    void pollCreatorRun(run.id);
   };
 
   const cancelCreatorRun = async () => {
@@ -374,6 +475,72 @@ export default function AgentSourceSyncSheet({
     }
     setActiveCreatorRun(response.data);
     setMessage(response.data.status === 'cancelled' ? '同步已取消' : '正在停止…');
+    await refreshCreatorRuns();
+  };
+
+  const loginBilibili = async () => {
+    const bridge = window.zhicuiDesktop;
+    if (!biliAccountSyncAvailable || !bridge || biliPending) return;
+    setBiliPending(true);
+    setBiliStage('starting');
+    setBiliMessage('正在打开 B站 官方登录页面，请在浏览器中完成登录…');
+    const response = await bridge.loginPlatformAccount({
+      platform: 'bilibili',
+      profileKey,
+    });
+    setBiliPending(false);
+    if (response.success) {
+      setBiliConnection(true);
+      setBiliStage('success');
+      setBiliMessage('B站连接成功，可以开始同步');
+      return;
+    }
+    setBiliStage(response.cancelled ? 'cancelled' : 'error');
+    setBiliMessage(response.cancelled ? '登录已取消' : response.error || '登录失败，请重试');
+  };
+
+  const syncBilibili = async () => {
+    const bridge = window.zhicuiDesktop;
+    if (!biliAccountSyncAvailable || !bridge || biliPending) return;
+    setBiliPending(true);
+    setBiliStage('collecting');
+    setBiliMessage(biliAccountMode === 'collect' ? '正在读取最近收藏…' : '正在读取最近喜欢…');
+    const collected = await bridge.collectPlatformAccount({
+      platform: 'bilibili',
+      profileKey,
+      mode: biliAccountMode,
+      limit: biliSyncCount,
+    });
+    if (!collected.success || !collected.urls?.length) {
+      setBiliPending(false);
+      setBiliConnected((current) => (collected.error?.includes('重新登录') ? false : current));
+      setBiliStage(collected.cancelled ? 'cancelled' : 'error');
+      setBiliMessage(collected.cancelled
+        ? '同步已取消'
+        : collected.error || '没有读取到可同步的作品');
+      return;
+    }
+    setBiliMessage(`已读取 ${collected.urls.length} 条，正在导入视频资料…`);
+    const imported = await importPlatformLibraryItems(collected.urls, biliAccountMode);
+    setBiliPending(false);
+    if (!imported.success || !imported.data) {
+      setBiliStage('error');
+      setBiliMessage(imported.error || '作品已读取，但导入资料失败');
+      return;
+    }
+    setBiliStage('success');
+    const completedMessage = imported.data.failed > 0
+      ? `已导入 ${imported.data.success} 条，${imported.data.failed} 条需要重试`
+      : `已同步 ${imported.data.success} 条${biliAccountMode === 'collect' ? '收藏' : '喜欢'}作品`;
+    setBiliMessage(completedMessage);
+    if (imported.data.success > 0) await onSynced();
+    onCompleted(completedMessage, imported.data.failed === 0);
+  };
+
+  const cancelBilibili = async () => {
+    const bridge = window.zhicuiDesktop;
+    if (!bridge || typeof bridge.cancelPlatformAccountAction !== 'function') return;
+    await bridge.cancelPlatformAccountAction();
   };
 
   const platformCreators = creators.filter((item) => item.platform === platform);
@@ -381,6 +548,23 @@ export default function AgentSourceSyncSheet({
   const creatorPlatformEnabled = creatorCatalog?.platforms[platform] !== false;
 
   return (
+    <>
+    <dialog
+      ref={removeDialogRef}
+      className={styles.confirmDialog}
+      aria-modal="true"
+      aria-labelledby="creator-remove-title"
+      onClose={() => setRemoveTarget(null)}
+    >
+      <div className={styles.confirmCard}>
+        <h2 id="creator-remove-title">移除这个博主？</h2>
+        <p>“{removeTarget?.display_name || '该博主'}”的来源和纯元数据清单会被停用，已经准备好的视频文稿会保留。</p>
+        <div>
+          <button type="button" onClick={() => { if (removeDialogRef.current?.open) removeDialogRef.current.close(); }}>取消</button>
+          <button type="button" data-danger="true" onClick={() => void removeCreator()}>确认移除</button>
+        </div>
+      </div>
+    </dialog>
     <div
       className={styles.overlay}
       data-open={open}
@@ -391,7 +575,7 @@ export default function AgentSourceSyncSheet({
       <section className={styles.panel} role="dialog" aria-modal={open || undefined} aria-label="同步视频">
         <header className={styles.header}>
           <h2>同步视频</h2>
-          <button type="button" className={styles.close} onClick={closeOrBackground} aria-label={pending ? '收起并后台运行' : '关闭同步视频'}><X size={18} /></button>
+          <button type="button" className={styles.close} onClick={closeOrBackground} aria-label={busy ? '收起并后台运行' : '关闭同步视频'}><X size={18} /></button>
         </header>
         <div className={styles.content}>
           <div className={styles.tabs} role="tablist" aria-label="选择视频平台">
@@ -403,12 +587,13 @@ export default function AgentSourceSyncSheet({
                 aria-selected={platform === item.value}
                 aria-label={item.label}
                 title={item.label}
-                disabled={pending}
+                disabled={busy}
                 onClick={() => {
                   setPlatform(item.value);
                   setCreatorPreview(null);
                   setCreatorRef('');
                   setMessage('');
+                  setBiliMessage('');
                   setFailed(false);
                 }}
               >
@@ -419,8 +604,8 @@ export default function AgentSourceSyncSheet({
 
           {creatorCatalog?.enabled && (
             <div className={styles.sourceSwitch} role="tablist" aria-label="选择同步来源">
-              <button type="button" role="tab" aria-selected={sourceKind === 'account'} disabled={pending} onClick={() => { setSourceKind('account'); setMessage(''); }}>我的账号</button>
-              <button type="button" role="tab" aria-selected={sourceKind === 'creator'} disabled={pending} onClick={() => { setSourceKind('creator'); setMessage(''); }}>指定博主</button>
+              <button type="button" role="tab" aria-selected={sourceKind === 'account'} disabled={busy} onClick={() => { setSourceKind('account'); setMessage(''); }}>我的账号</button>
+              <button type="button" role="tab" aria-selected={sourceKind === 'creator'} disabled={busy} onClick={() => { setSourceKind('creator'); setMessage(''); }}>指定博主</button>
             </div>
           )}
 
@@ -439,7 +624,7 @@ export default function AgentSourceSyncSheet({
                               {creator.avatar_url ? <img src={creator.avatar_url} alt="" /> : <UserCirclePlus size={22} />}
                               <span><strong>{creator.display_name}</strong><small>{creator.last_success_at ? '已同步' : '尚未同步'}</small></span>
                             </button>
-                            <button type="button" className={styles.removeCreator} disabled={pending} onClick={() => void removeCreator(creator)} aria-label={`移除博主 ${creator.display_name}`}><Trash size={15} /></button>
+                            <button type="button" className={styles.removeCreator} disabled={pending} onClick={() => requestRemoveCreator(creator)} aria-label={`移除博主 ${creator.display_name}`}><Trash size={15} /></button>
                           </div>
                         ))}
                       </div>
@@ -479,6 +664,9 @@ export default function AgentSourceSyncSheet({
                         </button>
                       </>
                     )}
+                    <Link className={styles.creatorPageLink} href="/library/creators" onClick={onClose}>
+                      查看全部作品与博主任务
+                    </Link>
                   </>
                 )}
               </>
@@ -503,6 +691,64 @@ export default function AgentSourceSyncSheet({
                   <span>{pending ? '正在同步' : `同步抖音${douyinMode === 'collect' ? '收藏' : '喜欢'}`}</span>
                 </button>
               </>
+            ) : platform === 'bilibili' && biliAccountSyncAvailable ? (
+              <>
+                <div className={styles.biliAccount}>
+                  <div className={styles.biliAccountStatus} data-connected={biliConnected} data-stage={biliStage}>
+                    {biliPending ? (
+                      <SpinnerGap size={18} weight="bold" aria-hidden="true" />
+                    ) : biliStage === 'error' ? (
+                      <WarningCircle size={18} weight="fill" aria-hidden="true" />
+                    ) : biliConnected ? (
+                      <CheckCircle size={18} weight="fill" aria-hidden="true" />
+                    ) : (
+                      <ShieldCheck size={18} aria-hidden="true" />
+                    )}
+                    <span>{biliPending ? '正在处理…' : biliConnected ? 'B站已连接' : 'B站未连接'}</span>
+                  </div>
+
+                  {biliConnected ? (
+                    <>
+                      <div className={styles.douyinModes} role="radiogroup" aria-label="选择B站同步来源">
+                        <button type="button" role="radio" aria-checked={biliAccountMode === 'collect'} disabled={biliPending} onClick={() => { setBiliAccountMode('collect'); setBiliMessage(''); }}><BookmarkSimple size={17} weight={biliAccountMode === 'collect' ? 'fill' : 'regular'} />收藏</button>
+                        <button type="button" role="radio" aria-checked={biliAccountMode === 'like'} disabled={biliPending} onClick={() => { setBiliAccountMode('like'); setBiliMessage(''); }}><Heart size={17} weight={biliAccountMode === 'like' ? 'fill' : 'regular'} />喜欢</button>
+                      </div>
+                      <div className={styles.countRow}>
+                        <span>同步最近</span>
+                        <div role="radiogroup" aria-label="同步视频数量">
+                          {biliSyncCounts.map((count) => (
+                            <button key={count} type="button" role="radio" aria-checked={biliSyncCount === count} disabled={biliPending} onClick={() => setBiliSyncCount(count)}>{count}</button>
+                          ))}
+                        </div>
+                        <span>条</span>
+                      </div>
+                    </>
+                  ) : (
+                    <p>登录你自己的 B站 账号，同步收藏和点赞过的视频；登录状态仅保存在本机。</p>
+                  )}
+
+                  {biliMessage && <p className={styles.status} role="status" aria-live="polite" data-error={biliStage === 'error'}>{biliMessage}</p>}
+
+                  {biliConnected ? (
+                    <button className={styles.primary} type="button" disabled={biliPending} data-loading={biliPending} onClick={syncBilibili}>
+                      {biliPending ? <SpinnerGap size={18} weight="bold" aria-hidden="true" /> : <CloudArrowDown size={19} weight="bold" aria-hidden="true" />}
+                      <span>{biliPending ? '正在同步' : `同步B站${biliAccountMode === 'collect' ? '收藏' : '喜欢'}`}</span>
+                    </button>
+                  ) : (
+                    <button className={styles.primary} type="button" disabled={biliPending} data-loading={biliPending} onClick={loginBilibili}>
+                      {biliPending ? <SpinnerGap size={18} weight="bold" aria-hidden="true" /> : <SignIn size={19} weight="bold" aria-hidden="true" />}
+                      <span>{biliPending ? '正在打开登录' : '连接 B站 账号'}</span>
+                    </button>
+                  )}
+
+                  {biliPending && (
+                    <div className={styles.biliActions}>
+                      <button type="button" className={styles.background} onClick={cancelBilibili}>取消</button>
+                      <button type="button" className={styles.background} onClick={closeOrBackground}>收起并后台运行</button>
+                    </div>
+                  )}
+                </div>
+              </>
             ) : (
               <>
                 <p>粘贴{platform === 'bilibili' ? 'B站' : '小红书'}视频链接，每行一个，最多 10 条。</p>
@@ -515,8 +761,15 @@ export default function AgentSourceSyncSheet({
             )}
             {message && <p className={styles.status} role="status" aria-live="polite" data-error={failed}>{message}</p>}
             {sourceKind === 'creator' && activeCreatorRun && !terminalCreatorStages.has(activeCreatorRun.status) ? (
-              <button type="button" className={styles.background} onClick={cancelCreatorRun}>取消同步</button>
-            ) : pending ? (
+              <button
+                type="button"
+                className={styles.background}
+                onClick={cancelCreatorRun}
+                disabled={activeCreatorRun.cancellation_requested}
+              >
+                {activeCreatorRun.cancellation_requested ? '正在停止…' : '取消同步'}
+              </button>
+            ) : busy && !biliPending ? (
               <button type="button" className={styles.background} onClick={closeOrBackground}>收起并后台运行</button>
             ) : sourceKind === 'account' ? (
               <button type="button" className={styles.manage} onClick={onManageSources}><Trash size={15} />管理已同步视频</button>
@@ -525,5 +778,6 @@ export default function AgentSourceSyncSheet({
         </div>
       </section>
     </div>
+    </>
   );
 }

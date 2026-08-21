@@ -1,14 +1,14 @@
 .workspace {
   --admin-canvas: #eef1ef;
   --admin-surface: #ffffff;
-  --admin-surface-2: #f5f5f3;
+  --admin-surface-2: #f6f7f8;
   --admin-line: #dce2de;
   --admin-line-strong: #cbd4ce;
   --admin-ink: #18201c;
   --admin-muted: #68736d;
   --admin-faint: #8b9690;
-  --admin-accent: var(--accent-emerald);
-  --admin-accent-soft: color-mix(in srgb, var(--accent-emerald) 11%, var(--admin-surface));
+  --admin-accent: var(--accent-brand);
+  --admin-accent-soft: color-mix(in srgb, var(--accent-brand) 11%, var(--admin-surface));
   --admin-sidebar: #191d1b;
   --admin-sidebar-soft: #242a27;
   --admin-sidebar-ink: #edf2ef;
@@ -27,8 +27,8 @@
   --admin-ink: #edf2ef;
   --admin-muted: #a5b0aa;
   --admin-faint: #7e8983;
-  --admin-accent: var(--accent-emerald);
-  --admin-accent-soft: color-mix(in srgb, var(--accent-emerald) 15%, var(--admin-surface));
+  --admin-accent: var(--accent-brand);
+  --admin-accent-soft: color-mix(in srgb, var(--accent-brand) 15%, var(--admin-surface));
   --admin-sidebar: #090c0b;
   --admin-sidebar-soft: #161b18;
 }

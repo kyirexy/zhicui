@@ -55,7 +55,7 @@ export default function AIModelsPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (isMobile) router.replace('/agent');
+    if (isMobile) router.replace('/harness');
   }, [isMobile, router]);
 
   const load = useCallback(async () => {

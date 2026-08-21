@@ -93,7 +93,7 @@ export default function FloatingHeader() {
               className="relative text-foreground-secondary hover:text-foreground transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] text-sm font-medium px-3.5 py-2 rounded-xl hover:bg-white/[0.06] min-h-[40px] hidden md:flex items-center group/nav"
             >
               知识库
-              <span className="absolute bottom-1 left-3.5 right-3.5 h-px bg-accent-emerald scale-x-0 group-hover/nav:scale-x-100 transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] origin-left" />
+              <span className="absolute bottom-1 left-3.5 right-3.5 h-px bg-accent-brand scale-x-0 group-hover/nav:scale-x-100 transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] origin-left" />
             </a>
             {/* Desktop-only: "计划" link. Mobile equivalent in TabBar. */}
             <a
@@ -101,7 +101,7 @@ export default function FloatingHeader() {
               className="relative text-foreground-secondary hover:text-foreground transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] text-sm font-medium px-3.5 py-2 rounded-xl hover:bg-white/[0.06] min-h-[40px] hidden md:flex items-center group/nav"
             >
               计划
-              <span className="absolute bottom-1 left-3.5 right-3.5 h-px bg-accent-emerald scale-x-0 group-hover/nav:scale-x-100 transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] origin-left" />
+              <span className="absolute bottom-1 left-3.5 right-3.5 h-px bg-accent-brand scale-x-0 group-hover/nav:scale-x-100 transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] origin-left" />
             </a>
             <div className="hidden md:block">
               <QRModal />

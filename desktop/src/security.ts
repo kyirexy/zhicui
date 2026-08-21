@@ -9,7 +9,7 @@ import type {
 } from './contract';
 
 const PRODUCTION_ORIGIN = 'https://luxai.cn';
-const DEVELOPMENT_ORIGIN = 'http://localhost:3003';
+const DEVELOPMENT_ORIGIN = 'http://localhost:3000';
 const DEVELOPMENT_ORIGINS = new Set([
   'http://localhost:3000',
   'http://127.0.0.1:3000',
@@ -131,8 +131,8 @@ export function validatePlatformAccountCollectRequest(
   if (!PLATFORM_ACCOUNT_MODES.has(mode)) {
     throw new Error('账号同步来源无效');
   }
-  if (!Number.isInteger(limit) || limit < 1 || limit > 10) {
-    throw new Error('账号同步数量必须在 1–10 条之间');
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error('账号同步数量必须在 1–100 条之间');
   }
   return { ...request, mode, limit };
 }

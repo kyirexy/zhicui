@@ -1,0 +1,131 @@
+/* 模型（用户端）设置卡 —— 可读字号优先，信息层级：选择态 > 模型名 > 计费方式 */
+.card { scroll-margin-top: 5rem; overflow: hidden; border: 1px solid var(--card-border); border-radius: 12px; background: var(--card-bg); color: var(--foreground); }
+.header { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: .9rem; padding: 1.25rem; border-bottom: 1px solid var(--card-border); }
+.identity { width: 42px; height: 42px; display: grid; place-items: center; border-radius: .75rem; background: var(--accent-brand-soft); color: var(--accent-brand); }
+.header h2 { margin: 0; font-size: 1rem; text-wrap: balance; }
+.header p { max-width: 58rem; margin: .4rem 0 0; color: var(--foreground-muted); font-size: .82rem; line-height: 1.6; text-wrap: pretty; }
+.group { display: grid; gap: .85rem; padding: 1.2rem 1.25rem; border-bottom: 1px solid var(--card-border); }
+.group:last-of-type { border-bottom: 0; }
+.groupHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.groupHeader h3 { margin: 0; display: inline-flex; align-items: center; gap: .4rem; font-size: .85rem; font-weight: 690; }
+.groupHeader h3 svg { color: var(--accent-brand); }
+.groupHeader p { margin: .3rem 0 0; color: var(--foreground-muted); font-size: .76rem; line-height: 1.55; text-wrap: pretty; }
+.balance { display: inline-flex; align-items: center; gap: .35rem; color: var(--foreground-muted); font-size: .76rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.balance svg { color: var(--accent-brand); }
+.balance strong { color: var(--foreground); font-weight: 690; }
+.list { display: grid; gap: .5rem; }
+
+/* 平台模型：整行可点，选中态用边框 + 色块 + 「当前」徽标三重提示 */
+.platformItem {
+  min-height: 60px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+  gap: .7rem;
+  padding: .6rem .8rem;
+  border: 1px solid var(--card-border);
+  border-radius: .75rem;
+  background: var(--card-bg);
+  color: var(--foreground);
+  text-align: left;
+  cursor: pointer;
+}
+.platformItem:hover { border-color: color-mix(in srgb, var(--accent-brand) 44%, var(--card-border)); }
+.platformItem:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 3px; }
+.platformItem:disabled { cursor: not-allowed; opacity: .82; }
+
+/* 自定义模型：结构相同，但行为按钮独立响应，整行不可点 */
+.customItem {
+  min-height: 60px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: .7rem;
+  padding: .6rem .8rem;
+  border: 1px solid var(--card-border);
+  border-radius: .75rem;
+  background: var(--card-bg);
+}
+
+.itemSelected { border-color: color-mix(in srgb, var(--accent-brand) 60%, var(--card-border)); background: color-mix(in srgb, var(--accent-brand) 6%, var(--card-bg)); }
+.itemIcon { width: 38px; height: 38px; display: grid; place-items: center; border-radius: .65rem; background: color-mix(in srgb, var(--foreground) 5%, transparent); color: var(--foreground-muted); }
+.itemSelected .itemIcon { background: var(--accent-brand-soft); color: var(--accent-brand); }
+
+.itemCopy { min-width: 0; display: grid; gap: .18rem; }
+.itemTitle { display: flex; align-items: baseline; flex-wrap: wrap; gap: .4rem; min-width: 0; }
+.itemTitle strong { font-size: .82rem; font-weight: 690; line-height: 1.3; overflow-wrap: anywhere; }
+.itemMeta { min-width: 0; color: var(--foreground-muted); font-size: .74rem; line-height: 1.45; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 徽标：统一语义色，不做装饰性满饱和度 */
+.badge, .badgeFree, .badgeCurrent, .badgeOff {
+  display: inline-flex; align-items: center; gap: .25rem;
+  padding: .08rem .45rem; border-radius: 999px;
+  font-size: .64rem; font-weight: 640; line-height: 1.35; white-space: nowrap;
+}
+.badge { color: var(--foreground-muted); background: color-mix(in srgb, var(--foreground) 7%, transparent); border: 1px solid var(--card-border); }
+.badgeFree { color: color-mix(in srgb, var(--accent-brand) 88%, var(--foreground)); background: var(--accent-brand-soft); }
+.badgeCurrent { color: #fff; background: var(--accent-brand); }
+.badgeOff { color: var(--foreground-muted); background: transparent; border: 1px dashed var(--card-border); }
+
+/* 操作按钮 */
+.itemActions { display: inline-flex; align-items: center; gap: .35rem; }
+.itemActions button { min-height: 34px; display: inline-flex; align-items: center; gap: .3rem; padding: .35rem .55rem; border: 1px solid var(--card-border); border-radius: .6rem; background: var(--card-bg); color: var(--foreground-muted); font-size: .74rem; }
+.itemActions button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent-brand) 38%, var(--card-border)); color: var(--accent-brand); }
+.itemActions button:disabled { opacity: .55; cursor: not-allowed; }
+.itemActions button:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 2px; }
+.itemActions .primaryGhost { color: var(--accent-brand); border-color: color-mix(in srgb, var(--accent-brand) 34%, var(--card-border)); }
+.itemActions .primaryGhost:hover:not(:disabled) { background: var(--accent-brand-soft); }
+.itemActions .currentOn { color: var(--accent-brand); border-color: transparent; background: var(--accent-brand-soft); }
+.itemActions button.danger:hover:not(:disabled) { border-color: #d34d4d; color: #d34d4d; }
+
+/* 接入按钮 */
+.addButton { min-height: 38px; display: inline-flex; align-items: center; gap: .35rem; padding: .5rem .8rem; border: 1px solid var(--accent-brand); border-radius: .6rem; background: var(--accent-brand-soft); color: var(--accent-brand); font-size: .78rem; font-weight: 650; white-space: nowrap; cursor: pointer; }
+.addButton:hover { background: color-mix(in srgb, var(--accent-brand) 15%, transparent); }
+.addButton:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 2px; }
+
+/* 空状态 */
+.empty { display: grid; justify-items: center; gap: .7rem; padding: 2rem 1rem; border: 1px dashed var(--card-border); border-radius: .75rem; color: var(--foreground-muted); text-align: center; }
+.empty svg { color: var(--accent-brand); }
+.empty p { margin: 0; max-width: 34rem; font-size: .8rem; line-height: 1.65; text-wrap: pretty; }
+
+/* 表单 */
+.form { display: grid; gap: .85rem; padding: 1rem; border: 1px solid color-mix(in srgb, var(--accent-brand) 26%, var(--card-border)); border-radius: .8rem; background: color-mix(in srgb, var(--accent-brand) 4%, var(--card-bg)); }
+.formTitle { display: inline-flex; align-items: center; gap: .45rem; font-size: .8rem; font-weight: 690; }
+.formIcon { display: inline-flex; color: var(--accent-brand); }
+.formFields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; }
+.field { min-width: 0; display: grid; gap: .35rem; align-content: start; }
+.field.wide { grid-column: 1 / -1; }
+.fieldLabel { color: var(--foreground-muted); font-size: .74rem; line-height: 1.4; }
+.field input { width: 100%; min-height: 42px; border: 1px solid var(--card-border); border-radius: .6rem; padding: .6rem .7rem; background: var(--background); color: var(--foreground); font-size: .8rem; }
+.field input:focus { outline: 2px solid var(--accent-brand); outline-offset: 2px; }
+.field input::placeholder { color: color-mix(in srgb, var(--foreground-muted) 88%, transparent); }
+.inputWrap { position: relative; display: block; }
+.inputWrap input { padding-right: 2.6rem; }
+.keyToggle { position: absolute; top: 50%; right: .45rem; transform: translateY(-50%); width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: .5rem; background: transparent; color: var(--foreground-muted); cursor: pointer; }
+.keyToggle:hover { color: var(--foreground); background: color-mix(in srgb, var(--foreground) 6%, transparent); }
+
+.formActions { display: flex; justify-content: flex-end; gap: .6rem; padding-top: .2rem; }
+.formActions button { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: .4rem; padding: .6rem .9rem; border: 1px solid var(--card-border); border-radius: .65rem; background: var(--card-bg); color: var(--foreground); font-size: .8rem; font-weight: 650; cursor: pointer; }
+.formActions button:hover { border-color: color-mix(in srgb, var(--foreground) 22%, var(--card-border)); }
+.formActions button.save { border-color: var(--accent-brand); background: var(--accent-brand); color: #fff; }
+.formActions button.save:hover:not(:disabled) { background: var(--accent-brand-strong); border-color: var(--accent-brand-strong); }
+.formActions button:disabled { opacity: .55; cursor: not-allowed; }
+
+/* 反馈区：固定一行，随内容出现，避免布局跳动 */
+.statusRow { display: grid; gap: .3rem; padding: 0 1.25rem 1.1rem; }
+.error, .success { margin: 0; font-size: .8rem; line-height: 1.5; }
+.error { color: #d34d4d; }
+.success { color: var(--accent-brand); }
+.loading { min-height: 220px; margin: 1.2rem; border-radius: .8rem; background: color-mix(in srgb, var(--foreground) 5%, transparent); }
+
+@media (max-width: 680px) {
+  .header { padding: 1rem; }
+  .group { gap: .75rem; padding: 1rem; }
+  .groupHeader { flex-direction: column; gap: .6rem; }
+  .balance { align-self: flex-start; }
+  .customItem { grid-template-columns: 34px minmax(0, 1fr); }
+  .itemActions { grid-column: 1 / -1; justify-content: flex-end; }
+  .formFields { grid-template-columns: minmax(0, 1fr); }
+  .field.wide { grid-column: auto; }
+  .itemMeta { white-space: normal; }
+}

@@ -9,7 +9,7 @@ fi
 APP_ROOT="/opt/douyin-downloader"
 DEPLOY_ROOT="/opt/zhicui/deploy/douyin-sidecar"
 UPSTREAM_URL="https://github.com/jiji262/douyin-downloader.git"
-UPSTREAM_COMMIT="c8ddfeb997c0fd8aec6480ed056bf84d265cc954"
+UPSTREAM_COMMIT="848bcaf7bf5c5bebbe028e8ccec76e30ad1bef6b"
 RELEASE_ID="${UPSTREAM_COMMIT:0:8}-$(date -u +%Y%m%d%H%M%S)"
 RELEASE_DIR="${APP_ROOT}/releases/${RELEASE_ID}"
 

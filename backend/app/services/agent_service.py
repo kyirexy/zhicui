@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
+from app.models.agent_runtime import AgentTurn
 from app.models.agent_thread import AgentMessage, AgentThread
 from app.models.note import Note
 from app.models.user import User
@@ -20,6 +21,7 @@ from app.services import (
     ai_juicer,
     video_source_ledger_service,
 )
+from app.services.agent_tool_runtime import AgentToolExecutor
 
 
 SOURCE_LIMIT = 100
@@ -168,6 +170,39 @@ def _source_meta(
 def _source_mode(note: Note, meta: dict[str, Any]) -> str:
     mode = str(meta.get("source_mode") or "").strip().lower()
     return mode if mode in {"collect", "like", "post"} else "unknown"
+
+
+def _channel_counts(
+    notes: list[Note],
+    ledger_map: dict[str, list[Any]],
+) -> dict[str, int]:
+    """Count the newest membership for each source channel per note.
+
+    A note may carry several ``VideoSourceLedger`` rows (one per mode).  The
+    newest observation within each channel is the honest "latest synced"
+    figure, mirroring the collector buckets show in the library view.
+    """
+    counts: dict[str, int] = {"collect": 0, "like": 0, "post": 0}
+    for note in notes:
+        rows = ledger_map.get(note.video_id, [])
+        if not rows:
+            meta = _legacy_source_meta(note)
+            mode = _source_mode(note, meta)
+            if mode in counts:
+                counts[mode] += 1
+            continue
+        for mode in counts:
+            matched = next(
+                (
+                    row
+                    for row in rows
+                    if row.source_mode == mode
+                ),
+                None,
+            )
+            if matched is not None:
+                counts[mode] += 1
+    return counts
 
 
 def source_mode(note: Note) -> str:
@@ -423,6 +458,7 @@ def list_sources(
     return {
         "scope": normalized_scope,
         "scope_label": SOURCE_SCOPES[normalized_scope],
+        "channel_counts": _channel_counts(notes, ledger_map),
         "items": [
             _source_dict(
                 note,
@@ -721,6 +757,17 @@ def serialize_thread(
         if last_message is not None and last_message.created_at
         else None
     )
+    active_turn = (
+        db.query(AgentTurn)
+        .filter(
+            AgentTurn.thread_id == thread.id,
+            AgentTurn.user_id == thread.user_id,
+            AgentTurn.status.in_(("queued", "running", "retry_wait")),
+        )
+        .order_by(AgentTurn.created_at.desc())
+        .first()
+    )
+    data["active_turn"] = active_turn.to_dict() if active_turn is not None else None
     if include_messages:
         messages = (
             db.query(AgentMessage)
@@ -1225,7 +1272,11 @@ def ask_thread(
     custom_instruction: str = "",
     web_scope: str = "auto",
     progress_callback: AgentProgressCallback | None = None,
+    answer_delta: Callable[[str], None] | None = None,
     allow_video_analysis: bool = True,
+    turn_id_override: str | None = None,
+    history_override: list[dict[str, str]] | None = None,
+    tool_executor: AgentToolExecutor | None = None,
 ) -> tuple[AgentMessage, AgentMessage]:
     clean_content = content.strip()
     if not clean_content:
@@ -1376,7 +1427,9 @@ def ask_thread(
             )
         )
     ]
-    turn_id = str(uuid.uuid4())
+    if history_override is not None:
+        history = history_override
+    turn_id = turn_id_override or str(uuid.uuid4())
     user_message = AgentMessage(
         thread_id=thread.id,
         user_id=thread.user_id,
@@ -1436,6 +1489,8 @@ def ask_thread(
             custom_instruction=custom_instruction,
             web_scope=web_scope,
             progress_callback=progress_callback,
+            answer_delta=answer_delta,
+            tool_executor=tool_executor,
         )
     except Exception:
         # The browser presents this turn as retryable. Do not leave behind a

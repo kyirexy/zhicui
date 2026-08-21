@@ -23,10 +23,13 @@ from app.core.database import SessionLocal, get_db
 from app.core.request_context import reset_request_context, set_request_context
 from app.models.user import User
 from app.models.note import Note
+from app.models.agent_thread import AgentMessage
 from app.services import (
     activity_service,
     auth_service,
     agent_service,
+    agent_runtime_service,
+    agent_runtime_worker,
     automation_runner,
     automation_service,
     chat_credit_billing_service,
@@ -36,6 +39,7 @@ from app.services import (
     error_log_service,
     library_hidden_service,
     user_ai_provider_service,
+    settings_service,
 )
 
 
@@ -87,6 +91,10 @@ def _sse_data(event: dict[str, Any]) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _answer_stream_chunks(content: str) -> list[str]:
     """Split finalized Markdown at natural boundaries for stable rendering."""
     chunks: list[str] = []
@@ -102,6 +110,71 @@ def _answer_stream_chunks(content: str) -> list[str]:
     if current:
         chunks.append("".join(current))
     return chunks
+
+
+def _durable_turn_stream(turn_id: str, user_id: str):
+    """Replay committed Agent V2 events, then follow until terminal."""
+    after_seq = 0
+    last_keepalive = time.monotonic()
+    yield _sse_data({"type": "turn", "turn_id": turn_id, "event_seq": 0})
+    while True:
+        with SessionLocal() as stream_db:
+            turn = agent_runtime_service.get_turn(stream_db, turn_id, user_id)
+            if turn is None:
+                yield _sse_data({"type": "error", "status": 404, "message": "Agent Turn 不存在"})
+                return
+            for event in agent_runtime_service.list_events(
+                stream_db, turn=turn, after_seq=after_seq
+            ):
+                after_seq = event.seq
+                payload = event.payload
+                yield _sse_data({
+                    "type": "progress",
+                    "turn_id": turn.id,
+                    "event_seq": event.seq,
+                    "stage": event.phase,
+                    "message": event.message,
+                    "resolved_mode": turn.resolved_mode,
+                    **payload,
+                })
+            if turn.status == "completed":
+                thread = agent_service.get_thread(stream_db, turn.thread_id, user_id)
+                user_message = stream_db.query(AgentMessage).filter(
+                    AgentMessage.id == turn.user_message_id
+                ).first()
+                assistant_message = stream_db.query(AgentMessage).filter(
+                    AgentMessage.id == turn.assistant_message_id
+                ).first()
+                if thread is None or user_message is None or assistant_message is None:
+                    yield _sse_data({"type": "error", "status": 500, "message": "回答已完成但会话投影暂不可用"})
+                    return
+                yield _sse_data({
+                    "type": "done",
+                    "turn_id": turn.id,
+                    "event_seq": after_seq,
+                    "data": {
+                        "turn": turn.to_dict(),
+                        "thread": agent_service.serialize_thread(
+                            stream_db, thread, include_messages=True, include_sources=True
+                        ),
+                        "user_message": user_message.to_dict(),
+                        "assistant_message": assistant_message.to_dict(),
+                    },
+                })
+                return
+            if turn.status in {"failed", "cancelled"}:
+                yield _sse_data({
+                    "type": "error",
+                    "turn_id": turn.id,
+                    "event_seq": after_seq,
+                    "status": 409 if turn.status == "cancelled" else 502,
+                    "message": turn.error_message or ("研究任务已取消" if turn.status == "cancelled" else "视频 Agent 暂时没有完成回答"),
+                })
+                return
+        if time.monotonic() - last_keepalive >= 15:
+            yield ": keep-alive\n\n"
+            last_keepalive = time.monotonic()
+        time.sleep(0.5)
 
 
 class ThreadCreateRequest(BaseModel):
@@ -120,12 +193,15 @@ class ThreadUpdateRequest(BaseModel):
 
 class ThreadMessageRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=600)
-    research_mode: Literal["fast", "deep"] = "fast"
+    client_turn_id: str = Field(
+        default_factory=lambda: str(uuid.uuid4()), min_length=8, max_length=80
+    )
+    research_mode: Literal["auto", "fast", "deep"] = "auto"
     output_style: Literal[
         "answer", "summary", "comparison", "action_plan", "custom"
     ] = "answer"
     custom_instruction: str = Field(default="", max_length=600)
-    web_scope: Literal["auto", "video_only"] = "auto"
+    web_scope: Literal["auto", "video_only"] = "video_only"
 
 
 class VideoAnalysisDecisionRequest(BaseModel):
@@ -492,6 +568,29 @@ def stream_agent_message(
     if thread is None:
         raise HTTPException(status_code=404, detail="Agent 任务不存在")
 
+    if settings_service.agent_v2_enabled_for_user(db, str(current_user.id)):
+        turn, created = agent_runtime_service.create_or_get_turn(
+            db,
+            thread=thread,
+            client_turn_id=body.client_turn_id,
+            question=body.content,
+            requested_mode=body.research_mode,
+            output_style=body.output_style,
+            custom_instruction=body.custom_instruction,
+            web_scope=body.web_scope,
+        )
+        if created or turn.status in {"queued", "retry_wait"}:
+            agent_runtime_worker.runner.submit(turn.id)
+        return StreamingResponse(
+            _durable_turn_stream(turn.id, str(current_user.id)),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     user_id = str(current_user.id)
     client_ip = request.client.host if request.client else None
     request_body = body.model_dump()
@@ -522,6 +621,25 @@ def stream_agent_message(
                     return
 
                 charge = _reserve_chat_charge(worker_db, user_id)
+                answer_started = {"value": False}
+
+                def emit_answer_delta(delta_text: str) -> None:
+                    if not delta_text:
+                        return
+                    if not answer_started["value"]:
+                        answer_started["value"] = True
+                        emit({
+                            "type": "assistant_start",
+                            "message": {
+                                "id": "",
+                                "thread_id": worker_thread.id,
+                                "role": "assistant",
+                                "content": "",
+                                "created_at": _now_iso(),
+                            },
+                        })
+                    emit({"type": "delta", "delta": delta_text})
+
                 user_message, assistant_message = agent_service.ask_thread(
                     worker_db,
                     thread=worker_thread,
@@ -534,17 +652,23 @@ def stream_agent_message(
                         "type": "progress",
                         **progress,
                     }),
+                    answer_delta=emit_answer_delta,
                 )
                 if charge is not None:
                     chat_credit_billing_service.capture(worker_db, charge)
                 charge = None
 
                 assistant_payload = assistant_message.to_dict()
-                emit({
-                    "type": "assistant_start",
-                    "message": {**assistant_payload, "content": ""},
-                })
+                if not answer_started["value"]:
+                    emit({
+                        "type": "assistant_start",
+                        "message": {**assistant_payload, "content": ""},
+                    })
                 for chunk in _answer_stream_chunks(assistant_message.content):
+                    if answer_started["value"]:
+                        # The validated answer was already streamed token by
+                        # token; do not reveal it a second time.
+                        break
                     emit({"type": "delta", "delta": chunk})
                     # A very short yield keeps markdown updates observable while
                     # adding less than a second for a typical response.
@@ -627,6 +751,82 @@ def stream_agent_message(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get("/threads/{thread_id}/turns/{turn_id}")
+def get_agent_turn(
+    thread_id: str,
+    turn_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    turn = agent_runtime_service.get_turn(db, turn_id, str(current_user.id))
+    if turn is None or turn.thread_id != thread_id:
+        raise HTTPException(status_code=404, detail="Agent Turn 不存在")
+    return _ok(turn.to_dict())
+
+
+@router.get("/threads/{thread_id}/turns/{turn_id}/events")
+def list_agent_turn_events(
+    thread_id: str,
+    turn_id: str,
+    after_seq: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    turn = agent_runtime_service.get_turn(db, turn_id, str(current_user.id))
+    if turn is None or turn.thread_id != thread_id:
+        raise HTTPException(status_code=404, detail="Agent Turn 不存在")
+    events = agent_runtime_service.list_events(db, turn=turn, after_seq=after_seq)
+    return _ok({"turn": turn.to_dict(), "items": [event.to_dict() for event in events]})
+
+
+@router.get("/threads/{thread_id}/turns/{turn_id}/stream")
+def resume_agent_turn_stream(
+    thread_id: str,
+    turn_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    turn = agent_runtime_service.get_turn(db, turn_id, str(current_user.id))
+    if turn is None or turn.thread_id != thread_id:
+        raise HTTPException(status_code=404, detail="Agent Turn 不存在")
+    return StreamingResponse(
+        _durable_turn_stream(turn.id, str(current_user.id)),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/threads/{thread_id}/turns/{turn_id}/cancel")
+def cancel_agent_turn(
+    thread_id: str,
+    turn_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    turn = agent_runtime_service.get_turn(db, turn_id, str(current_user.id))
+    if turn is None or turn.thread_id != thread_id:
+        raise HTTPException(status_code=404, detail="Agent Turn 不存在")
+    return _ok(agent_runtime_service.request_cancel(db, turn).to_dict())
+
+
+@router.post("/threads/{thread_id}/turns/{turn_id}/retry")
+def retry_agent_turn(
+    thread_id: str,
+    turn_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    turn = agent_runtime_service.get_turn(db, turn_id, str(current_user.id))
+    if turn is None or turn.thread_id != thread_id:
+        raise HTTPException(status_code=404, detail="Agent Turn 不存在")
+    try:
+        retried = agent_runtime_service.retry_turn(db, turn)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    agent_runtime_worker.runner.submit(retried.id)
+    return _ok(retried.to_dict())
 
 
 @router.post("/threads/{thread_id}/video-analysis/{run_id}/decision")

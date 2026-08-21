@@ -148,7 +148,7 @@ export default function HomePage() {
                 <img
                   src="/logo.png"
                   alt="知萃"
-                  className="h-10 w-10 object-contain drop-shadow-[0_0_24px_rgba(48,48,52,0.22)] md:h-12 md:w-12"
+                  className="h-10 w-10 object-contain drop-shadow-[0_0_24px_rgba(16, 24, 40,0.22)] md:h-12 md:w-12"
                 />
                 <div>
                   <p className="text-base font-bold tracking-tight text-foreground">知萃</p>
@@ -156,14 +156,14 @@ export default function HomePage() {
                 </div>
               </div>
 
-              <p className="mb-4 inline-flex items-center gap-2 text-xs font-semibold tracking-[0.12em] text-accent-emerald">
-                <span className="h-1.5 w-1.5 rounded-full bg-accent-emerald shadow-[0_0_0_5px_rgba(48,48,52,0.1)]" />
+              <p className="mb-4 inline-flex items-center gap-2 text-xs font-semibold tracking-[0.12em] text-accent-brand">
+                <span className="h-1.5 w-1.5 rounded-full bg-accent-brand shadow-[0_0_0_5px_rgba(16, 24, 40,0.1)]" />
                 把收藏夹重新用起来
               </p>
 
               <h1 className="max-w-[12ch] text-balance text-[2.35rem] font-extrabold leading-[1.06] tracking-[-0.045em] text-foreground sm:text-5xl lg:text-[4.15rem]">
                 视频收藏了很多，
-                <span className="block text-accent-emerald">真正用上的很少。</span>
+                <span className="block text-accent-brand">真正用上的很少。</span>
               </h1>
 
               <p className="mt-6 max-w-[36rem] text-pretty text-base leading-8 text-foreground-secondary md:text-lg">
@@ -172,8 +172,8 @@ export default function HomePage() {
 
               <div className="mt-8 flex flex-col gap-3 sm:flex-row">
                 <Link
-                  href="/library"
-                  className="btn-primary btn-magnetic inline-flex min-h-[52px] items-center justify-center gap-2 px-6 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-emerald/60 focus-visible:ring-offset-2"
+                  href="/library?sync=1"
+                  className="btn-primary btn-magnetic inline-flex min-h-[52px] items-center justify-center gap-2 px-6 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-brand/60 focus-visible:ring-offset-2"
                 >
                   打开我的视频库
                   <ArrowRight size={17} />
@@ -183,7 +183,7 @@ export default function HomePage() {
                   onClick={openSingleExtractor}
                   aria-expanded={singleExtractorOpen}
                   aria-controls="single-link-extractor"
-                  className="inline-flex min-h-[52px] items-center justify-center gap-2 rounded-xl border border-card-border bg-card-bg/65 px-6 text-sm font-semibold text-foreground-secondary transition-[transform,background-color,border-color,color] duration-200 hover:-translate-y-0.5 hover:border-accent-emerald/30 hover:bg-accent-emerald/[0.05] hover:text-foreground active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-emerald/50"
+                  className="inline-flex min-h-[52px] items-center justify-center gap-2 rounded-xl border border-card-border bg-card-bg/65 px-6 text-sm font-semibold text-foreground-secondary transition-[transform,background-color,border-color,color] duration-200 hover:-translate-y-0.5 hover:border-accent-brand/30 hover:bg-accent-brand/[0.05] hover:text-foreground active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-brand/50"
                 >
                   提取单条链接
                 </button>
@@ -196,7 +196,7 @@ export default function HomePage() {
                   '不在数据库保存视频',
                 ].map((item) => (
                   <li key={item} className="flex items-start gap-2">
-                    <span className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md bg-accent-emerald/10 text-accent-emerald">
+                    <span className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md bg-accent-brand/10 text-accent-brand">
                       <Check size={12} strokeWidth={2.5} />
                     </span>
                     <span className="leading-5">{item}</span>
@@ -214,7 +214,7 @@ export default function HomePage() {
           >
             <div className="mb-7 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
               <div>
-                <p className="text-xs font-semibold tracking-[0.12em] text-accent-emerald">
+                <p className="text-xs font-semibold tracking-[0.12em] text-accent-brand">
                   从视频到行动
                 </p>
                 <h2
@@ -226,7 +226,7 @@ export default function HomePage() {
               </div>
               <Link
                 href="/library"
-                className="group inline-flex min-h-[44px] items-center gap-2 self-start rounded-lg py-2 text-sm font-semibold text-foreground-secondary transition-colors hover:text-accent-emerald focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-emerald/50 md:self-auto"
+                className="group inline-flex min-h-[44px] items-center gap-2 self-start rounded-lg py-2 text-sm font-semibold text-foreground-secondary transition-colors hover:text-accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-brand/50 md:self-auto"
               >
                 进入视频库体验
                 <ArrowRight
@@ -242,7 +242,7 @@ export default function HomePage() {
                   key={step.number}
                   className={`relative min-w-0 ${index > 0 ? 'lg:before:absolute lg:before:-left-3.5 lg:before:top-1 lg:before:h-16 lg:before:w-px lg:before:bg-card-border' : ''}`}
                 >
-                  <span className="font-mono text-[11px] font-semibold tabular-nums tracking-[0.15em] text-accent-emerald/80">
+                  <span className="font-mono text-[11px] font-semibold tabular-nums tracking-[0.15em] text-accent-brand/80">
                     {step.number}
                   </span>
                   <h3 className="mt-2 text-base font-semibold text-foreground">{step.title}</h3>
@@ -259,12 +259,12 @@ export default function HomePage() {
       {showSingleExtractor && (
         <section
           id="single-link-extractor"
-          className="relative z-10 mt-8 w-full max-w-3xl animate-fade-up-blur rounded-[1.75rem] border border-card-border bg-card-bg/75 p-4 shadow-[0_24px_70px_-45px_rgba(48,48,52,0.42)] backdrop-blur-2xl md:mt-12 md:p-7"
+          className="relative z-10 mt-8 w-full max-w-3xl animate-fade-up-blur rounded-[1.75rem] border border-card-border bg-card-bg/75 p-4 shadow-[0_24px_70px_-45px_rgba(16, 24, 40,0.42)] backdrop-blur-2xl md:mt-12 md:p-7"
           aria-labelledby="single-link-title"
         >
           <div className="mb-5 flex items-start justify-between gap-4 px-1">
             <div>
-              <p className="text-xs font-semibold tracking-[0.12em] text-accent-emerald">
+              <p className="text-xs font-semibold tracking-[0.12em] text-accent-brand">
                 单条内容
               </p>
               <h2 id="single-link-title" className="mt-1.5 text-xl font-bold text-foreground">
@@ -278,7 +278,7 @@ export default function HomePage() {
               <button
                 type="button"
                 onClick={() => setSingleExtractorOpen(false)}
-                className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl text-foreground-muted transition-colors hover:bg-white/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-emerald/50"
+                className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl text-foreground-muted transition-colors hover:bg-white/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-brand/50"
                 aria-label="收起单条链接提取"
               >
                 <X size={18} />
@@ -347,7 +347,7 @@ export default function HomePage() {
                 <button
                   type="button"
                   onClick={dismissError}
-                  className="min-h-[40px] rounded-lg py-2 text-xs font-medium text-accent-emerald hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-emerald/50"
+                  className="min-h-[40px] rounded-lg py-2 text-xs font-medium text-accent-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-brand/50"
                 >
                   关闭
                 </button>
@@ -364,18 +364,18 @@ function LibraryWorkbenchPreview() {
   return (
     <div className="relative animate-fade-up-blur [animation-delay:100ms]">
       <div
-        className="absolute -inset-5 -z-10 rounded-[3rem] bg-accent-emerald/[0.06] blur-3xl"
+        className="absolute -inset-5 -z-10 rounded-[3rem] bg-accent-brand/[0.06] blur-3xl"
         aria-hidden="true"
       />
-      <div className="relative overflow-hidden rounded-[1.75rem] border border-card-border bg-card-bg/90 p-3 shadow-[0_34px_100px_-52px_rgba(48,48,52,0.55)] backdrop-blur-2xl md:rounded-[2rem] md:p-4">
+      <div className="relative overflow-hidden rounded-[1.75rem] border border-card-border bg-card-bg/90 p-3 shadow-[0_34px_100px_-52px_rgba(16, 24, 40,0.55)] backdrop-blur-2xl md:rounded-[2rem] md:p-4">
         <div
-          className="absolute inset-0 bg-[radial-gradient(circle_at_82%_0%,rgba(48,48,52,0.13),transparent_38%)]"
+          className="absolute inset-0 bg-[radial-gradient(circle_at_82%_0%,rgba(16, 24, 40,0.13),transparent_38%)]"
           aria-hidden="true"
         />
 
         <header className="relative flex items-center justify-between gap-3 border-b border-card-border/70 px-1 pb-3 md:px-2">
           <div className="flex items-center gap-2.5">
-            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-accent-emerald/10 text-accent-emerald">
+            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-accent-brand/10 text-accent-brand">
               <Library size={16} />
             </span>
             <div>
@@ -383,8 +383,8 @@ function LibraryWorkbenchPreview() {
               <p className="text-[10px] text-foreground-muted">最近收藏 · 示例预览</p>
             </div>
           </div>
-          <span className="inline-flex items-center gap-1.5 rounded-lg border border-accent-emerald/15 bg-accent-emerald/[0.07] px-2.5 py-1.5 text-[10px] font-semibold text-accent-emerald">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent-emerald" />
+          <span className="inline-flex items-center gap-1.5 rounded-lg border border-accent-brand/15 bg-accent-brand/[0.07] px-2.5 py-1.5 text-[10px] font-semibold text-accent-brand">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent-brand" />
             文案逐条就绪
           </span>
         </header>
@@ -393,7 +393,7 @@ function LibraryWorkbenchPreview() {
           <section className="min-w-0 rounded-[1.2rem] border border-card-border/70 bg-background/35 p-2.5">
             <div className="mb-2.5 flex items-center justify-between gap-2">
               <div className="flex rounded-lg bg-card-bg p-0.5 text-[9px] font-medium text-foreground-muted">
-                <span className="rounded-md bg-accent-emerald/10 px-2 py-1 text-accent-emerald">
+                <span className="rounded-md bg-accent-brand/10 px-2 py-1 text-accent-brand">
                   收藏
                 </span>
                 <span className="px-2 py-1">喜欢</span>
@@ -408,11 +408,11 @@ function LibraryWorkbenchPreview() {
                   key={video.title}
                   className="group min-w-0 overflow-hidden rounded-xl border border-card-border/70 bg-card-bg transition-transform duration-200 hover:-translate-y-0.5"
                 >
-                  <div className="relative aspect-[16/10] overflow-hidden bg-[radial-gradient(circle_at_78%_16%,rgba(48,48,52,0.28),transparent_42%),linear-gradient(145deg,rgba(48,48,52,0.09),rgba(15,23,42,0.12))]">
+                  <div className="relative aspect-[16/10] overflow-hidden bg-[radial-gradient(circle_at_78%_16%,rgba(16, 24, 40,0.28),transparent_42%),linear-gradient(145deg,rgba(16, 24, 40,0.09),rgba(15,23,42,0.12))]">
                     <span className="absolute left-2 top-2 font-mono text-[9px] font-semibold text-foreground-muted/55">
                       0{index + 1}
                     </span>
-                    <span className="absolute inset-0 flex items-center justify-center text-accent-emerald/80">
+                    <span className="absolute inset-0 flex items-center justify-center text-accent-brand/80">
                       <Play size={17} fill="currentColor" />
                     </span>
                     <span className="absolute bottom-1.5 right-1.5 rounded bg-background/70 px-1.5 py-0.5 font-mono text-[8px] text-foreground-secondary backdrop-blur-sm">
@@ -426,7 +426,7 @@ function LibraryWorkbenchPreview() {
                     <p
                       className={`mt-1.5 text-[8px] font-medium ${
                         video.label === '完整文案'
-                          ? 'text-accent-emerald'
+                          ? 'text-accent-brand'
                           : 'text-foreground-muted'
                       }`}
                     >
@@ -440,7 +440,7 @@ function LibraryWorkbenchPreview() {
 
           <section className="flex min-h-[21rem] min-w-0 flex-col rounded-[1.2rem] border border-card-border/70 bg-background/35 p-3">
             <div className="flex items-center gap-2 border-b border-card-border/60 pb-2.5">
-              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent-emerald/10 text-accent-emerald">
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent-brand/10 text-accent-brand">
                 <Sparkles size={14} />
               </span>
               <div>
@@ -450,14 +450,14 @@ function LibraryWorkbenchPreview() {
             </div>
 
             <div className="flex-1 space-y-2.5 py-3">
-              <div className="ml-auto max-w-[88%] rounded-xl rounded-br-sm bg-accent-emerald px-3 py-2 text-[10px] font-medium leading-4 text-white">
+              <div className="ml-auto max-w-[88%] rounded-xl rounded-br-sm bg-accent-brand px-3 py-2 text-[10px] font-medium leading-4 text-white">
                 这些视频里，我今天最适合先做什么？
               </div>
               <div className="max-w-[94%] rounded-xl rounded-bl-sm border border-card-border bg-card-bg px-3 py-2.5">
                 <p className="text-[10px] leading-4 text-foreground-secondary">
                   先做 10 分钟肩颈训练。两条文案都把“短时、低门槛”列为最容易开始的第一步。
                 </p>
-                <p className="mt-2 flex items-center gap-1 text-[8px] font-medium text-accent-emerald">
+                <p className="mt-2 flex items-center gap-1 text-[8px] font-medium text-accent-brand">
                   <FileText size={9} />
                   已核对 2 条完整文案
                 </p>
@@ -466,11 +466,11 @@ function LibraryWorkbenchPreview() {
 
             <div className="grid grid-cols-2 gap-2">
               <div className="flex items-center gap-2 rounded-xl border border-card-border bg-card-bg px-2.5 py-2">
-                <span className="text-accent-emerald"><ListChecks size={13} /></span>
+                <span className="text-accent-brand"><ListChecks size={13} /></span>
                 <span className="text-[9px] font-semibold text-foreground-secondary">生成计划</span>
               </div>
               <div className="flex items-center gap-2 rounded-xl border border-card-border bg-card-bg px-2.5 py-2">
-                <span className="text-accent-emerald"><MessageSquare size={13} /></span>
+                <span className="text-accent-brand"><MessageSquare size={13} /></span>
                 <span className="text-[9px] font-semibold text-foreground-secondary">保存知识卡</span>
               </div>
             </div>

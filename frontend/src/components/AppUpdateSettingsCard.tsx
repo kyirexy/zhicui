@@ -168,7 +168,7 @@ export default function AppUpdateSettingsCard() {
   return (
     <section className="rounded-xl border border-card-border bg-card-bg p-4 sm:p-5">
       <header className="flex items-start gap-3">
-        <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-accent-emerald">
+        <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-accent-brand">
           {mode === 'desktop' ? (
             <MonitorDown size={21} aria-hidden="true" />
           ) : mode === 'android' ? (
@@ -192,7 +192,7 @@ export default function AppUpdateSettingsCard() {
           </p>
         </div>
         {(androidCurrent || desktopCurrent) && (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-accent-emerald">
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-accent-brand">
             <CheckCircle2 size={14} aria-hidden="true" />
             已是最新版
           </span>
@@ -207,7 +207,7 @@ export default function AppUpdateSettingsCard() {
           </div>
           <div className="mt-3 h-2 overflow-hidden rounded-full bg-foreground/10">
             <span
-              className="block h-full rounded-full bg-accent-emerald transition-[width] duration-150"
+              className="block h-full rounded-full bg-accent-brand transition-[width] duration-150"
               style={{ width: `${progress}%` }}
             />
           </div>
@@ -244,7 +244,7 @@ export default function AppUpdateSettingsCard() {
             <ul className="mt-2 space-y-2 text-sm leading-6 text-foreground-secondary">
               {androidResult.release.release_notes.map((note) => (
                 <li key={note} className="flex gap-2 text-pretty">
-                  <span className="mt-2.5 size-1.5 shrink-0 rounded-full bg-accent-emerald" aria-hidden="true" />
+                  <span className="mt-2.5 size-1.5 shrink-0 rounded-full bg-accent-brand" aria-hidden="true" />
                   <span>{note}</span>
                 </li>
               ))}
@@ -274,7 +274,7 @@ export default function AppUpdateSettingsCard() {
         {androidHasUpdate && (
           <button
             type="button"
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent-emerald px-4 text-sm font-semibold text-white transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent-brand px-4 text-sm font-semibold text-white transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
             disabled={opening}
             onClick={openAndroidDownload}
           >
@@ -285,7 +285,7 @@ export default function AppUpdateSettingsCard() {
         {desktopDownloaded && (
           <button
             type="button"
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent-emerald px-4 text-sm font-semibold text-white transition-opacity duration-150 hover:opacity-90 disabled:opacity-60"
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent-brand px-4 text-sm font-semibold text-white transition-opacity duration-150 hover:opacity-90 disabled:opacity-60"
             disabled={opening}
             onClick={installDesktopUpdate}
           >
@@ -297,7 +297,7 @@ export default function AppUpdateSettingsCard() {
           <>
             <a
               href="/download/zhicui.apk"
-              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent-emerald px-4 text-sm font-semibold text-white transition-opacity duration-150 hover:opacity-90"
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent-brand px-4 text-sm font-semibold text-white transition-opacity duration-150 hover:opacity-90"
             >
               <Smartphone size={17} aria-hidden="true" />
               下载 Android App

@@ -20,8 +20,8 @@
   flex: 0 0 auto;
   border-radius: 10px;
   place-items: center;
-  color: var(--accent-emerald);
-  background: var(--accent-mint-soft);
+  color: var(--accent-brand);
+  background: var(--accent-sky-soft);
 }
 
 .header h2 {
@@ -107,15 +107,15 @@
   height: 20px;
   border-radius: 50%;
   place-items: center;
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
   background: var(--card-bg);
   box-shadow: 0 1px 3px color-mix(in srgb, var(--foreground) 18%, transparent);
   transition: transform 180ms ease-out;
 }
 
-.switchActive::before { background: var(--accent-emerald); }
+.switchActive::before { background: var(--accent-brand); }
 .switchActive > span { transform: translateX(18px); }
-.switch:focus-visible { outline: 2px solid var(--accent-emerald); outline-offset: 2px; border-radius: 13px; }
+.switch:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 2px; border-radius: 13px; }
 
 .details {
   border-top: 1px solid var(--card-border);
@@ -136,7 +136,7 @@
 }
 
 .details summary::-webkit-details-marker { display: none; }
-.details summary:focus-visible { outline: 2px solid var(--accent-emerald); outline-offset: -2px; }
+.details summary:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: -2px; }
 .details summary svg { color: var(--foreground-muted); transition: transform 160ms ease-out; }
 .details[open] summary svg { transform: rotate(90deg); }
 
@@ -160,7 +160,7 @@
 .details p svg {
   margin-top: 2px;
   flex: 0 0 auto;
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
 }
 
 .footer {
@@ -189,8 +189,8 @@
 
 .footer button:hover { color: var(--foreground); }
 .footer button:active { transform: translateY(1px); }
-.footer button:focus-visible { outline: 2px solid var(--accent-emerald); outline-offset: 2px; border-radius: 6px; }
-.footer span { color: var(--accent-emerald); font-size: 0.7rem; text-align: right; }
+.footer button:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 2px; border-radius: 6px; }
+.footer span { color: var(--accent-brand); font-size: 0.7rem; text-align: right; }
 
 @media (max-width: 640px) {
   .header { padding-right: 16px; padding-left: 16px; }

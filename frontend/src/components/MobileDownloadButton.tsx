@@ -19,8 +19,8 @@ export default function MobileDownloadButton() {
         <button type="button" onClick={() => setOpen(true)} className="bezel-outer btn-magnetic group w-full cursor-pointer">
           <div className="bezel-inner">
             <div className="flex items-center gap-4 p-4 md:p-5">
-              <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl border border-accent-emerald/15 bg-accent-emerald/10 transition-all duration-500 group-hover:bg-accent-emerald/20">
-                <Download size={22} className="text-accent-emerald" />
+              <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl border border-accent-brand/15 bg-accent-brand/10 transition-all duration-500 group-hover:bg-accent-brand/20">
+                <Download size={22} className="text-accent-brand" />
               </div>
               <div className="flex-1 text-left">
                 <p className="text-sm font-semibold text-foreground">下载手机客户端</p>

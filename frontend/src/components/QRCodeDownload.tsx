@@ -55,7 +55,7 @@ export default function QRCodeDownload() {
               直接下载 APK
             </a>
             <div className="flex items-center gap-2 text-xs text-foreground-muted">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent-emerald" />
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent-brand" />
               <span>也可添加到主屏幕使用网页版</span>
             </div>
           </div>
@@ -91,7 +91,7 @@ export default function QRCodeDownload() {
         <p className="text-xs text-foreground-muted text-center mb-3">或添加网页到主屏幕</p>
         <div className="space-y-3">
           <div className="flex items-start gap-3">
-            <span className="flex-shrink-0 w-6 h-6 rounded-full bg-accent-emerald/15 text-accent-emerald text-xs font-bold flex items-center justify-center">
+            <span className="flex-shrink-0 w-6 h-6 rounded-full bg-accent-brand/15 text-accent-brand text-xs font-bold flex items-center justify-center">
               i
             </span>
             <div>
@@ -102,7 +102,7 @@ export default function QRCodeDownload() {
             </div>
           </div>
           <div className="flex items-start gap-3">
-            <span className="flex-shrink-0 w-6 h-6 rounded-full bg-accent-emerald/15 text-accent-emerald text-xs font-bold flex items-center justify-center">
+            <span className="flex-shrink-0 w-6 h-6 rounded-full bg-accent-brand/15 text-accent-brand text-xs font-bold flex items-center justify-center">
               A
             </span>
             <div>

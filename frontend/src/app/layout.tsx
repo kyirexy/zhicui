@@ -92,7 +92,7 @@ export default function RootLayout({
                 try {
                   if (window.zhicuiDesktop) {
                     document.documentElement.setAttribute('data-desktop-app', 'pending');
-                    if (window.location.pathname.indexOf('/agent') === 0) {
+                    if (window.location.pathname.indexOf('/harness') === 0) {
                       document.documentElement.setAttribute('data-desktop-workspace', 'agent');
                     }
                     var storedSettings = {};

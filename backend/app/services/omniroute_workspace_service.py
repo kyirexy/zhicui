@@ -8,8 +8,10 @@ from threading import Lock
 from typing import Any
 
 import requests
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.services import settings_service
 from app.services.user_ai_provider_service import omniroute_config
 
 
@@ -258,8 +260,8 @@ def _empty_workspace(*, configured: bool, message: str) -> dict[str, Any]:
     }
 
 
-def _build_workspace() -> dict[str, Any]:
-    config = omniroute_config()
+def _build_workspace(db: Session | None = None) -> dict[str, Any]:
+    config = omniroute_config(db)
     if not config["available"]:
         return _empty_workspace(
             configured=False,
@@ -321,20 +323,27 @@ def _build_workspace() -> dict[str, Any]:
     }
 
 
-def get_workspace(*, refresh: bool = False, include_admin: bool = False) -> dict[str, Any]:
+def get_workspace(
+    *,
+    refresh: bool = False,
+    include_admin: bool = False,
+    db: Session | None = None,
+) -> dict[str, Any]:
     global _CACHE
     now = time.monotonic()
     with _CACHE_LOCK:
         if not refresh and _CACHE and _CACHE[0] > now:
             workspace = dict(_CACHE[1])
         else:
-            workspace = _build_workspace()
+            workspace = _build_workspace(db)
             _CACHE = (now + _CACHE_TTL_SECONDS, workspace)
 
     result = dict(workspace)
-    result["advanced_console_url"] = (
-        settings.OMNIROUTE_DASHBOARD_URL.strip() if include_admin else ""
-    )
+    if include_admin:
+        dashboard = (db and settings_service.get_setting(db, "omniroute_dashboard_url")) or settings.OMNIROUTE_DASHBOARD_URL
+        result["advanced_console_url"] = (dashboard or "").strip()
+    else:
+        result["advanced_console_url"] = ""
     return result
 
 

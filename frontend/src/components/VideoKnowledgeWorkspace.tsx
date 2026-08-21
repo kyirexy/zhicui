@@ -17,12 +17,20 @@ import {
   Sparkles,
   WandSparkles,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from 'react';
 import ContentChat from '@/components/ContentChat';
 import DesktopMediaVideoPlayer from '@/components/DesktopMediaVideoPlayer';
 import DouyinGalleryViewer from '@/components/DouyinGalleryViewer';
 import TranscriptViewer from '@/components/TranscriptViewer';
 import VideoAnalysisEntry from '@/components/VideoAnalysisEntry';
+import VideoAgentWorkspace from '@/components/agent/VideoAgentWorkspace';
 import {
   extractDouyinLibraryItem,
   getDouyinLibraryItem,
@@ -43,7 +51,7 @@ const TABS: Array<{
   label: string;
   Icon: typeof Sparkles;
 }> = [
-  { id: 'assistant', label: '视频研伴', Icon: Sparkles },
+  { id: 'assistant', label: '知萃 Harness', Icon: Sparkles },
   { id: 'transcript', label: '完整文案', Icon: FileText },
   { id: 'summary', label: '摘要笔记', Icon: BookOpenText },
   { id: 'plan', label: '行动计划', Icon: CalendarCheck2 },
@@ -89,6 +97,13 @@ export default function VideoKnowledgeWorkspace() {
   const searchParams = useSearchParams();
   const awemeId = searchParams.get('id')?.trim() || '';
   const importedNoteId = searchParams.get('note')?.trim() || '';
+  const routeAgentThreadId = searchParams.get('agent_thread')?.trim() || null;
+  const agentThreadUrlRef = useRef<string | null>(routeAgentThreadId);
+  const workspaceRequestRef = useRef(0);
+  const [agentBootstrap, setAgentBootstrap] = useState({
+    threadId: routeAgentThreadId,
+    revision: 0,
+  });
   const [workspace, setWorkspace] = useState<DouyinVideoWorkspace | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('assistant');
   const [loading, setLoading] = useState(true);
@@ -99,8 +114,40 @@ export default function VideoKnowledgeWorkspace() {
   const [agentNotice, setAgentNotice] = useState('');
   const [error, setError] = useState('');
 
+  const syncAgentThreadToUrl = useCallback((threadId: string | null) => {
+    agentThreadUrlRef.current = threadId;
+    setAgentBootstrap((current) => (
+      current.threadId === threadId
+        ? current
+        : { ...current, threadId }
+    ));
+    const url = new URL(window.location.href);
+    if (threadId) {
+      url.searchParams.set('agent_thread', threadId);
+    } else {
+      url.searchParams.delete('agent_thread');
+    }
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `${url.pathname}${url.search}${url.hash}`,
+    );
+  }, []);
+
+  useEffect(() => {
+    if (routeAgentThreadId === agentThreadUrlRef.current) return;
+    agentThreadUrlRef.current = routeAgentThreadId;
+    setAgentBootstrap((current) => ({
+      threadId: routeAgentThreadId,
+      revision: current.revision + 1,
+    }));
+  }, [routeAgentThreadId]);
+
   const loadWorkspace = useCallback(async () => {
+    const requestId = workspaceRequestRef.current + 1;
+    workspaceRequestRef.current = requestId;
     if (!awemeId && !importedNoteId) {
+      if (requestId !== workspaceRequestRef.current) return;
       setError('缺少视频标识，请从视频资料重新打开。');
       setLoading(false);
       return;
@@ -110,6 +157,7 @@ export default function VideoKnowledgeWorkspace() {
     const response = importedNoteId
       ? await getPlatformLibraryItem(importedNoteId)
       : await getDouyinLibraryItem(awemeId);
+    if (requestId !== workspaceRequestRef.current) return;
     if (response.success && response.data) {
       setWorkspace(response.data);
     } else {
@@ -122,6 +170,9 @@ export default function VideoKnowledgeWorkspace() {
   useEffect(() => {
     window.scrollTo(0, 0);
     void loadWorkspace();
+    return () => {
+      workspaceRequestRef.current += 1;
+    };
   }, [loadWorkspace]);
 
   const note = workspace?.note ?? null;
@@ -257,6 +308,29 @@ export default function VideoKnowledgeWorkspace() {
         ? { title: '暂无行动计划', copy: isGallery ? '先从图片问答开始。' : '生成文案后可创建计划。', Icon: CalendarCheck2 }
         : { title: '暂无可用内容', copy: '请返回视频资料重新同步。', Icon: Sparkles };
   const EmptyTabIcon = emptyTab.Icon;
+  const emptyTabContent = (
+    <section className="video-knowledge-empty-tab">
+      <span aria-hidden><EmptyTabIcon size={22} /></span>
+      <h2>{emptyTab.title}</h2>
+      <p>{emptyTab.copy}</p>
+      {isGallery ? (
+        <button type="button" onClick={() => setActiveTab('assistant')}>
+          返回图片问答
+        </button>
+      ) : item.can_extract ? (
+        <button
+          type="button"
+          onClick={() => void prepareVideo()}
+          disabled={extracting}
+        >
+          {extracting && <LoaderCircle size={16} className="animate-spin" />}
+          {extracting ? '正在提取' : '提取完整文案'}
+        </button>
+      ) : (
+        <Link href="/library">返回视频资料</Link>
+      )}
+    </section>
+  );
 
   return (
     <div className="video-knowledge-page">
@@ -306,6 +380,13 @@ export default function VideoKnowledgeWorkspace() {
             </span>
           </div>
 
+          <div className="video-knowledge-title">
+            <h1>{item.title}</h1>
+            {item.caption && item.caption !== item.title && (
+              <p>{item.caption}</p>
+            )}
+          </div>
+
           <div className="video-knowledge-meta">
             <div className="video-knowledge-author">
               <span>{item.author_name?.slice(0, 1) || '视'}</span>
@@ -318,13 +399,6 @@ export default function VideoKnowledgeWorkspace() {
               查看原视频
               <ArrowUpRight size={14} />
             </a>
-          </div>
-
-          <div className="video-knowledge-title">
-            <h1>{item.title}</h1>
-            {item.caption && item.caption !== item.title && (
-              <p>{item.caption}</p>
-            )}
           </div>
 
           <div className="video-knowledge-facts">
@@ -395,63 +469,43 @@ export default function VideoKnowledgeWorkspace() {
           </nav>
 
           <div className="video-knowledge-tabpanel" role="tabpanel">
-            {activeTab === 'assistant' && !hasTranscript && visualSource ? (
-              <section className="video-knowledge-assistant">
-                <header>
-                  <div>
-                    <strong>
-                      {visualSource.mediaType === 'gallery'
-                        ? `${visualSource.imageCount} 张图片`
-                        : '视频画面'}
-                    </strong>
-                  </div>
-                </header>
-                <ContentChat
-                  title={item.title}
-                  visualSource={visualSource}
+            {note && hasTranscript && (
+              <section
+                className="video-knowledge-assistant video-knowledge-assistant--harness"
+                hidden={activeTab !== 'assistant'}
+                inert={activeTab !== 'assistant'}
+                aria-label={`基于《${note.title}》的知萃 Harness 对话`}
+              >
+                <VideoAgentWorkspace
+                  key={`${note.id}:${agentBootstrap.revision}`}
+                  active={activeTab === 'assistant'}
+                  embedded
+                  initialSourceIds={[note.id]}
+                  initialThreadId={agentBootstrap.threadId}
+                  onThreadChange={syncAgentThreadToUrl}
                 />
               </section>
-            ) : !note ? (
-              <section className="video-knowledge-empty-tab">
-                <span aria-hidden><EmptyTabIcon size={22} /></span>
-                <h2>{emptyTab.title}</h2>
-                <p>{emptyTab.copy}</p>
-                {isGallery ? (
-                  <button type="button" onClick={() => setActiveTab('assistant')}>
-                    返回图片问答
-                  </button>
-                ) : item.can_extract ? (
-                  <button
-                    type="button"
-                    onClick={() => void prepareVideo()}
-                    disabled={extracting}
-                  >
-                    {extracting && <LoaderCircle size={16} className="animate-spin" />}
-                    {extracting ? '正在提取' : '提取完整文案'}
-                  </button>
-                ) : (
-                  <Link href="/library">返回视频资料</Link>
-                )}
-              </section>
-            ) : activeTab === 'assistant' ? (
-              <section className="video-knowledge-assistant">
-                <header>
-                  <div>
-                    <small>当前依据</small>
-                    <strong>这 1 条视频的完整文案</strong>
-                  </div>
-                  <Link href={`/agent?source_ids=${encodeURIComponent(note.id)}`}>
-                    加入多视频任务
-                    <ArrowUpRight size={14} />
-                  </Link>
-                </header>
-                <ContentChat
-                  noteId={note.id}
-                  cardType={note.card_type}
-                  title={note.title}
-                />
-              </section>
-            ) : activeTab === 'transcript' ? (
+            )}
+
+            {activeTab === 'assistant' ? (
+              note && hasTranscript ? null : visualSource ? (
+                <section className="video-knowledge-assistant">
+                  <header>
+                    <div>
+                      <strong>
+                        {visualSource.mediaType === 'gallery'
+                          ? `${visualSource.imageCount} 张图片`
+                          : '视频画面'}
+                      </strong>
+                    </div>
+                  </header>
+                  <ContentChat
+                    title={item.title}
+                    visualSource={visualSource}
+                  />
+                </section>
+              ) : emptyTabContent
+            ) : !note ? emptyTabContent : activeTab === 'transcript' ? (
               <section className="video-knowledge-transcript">
                 <header>
                   <h2>完整文案</h2>

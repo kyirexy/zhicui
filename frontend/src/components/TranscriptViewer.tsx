@@ -97,7 +97,7 @@ export default function TranscriptViewer({ transcript, className = '' }: Transcr
             className="transcript-search w-full pl-9 pr-3 py-2 text-sm rounded-lg
                        bg-card-bg border border-card-border text-foreground
                        placeholder:text-foreground-muted
-                       focus:outline-none focus:border-accent-emerald focus:ring-1 focus:ring-accent-emerald/30
+                       focus:outline-none focus:border-accent-brand focus:ring-1 focus:ring-accent-brand/30
                        transition-colors duration-200"
           />
         </div>
@@ -112,11 +112,11 @@ export default function TranscriptViewer({ transcript, className = '' }: Transcr
             className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium
                        rounded-lg border border-card-border bg-card-bg
                        text-foreground-secondary hover:text-foreground
-                       hover:border-accent-emerald/30 transition-colors duration-200"
+                       hover:border-accent-brand/30 transition-colors duration-200"
           >
             {copied ? (
               <>
-                <Check size={13} className="text-accent-emerald" />
+                <Check size={13} className="text-accent-brand" />
                 已复制
               </>
             ) : (

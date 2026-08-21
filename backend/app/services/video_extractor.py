@@ -97,13 +97,23 @@ _BILI_HEADERS = [
 def _clean_bilibili_url(url: str) -> str:
     """Extract a clean B站 BV/av URL from any user input."""
     import re as _re
+    from urllib.parse import parse_qs as _parse_qs, urlsplit as _urlsplit
+
+    # Multi-P creator catalog items use the stable ``?p=N`` selector. Keep
+    # only that bounded integer and discard every tracking/signature query.
+    try:
+        raw_page = (_parse_qs(_urlsplit(url).query).get('p') or [''])[0]
+        page = int(raw_page) if str(raw_page).isdigit() else 0
+    except (TypeError, ValueError):
+        page = 0
+    page_query = f'?p={page}' if 1 <= page <= 10_000 else ''
     # b23.tv short link → pass through raw
     if 'b23.tv' in url:
         return url.split('?')[0].split(' ')[0].rstrip('/')
     # Extract BV/av number
     m = _re.search(r'(?:/video/|/bangumi/play/)(BV[\w]+|av\d+|ep\d+|ss\d+)', url)
     if m:
-        return f'https://www.bilibili.com/video/{m.group(1)}/'
+        return f'https://www.bilibili.com/video/{m.group(1)}/{page_query}'
     # Fallback: strip query + spaces
     return url.split('?')[0].split(' ')[0].rstrip('/')
 

@@ -75,9 +75,9 @@ def send_digest(
         }
 
     thread_url = (
-        f"{settings.PUBLIC_APP_URL.rstrip('/')}/agent?thread={thread_id}"
+        f"{settings.PUBLIC_APP_URL.rstrip('/')}/harness?thread={thread_id}"
         if thread_id
-        else f"{settings.PUBLIC_APP_URL.rstrip('/')}/agent"
+        else f"{settings.PUBLIC_APP_URL.rstrip('/')}/harness"
     )
     message = EmailMessage()
     message["Subject"] = title
@@ -154,7 +154,7 @@ def send_verification(
             "error": "邮件服务尚未配置，暂时不能发送验证邮件。",
         }
     verification_url = (
-        f"{settings.PUBLIC_APP_URL.rstrip('/')}/agent"
+        f"{settings.PUBLIC_APP_URL.rstrip('/')}/harness"
         f"#verify_email={quote(token, safe='')}"
     )
     safe_url = html.escape(verification_url, quote=True)

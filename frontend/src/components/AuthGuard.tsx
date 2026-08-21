@@ -12,7 +12,7 @@ const BROWSER_PUBLIC = ['/', '/style'];
 const ALWAYS_PUBLIC = ['/login'];
 const IS_DEV = process.env.NODE_ENV === 'development';
 const CLIENT_ONLY_PATHS = [
-  '/agent',
+  '/harness',
   '/library',
   '/notes',
   '/plans',

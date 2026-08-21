@@ -12,6 +12,7 @@ import type {
   DouyinSourceMode,
   LibraryAutoSyncIntervalMinutes,
 } from '@/lib/types';
+import { formatDouyinSyncError } from '@/lib/douyinSyncFeedback';
 
 const STATE_PREFIX = 'zhicui-library-auto-sync:v1:';
 const LOCK_PREFIX = 'zhicui-library-auto-sync-lock:v1:';
@@ -322,7 +323,7 @@ async function executeLibraryAutoSync(
 
       const collectResponse = await collectDouyinLibrary(SYNC_COUNT, source.mode);
       if (!collectResponse.success || !collectResponse.data) {
-        syncFailures.push(`${source.label}：${collectResponse.error || '无法启动同步'}`);
+        syncFailures.push(`${source.label}：${formatDouyinSyncError(collectResponse.error, source.label)}`);
         continue;
       }
       try {
@@ -342,7 +343,10 @@ async function executeLibraryAutoSync(
           .forEach((item) => targetIds.add(item.aweme_id));
       } catch (error) {
         syncFailures.push(
-          `${source.label}：${error instanceof Error ? error.message : '同步失败'}`,
+          `${source.label}：${formatDouyinSyncError(
+            error instanceof Error ? error.message : '同步失败',
+            source.label,
+          )}`,
         );
       }
     }

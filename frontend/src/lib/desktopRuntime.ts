@@ -32,6 +32,42 @@ export interface DesktopLoginStatus {
 }
 
 export type PlatformAccountProvider = 'bilibili' | 'xiaohongshu';
+
+// ---------------------------------------------------------------------------
+// 知萃账号 桌面端 ↔ Web 联动登录
+// ---------------------------------------------------------------------------
+
+export type DesktopZhicuiLoginStage =
+  | 'starting'
+  | 'browser-open'
+  | 'waiting'
+  | 'success'
+  | 'cancelled'
+  | 'error';
+
+export interface DesktopZhicuiLoginStatus {
+  stage: DesktopZhicuiLoginStage;
+  message: string;
+}
+
+export interface DesktopZhicuiUser {
+  id: string;
+  email: string;
+  username: string | null;
+  is_active: boolean;
+  is_admin: boolean;
+}
+
+export interface DesktopZhicuiSession {
+  token: string;
+  user: DesktopZhicuiUser;
+}
+
+export interface DesktopZhicuiLoginResult {
+  success: boolean;
+  cancelled?: boolean;
+  error?: string;
+}
 export type PlatformAccountSourceMode = 'like' | 'collect';
 export type PlatformAccountStage =
   | 'starting'
@@ -153,6 +189,14 @@ export interface ZhicuiDesktopBridge {
   onDouyinLoginStatus(
     listener: (status: DesktopLoginStatus) => void,
   ): () => void;
+  beginZhicuiWebLogin?(): Promise<DesktopZhicuiLoginResult>;
+  cancelZhicuiWebLogin?(): Promise<DesktopZhicuiLoginResult>;
+  onZhicuiLoginStatus?(
+    listener: (status: DesktopZhicuiLoginStatus) => void,
+  ): () => void;
+  onZhicuiSession?(
+    listener: (session: DesktopZhicuiSession) => void,
+  ): () => void;
   onPlatformAccountStatus(
     listener: (status: PlatformAccountStatus) => void,
   ): () => void;
@@ -211,6 +255,19 @@ export function supportsDesktopMediaLibrary(
   );
 }
 
+export function supportsPlatformAccountSync(
+  bridge: ZhicuiDesktopBridge | undefined = (
+    typeof window !== 'undefined' ? window.zhicuiDesktop : undefined
+  ),
+): bridge is ZhicuiDesktopBridge {
+  return Boolean(
+    bridge
+    && typeof bridge.loginPlatformAccount === 'function'
+    && typeof bridge.collectPlatformAccount === 'function'
+    && typeof bridge.onPlatformAccountStatus === 'function',
+  );
+}
+
 export function openInstalledDesktopApp(): void {
   if (typeof document === 'undefined') return;
   const frame = document.createElement('iframe');
@@ -218,7 +275,14 @@ export function openInstalledDesktopApp(): void {
   frame.setAttribute('aria-hidden', 'true');
   frame.src = 'zhicui://douyin-login';
   document.body.appendChild(frame);
-  window.setTimeout(() => frame.remove(), 1600);
+  window.setTimeout(() => {
+    // remove() 内部是 parentNode.removeChild()；若期间 iframe 已被摘除
+    // （React 重建/HMR/路由切换），parentNode 为 null 会抛
+    // “Cannot read properties of null (reading 'removeChild')”，先判连接态。
+    if (frame.isConnected) {
+      frame.remove();
+    }
+  }, 1600);
 }
 
 export const DESKTOP_DOWNLOAD_URL = (

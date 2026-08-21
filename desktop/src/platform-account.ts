@@ -111,7 +111,7 @@ export function boundedPlatformUrls(
   values: string[],
   limit: number,
 ): string[] {
-  const boundedLimit = Math.max(1, Math.min(10, Math.trunc(limit) || 1));
+  const boundedLimit = Math.max(1, Math.min(100, Math.trunc(limit) || 1));
   const seen = new Set<string>();
   const result: string[] = [];
   for (const value of values) {
@@ -370,20 +370,26 @@ export class PlatformAccountConnector {
     const mid = numeric(nav.mid);
     if (!mid) throw new Error('B站登录状态无效，请重新登录');
     const ranked: RankedUrl[] = [];
+    // like 接口单页最多 50，收藏接口单页最多 20；超过单页上限时分页拉取。
+    const pageSize = mode === 'like' ? 50 : 20;
+    const pageCap = Math.ceil(limit / pageSize);
     if (mode === 'like') {
-      const data = await this.requestBilibili(
-        context,
-        `https://api.bilibili.com/x/space/like/video?vmid=${mid}&pn=1&ps=${limit}`,
-      );
-      const videos = list(record(data.list).vlist);
-      for (const value of videos) {
-        const video = record(value);
-        const bvid = String(video.bvid || '').trim();
-        if (!bvid) continue;
-        ranked.push({
-          url: `https://www.bilibili.com/video/${bvid}`,
-          rank: numeric(video.created || video.pubdate),
-        });
+      for (let page = 1; page <= pageCap && ranked.length < limit && !this.cancelled; page += 1) {
+        const data = await this.requestBilibili(
+          context,
+          `https://api.bilibili.com/x/space/like/video?vmid=${mid}&pn=${page}&ps=${pageSize}`,
+        );
+        const videos = list(record(data.list).vlist);
+        for (const value of videos) {
+          const video = record(value);
+          const bvid = String(video.bvid || '').trim();
+          if (!bvid) continue;
+          ranked.push({
+            url: `https://www.bilibili.com/video/${bvid}`,
+            rank: numeric(video.created || video.pubdate),
+          });
+        }
+        if (videos.length < pageSize) break;
       }
     } else {
       const foldersData = await this.requestBilibili(
@@ -392,22 +398,28 @@ export class PlatformAccountConnector {
       );
       const folders = list(foldersData.list).slice(0, MAX_BILIBILI_FOLDERS);
       for (const value of folders) {
-        if (this.cancelled) break;
+        if (this.cancelled || ranked.length >= limit) break;
         const folder = record(value);
-        const mediaId = numeric(folder.id || folder.media_id);
-        if (!mediaId) continue;
-        const folderData = await this.requestBilibili(
-          context,
-          `https://api.bilibili.com/x/v3/fav/resource/list?media_id=${mediaId}&pn=1&ps=${limit}&keyword=&order=mtime&type=0&tid=0&platform=web`,
-        );
-        for (const mediaValue of list(folderData.medias)) {
-          const media = record(mediaValue);
-          const bvid = String(media.bvid || '').trim();
-          if (!bvid) continue;
-          ranked.push({
-            url: `https://www.bilibili.com/video/${bvid}`,
-            rank: numeric(media.fav_time || media.ctime || media.pubtime),
-          });
+        // B站默认收藏夹的 fid 为 0，id/fid 可能缺省或为 0；media_id 才是取资源列表所需的字段。
+        // 不能因为 fid === 0 就跳过，否则仅使用默认收藏夹的账号会一个作品都读不到。
+        const mediaId = numeric(folder.media_id ?? folder.id ?? folder.fid);
+        if (!Number.isFinite(mediaId)) continue;
+        for (let page = 1; page <= pageCap && ranked.length < limit; page += 1) {
+          const folderData = await this.requestBilibili(
+            context,
+            `https://api.bilibili.com/x/v3/fav/resource/list?media_id=${mediaId}&pn=${page}&ps=${pageSize}&keyword=&order=mtime&type=0&tid=0&platform=web`,
+          );
+          const medias = list(folderData.medias);
+          for (const mediaValue of medias) {
+            const media = record(mediaValue);
+            const bvid = String(media.bvid || '').trim();
+            if (!bvid) continue;
+            ranked.push({
+              url: `https://www.bilibili.com/video/${bvid}`,
+              rank: numeric(media.fav_time || media.ctime || media.pubtime),
+            });
+          }
+          if (medias.length < pageSize) break;
         }
       }
     }

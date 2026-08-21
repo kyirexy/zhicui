@@ -190,7 +190,7 @@ export default function LibraryPreviewPane({ selection }: LibraryPreviewPaneProp
           <ArrowUpRight size={15} />
         </Link>
         {canAskAi && (
-          <Link href={`/agent?source_ids=${encodeURIComponent(preview.noteId)}`}>
+          <Link href={`/harness?source_ids=${encodeURIComponent(preview.noteId)}`}>
             <MessageSquareText size={15} />
             向 AI 提问
           </Link>

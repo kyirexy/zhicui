@@ -269,7 +269,7 @@ def effective_config(db: Session, user_id: str, offering_id: str | None = None) 
     offering = get_published(db, offering_id or "") if offering_id else selected_offering(db, user_id)
     offering = offering or default_offering(db)
     if offering.provider_mode == "omniroute":
-        omni = omniroute_config()
+        omni = omniroute_config(db)
         if not omni["available"]:
             raise ValueError("该模型服务暂时不可用，请选择其他模型")
         return {
@@ -281,9 +281,12 @@ def effective_config(db: Session, user_id: str, offering_id: str | None = None) 
             "offering_id": offering.id,
         }
     config = settings_service.get_llm_config(db)
-    runtime_model = offering.model_id
-    if str(config.get("provider") or "") == "custom" and "/" not in runtime_model:
-        runtime_model = f"openai/{runtime_model}"
+    # 平台模型 ID（如 SiliconFlow 的 `deepseek-ai/DeepSeek-V3`）只是网关内
+    # 的资源名，不能靠“是否含 /”来猜供应商；统一按当前供应商规范补前缀。
+    runtime_model = settings_service.to_litellm_model(
+        str(config.get("provider") or ""),
+        offering.model_id,
+    )
     return {
         **config,
         "model": offering.model_id,

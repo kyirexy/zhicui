@@ -7,9 +7,9 @@
   --plan-ink: var(--foreground);
   --plan-ink-soft: var(--foreground-secondary);
   --plan-ink-faint: var(--foreground-muted);
-  --plan-mint: color-mix(in srgb, var(--accent-emerald) 10%, var(--card-bg));
-  --plan-mint-strong: var(--accent-emerald);
-  --plan-mint-ink: var(--accent-emerald);
+  --plan-mint: color-mix(in srgb, var(--accent-brand) 10%, var(--card-bg));
+  --plan-mint-strong: var(--accent-brand);
+  --plan-mint-ink: var(--accent-brand);
   --plan-danger: #b55252;
   --plan-warning: #9a6734;
   --plan-shadow: none;
@@ -91,7 +91,7 @@
   justify-content: center;
   gap: 0.5rem;
   padding: 0.65rem 1rem;
-  background: var(--accent-emerald);
+  background: var(--accent-brand);
   color: #fff;
   font-size: 0.86rem;
   font-weight: 700;
@@ -189,7 +189,7 @@
 }
 
 .tabActive {
-  border-bottom-color: var(--accent-emerald);
+  border-bottom-color: var(--accent-brand);
   background: transparent;
   color: var(--plan-ink);
   box-shadow: none;
@@ -812,9 +812,11 @@
 
 .secondarySections { display: grid; gap: 0.7rem; margin-top: 1rem; }
 .disclosure {
+  overflow: hidden;
   border: 1px solid var(--plan-border);
   border-radius: 1rem;
   background: var(--plan-surface);
+  transition: border-color 160ms ease;
 }
 
 .disclosure summary {
@@ -829,9 +831,16 @@
   font-weight: 680;
   cursor: pointer;
   list-style: none;
+  user-select: none;
 }
 .disclosure summary::-webkit-details-marker { display: none; }
+.disclosure summary svg {
+  flex: 0 0 auto;
+  color: var(--plan-ink-faint);
+  transition: transform 180ms ease;
+}
 .disclosure[open] summary { border-bottom: 1px solid var(--plan-border); }
+.disclosure[open] summary svg { transform: rotate(180deg); }
 .disclosureBody { display: grid; gap: 0.55rem; padding: 0.7rem; }
 
 .goalToolbar {
@@ -1029,9 +1038,11 @@
 .diffBadge { padding: 0.28rem 0.45rem; border-radius: 0.5rem; background: var(--plan-surface-muted); color: var(--plan-ink-soft); font-size: 0.68rem; }
 .diffList { margin: 0; padding-left: 1rem; color: var(--plan-ink-soft); font-size: 0.72rem; line-height: 1.65; }
 
-.fieldsDisclosure { border: 1px solid var(--plan-border); border-radius: 1.05rem; background: var(--plan-surface); }
-.fieldsDisclosure summary { min-height: 50px; display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 0.9rem; color: var(--plan-ink-soft); font-size: 0.78rem; font-weight: 680; cursor: pointer; list-style: none; }
+.fieldsDisclosure { overflow: hidden; border: 1px solid var(--plan-border); border-radius: 1.05rem; background: var(--plan-surface); }
+.fieldsDisclosure summary { min-height: 50px; display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 0.9rem; color: var(--plan-ink-soft); font-size: 0.78rem; font-weight: 680; cursor: pointer; list-style: none; user-select: none; }
 .fieldsDisclosure summary::-webkit-details-marker { display: none; }
+.fieldsDisclosure summary svg { flex: 0 0 auto; color: var(--plan-ink-faint); transition: transform 180ms ease; }
+.fieldsDisclosure[open] summary svg { transform: rotate(90deg); }
 .fieldList { display: grid; gap: 0.55rem; padding: 0 0.8rem 0.8rem; }
 .fieldItem { padding: 0.65rem 0.7rem; border-radius: 0.75rem; background: var(--plan-surface-muted); }
 .fieldItem small { display: block; color: var(--plan-ink-faint); font-size: 0.66rem; }
@@ -1042,12 +1053,12 @@
 .sheetForm { display: grid; gap: 0.9rem; }
 .sheetForm {
   --plan-surface: var(--card-bg, #fff);
-  --plan-surface-muted: var(--background-secondary, #f1f1ef);
-  --plan-border: var(--card-border, rgba(36, 36, 38, 0.12));
-  --plan-border-strong: color-mix(in srgb, var(--foreground, #242426) 20%, transparent);
-  --plan-ink: var(--foreground, #242426);
+  --plan-surface-muted: var(--background-secondary, #e8f0fe);
+  --plan-border: var(--card-border, rgba(16, 24, 40, 0.12));
+  --plan-border-strong: color-mix(in srgb, var(--foreground, var(--foreground)) 20%, transparent);
+  --plan-ink: var(--foreground, var(--foreground));
   --plan-ink-soft: var(--foreground-secondary, #5f5f66);
-  --plan-ink-faint: var(--foreground-muted, #7a7a82);
+  --plan-ink-faint: var(--foreground-muted, #7a828a);
   --plan-mint: color-mix(in srgb, var(--ui-accent) 10%, var(--plan-surface));
   --plan-mint-strong: var(--ui-accent);
   --plan-mint-ink: var(--ui-accent);

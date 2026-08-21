@@ -91,17 +91,17 @@ export default function SampleLinks({ onFill, isLoading }: SampleLinksProps) {
                         disabled={isLoading}
                         onClick={() => onFill(link.url)}
                         className="w-full flex items-center gap-3 px-4 py-3 text-left
-                                   hover:bg-accent-emerald/[0.04] transition-colors duration-200
+                                   hover:bg-accent-brand/[0.04] transition-colors duration-200
                                    disabled:opacity-50 disabled:cursor-not-allowed group/link"
                       >
-                        <div className="flex-shrink-0 w-7 h-7 rounded-lg bg-accent-emerald/[0.08]
+                        <div className="flex-shrink-0 w-7 h-7 rounded-lg bg-accent-brand/[0.08]
                                         flex items-center justify-center
-                                        group-hover/link:bg-accent-emerald/[0.15] transition-colors">
-                          <Play size={11} className="text-accent-emerald" />
+                                        group-hover/link:bg-accent-brand/[0.15] transition-colors">
+                          <Play size={11} className="text-accent-brand" />
                         </div>
                         <div className="min-w-0 flex-1">
                           <p className="text-xs font-medium text-foreground truncate
-                                        group-hover/link:text-accent-emerald transition-colors">
+                                        group-hover/link:text-accent-brand transition-colors">
                             {link.title}
                           </p>
                           <p className="text-[11px] text-foreground-muted truncate mt-0.5">
@@ -111,7 +111,7 @@ export default function SampleLinks({ onFill, isLoading }: SampleLinksProps) {
                         <ExternalLink
                           size={11}
                           className="text-foreground-muted/40 flex-shrink-0
-                                     group-hover/link:text-accent-emerald/60 transition-colors"
+                                     group-hover/link:text-accent-brand/60 transition-colors"
                         />
                       </button>
                     ))}

@@ -11,15 +11,18 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
+import secrets
 import socket
 import subprocess
 import sys
-from typing import Any
+import threading
+from datetime import datetime, timezone
+from typing import Any, Callable
 from urllib.parse import urljoin, urlparse
 
 import requests
 
-from app.services import douyin_library, xhs_downloader_client
+from app.services import douyin_library, xhs_downloader_client, yutto_catalog_client
 
 
 class CreatorConnectorError(RuntimeError):
@@ -42,6 +45,39 @@ SHORT_HOSTS = {"b23.tv", "v.douyin.com", "xhslink.com", "www.xhslink.com"}
 _BILI_ID = re.compile(r"^[1-9][0-9]{0,19}$")
 _DOUYIN_ID = re.compile(r"^[A-Za-z0-9_-]{12,192}$")
 _XHS_ID = re.compile(r"^[A-Za-z0-9_-]{8,192}$")
+_ACTIVE_CATALOG_CANCELS: dict[str, Callable[[], bool]] = {}
+_ACTIVE_CATALOG_CANCELS_LOCK = threading.Lock()
+
+
+def _register_catalog_cancel(run_id: str, cancel: Callable[[], bool]) -> None:
+    clean_run_id = str(run_id or "").strip()
+    if not clean_run_id:
+        return
+    with _ACTIVE_CATALOG_CANCELS_LOCK:
+        _ACTIVE_CATALOG_CANCELS[clean_run_id] = cancel
+
+
+def _clear_catalog_cancel(run_id: str) -> None:
+    clean_run_id = str(run_id or "").strip()
+    if not clean_run_id:
+        return
+    with _ACTIVE_CATALOG_CANCELS_LOCK:
+        _ACTIVE_CATALOG_CANCELS.pop(clean_run_id, None)
+
+
+def cancel_catalog(run_id: str) -> bool:
+    """Best-effort cancellation bridge used by the durable run service."""
+    clean_run_id = str(run_id or "").strip()
+    if not clean_run_id:
+        return False
+    with _ACTIVE_CATALOG_CANCELS_LOCK:
+        cancel = _ACTIVE_CATALOG_CANCELS.get(clean_run_id)
+    if cancel is None:
+        return False
+    try:
+        return bool(cancel())
+    except Exception:
+        return False
 
 
 def _host(url: str) -> str:
@@ -275,3 +311,325 @@ def discover_works(
         for item in items
         if item.get("note_id") and item.get("type") == "video"
     ]
+
+
+def _safe_catalog_text(value: object, limit: int) -> str:
+    return str(value or "").replace("\x00", "").strip()[:limit]
+
+
+def _catalog_published_at(raw: dict[str, Any]) -> str | None:
+    timestamp = raw.get("publish_timestamp")
+    if timestamp is None:
+        timestamp = raw.get("create_time")
+    try:
+        numeric = int(timestamp)
+        if numeric > 10_000_000_000:
+            numeric //= 1000
+        if 0 < numeric < 32_503_680_000:
+            return datetime.fromtimestamp(numeric, tz=timezone.utc).isoformat()
+    except (TypeError, ValueError, OSError, OverflowError):
+        pass
+    value = _safe_catalog_text(raw.get("published_at"), 64)
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).isoformat()
+    except ValueError:
+        return None
+
+
+def _normalize_douyin_catalog_item(
+    raw: dict[str, Any],
+    order_index: int,
+) -> dict[str, Any] | None:
+    external_id = _safe_catalog_text(raw.get("aweme_id") or raw.get("id"), 192)
+    if not external_id or not re.fullmatch(r"[0-9A-Za-z_-]{5,192}", external_id):
+        return None
+    media_type = _safe_catalog_text(raw.get("media_type") or "video", 32).lower()
+    if media_type != "video":
+        # The product currently prepares video transcripts.  Photo posts may
+        # still exist in the sidecar manifest, but they are not catalog rows.
+        return None
+    description = _safe_catalog_text(raw.get("description") or raw.get("desc"), 5000)
+    title = _safe_catalog_text(raw.get("title"), 300)
+    if not title:
+        title = _safe_catalog_text(description.splitlines()[0] if description else "", 300)
+    try:
+        if raw.get("duration_ms") is not None:
+            duration_seconds = int(raw.get("duration_ms") or 0) // 1000
+        else:
+            duration_seconds = int(raw.get("duration_seconds") or raw.get("duration") or 0)
+    except (TypeError, ValueError):
+        duration_seconds = 0
+    return {
+        "external_id": external_id,
+        "source_url": f"https://www.douyin.com/video/{external_id}",
+        "title": title or f"抖音作品 {external_id}",
+        # Douyin CDN cover addresses are usually signed and short-lived.  They
+        # must never be persisted by CreatorSourceItem, so the durable catalog
+        # deliberately leaves this blank until a stable proxy is introduced.
+        "cover_url": "",
+        "description": description,
+        "author_name": _safe_catalog_text(raw.get("author_name") or raw.get("nickname"), 160),
+        "published_at": _catalog_published_at(raw),
+        "duration_seconds": max(0, min(duration_seconds, 7 * 24 * 60 * 60)),
+        "order_index": max(0, int(order_index)),
+        "parts": [],
+    }
+
+
+def _douyin_catalog_error(exc: Exception) -> CreatorConnectorError:
+    message = str(exc).lower()
+    if any(marker in message for marker in ("验证码", "captcha", "challenge", "风控", "risk")):
+        return CreatorConnectorError("douyin_verification_required", "抖音要求完成验证码或风控验证")
+    if any(marker in message for marker in ("登录", "cookie", "login", "session")):
+        return CreatorConnectorError("douyin_login_required", "抖音登录已失效，请重新连接")
+    return CreatorConnectorError("connector_unavailable", "抖音全量目录连接器暂不可用")
+
+
+def _discover_douyin_catalog(
+    source: Any,
+    *,
+    douyin_session_scope: str,
+    on_item: Callable[[dict[str, Any], int, int | None], None] | None,
+    should_cancel: Callable[[], bool] | None,
+    run_id: str,
+) -> dict[str, Any]:
+    if not douyin_session_scope:
+        raise CreatorConnectorError("douyin_login_required", "请先连接自己的抖音账号")
+    cursor = ""
+    catalog_id = secrets.token_hex(20)
+    seen_cursors: set[str] = set()
+    seen_ids: set[str] = set()
+    items: list[dict[str, Any]] = []
+    failures: list[dict[str, str]] = []
+    complete = False
+
+    def cancel_sidecar() -> bool:
+        if not catalog_id:
+            return False
+        try:
+            state = douyin_library._request(
+                "DELETE",
+                f"/api/v1/creators/catalog/{catalog_id}",
+                session_scope=douyin_session_scope,
+                timeout=8.0,
+            )
+            return bool(not isinstance(state, dict) or state.get("cancelled", True))
+        except Exception:
+            return False
+
+    _register_catalog_cancel(run_id, cancel_sidecar)
+
+    try:
+        for _page_index in range(1000):
+            if should_cancel is not None and should_cancel():
+                cancel_sidecar()
+                raise CreatorConnectorError("cancelled", "抖音目录同步已取消")
+            try:
+                body = douyin_library._request(
+                    "POST",
+                    "/api/v1/creators/catalog",
+                    session_scope=douyin_session_scope,
+                    json_body={
+                        "creator_id": str(source.creator_id),
+                        "cursor": cursor or None,
+                        "page_size": 50,
+                        "catalog_id": catalog_id,
+                        "metadata_only": True,
+                    },
+                    timeout=60.0,
+                )
+            except douyin_library.DouyinLibraryError as exc:
+                error = _douyin_catalog_error(exc)
+                if not items or error.code in {
+                    "douyin_login_required",
+                    "douyin_verification_required",
+                }:
+                    raise error from exc
+                failures.append({"external_id": "", "error_code": error.code})
+                break
+            if not isinstance(body, dict) or not isinstance(body.get("items"), list):
+                error = CreatorConnectorError(
+                    "invalid_upstream_response",
+                    "抖音全量目录连接器返回格式异常",
+                )
+                if not items:
+                    raise error
+                failures.append({"external_id": "", "error_code": error.code})
+                break
+
+            next_catalog_id = _safe_catalog_text(body.get("catalog_id"), 96)
+            if next_catalog_id:
+                catalog_id = next_catalog_id
+                _register_catalog_cancel(run_id, cancel_sidecar)
+            for raw in body["items"]:
+                if not isinstance(raw, dict):
+                    continue
+                item = _normalize_douyin_catalog_item(raw, len(items))
+                if item is None or item["external_id"] in seen_ids:
+                    continue
+                seen_ids.add(item["external_id"])
+                items.append(item)
+                if on_item is not None:
+                    # 上游总数包含图文；过滤后只能在完整扫描结束时确定视频总数。
+                    on_item(item, len(items), None)
+                if len(items) >= 50_000:
+                    failures.append({"external_id": "", "error_code": "catalog_safety_limit"})
+                    return {
+                        "items": items,
+                        "complete": False,
+                        "total_count": None,
+                        "failures": failures,
+                    }
+
+            needs_action = _safe_catalog_text(body.get("needs_action"), 96)
+            if needs_action:
+                code = (
+                    "douyin_verification_required"
+                    if needs_action in {"captcha", "challenge", "risk_control", "verification"}
+                    else "douyin_login_required"
+                )
+                raise CreatorConnectorError(code, "抖音需要用户处理后才能继续同步")
+
+            has_more = bool(body.get("has_more"))
+            next_cursor = _safe_catalog_text(body.get("next_cursor"), 256)
+            if not has_more:
+                complete = body.get("complete") is not False
+                break
+            if not next_cursor or next_cursor == cursor or next_cursor in seen_cursors:
+                failures.append({"external_id": "", "error_code": "invalid_discovery_cursor"})
+                break
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        else:
+            failures.append({"external_id": "", "error_code": "catalog_page_limit"})
+    finally:
+        _clear_catalog_cancel(run_id)
+
+    if failures:
+        complete = False
+    return {
+        "items": items,
+        "complete": complete,
+        # The sidecar may enumerate photo posts as well. This feature catalogs
+        # transcript-capable videos only, so the exact terminal count is the
+        # connector's allowlisted video count rather than the raw profile total.
+        "total_count": len(items) if complete else None,
+        "failures": failures,
+    }
+
+
+def discover_catalog(
+    source: Any,
+    *,
+    douyin_session_scope: str = "",
+    douyin_binding_ref: str = "",
+    on_item: Callable[[dict[str, Any], int, int | None], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    run_id: str = "",
+) -> dict[str, Any]:
+    """Enumerate every currently readable public work without media download.
+
+    The returned ``items`` use a strict persistence allowlist. ``complete`` is
+    true only when the connector reached the end without partial failures;
+    callers may mark previously-seen rows unavailable only in that case.
+    """
+    del douyin_binding_ref  # kept in the shared contract for future stable proxies
+    if should_cancel is not None and should_cancel():
+        raise CreatorConnectorError("cancelled", "博主目录同步已取消")
+    if source.platform == "douyin":
+        return _discover_douyin_catalog(
+            source,
+            douyin_session_scope=douyin_session_scope,
+            on_item=on_item,
+            should_cancel=should_cancel,
+            run_id=run_id,
+        )
+    if source.platform == "bilibili":
+        task_id_holder = {"value": ""}
+
+        def task_started(task_id: str) -> None:
+            task_id_holder["value"] = task_id
+            _register_catalog_cancel(
+                run_id,
+                lambda: yutto_catalog_client.cancel_task(task_id_holder["value"]),
+            )
+
+        try:
+            return yutto_catalog_client.discover_bilibili_catalog(
+                source.profile_url,
+                on_item=on_item,
+                should_cancel=should_cancel,
+                task_started=task_started,
+            )
+        except yutto_catalog_client.YuttoCatalogError as exc:
+            raise CreatorConnectorError(exc.code, str(exc)) from exc
+        finally:
+            _clear_catalog_cancel(run_id)
+    raise CreatorConnectorError(
+        "catalog_not_supported",
+        "该平台首版暂不支持全量作品目录",
+    )
+
+
+def catalog_health(
+    platform: str,
+    *,
+    douyin_session_scope: str = "",
+) -> dict[str, Any]:
+    """Return a credential-free readiness summary for catalog capability."""
+    if platform == "bilibili":
+        state = yutto_catalog_client.health()
+        return {
+            "platform": platform,
+            "enabled": bool(state.get("enabled")),
+            "healthy": bool(state.get("healthy")),
+            "supports_catalog_all": bool(state.get("healthy")),
+            "version": _safe_catalog_text(state.get("version"), 32),
+            "error_code": _safe_catalog_text(state.get("error_code"), 96) or None,
+        }
+    if platform == "douyin":
+        try:
+            raw = douyin_library._request("GET", "/api/v1/health", timeout=3.0)
+            connected = isinstance(raw, dict) and raw.get("status") == "ok"
+            storage_mode = _safe_catalog_text(
+                raw.get("storage_mode") if isinstance(raw, dict) else "",
+                32,
+            )
+            capabilities = raw.get("capabilities") if isinstance(raw, dict) else []
+            supports_catalog = bool(
+                (isinstance(capabilities, list) and "creator_catalog" in capabilities)
+                or (isinstance(raw, dict) and raw.get("supports_creator_catalog"))
+            )
+            session_ready: bool | None = None
+            if douyin_session_scope:
+                session_state = douyin_library.connection_status(douyin_session_scope)
+                session_ready = bool(session_state.get("cookie_valid"))
+            healthy = connected and storage_mode == "metadata_only" and supports_catalog
+            return {
+                "platform": platform,
+                "enabled": connected,
+                "healthy": healthy,
+                "supports_catalog_all": healthy,
+                "storage_mode": storage_mode or "unknown",
+                "session_ready": session_ready,
+                "error_code": None if healthy else "catalog_capability_unavailable",
+            }
+        except douyin_library.DouyinLibraryError:
+            return {
+                "platform": platform,
+                "enabled": False,
+                "healthy": False,
+                "supports_catalog_all": False,
+                "storage_mode": "unknown",
+                "session_ready": False if douyin_session_scope else None,
+                "error_code": "connector_unavailable",
+            }
+    return {
+        "platform": platform,
+        "enabled": False,
+        "healthy": False,
+        "supports_catalog_all": False,
+        "error_code": "catalog_not_supported",
+    }

@@ -379,7 +379,7 @@ export default function PlanTaskList({ plan, onMutate }: PlanTaskListProps) {
                               {priority === 'high' ? '高优先' : priority === 'low' ? '低优先' : '中优先'}
                             </span>
                             {scheduleLabel && (
-                              <span className={overdue ? 'text-accent-rose' : dueToday ? 'text-accent-emerald' : ''}>
+                              <span className={overdue ? 'text-accent-rose' : dueToday ? 'text-accent-brand' : ''}>
                                 <CalendarBlank size={12} />
                                 {overdue ? '逾期 ' : ''}
                                 {scheduleLabel}

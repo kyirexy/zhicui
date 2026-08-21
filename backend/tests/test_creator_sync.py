@@ -10,7 +10,12 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
-from app.models.creator_sync import CreatorSource, CreatorSourceItem, CreatorSyncRun
+from app.models.creator_sync import (
+    CreatorSource,
+    CreatorSourceItem,
+    CreatorSyncRun,
+    CreatorSyncRunItem,
+)
 from app.models.note import Note
 from app.models.system_setting import SystemSetting
 from app.models.user import User
@@ -83,6 +88,7 @@ class CreatorSyncServiceTests(unittest.TestCase):
                 CreatorSource.__table__,
                 CreatorSourceItem.__table__,
                 CreatorSyncRun.__table__,
+                CreatorSyncRunItem.__table__,
             ],
         )
         self.Session = sessionmaker(bind=self.engine)

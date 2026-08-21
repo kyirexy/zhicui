@@ -23,7 +23,7 @@ export function celebrateDayDone(): void {
     scalar: 0.8,
     ticks: 120,
     origin: { y: 0.7 },
-    colors: ['#303034', '#74747b', '#55555c', '#fbbf24'],
+    colors: ['#2563eb', '#60a5fa', '#4f5bd5', '#fbbf24'],
   });
 }
 
@@ -31,7 +31,7 @@ export function celebrateDayDone(): void {
 export function celebrateCompletion(): void {
   if (prefersReducedMotion()) return;
   const end = Date.now() + 900;
-  const colors = ['#303034', '#74747b', '#22d3ee', '#55555c', '#fbbf24', '#fb7185'];
+  const colors = ['#2563eb', '#60a5fa', '#22d3ee', '#4f5bd5', '#fbbf24', '#fb7185'];
 
   // Initial center burst.
   confetti({

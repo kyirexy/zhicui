@@ -90,7 +90,7 @@ export default function AppHeader() {
           type="button"
           onClick={openAnalysisTasks}
           aria-label={`查看详细解析任务：${analysisStatusText}`}
-          className="mx-4 mt-2 flex min-h-11 items-center justify-center rounded-lg border border-accent-emerald/25 bg-accent-emerald/7 px-3 text-sm font-semibold text-accent-emerald focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-emerald md:hidden"
+          className="mx-4 mt-2 flex min-h-11 items-center justify-center rounded-lg border border-accent-brand/25 bg-accent-brand/7 px-3 text-sm font-semibold text-accent-brand focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-brand md:hidden"
         >
           {analysisStatusText}
         </button>
@@ -105,14 +105,15 @@ export default function AppHeader() {
           同步中 {activeCreatorRuns.length}
         </button>
       )}
-      <header className="web-app-header hidden w-full max-w-6xl items-center justify-between px-5 py-2.5 md:mx-auto md:flex md:px-8 lg:px-12">
+      <header className="web-app-header sticky top-0 z-30 hidden w-full border-b border-card-border/80 bg-background/85 backdrop-blur-xl md:block">
+      <div className="mx-auto flex w-full max-w-[1600px] items-center justify-between px-5 py-2.5 md:px-8 lg:px-12">
       <a href="/" className="group flex items-center gap-2.5 text-foreground no-underline">
         <img
           src="/logo.png"
           alt="知萃 Logo"
-          className="h-8 w-8 object-contain transition-transform duration-300 group-hover:rotate-3 group-hover:scale-105"
+          className="h-8 w-8 rounded-[0.65rem] object-contain transition-transform duration-300 group-hover:scale-105"
         />
-        <span className="text-lg font-bold tracking-tight">知萃</span>
+        <span className="text-[1.05rem] font-bold tracking-tight">知萃</span>
       </a>
 
       <nav className="flex items-center gap-1" aria-label="产品导航">
@@ -123,7 +124,7 @@ export default function AppHeader() {
             key={href}
             href={href}
             aria-current={active ? 'page' : undefined}
-            className={`relative flex min-h-11 items-center rounded-lg px-3 py-2 text-sm font-medium transition-colors hover:bg-black/[0.035] hover:text-foreground ${active ? 'text-accent-emerald' : 'text-foreground-secondary'}`}
+            className={`relative flex min-h-10 items-center rounded-[0.6rem] px-3.5 py-2 text-sm font-medium transition-colors hover:bg-foreground/[0.045] ${active ? 'bg-accent-brand/[0.09] text-accent-brand' : 'text-foreground-secondary hover:text-foreground'}`}
           >
             {label}
           </Link>
@@ -135,7 +136,7 @@ export default function AppHeader() {
             type="button"
             onClick={openAnalysisTasks}
             aria-label={`查看详细解析任务：${analysisStatusText}`}
-            className="ml-1 flex min-h-11 items-center rounded-lg px-3 py-2 text-sm font-semibold text-accent-emerald transition-colors hover:bg-accent-emerald/8 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-emerald"
+            className="ml-1 flex min-h-10 items-center rounded-[0.6rem] px-3 py-2 text-sm font-semibold text-accent-brand transition-colors hover:bg-accent-brand/[0.07]"
           >
             {analysisStatusText}
           </button>
@@ -145,7 +146,7 @@ export default function AppHeader() {
             type="button"
             onClick={openCreatorSyncTasks}
             aria-label={`查看博主同步任务：同步中 ${activeCreatorRuns.length}`}
-            className="ml-1 flex min-h-11 items-center rounded-xl px-3 py-2 text-sm font-semibold text-foreground-secondary transition-colors hover:bg-black/[0.035]"
+            className="ml-1 flex min-h-10 items-center rounded-[0.6rem] px-3 py-2 text-sm font-semibold text-foreground-secondary transition-colors hover:bg-foreground/[0.045]"
           >
             同步中 {activeCreatorRuns.length}
           </button>
@@ -154,18 +155,20 @@ export default function AppHeader() {
         {user ? (
           <div className="ml-2 flex items-center gap-2">
             {user.is_admin && (
-              <Link href="/admin" className="px-2 py-1 text-xs text-accent-emerald hover:underline">
+              <Link href="/admin" className="px-2 py-1 text-xs font-medium text-accent-brand hover:underline">
                 管理端
               </Link>
             )}
-            <span className="flex items-center gap-1 text-xs text-foreground-muted">
-              <UserCircle size={14} weight="light" />
+            <span className="flex items-center gap-1.5 rounded-full border border-card-border bg-card-bg py-1 pl-1 pr-3 text-xs font-medium text-foreground-secondary">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent-brand/[0.12] text-accent-brand">
+                <UserCircle size={15} weight="fill" />
+              </span>
               {user.username || user.email}
             </span>
             <button
               type="button"
               onClick={logout}
-              className="text-xs text-foreground-muted/70 transition-colors hover:text-foreground"
+              className="text-xs text-foreground-muted transition-colors hover:text-foreground"
             >
               退出
             </button>
@@ -173,7 +176,7 @@ export default function AppHeader() {
         ) : (
           <Link
             href="/login"
-            className="ml-2 flex min-h-11 items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium text-foreground-secondary transition-colors hover:bg-black/[0.035] hover:text-foreground"
+            className="ml-2 flex min-h-10 items-center gap-1.5 rounded-[0.6rem] bg-accent-brand px-4 py-2 text-sm font-semibold text-white shadow-[0_1px_2px_rgba(16,24,40,0.08),0_6px_16px_-4px_color-mix(in_srgb,var(--accent-brand)_45%,transparent)] transition-all hover:bg-accent-brand-strong"
           >
             <SignIn size={15} weight="light" />
             登录
@@ -182,6 +185,7 @@ export default function AppHeader() {
 
         <QRModal />
       </nav>
+      </div>
       </header>
     </>
   );

@@ -153,6 +153,13 @@ export default function PlatformLibraryPanel({
   const [results, setResults] = useState<PlatformLibraryImportEntry[]>([]);
   const [feedbackView, setFeedbackView] = useState<PlatformLibraryManagerView>('all');
   const [accountAction, setAccountAction] = useState('');
+  const [selectedAccountModes, setSelectedAccountModes] = useState<Record<
+    PlatformAccountProvider,
+    PlatformAccountSourceMode[]
+  >>({
+    bilibili: ['like', 'collect'],
+    xiaohongshu: ['like', 'collect'],
+  });
   const [accountBridgeAvailable, setAccountBridgeAvailable] = useState(false);
   const [manualImporterOpen, setManualImporterOpen] = useState(false);
   const [disconnectTarget, setDisconnectTarget] = useState<PlatformAccountProvider | null>(null);
@@ -352,59 +359,128 @@ export default function PlatformLibraryPanel({
 
   const syncAccount = async (
     platform: PlatformAccountProvider,
-    mode: PlatformAccountSourceMode,
+    modes: PlatformAccountSourceMode[],
   ) => {
     const bridge = window.zhicuiDesktop;
-    if (!accountBridgeAvailable || !bridge || !user?.id || accountAction) return;
+    if (
+      !accountBridgeAvailable
+      || !bridge
+      || !user?.id
+      || accountAction
+      || modes.length === 0
+    ) return;
+    const collectedUrls: Array<{ mode: PlatformAccountSourceMode; urls: string[] }> = [];
     setFeedbackView(platform);
-    setAccountAction(`${platform}:${mode}`);
+    const syncAction = `${platform}:sync`;
+    setAccountAction(syncAction);
     setResults([]);
-    updateAccountConnection(platform, {
-      stage: 'collecting',
-      message: mode === 'collect' ? '正在读取最近收藏…' : '正在读取最近喜欢…',
-    });
-    const collected = await bridge.collectPlatformAccount({
-      platform,
-      profileKey: user.id,
-      mode,
-      limit: 10,
-    });
-    if (!collected.success || !collected.urls?.length) {
+
+    for (const mode of modes) {
+      updateAccountConnection(platform, {
+        stage: 'collecting',
+        message: mode === 'collect' ? '正在读取最近收藏…' : '正在读取最近喜欢…',
+      });
+      const collected = await bridge.collectPlatformAccount({
+        platform,
+        profileKey: user.id,
+        mode,
+        limit: 10,
+      });
+      if (!collected.success || !collected.urls?.length) {
+        const isRelogin = collected.error?.includes('重新登录');
+        if (mode === 'like' && !isRelogin && modes.includes('collect')) {
+          updateAccountConnection(platform, {
+            stage: 'collecting',
+            message: '喜欢列表暂时无法读取，继续读取收藏…',
+          });
+          continue;
+        }
+        if (collectedUrls.length > 0) {
+          break;
+        }
+        updateAccountConnection(platform, {
+          connected: collected.error?.includes('重新登录') ? false : accountConnections[platform].connected,
+          stage: collected.cancelled ? 'cancelled' : 'error',
+          message: collected.cancelled
+            ? '同步已取消'
+            : collected.error || '没有读取到可同步的作品',
+        });
+        if (collected.cancelled) {
+          setAccountAction('');
+          return;
+        }
+        setAccountAction('');
+        return;
+      }
+      collectedUrls.push({ mode, urls: collected.urls });
+    }
+
+    const urls = collectedUrls.flatMap((entry) => entry.urls);
+    if (urls.length === 0) {
       setAccountAction('');
       updateAccountConnection(platform, {
-        connected: collected.error?.includes('重新登录') ? false : accountConnections[platform].connected,
-        stage: collected.cancelled ? 'cancelled' : 'error',
-        message: collected.cancelled
-          ? '同步已取消'
-          : collected.error || '没有读取到可同步的作品',
+        stage: 'error',
+        message: '喜欢和收藏都没有读取到可同步的作品',
       });
       return;
     }
 
+    setAccountAction(`${syncAction}:import`);
     updateAccountConnection(platform, {
       connected: true,
       stage: 'collecting',
-      message: `已读取 ${collected.urls.length} 条，正在准备文案…`,
+      message: `已读取 ${urls.length} 条，正在准备文案…`,
     });
-    setAccountAction(`${platform}:${mode}:import`);
-    const imported = await importPlatformLibraryItems(collected.urls);
+    const importedItems: PlatformLibraryImportEntry[] = [];
+    let importError = '';
+    for (const entry of collectedUrls) {
+      const imported = await importPlatformLibraryItems(entry.urls, entry.mode);
+      if (!imported.success || !imported.data) {
+        importError = imported.error || '作品已读取，但导入资料失败';
+        break;
+      }
+      importedItems.push(...imported.data.items);
+    }
     setAccountAction('');
-    if (!imported.success || !imported.data) {
+    const importedSuccess = importedItems.filter((entry) => entry.success).length;
+    const importedFailed = importedItems.length - importedSuccess;
+    if (importedItems.length === 0 && importError) {
       updateAccountConnection(platform, {
         stage: 'error',
-        message: imported.error || '作品已读取，但导入资料失败',
+        message: importError,
       });
       return;
     }
-    setResults(imported.data.items);
+    const modeSummary = collectedUrls.length > 1
+      ? '喜欢 + 收藏'
+      : collectedUrls[0]?.mode === 'collect'
+        ? '收藏'
+        : '喜欢';
+    setResults(importedItems);
     updateAccountConnection(platform, {
       connected: true,
-      stage: 'success',
-      message: imported.data.failed > 0
-        ? `已导入 ${imported.data.success} 条，${imported.data.failed} 条需要重试`
-        : `已同步 ${imported.data.success} 条${mode === 'collect' ? '收藏' : '喜欢'}作品`,
+      stage: importError ? 'error' : 'success',
+      message: importError
+        ? `已同步 ${importedSuccess} 条；${importError}`
+        : importedFailed > 0
+          ? `已导入 ${importedSuccess} 条，${importedFailed} 条需要重试`
+          : `已同步 ${importedSuccess} 条${modeSummary}作品`,
     });
-    if (imported.data.success > 0) await load(true);
+    if (importedSuccess > 0) await load(true);
+  };
+
+  const toggleAccountMode = (
+    platform: PlatformAccountProvider,
+    mode: PlatformAccountSourceMode,
+  ) => {
+    if (accountAction) return;
+    setSelectedAccountModes((current) => {
+      const modes = current[platform] || [];
+      const next = modes.includes(mode)
+        ? modes.filter((value) => value !== mode)
+        : [...modes, mode];
+      return { ...current, [platform]: next };
+    });
   };
 
   const openDisconnectDialog = (platform: PlatformAccountProvider) => {
@@ -531,7 +607,7 @@ export default function PlatformLibraryPanel({
             <h3 id="platform-account-heading">
               {controlsOnly ? '平台账号同步' : '连接平台账号'}
             </h3>
-            {!controlsOnly && <p>登录后同步收藏或喜欢。</p>}
+            {!controlsOnly && <p>登录后可多选同步喜欢或收藏。</p>}
           </div>
           <div className={styles.localOnly}>
             <ShieldCheck size={15} aria-hidden="true" />
@@ -547,6 +623,22 @@ export default function PlatformLibraryPanel({
               const blockedByOtherAccount = Boolean(accountAction) && !busy;
               const activeAccountLabel = accountAction.startsWith('bilibili:') ? 'B站' : '小红书';
               const activeOperation = busy ? accountAction.split(':')[1] : '';
+              const selectedModes = selectedAccountModes[platform] || [];
+              const syncAction = `${platform}:sync`;
+              const syncingCombined = accountAction === syncAction
+                || accountAction === `${syncAction}:import`;
+              const singleSyncLabel = selectedModes.length === 1
+                ? (selectedModes[0] === 'like'
+                  ? `${activeAccountLabel}喜欢同步中`
+                  : `${activeAccountLabel}收藏同步中`)
+                : '';
+              const connectedBusyLabel = syncingCombined
+                ? (accountAction === `${syncAction}:import`
+                  ? `${activeAccountLabel}同步正在准备文案`
+                  : selectedModes.length > 1
+                    ? `${activeAccountLabel}喜欢 + 收藏同步中`
+                    : singleSyncLabel)
+                : accountAction;
               return (
                 <article
                   className={styles.accountCard}
@@ -591,7 +683,7 @@ export default function PlatformLibraryPanel({
                       <span>
                         {blockedByOtherAccount
                           ? `${activeAccountLabel}操作正在进行，完成后即可继续`
-                          : connection.message}
+                          : connection.message || (busy && syncingCombined ? connectedBusyLabel : '')}
                       </span>
                       {busy && !accountAction.endsWith(':import') && (
                         <button type="button" onClick={() => void cancelAccountAction()}>
@@ -603,28 +695,65 @@ export default function PlatformLibraryPanel({
 
                   {connection.connected ? (
                     <div className={styles.connectedActions}>
-                      <div className={styles.syncActions}>
-                        <button
-                          type="button"
-                          className={styles.primarySyncButton}
-                          onClick={() => void syncAccount(platform, 'collect')}
-                          disabled={Boolean(accountAction)}
-                        >
-                          {activeOperation === 'collect' || activeOperation === 'import'
-                            ? <LoaderCircle size={17} className="animate-spin" />
-                            : <Bookmark size={17} />}
-                          {activeOperation === 'collect' ? '正在读取收藏' : '同步收藏'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void syncAccount(platform, 'like')}
-                          disabled={Boolean(accountAction)}
-                        >
-                          {activeOperation === 'like'
-                            ? <LoaderCircle size={17} className="animate-spin" />
-                            : <Heart size={17} />}
-                          {activeOperation === 'like' ? '正在读取喜欢' : '同步喜欢'}
-                        </button>
+                      <div className={styles.syncActions} role="group" aria-label={`选择${label}要同步的来源，可多选`}>
+                        {syncingCombined ? (
+                          <button
+                            type="button"
+                            className={styles.primarySyncButton}
+                            disabled
+                          >
+                            <LoaderCircle size={17} className="animate-spin" />
+                            {accountAction === `${syncAction}:import`
+                              ? '正在准备文案'
+                              : selectedModes.length > 1
+                                ? '正在同步喜欢 + 收藏'
+                                : selectedModes[0] === 'like'
+                                  ? '正在同步喜欢'
+                                  : '正在同步收藏'}
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              className={styles.primarySyncButton}
+                              onClick={() => void syncAccount(platform, selectedModes)}
+                              disabled={Boolean(accountAction) || selectedModes.length === 0}
+                            >
+                              <RefreshCw size={17} />
+                              {selectedModes.length > 1
+                                ? '同步喜欢 + 收藏'
+                                : selectedModes.length === 1
+                                  ? selectedModes[0] === 'like'
+                                    ? '同步喜欢'
+                                    : '同步收藏'
+                                  : '同步视频'}
+                            </button>
+                            <div
+                              className={styles.modeSelector}
+                              role="group"
+                              aria-label={`${label}同步范围`}
+                            >
+                              <button
+                                type="button"
+                                data-active={selectedModes.includes('collect')}
+                                aria-pressed={selectedModes.includes('collect')}
+                                onClick={() => toggleAccountMode(platform, 'collect')}
+                                disabled={Boolean(accountAction)}
+                              >
+                                <Bookmark size={15} />收藏
+                              </button>
+                              <button
+                                type="button"
+                                data-active={selectedModes.includes('like')}
+                                aria-pressed={selectedModes.includes('like')}
+                                onClick={() => toggleAccountMode(platform, 'like')}
+                                disabled={Boolean(accountAction)}
+                              >
+                                <Heart size={15} />喜欢
+                              </button>
+                            </div>
+                          </>
+                        )}
                       </div>
                       <details className={styles.accountManagementDisclosure}>
                         <summary>

@@ -28,6 +28,11 @@ import AdminVideoAnalysisUsageView from './AdminVideoAnalysisUsageView';
 
 type View = 'usage' | 'analysis' | 'activity' | 'errors' | 'audit';
 
+interface AdminObservabilityPanelProps {
+  /** 外部跳转时指定初始视图（例如运营概览里的“查看全部用户任务”）。 */
+  initialView?: View;
+}
+
 export const ADMIN_ACTION_LABELS: Record<string, string> = {
   user_enable: '启用用户',
   user_disable: '禁用用户',
@@ -62,8 +67,8 @@ const OPERATION_LABELS: Record<string, string> = {
   llm_call: '通用 LLM 调用',
 };
 
-export default function AdminObservabilityPanel() {
-  const [view, setView] = useState<View>('usage');
+export default function AdminObservabilityPanel({ initialView }: AdminObservabilityPanelProps) {
+  const [view, setView] = useState<View>(initialView || 'usage');
   const [days, setDays] = useState(30);
   const [usage, setUsage] = useState<LlmUsageReport | null>(null);
   const [usagePage, setUsagePage] = useState(1);
@@ -150,7 +155,7 @@ export default function AdminObservabilityPanel() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2 text-xs font-semibold text-accent-emerald uppercase">
+          <div className="flex items-center gap-2 text-xs font-semibold text-accent-brand uppercase">
             <Activity size={14} aria-hidden="true" />
             Observability
           </div>
@@ -170,7 +175,7 @@ export default function AdminObservabilityPanel() {
                 setActivityPage(1);
                 setErrorPage(1);
               }}
-              className="min-h-10 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-emerald/50"
+              className="min-h-10 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-brand/50"
             >
               <option value={7}>最近 7 天</option>
               <option value={30}>最近 30 天</option>
@@ -307,7 +312,7 @@ function UsageView({
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Metric label="总 Token" value={formatNumber(summary.total_tokens)} helper="模型真实上报" icon={Bot} color="var(--accent-emerald)" />
+        <Metric label="总 Token" value={formatNumber(summary.total_tokens)} helper="模型真实上报" icon={Bot} color="var(--accent-brand)" />
         <Metric label="输入 Token" value={formatNumber(summary.prompt_tokens)} helper="提示词与上下文" icon={BarChart3} color="var(--accent-indigo)" />
         <Metric label="输出 Token" value={formatNumber(summary.completion_tokens)} helper="回答与结构化结果" icon={Activity} color="var(--accent-amber)" />
         <Metric label="调用次数" value={formatNumber(summary.calls)} helper={`${summary.active_users} 位活跃用户`} icon={Users} color="var(--accent-slate)" />
@@ -328,7 +333,7 @@ function UsageView({
                 <div key={item.date} className="group flex min-w-2 flex-1 flex-col items-center justify-end gap-2">
                   <div
                     title={`${item.date} · ${formatNumber(item.total_tokens)} Token · ${item.calls} 次`}
-                    className="w-full min-w-2 rounded-t-sm bg-accent-emerald/55 transition-colors group-hover:bg-accent-emerald"
+                    className="w-full min-w-2 rounded-t-sm bg-accent-brand/55 transition-colors group-hover:bg-accent-brand"
                     style={{ height: `${Math.max(4, Math.round((item.total_tokens / maxDailyTokens) * 124))}px` }}
                   />
                   <span className="hidden text-[10px] text-foreground-muted 2xl:block">
@@ -427,12 +432,13 @@ function ActivityView({
   setUserId: (userId: string) => void;
   onRefresh: () => Promise<void>;
 }) {
+  const [expandedId, setExpandedId] = useState<number | null>(null);
   if (!report && loading) return <LoadingPanel label="正在读取用户操作" />;
   const summary = report?.summary || { total: 0, today: 0, active_users: 0, errors: 0 };
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Metric label="操作总数" value={formatNumber(summary.total)} helper="当前时间范围" icon={Activity} color="var(--accent-emerald)" />
+        <Metric label="操作总数" value={formatNumber(summary.total)} helper="当前时间范围" icon={Activity} color="var(--accent-brand)" />
         <Metric label="今日操作" value={formatNumber(summary.today)} helper="按北京时间统计" icon={Clock3} color="var(--accent-amber)" />
         <Metric label="活跃用户" value={formatNumber(summary.active_users)} helper="产生关键操作" icon={Users} color="var(--accent-indigo)" />
         <Metric label="异常响应" value={formatNumber(summary.errors)} helper="HTTP 400 及以上" icon={ShieldCheck} color="var(--accent-rose)" />
@@ -441,14 +447,14 @@ function ActivityView({
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-card-border px-5 py-4">
           <div>
             <h2 className="text-sm font-semibold text-foreground">用户操作轨迹</h2>
-            <p className="mt-1 text-xs text-foreground-muted">不记录请求正文、文案、问题、密码或密钥</p>
+            <p className="mt-1 text-xs text-foreground-muted">不记录请求正文、文案、问题、密码或密钥；点击行可展开任务详情</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <select
               value={userId}
               onChange={event => setUserId(event.target.value)}
               aria-label="按用户筛选操作日志"
-              className="min-h-10 min-w-36 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-emerald/50"
+              className="min-h-10 min-w-36 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-brand/50"
             >
               <option value="">全部用户</option>
               {report?.users?.map(option => (
@@ -459,7 +465,7 @@ function ActivityView({
               value={action}
               onChange={event => setAction(event.target.value)}
               aria-label="按操作类型筛选日志"
-              className="min-h-10 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-emerald/50"
+              className="min-h-10 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-brand/50"
             >
               <option value="">全部操作</option>
               {report?.actions.map(option => (
@@ -473,9 +479,10 @@ function ActivityView({
           <table className="admin-table admin-table-wider text-sm">
             <thead>
               <tr className="text-xs text-foreground-muted">
+                <th className="w-10 p-3"><span className="sr-only">详情</span></th>
                 <th className="p-3 text-left">时间</th>
                 <th className="p-3 text-left">用户</th>
-                <th className="p-3 text-left">操作</th>
+                <th className="p-3 text-left">任务</th>
                 <th className="p-3 text-left">结果详情</th>
                 <th className="p-3 text-left">接口</th>
                 <th className="p-3 text-left">状态</th>
@@ -484,25 +491,84 @@ function ActivityView({
               </tr>
             </thead>
             <tbody>
-              {report?.items.map(item => (
-                <tr key={item.id} className="border-b border-card-border/50">
-                  <td className="whitespace-nowrap p-3 text-xs text-foreground-muted">{formatDateTime(item.created_at)}</td>
-                  <td className="p-3 font-medium text-foreground">{item.username}</td>
-                  <td className="p-3"><span className="rounded-md bg-[var(--admin-surface-2)] px-2 py-1 text-xs text-foreground">{item.action_label}</span></td>
-                  <td className="max-w-xs p-3 text-xs text-foreground-secondary">
-                    {item.detail_summary || (item.status_code >= 400 ? '失败' : '已完成')}
-                  </td>
-                  <td className="p-3"><code className="text-xs text-foreground-muted">{item.method} {item.path}</code></td>
-                  <td className="p-3">
-                    <span className={`text-xs font-semibold ${item.status_code >= 400 ? 'text-accent-rose' : 'text-accent-emerald'}`}>
-                      {item.status_code >= 400 ? '失败' : '成功'} · {item.status_code}
-                    </span>
-                  </td>
-                  <td className="p-3 text-right text-xs text-foreground-muted">{item.duration_ms} ms</td>
-                  <td className="p-3 text-xs text-foreground-muted">{item.ip || '-'}</td>
-                </tr>
-              ))}
-              {!report?.items.length && <EmptyTable colSpan={8} label="暂无用户操作记录" />}
+              {report?.items.map(item => {
+                const expanded = expandedId === item.id;
+                return (
+                  <Fragment key={item.id}>
+                    <tr className="border-b border-card-border/50">
+                      <td className="p-2 text-center">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedId(expanded ? null : item.id)}
+                          aria-label={expanded ? '收起任务详情' : '展开任务详情'}
+                          aria-expanded={expanded}
+                          className="inline-flex size-9 items-center justify-center rounded-lg text-foreground-muted transition-colors hover:bg-[var(--admin-surface-2)] hover:text-foreground"
+                        >
+                          <ChevronDown size={15} className={expanded ? 'rotate-180' : ''} aria-hidden="true" />
+                        </button>
+                      </td>
+                      <td className="whitespace-nowrap p-3 text-xs text-foreground-muted">{formatDateTime(item.created_at)}</td>
+                      <td className="p-3 font-medium text-foreground">{item.username}</td>
+                      <td className="p-3"><span className="rounded-md bg-[var(--admin-surface-2)] px-2 py-1 text-xs text-foreground">{item.action_label}</span></td>
+                      <td className="max-w-xs p-3 text-xs text-foreground-secondary">
+                        {item.detail_summary || (item.status_code >= 400 ? '失败' : '已完成')}
+                      </td>
+                      <td className="p-3"><code className="text-xs text-foreground-muted">{item.method} {item.path}</code></td>
+                      <td className="p-3">
+                        <span className={`text-xs font-semibold ${item.status_code >= 400 ? 'text-accent-rose' : 'text-accent-brand'}`}>
+                          {item.status_code >= 400 ? '失败' : '成功'} · {item.status_code}
+                        </span>
+                      </td>
+                      <td className="p-3 text-right text-xs text-foreground-muted">{item.duration_ms} ms</td>
+                      <td className="p-3 text-xs text-foreground-muted">{item.ip || '-'}</td>
+                    </tr>
+                    {expanded && (
+                      <tr>
+                        <td colSpan={9} className="bg-[var(--admin-surface-2)] p-4 sm:p-5">
+                          <div className="text-xs font-semibold text-foreground">任务详情</div>
+                          <dl className="mt-3 grid content-start gap-x-4 gap-y-2 text-xs sm:grid-cols-2 lg:grid-cols-3">
+                            <div>
+                              <dt className="text-foreground-muted">任务类型</dt>
+                              <dd className="mt-0.5 font-medium text-foreground">{item.action_label}</dd>
+                            </div>
+                            <div>
+                              <dt className="text-foreground-muted">操作标识</dt>
+                              <dd className="mt-0.5 font-mono text-foreground">{item.action}</dd>
+                            </div>
+                            <div>
+                              <dt className="text-foreground-muted">接口</dt>
+                              <dd className="mt-0.5 break-all font-mono text-foreground">{item.method} {item.path}</dd>
+                            </div>
+                            <div>
+                              <dt className="text-foreground-muted">结果</dt>
+                              <dd className={`mt-0.5 font-semibold ${item.status_code >= 400 ? 'text-accent-rose' : 'text-accent-brand'}`}>
+                                {item.status_code >= 400 ? '失败' : '成功'} · {item.status_code}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt className="text-foreground-muted">耗时</dt>
+                              <dd className="mt-0.5 tabular-nums font-medium text-foreground">{item.duration_ms} ms</dd>
+                            </div>
+                            <div>
+                              <dt className="text-foreground-muted">IP</dt>
+                              <dd className="mt-0.5 font-medium text-foreground">{item.ip || '-'}</dd>
+                            </div>
+                          </dl>
+                          {Object.keys(item.detail).length > 0 && (
+                            <>
+                              <div className="mt-4 text-xs font-semibold text-foreground">任务上下文</div>
+                              <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-card-border bg-background p-3 text-[11px] leading-5 text-foreground-muted">
+                                {JSON.stringify(item.detail, null, 2)}
+                              </pre>
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+              {!report?.items.length && <EmptyTable colSpan={9} label="暂无用户操作记录" />}
             </tbody>
           </table>
         </div>
@@ -608,7 +674,7 @@ function ErrorView({
               id="error-source-filter"
               value={source}
               onChange={event => setSource(event.target.value)}
-              className="min-h-10 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-emerald/50"
+              className="min-h-10 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-brand/50"
             >
               <option value="">全部来源</option>
               {(report?.sources || []).map(option => (
@@ -622,7 +688,7 @@ function ErrorView({
               id="error-severity-filter"
               value={severity}
               onChange={event => setSeverity(event.target.value)}
-              className="min-h-10 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-emerald/50"
+              className="min-h-10 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-brand/50"
             >
               <option value="">全部等级</option>
               {(report?.severities || ['warning', 'error', 'critical']).map(option => (
@@ -801,7 +867,7 @@ function AuditView({
             <select
               value={action}
               onChange={event => setAction(event.target.value)}
-              className="min-h-10 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-emerald/50"
+              className="min-h-10 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-brand/50"
             >
               <option value="">全部动作</option>
               {Object.entries(ADMIN_ACTION_LABELS).map(([key, label]) => (

@@ -17,9 +17,9 @@
 }
 
 .panel {
-  --sync-primary-bg: #303034;
-  --sync-primary-hover: #242426;
-  --sync-primary-loading: #74747b;
+  --sync-primary-bg: var(--accent-brand);
+  --sync-primary-hover: var(--foreground);
+  --sync-primary-loading: var(--accent-sky);
   overflow: hidden;
   width: min(520px, 100%);
   max-height: min(680px, calc(100dvh - 40px));
@@ -79,13 +79,23 @@
 .status[data-error="true"] { color: var(--accent-rose); }
 .countRow { display: flex; min-height: 44px; align-items: center; gap: 8px; color: var(--foreground-muted); font-size: .82rem; }
 .countRow > div { display: inline-flex; padding: 2px; border-radius: 8px; gap: 2px; background: var(--background-secondary); }
-.countRow button { min-width: 44px; min-height: 40px; border: 0; border-radius: 7px; color: var(--foreground-muted); background: transparent; font-weight: 650; font-variant-numeric: tabular-nums; }
+.countRow button { min-width: 44px; min-height: 44px; border: 0; border-radius: 7px; color: var(--foreground-muted); background: transparent; font-weight: 650; font-variant-numeric: tabular-nums; }
 .countRow button[aria-checked="true"] { color: var(--foreground); background: var(--card-bg); box-shadow: 0 1px 3px rgb(0 0 0 / 8%); }
 .manage { display: inline-flex; width: max-content; min-height: 44px; padding: 0 4px; border: 0; align-items: center; gap: 6px; color: var(--foreground-muted); background: transparent; font-size: .82rem; }
 .manage:hover { color: var(--foreground); }
 .manage:disabled { opacity: .45; }
 .background { width: max-content; min-height: 44px; padding: 0 12px; border: 1px solid var(--card-border); border-radius: 8px; color: var(--foreground); background: transparent; font-size: .82rem; font-weight: 650; }
 .background:hover { background: var(--background-secondary); }
+
+.biliAccount { display: grid; gap: 12px; }
+.biliActions { display: flex; gap: 10px; }
+.biliActions .background { flex: 1; }
+.biliAccountStatus { display: inline-flex; width: max-content; min-height: 40px; padding: 0 12px; border: 1px solid var(--card-border); border-radius: 999px; align-items: center; gap: 8px; color: var(--foreground-muted); font-size: .82rem; }
+.biliAccountStatus[data-connected="true"] { color: var(--foreground); border-color: color-mix(in srgb, var(--foreground) 22%, var(--card-border)); }
+.biliAccountStatus[data-connected="true"] svg { color: #00aeec; }
+.biliAccountStatus[data-stage="error"] svg { color: var(--accent-rose); }
+.biliAccountStatus[data-stage="starting"][data-connected="false"] svg,
+.biliAccountStatus[data-stage="collecting"] svg { color: var(--accent-sky); }
 
 .creatorList { display: grid; gap: 6px; }
 .creatorChoice { display: grid; min-height: 54px; padding: 3px; border: 1px solid var(--card-border); border-radius: 10px; grid-template-columns: minmax(0, 1fr) 44px; align-items: center; background: transparent; }
@@ -111,13 +121,25 @@
 .creatorPreview strong { overflow: hidden; font-size: .88rem; text-overflow: ellipsis; white-space: nowrap; }
 .creatorPreview small { color: var(--foreground-muted); font-size: .73rem; }
 .creatorEmpty { display: grid; min-height: 88px; border: 1px dashed var(--card-border); border-radius: 10px; place-items: center; color: var(--foreground-muted); font-size: .84rem; }
+.creatorPageLink { display: inline-flex; width: max-content; min-height: 44px; align-items: center; color: var(--accent-brand); font-size: .82rem; font-weight: 700; text-decoration: none; }
+.creatorPageLink:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+.confirmDialog { width: min(420px, calc(100% - 32px)); margin: auto; padding: 0; border: 1px solid var(--card-border); border-radius: 14px; color: var(--foreground); background: var(--card-bg); box-shadow: 0 24px 80px rgb(0 0 0 / 28%); }
+.confirmDialog::backdrop { background: rgb(0 0 0 / 52%); backdrop-filter: blur(3px); }
+.confirmCard { display: grid; padding: 22px; gap: 12px; }
+.confirmCard h2, .confirmCard p { margin: 0; }
+.confirmCard h2 { font-size: 1rem; }
+.confirmCard p { color: var(--foreground-muted); font-size: .84rem; line-height: 1.65; }
+.confirmCard > div { display: flex; margin-top: 4px; justify-content: flex-end; gap: 8px; }
+.confirmCard button { min-height: 44px; padding: 0 15px; border: 1px solid var(--card-border); border-radius: 9px; color: var(--foreground); background: var(--background-secondary); font-weight: 700; }
+.confirmCard button[data-danger="true"] { color: #fff; border-color: var(--accent-rose); background: var(--accent-rose); }
 
 @keyframes sync-spin { to { transform: rotate(360deg); } }
 
 :global([data-theme="dark"]) .panel {
-  --sync-primary-bg: #9a9aa2;
+  --sync-primary-bg: var(--accent-sky);
   --sync-primary-hover: #bdbdc5;
-  --sync-primary-loading: #74747b;
+  --sync-primary-loading: var(--accent-sky);
 }
 
 @media (prefers-reduced-motion: reduce) {

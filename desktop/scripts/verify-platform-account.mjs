@@ -29,9 +29,9 @@ assert.throws(
     platform: 'xiaohongshu',
     profileKey: 'user_123-safe',
     mode: 'collect',
-    limit: 11,
+    limit: 101,
   }),
-  /1–10/,
+  /1–100/,
 );
 
 assert.equal(

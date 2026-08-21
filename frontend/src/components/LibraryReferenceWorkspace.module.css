@@ -11,12 +11,12 @@
 }
 
 .crossRow[data-active='true'] {
-  background: var(--accent-mint-soft);
-  box-shadow: inset 3px 0 0 var(--accent-emerald);
+  background: var(--accent-sky-soft);
+  box-shadow: inset 3px 0 0 var(--accent-brand);
 }
 
 .crossRow[data-selected='true'] {
-  background: color-mix(in srgb, var(--accent-emerald) 7%, var(--card-bg));
+  background: color-mix(in srgb, var(--accent-brand) 7%, var(--card-bg));
 }
 
 .crossRow[data-layout='grid'] {
@@ -31,16 +31,16 @@
 }
 
 .crossRow[data-layout='grid'][data-active='true'] {
-  border-color: color-mix(in srgb, var(--accent-emerald) 68%, var(--card-border));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-emerald) 24%, transparent);
+  border-color: color-mix(in srgb, var(--accent-brand) 68%, var(--card-border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-brand) 24%, transparent);
 }
 
 .crossRow:has(.crossRowActivation:hover) {
-  background: color-mix(in srgb, var(--accent-mint-soft) 55%, var(--card-bg));
+  background: color-mix(in srgb, var(--accent-sky-soft) 55%, var(--card-bg));
 }
 
 .crossRow:has(.crossRowActivation:focus-visible) {
-  outline: 2px solid var(--accent-emerald);
+  outline: 2px solid var(--accent-brand);
   outline-offset: -2px;
 }
 
@@ -164,13 +164,13 @@ span.crossRowCoverFallback {
 }
 
 .crossRowSelect[aria-pressed='true'] {
-  border-color: var(--accent-emerald);
+  border-color: var(--accent-brand);
   color: #fff;
-  background: var(--accent-emerald);
+  background: var(--accent-brand);
 }
 
 .crossRowSelect:focus-visible {
-  outline: 2px solid var(--accent-emerald);
+  outline: 2px solid var(--accent-brand);
   outline-offset: 2px;
 }
 
@@ -262,7 +262,7 @@ span.crossRowCoverFallback {
 }
 
 .crossRowStatus[data-ready='true'] {
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
 }
 
 .crossRowStatus b {
@@ -326,7 +326,7 @@ span.crossRowCoverFallback {
 }
 
 .crossRowActions button {
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
 }
 
 .crossRowActions button:disabled {
@@ -355,7 +355,7 @@ span.crossRowCoverFallback {
 .previewPaneActions a:focus-visible,
 .previewPaneMore summary:focus-visible,
 .crossRowCoverFallback:focus-visible {
-  outline: 2px solid var(--accent-emerald);
+  outline: 2px solid var(--accent-brand);
   outline-offset: 2px;
 }
 
@@ -467,7 +467,7 @@ span.crossRowCoverFallback {
 }
 
 .previewPaneStatuses > span[data-ready='true'] {
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
 }
 
 .previewPaneStatuses b {

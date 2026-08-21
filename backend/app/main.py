@@ -2,6 +2,7 @@
 VideoCapsule FastAPI application entry point.
 """
 
+import json
 import os
 import threading
 import time
@@ -34,15 +35,24 @@ from app.models.application_error_log import ApplicationErrorLog  # noqa: F401
 from app.models.feedback import Feedback  # noqa: F401
 from app.models.library_hidden_item import LibraryHiddenItem  # noqa: F401
 from app.models.douyin_account_binding import DouyinAccountBinding  # noqa: F401
+from app.models.desktop_handoff import DesktopHandoff  # noqa: F401
 from app.models.video_source_ledger import VideoSourceLedger  # noqa: F401
 from app.models.creator_sync import (  # noqa: F401
     CreatorSource,
     CreatorSourceItem,
     CreatorSyncRun,
+    CreatorSyncRunItem,
 )
 from app.models.agent_thread import AgentMessage, AgentThread  # noqa: F401
+from app.models.agent_runtime import (  # noqa: F401
+    AgentEvent,
+    AgentMemoryCheckpoint,
+    AgentTurn,
+    AgentTurnSource,
+)
 from app.models.knowledge_entry import KnowledgeEntry  # noqa: F401
 from app.models.user_ai_provider_config import UserAIProviderConfig  # noqa: F401
+from app.models.user_custom_chat_model import UserCustomChatModel  # noqa: F401
 from app.models.chat_model import (  # noqa: F401
     ChatModelChargeReservation,
     ChatModelFreeUsage,
@@ -57,6 +67,7 @@ from app.core.request_context import reset_request_context, set_request_context
 from app.services import (
     activity_service,
     agent_service,
+    agent_runtime_worker,
     auth_service,
     automation_runner,
     creator_sync_worker,
@@ -229,6 +240,7 @@ def create_app() -> FastAPI:
         )
         video_analysis_worker.runner.start()
         creator_sync_worker.runner.start()
+        agent_runtime_worker.runner.start()
         threading.Thread(
             target=_reconcile_video_analysis_agent_runs,
             name="video-analysis-agent-reconcile",
@@ -238,6 +250,7 @@ def create_app() -> FastAPI:
 
     @app.on_event("shutdown")
     def on_shutdown() -> None:
+        agent_runtime_worker.runner.stop()
         creator_sync_worker.runner.stop()
         automation_runner.runner.stop()
         video_analysis_worker.runner.stop()
@@ -390,11 +403,167 @@ def _migrate_knowledge_entries(conn, insp, dialect_name: str) -> None:
         ))
 
 
+def _promote_legacy_custom_provider(conn) -> None:
+    """把旧单行 custom 配置提升为该用户第一条自定义模型并设为当前。
+
+    仅当用户还没有任何自定义模型时才提升，保证幂等且绝不覆盖用户
+    之后新建的选择。
+    """
+    from app.models.user_custom_chat_model import UserCustomChatModel
+
+    legacy_rows = conn.execute(text(
+        "SELECT id, user_id, provider_name, model, api_base, encrypted_api_key "
+        "FROM user_ai_provider_configs "
+        "WHERE mode = 'custom' AND enabled"
+    )).mappings().all()
+    if not legacy_rows:
+        return
+    for row in legacy_rows:
+        if not (row["model"] and row["api_base"] and row["encrypted_api_key"]):
+            continue
+        exists = conn.execute(text(
+            "SELECT 1 FROM user_custom_chat_models WHERE user_id = :user_id LIMIT 1"
+        ), {"user_id": row["user_id"]}).first()
+        if exists is not None:
+            continue
+        import uuid
+
+        conn.execute(
+            UserCustomChatModel.__table__.insert(),
+            {
+                "id": str(uuid.uuid4()),
+                "user_id": row["user_id"],
+                "name": (row["provider_name"] or "").strip()[:80] or "OpenAI Compatible",
+                "provider_name": (row["provider_name"] or "").strip()[:80] or "OpenAI Compatible",
+                "model": row["model"],
+                "api_base": row["api_base"],
+                "encrypted_api_key": row["encrypted_api_key"],
+                "enabled": True,
+                "is_selected": True,
+            },
+        )
+
+
+def _migrate_creator_sync(conn, insp) -> None:
+    """Add catalog/run-progress fields without rebuilding legacy tables.
+
+    In particular, the historic requested_limit and status CHECK constraints
+    stay untouched. Retry waiting is represented by queued + next_retry_at and
+    user intervention by failed + needs_action.
+    """
+    if insp.has_table("creator_source_items"):
+        item_cols = {c["name"] for c in insp.get_columns("creator_source_items")}
+        item_additions = {
+            "title": "VARCHAR(512) NOT NULL DEFAULT ''",
+            "cover_url": "VARCHAR(2048) NOT NULL DEFAULT ''",
+            "description": "TEXT NOT NULL DEFAULT ''",
+            "author_name": "VARCHAR(160) NOT NULL DEFAULT ''",
+            "published_at": "TIMESTAMP NULL",
+            "duration_seconds": "INTEGER NULL",
+            "order_index": "INTEGER NOT NULL DEFAULT 0",
+            "parts_json": "TEXT NOT NULL DEFAULT '[]'",
+            "last_seen_run_id": "VARCHAR(48) NULL",
+            "is_available": "BOOLEAN NOT NULL DEFAULT TRUE",
+            "unavailable_at": "TIMESTAMP NULL",
+        }
+        for column_name, definition in item_additions.items():
+            if column_name not in item_cols:
+                conn.execute(text(
+                    f"ALTER TABLE creator_source_items ADD COLUMN "
+                    f"{column_name} {definition}"
+                ))
+        conn.execute(text(
+            "UPDATE creator_source_items SET is_available = FALSE, "
+            "unavailable_at = COALESCE(unavailable_at, removed_at) "
+            "WHERE state = 'removed' OR removed_at IS NOT NULL"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_creator_items_source_catalog "
+            "ON creator_source_items "
+            "(source_id, is_available, published_at, external_id)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_creator_items_source_state "
+            "ON creator_source_items (source_id, state, note_id)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_creator_source_items_last_seen_run_id "
+            "ON creator_source_items (last_seen_run_id)"
+        ))
+
+    if insp.has_table("creator_sync_runs"):
+        run_cols = {c["name"] for c in insp.get_columns("creator_sync_runs")}
+        run_additions = {
+            "operation": "VARCHAR(32) NOT NULL DEFAULT 'recent_transcript'",
+            "target_count": "INTEGER NOT NULL DEFAULT 0",
+            "discovery_cursor_json": "TEXT NOT NULL DEFAULT '{}'",
+            "discovery_complete": "BOOLEAN NOT NULL DEFAULT FALSE",
+            "discovered_count": "INTEGER NOT NULL DEFAULT 0",
+            "processed_count": "INTEGER NOT NULL DEFAULT 0",
+            "total_count": "INTEGER NULL",
+            "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+            "next_retry_at": "TIMESTAMP NULL",
+            "needs_action": "BOOLEAN NOT NULL DEFAULT FALSE",
+            "needs_action_code": "VARCHAR(80) NOT NULL DEFAULT ''",
+            "needs_action_message": "VARCHAR(240) NOT NULL DEFAULT ''",
+            "source_snapshot_json": "TEXT NOT NULL DEFAULT '{}'",
+        }
+        for column_name, definition in run_additions.items():
+            if column_name not in run_cols:
+                conn.execute(text(
+                    f"ALTER TABLE creator_sync_runs ADD COLUMN "
+                    f"{column_name} {definition}"
+                ))
+        conn.execute(text(
+            "UPDATE creator_sync_runs SET "
+            "operation = COALESCE(NULLIF(operation, ''), 'recent_transcript'), "
+            "target_count = CASE WHEN target_count = 0 THEN requested_limit "
+            "ELSE target_count END, "
+            "discovered_count = CASE WHEN discovered_count = 0 THEN checked_count "
+            "ELSE discovered_count END, "
+            "processed_count = CASE WHEN processed_count = 0 THEN checked_count "
+            "ELSE processed_count END"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_creator_sync_runs_operation "
+            "ON creator_sync_runs (operation)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_creator_sync_runs_next_retry_at "
+            "ON creator_sync_runs (next_retry_at)"
+        ))
+        legacy_snapshots = conn.execute(text(
+            "SELECT r.id, s.id AS source_id, s.platform, s.creator_id, "
+            "s.profile_url, s.display_name, s.avatar_url "
+            "FROM creator_sync_runs r "
+            "JOIN creator_sources s ON s.id = r.source_id "
+            "WHERE r.source_snapshot_json IS NULL "
+            "OR r.source_snapshot_json = '' OR r.source_snapshot_json = '{}'"
+        )).mappings().all()
+        for row in legacy_snapshots:
+            snapshot = {
+                "id": row["source_id"],
+                "platform": row["platform"],
+                "creator_id": row["creator_id"],
+                "profile_url": row["profile_url"],
+                "display_name": row["display_name"],
+                "avatar_url": row["avatar_url"],
+            }
+            conn.execute(text(
+                "UPDATE creator_sync_runs SET source_snapshot_json = :snapshot "
+                "WHERE id = :run_id"
+            ), {
+                "snapshot": json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")),
+                "run_id": row["id"],
+            })
+
+
 def _migrate_db() -> None:
     """Apply small cross-dialect additive migrations without Alembic."""
     insp = inspect(engine)
     with engine.begin() as conn:
         _migrate_knowledge_entries(conn, insp, engine.dialect.name)
+        _migrate_creator_sync(conn, insp)
         # Older local SQLite builds ran with foreign_keys disabled. Remove
         # only orphan rows from the newly introduced Agent tables before
         # relying on cascade behavior going forward.
@@ -599,6 +768,28 @@ def _migrate_db() -> None:
                 "ix_agent_automation_runs_heartbeat_at "
                 "ON agent_automation_runs (heartbeat_at)"
             ))
+        if insp.has_table("user_custom_chat_models"):
+            custom_model_cols = {
+                c["name"] for c in insp.get_columns("user_custom_chat_models")
+            }
+            if "is_selected" not in custom_model_cols:
+                conn.execute(text(
+                    "ALTER TABLE user_custom_chat_models ADD COLUMN "
+                    "is_selected BOOLEAN NOT NULL DEFAULT FALSE"
+                ))
+            # 部分唯一索引：每个用户最多一条选中行；其他行不受约束。
+            dialect_name = engine.dialect.name
+            where_clause = "is_selected" if dialect_name in {"sqlite", "postgresql"} else "TRUE"
+            conn.execute(text(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS "
+                f"uq_user_custom_chat_model_selected "
+                f"ON user_custom_chat_models (user_id) WHERE {where_clause}"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_user_custom_chat_model_user "
+                "ON user_custom_chat_models (user_id, created_at)"
+            ))
+            _promote_legacy_custom_provider(conn)
         if insp.has_table("vision_providers"):
             provider_cols = {
                 c["name"] for c in insp.get_columns("vision_providers")

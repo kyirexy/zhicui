@@ -74,7 +74,7 @@ export default function AdminAnalysisAccountCard({ userId }: { userId: string })
     <section className="rounded-xl border border-card-border bg-[var(--admin-surface-1)] p-4" aria-labelledby="analysis-account-title">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
-          <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-accent-emerald/10 text-accent-emerald">
+          <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-accent-brand/10 text-accent-brand">
             <WalletCards size={18} aria-hidden="true" />
           </span>
           <div>
@@ -140,7 +140,7 @@ export default function AdminAnalysisAccountCard({ userId }: { userId: string })
                 value={points}
                 onChange={event => setPoints(event.target.value)}
                 placeholder="例如：1000"
-                className="min-h-11 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-emerald/60"
+                className="min-h-11 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-brand/60"
               />
             </label>
             <label className="grid gap-1 text-xs text-foreground-muted">
@@ -150,14 +150,14 @@ export default function AdminAnalysisAccountCard({ userId }: { userId: string })
                 onChange={event => setReason(event.target.value)}
                 placeholder="例如：内测额度、异常任务退款"
                 rows={2}
-                className="rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 py-2 text-sm text-foreground outline-none focus:border-accent-emerald/60"
+                className="rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 py-2 text-sm text-foreground outline-none focus:border-accent-brand/60"
               />
             </label>
             <button
               type="button"
               onClick={() => void submit()}
               disabled={busy || !points || !reason.trim()}
-              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent-emerald px-3 text-sm font-semibold text-white disabled:opacity-50"
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent-brand px-3 text-sm font-semibold text-white disabled:opacity-50"
             >
               {busy ? <LoaderCircle size={15} className="animate-spin" /> : <CircleDollarSign size={15} />}
               {busy ? '正在写入账本' : `确认${action === 'grant' ? '发放' : action === 'refund' ? '退款' : '扣减'}`}
@@ -176,7 +176,7 @@ export default function AdminAnalysisAccountCard({ userId }: { userId: string })
                     </span>
                     {(() => {
                       const delta = Number(entry.available_delta ?? entry.reserved_delta ?? entry.points);
-                      return <b className={delta < 0 ? 'shrink-0 text-accent-rose' : 'shrink-0 text-accent-emerald'}>{formatSignedPoints(delta)}</b>;
+                      return <b className={delta < 0 ? 'shrink-0 text-accent-rose' : 'shrink-0 text-accent-brand'}>{formatSignedPoints(delta)}</b>;
                     })()}
                   </div>
                 ))}
@@ -186,7 +186,7 @@ export default function AdminAnalysisAccountCard({ userId }: { userId: string })
         </>
       ) : null}
 
-      {message && <p className="mt-3 text-xs text-accent-emerald" role="status">{message}</p>}
+      {message && <p className="mt-3 text-xs text-accent-brand" role="status">{message}</p>}
       {error && <p className="mt-3 text-xs text-accent-rose" role="alert">{error}</p>}
     </section>
   );

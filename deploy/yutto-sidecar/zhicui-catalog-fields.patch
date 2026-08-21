@@ -1,0 +1,63 @@
+diff --git a/src/yutto/api/ugc_video.py b/src/yutto/api/ugc_video.py
+index 4ad60bc56eab31deef4239efa22cad654852d179..2ec45ab789a82447d30d778e593c0f5ebafd428a 100644
+--- a/src/yutto/api/ugc_video.py
++++ b/src/yutto/api/ugc_video.py
+@@ -47,6 +47,7 @@ class _UgcVideoInfo(TypedDict):
+     picture: str
+     title: str
+     pubdate: int
++    duration_seconds: int
+     description: str
+     pages: list[_UgcVideoPageInfo]
+     genre: list[str]
+@@ -59,6 +60,7 @@ class UgcVideoListItem(TypedDict):
+     name: str
+     avid: AvId
+     cid: CId
++    duration_seconds: int
+     metadata: MetaData
+
+
+@@ -118,6 +120,7 @@ async def get_ugc_video_info(scope: ExecutionScope, avid: AvId) -> _UgcVideoInfo
+         picture=res_json_data["pic"],
+         title=res_json_data["title"],
+         pubdate=res_json_data["pubdate"],
++        duration_seconds=max(0, int(res_json_data.get("duration") or 0)),
+         description=res_json_data["desc"],
+         pages=[
+             _UgcVideoPageInfo(
+@@ -163,6 +166,7 @@ async def get_ugc_video_list(scope: ExecutionScope, avid: AvId) -> UgcVideoList:
+             name=item["part"],
+             avid=avid,
+             cid=CId(str(item["cid"])),
++            duration_seconds=video_info["duration_seconds"],
+             metadata=_parse_ugc_video_metadata(video_info, page_info, is_first_page=i == 0),
+         )
+         for i, (item, page_info) in enumerate(
+diff --git a/src/yutto/core/result.py b/src/yutto/core/result.py
+index a150d94a51334221ad025a7fe7e0aa6b5912a0f9..4cd24835882097902cb0f2e977c761884b9fb74d 100644
+--- a/src/yutto/core/result.py
++++ b/src/yutto/core/result.py
+@@ -73,6 +73,9 @@ class ResolvedItem(_ResultModel):
+     uploader: str = ""
+     description: str = ""
+     tags: tuple[str, ...] = ()
++    # 稳定目录元数据：仅在 resolve-only 枚举中透出，不携带媒体流地址或本地路径。
++    published_at: int | None = None
++    duration_seconds: int = 0
+
+     @field_validator("avid", mode="plain", json_schema_input_type=str)
+     @classmethod
+diff --git a/src/yutto/extractor/common.py b/src/yutto/extractor/common.py
+index b157e019a075a0f2bb0ea622f8eb60aa7750b2d8..7b29b13b329557e33f65b284572c042e4d48a4fe 100644
+--- a/src/yutto/extractor/common.py
++++ b/src/yutto/extractor/common.py
+@@ -299,6 +299,8 @@ def build_ugc_video_info(
+             uploader=uploader,
+             description=description,
+             tags=tuple(tags),
++            published_at=int(ugc_video_info["metadata"]["premiered"]),
++            duration_seconds=ugc_video_info["duration_seconds"],
+             planned_path=planned_path,
+             display_group=display_group,
+         ),

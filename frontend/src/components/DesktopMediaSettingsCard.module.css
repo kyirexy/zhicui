@@ -1,6 +1,6 @@
 .card {
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--desktop-border-strong, rgba(36, 36, 38, 0.16)) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--desktop-border-strong, rgba(16, 24, 40, 0.16)) 82%, transparent);
   border-radius: 12px;
   background: var(--desktop-surface, var(--card-bg));
 }
@@ -19,8 +19,8 @@
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  color: var(--desktop-accent-strong, var(--accent-emerald));
-  background: var(--desktop-accent-soft, rgba(48, 48, 52, 0.1));
+  color: var(--desktop-accent-strong, var(--accent-brand));
+  background: var(--desktop-accent-soft, color-mix(in srgb, var(--accent-brand) 10%, transparent));
 }
 
 .mark {
@@ -137,20 +137,20 @@
 }
 
 .switchActive::before {
-  border-color: color-mix(in srgb, var(--desktop-accent, var(--accent-emerald)) 55%, transparent);
-  background: var(--desktop-accent-soft, color-mix(in srgb, var(--accent-emerald) 12%, transparent));
+  border-color: color-mix(in srgb, var(--desktop-accent, var(--accent-brand)) 55%, transparent);
+  background: var(--desktop-accent-soft, color-mix(in srgb, var(--accent-brand) 12%, transparent));
 }
 
 .switchActive > span {
   transform: translateX(18px);
-  background: var(--desktop-accent-strong, var(--accent-emerald));
+  background: var(--desktop-accent-strong, var(--accent-brand));
 }
 
 .switch:focus-visible,
 .primaryAction:focus-visible,
 .secondaryAction:focus-visible,
 .error button:focus-visible {
-  outline: 2px solid var(--desktop-accent, var(--accent-emerald));
+  outline: 2px solid var(--desktop-accent, var(--accent-brand));
   outline-offset: 2px;
 }
 
@@ -206,7 +206,7 @@
 
 .directoryTop > svg {
   flex: 0 0 auto;
-  color: var(--desktop-accent-strong, var(--accent-emerald));
+  color: var(--desktop-accent-strong, var(--accent-brand));
 }
 
 .directory p {
@@ -236,13 +236,13 @@
 }
 
 .primaryAction {
-  border: 1px solid var(--desktop-accent-strong, #303034);
+  border: 1px solid var(--desktop-accent-strong, var(--accent-brand));
   color: white;
-  background: var(--desktop-accent-strong, #303034);
+  background: var(--desktop-accent-strong, var(--accent-brand));
 }
 
 .primaryAction:hover {
-  background: color-mix(in srgb, var(--desktop-accent-strong, #303034) 90%, black);
+  background: color-mix(in srgb, var(--desktop-accent-strong, var(--accent-brand)) 90%, black);
 }
 
 .secondaryAction {
@@ -252,7 +252,7 @@
 }
 
 .secondaryAction:hover {
-  border-color: var(--desktop-accent, #74747b);
+  border-color: var(--desktop-accent, var(--accent-sky));
 }
 
 .loading {

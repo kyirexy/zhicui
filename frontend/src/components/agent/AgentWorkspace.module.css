@@ -5,8 +5,8 @@
   --aw-soft: color-mix(in srgb, var(--foreground) 4%, transparent);
   --aw-soft-strong: color-mix(in srgb, var(--foreground) 7%, transparent);
   --aw-line: var(--card-border);
-  --aw-mint: var(--accent-emerald);
-  --aw-mint-soft: color-mix(in srgb, var(--accent-emerald) 9%, var(--card-bg));
+  --aw-mint: var(--accent-brand);
+  --aw-mint-soft: color-mix(in srgb, var(--accent-brand) 9%, var(--card-bg));
   width: 100%;
   min-width: 0;
   min-height: 0;
@@ -245,7 +245,24 @@
   font-size: 0.62rem;
   font-weight: 650;
   opacity: 0.78;
+  white-space: nowrap;
   transition: opacity 160ms ease-out, transform 160ms ease-out;
+}
+
+.root :global(.video-agent-platform-tabs button svg) {
+  flex: 0 0 auto;
+}
+
+.root :global(.video-agent-platform-tabs button [data-platform-brand='douyin']) {
+  color: var(--foreground);
+}
+
+.root :global(.video-agent-platform-tabs button [data-platform-brand='bilibili']) {
+  color: #00aeec;
+}
+
+.root :global(.video-agent-platform-tabs button [data-platform-brand='xiaohongshu']) {
+  color: #ff2442;
 }
 
 .root :global(.video-agent-platform-tabs button:hover),
@@ -255,7 +272,7 @@
 }
 
 .root :global(.video-agent-platform-tabs button.is-active) {
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
   background: transparent;
   box-shadow: none;
   opacity: 1;
@@ -751,7 +768,9 @@
   overflow-y: auto;
   min-width: 0;
   min-height: 0;
-  padding: clamp(28px, 4vw, 48px) clamp(24px, 6vw, 72px) 30px;
+  /* DSH ChatView.scroll parity: sides = composer clearance + 16px, so the
+     transcript stays exactly 32px narrower than the input card. */
+  padding: 16px max(16px, calc((100% - 748px) / 2)) 30px;
   flex: 1 1 0;
   scrollbar-width: thin;
   scrollbar-color: var(--aw-line) transparent;
@@ -761,9 +780,67 @@
   -webkit-overflow-scrolling: touch;
 }
 
+.root :global(.video-agent-to-bottom-slot) {
+  position: sticky;
+  z-index: 8;
+  bottom: 16px;
+  display: flex;
+  height: 0;
+  justify-content: flex-end;
+  /* Align the button's right edge to the centered message column exactly as
+     DSH's toBottomSlot aligns to --dsh-chat-content-width (748px). */
+  padding-right: max(0px, calc((100% - min(100%, 748px)) / 2));
+  pointer-events: none;
+}
+
+.root :global(.video-agent-back-to-bottom) {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  margin-top: -34px;
+  padding: 0;
+  border: 1px solid var(--aw-line);
+  border-radius: 100px;
+  place-items: center;
+  color: var(--foreground);
+  background: var(--aw-surface);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--card-shadow) 30%, transparent);
+  opacity: 0;
+  transform: scale(0.86);
+  pointer-events: none;
+  transition:
+    opacity 160ms ease,
+    transform 180ms ease,
+    border-color 160ms ease,
+    background-color 160ms ease;
+}
+
+.root :global(.video-agent-back-to-bottom.is-visible) {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+
+.root :global(.video-agent-back-to-bottom:hover) {
+  border-color: var(--aw-mint);
+  color: var(--aw-mint);
+  background: color-mix(in srgb, var(--aw-mint) 8%, var(--aw-surface));
+}
+
+.root :global(.video-agent-back-to-bottom:focus-visible) {
+  outline: 2px solid var(--aw-mint);
+  outline-offset: 2px;
+}
+
+@media (max-width: 960px) {
+  .root :global(.video-agent-to-bottom-slot) {
+    padding-right: 12px;
+  }
+}
+
 .root :global(.video-agent-welcome) {
   display: flex;
-  width: min(100%, 720px);
+  width: min(100%, 748px);
   min-height: 100%;
   margin: auto;
   padding: 32px 0 44px;
@@ -875,9 +952,9 @@
 }
 
 .root :global(.video-agent-message) {
-  width: min(100%, 780px);
+  width: min(100%, 748px);
   min-width: 0;
-  margin: 0 auto 30px;
+  margin: 0 auto 18px;
   color: var(--foreground-secondary);
 }
 
@@ -887,11 +964,29 @@
 }
 
 .root :global(.video-agent-message.is-user) {
+  display: flex;
+  width: 100%;
+  max-width: 100%;
+  margin-bottom: 8px;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: flex-start;
+}
+
+.root :global(.video-agent-message.is-user .video-agent-message-content) {
   width: fit-content;
-  max-width: min(76%, 620px);
-  margin-bottom: 20px;
-  margin-right: 0;
-  margin-left: auto;
+  min-width: 0;
+  max-width: min(525px, 82%);
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 22px;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--aw-mint) 8%, var(--aw-soft-strong));
+  box-shadow: none;
+  font-size: 16px;
+  line-height: 24px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .root :global(.video-agent-message-author) {
@@ -956,40 +1051,19 @@
 }
 
 .root :global(.video-agent-message.is-user .video-agent-message-content) {
-  padding: 11px 15px;
-  border: 0;
-  border-radius: 17px 17px 5px;
-  color: var(--foreground);
-  background: color-mix(in srgb, var(--aw-mint) 8%, var(--aw-soft-strong));
-  box-shadow: none;
+  /* User bubble geometry lives on the base block above (DSH MessageItem
+     parity); this keeps the delivery-state children clear of it. */
 }
 
 .root :global(.video-agent-answer-markdown) {
-  max-width: 68ch;
-  padding: 2px 0 2px 18px;
-  border-left: 2px solid color-mix(in srgb, var(--aw-mint) 46%, var(--aw-line));
+  max-width: none;
+  padding: 2px 0;
+  border-left: 0;
   color: var(--foreground);
-  font-size: 0.96rem;
-  line-height: 1.78;
+  font-size: 16px;
+  line-height: 28px;
   overflow-wrap: anywhere;
   text-wrap: pretty;
-}
-
-.root :global(.video-agent-message.is-streaming .video-agent-answer-markdown::after) {
-  display: inline-block;
-  width: 2px;
-  height: 1em;
-  margin-left: 3px;
-  border-radius: 2px;
-  vertical-align: -0.12em;
-  background: var(--aw-mint);
-  content: '';
-  animation: video-agent-stream-caret 0.8s steps(1, end) infinite;
-}
-
-@keyframes video-agent-stream-caret {
-  0%, 48% { opacity: 1; }
-  49%, 100% { opacity: 0; }
 }
 
 .root :global(.video-agent-answer-markdown) :where(p, ul, ol, blockquote, pre, table) {
@@ -1183,6 +1257,7 @@
 }
 
 .root :global(.video-agent-grounding-evidence),
+.root :global(.video-agent-grounding-claims),
 .root :global(.video-agent-grounding-links),
 .root :global(.video-agent-grounding-process),
 .root :global(.video-agent-grounding-limitations) {
@@ -1194,6 +1269,89 @@
 .root :global(.video-agent-grounding-evidence) {
   display: grid;
   gap: 8px;
+}
+
+.root :global(.video-agent-grounding-claims) {
+  display: grid;
+  gap: 10px;
+}
+
+.root :global(.video-agent-grounding-claims > li) {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--aw-mint) 22%, var(--aw-line));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--aw-mint-soft) 42%, var(--aw-soft));
+}
+
+.root :global(.video-agent-grounding-claims > li > header) {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+}
+
+.root :global(.video-agent-grounding-claims > li > header > span:last-child) {
+  display: grid;
+  gap: 2px;
+}
+
+.root :global(.video-agent-grounding-claims strong) {
+  color: var(--foreground);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.root :global(.video-agent-grounding-claims small) {
+  color: var(--foreground-muted);
+  font-size: 0.67rem;
+}
+
+.root :global(.video-agent-grounding-claims > li > p) {
+  margin: 8px 0 0 33px;
+  color: var(--foreground-secondary);
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+.root :global(.video-agent-grounding-claims ul) {
+  display: grid;
+  margin: 10px 0 0 33px;
+  padding: 0;
+  gap: 7px;
+  list-style: none;
+}
+
+.root :global(.video-agent-grounding-claims ul li) {
+  min-width: 0;
+  padding-top: 7px;
+  border-top: 1px solid var(--aw-line);
+}
+
+.root :global(.video-agent-grounding-claims ul a) {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.root :global(.video-agent-grounding-claims ul small) {
+  margin-left: 7px;
+}
+
+.root :global(.video-agent-grounding-claims blockquote) {
+  margin: 4px 0 0;
+  padding: 0;
+  border: 0;
+  color: var(--foreground-secondary);
+  background: transparent;
+  font-size: 0.74rem;
+  line-height: 1.55;
 }
 
 .root :global(.video-agent-grounding-evidence > li) {
@@ -1483,7 +1641,7 @@
 
 .root :global(.video-agent-thinking) {
   display: flex;
-  width: min(100%, 760px);
+  width: min(100%, 748px);
   min-height: 44px;
   margin: -12px auto 24px;
   align-items: center;
@@ -1497,6 +1655,63 @@
   gap: 3px;
 }
 
+.root :global(.video-agent-thinking-copy) {
+  display: grid !important;
+  min-width: 0;
+  gap: 2px !important;
+}
+
+.root :global(.video-agent-thinking-copy strong) {
+  color: var(--foreground-secondary);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.root :global(.video-agent-thinking-copy small) {
+  color: var(--foreground-muted);
+  font-size: 0.66rem;
+}
+
+.root :global(.video-agent-turn-action) {
+  display: inline-flex;
+  min-height: 34px;
+  margin-left: auto;
+  padding: 0 11px;
+  border: 1px solid var(--aw-line);
+  border-radius: 9px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  color: var(--foreground-secondary);
+  background: var(--aw-surface);
+  font-size: 0.69rem;
+  font-weight: 650;
+  transition: border-color 150ms ease, color 150ms ease, background-color 150ms ease;
+}
+
+.root :global(.video-agent-turn-action:hover:not(:disabled)) {
+  border-color: color-mix(in srgb, var(--aw-mint) 44%, var(--aw-line));
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--aw-mint) 7%, var(--aw-surface));
+}
+
+.root :global(.video-agent-turn-action:disabled) {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.root :global(.video-agent-turn-terminal-icon) {
+  display: inline-grid !important;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--foreground-muted);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+
 .root :global(.video-agent-thinking i) {
   width: 5px;
   height: 5px;
@@ -1508,7 +1723,9 @@
   position: relative;
   z-index: 2;
   flex: 0 0 auto;
-  padding: 10px clamp(18px, 5vw, 64px) 12px;
+  /* DSH skeleton parity: the composer card rides the same 748px axis as the
+     message column; sides = composer clearance + 16px. */
+  padding: 10px max(16px, calc((100% - 748px) / 2)) 12px;
   border-top: 0;
   background: var(--aw-surface);
 }
@@ -1520,7 +1737,7 @@
 .root :global(.video-agent-composer) {
   position: relative;
   overflow: visible;
-  width: min(100%, 800px);
+  width: min(100%, 748px);
   margin: 0 auto;
   border: 1px solid color-mix(in srgb, var(--foreground) 12%, var(--aw-line));
   border-radius: 14px;
@@ -1777,6 +1994,229 @@
   color: var(--foreground-muted);
   font-size: 0.68rem;
   text-align: center;
+}
+
+.root :global(.video-agent-model-config-link) {
+  display: flex;
+  width: auto;
+  min-height: 34px;
+  margin: 2px 9px 8px;
+  padding: 0 11px;
+  border: 1px dashed color-mix(in srgb, var(--aw-mint) 34%, var(--aw-line));
+  border-radius: 10px;
+  align-items: center;
+  gap: 7px;
+  color: var(--aw-mint);
+  background: color-mix(in srgb, var(--aw-mint) 5%, transparent);
+  font-size: 0.66rem;
+  font-weight: 680;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.root :global(.video-agent-model-config-link:hover),
+.root :global(.video-agent-model-config-link:focus-visible) {
+  color: var(--foreground);
+  outline: none;
+  border-color: color-mix(in srgb, var(--aw-mint) 62%, var(--aw-line));
+  background: color-mix(in srgb, var(--aw-mint) 9%, transparent);
+}
+
+.root :global(.video-agent-model-config-link:active) { transform: scale(0.99); }
+
+.root :global(.video-agent-model-config-link em) {
+  margin-left: auto;
+  overflow: hidden;
+  max-width: 150px;
+  color: var(--foreground-muted);
+  font-size: 0.58rem;
+  font-style: normal;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.root :global(.video-agent-model-config) {
+  position: fixed;
+  z-index: 32;
+  overflow: hidden;
+  width: min(360px, calc(100dvw - 28px));
+  border: 1px solid var(--aw-line);
+  border-radius: 16px;
+  color: var(--foreground);
+  background: var(--card-bg);
+  box-shadow: 0 20px 55px rgba(38, 38, 48, 0.18);
+  animation: agent-model-menu-in 150ms cubic-bezier(0.22, 1, 0.36, 1);
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+}
+
+.root :global(.video-agent-model-config-header) {
+  display: grid;
+  padding: 13px 13px 11px;
+  border-bottom: 1px solid var(--aw-line);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 9px;
+}
+
+.root :global(.video-agent-model-config-header > svg) {
+  margin-top: 2px;
+  color: var(--aw-mint);
+}
+
+.root :global(.video-agent-model-config-header > div) {
+  display: grid;
+  gap: 2px;
+}
+
+.root :global(.video-agent-model-config-header strong) {
+  font-size: 0.8rem;
+  font-weight: 760;
+  letter-spacing: -0.01em;
+}
+
+.root :global(.video-agent-model-config-header small) {
+  color: var(--foreground-muted);
+  font-size: 0.62rem;
+  line-height: 1.4;
+}
+
+.root :global(.video-agent-model-config-close) {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--foreground-muted);
+  background: transparent;
+  font-size: 1rem;
+  line-height: 1;
+  place-items: center;
+  transition: color 140ms ease, background 140ms ease;
+}
+
+.root :global(.video-agent-model-config-close:hover),
+.root :global(.video-agent-model-config-close:focus-visible) {
+  color: var(--foreground);
+  outline: none;
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+
+.root :global(.video-agent-model-config-body) {
+  display: grid;
+  padding: 12px 13px 4px;
+  gap: 10px;
+}
+
+.root :global(.video-agent-model-config-body label) {
+  display: grid;
+  gap: 5px;
+}
+
+.root :global(.video-agent-model-config-body label > span) {
+  color: var(--foreground-muted);
+  font-size: 0.6rem;
+  font-weight: 680;
+}
+
+.root :global(.video-agent-model-config-body input) {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--aw-line);
+  border-radius: 9px;
+  color: var(--foreground);
+  outline: none;
+  background: color-mix(in srgb, var(--foreground) 3%, transparent);
+  font: inherit;
+  font-size: 0.68rem;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.root :global(.video-agent-model-config-body input:focus) {
+  border-color: color-mix(in srgb, var(--aw-mint) 44%, var(--aw-line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--aw-mint) 7%, transparent);
+}
+
+.root :global(.video-agent-model-config-body input:disabled) {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.root :global(.video-agent-model-config-feedback) {
+  margin: 6px 13px 0;
+  padding: 7px 9px;
+  border-radius: 8px;
+  color: var(--aw-mint);
+  background: color-mix(in srgb, var(--aw-mint) 8%, transparent);
+  font-size: 0.66rem;
+  line-height: 1.45;
+}
+
+.root :global(.video-agent-model-config-feedback.is-error) {
+  color: #b34d47;
+  background: color-mix(in srgb, #c45b54 7%, transparent);
+}
+
+.root :global(.video-agent-model-config-actions) {
+  display: flex;
+  padding: 12px 13px 14px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.root :global(.video-agent-model-config-cta) {
+  display: flex;
+  gap: 7px;
+}
+
+.root :global(.video-agent-model-config-actions button) {
+  display: inline-flex;
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid var(--aw-line);
+  border-radius: 9px;
+  align-items: center;
+  gap: 6px;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  font: inherit;
+  font-size: 0.64rem;
+  font-weight: 680;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.root :global(.video-agent-model-config-actions button:hover:not(:disabled)),
+.root :global(.video-agent-model-config-actions button:focus-visible:not(:disabled)) {
+  outline: none;
+  color: var(--foreground);
+  border-color: color-mix(in srgb, var(--aw-mint) 46%, var(--aw-line));
+  background: color-mix(in srgb, var(--aw-mint) 9%, transparent);
+}
+
+.root :global(.video-agent-model-config-actions button:active:not(:disabled)) { transform: scale(0.98); }
+
+.root :global(.video-agent-model-config-actions button:disabled) {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.root :global(.video-agent-model-config-save) {
+  border-color: transparent !important;
+  color: #1d1f27 !important;
+  background: var(--aw-mint) !important;
+}
+
+.root :global(.video-agent-model-config-save:hover:not(:disabled)),
+.root :global(.video-agent-model-config-save:focus-visible:not(:disabled)) {
+  filter: brightness(1.04);
+  background: var(--aw-mint) !important;
+}
+
+.root :global(.video-agent-model-config-reset) {
+  color: var(--foreground-muted) !important;
 }
 
 .root :global(.video-agent-model-error) {
@@ -2054,45 +2494,60 @@
 .root :global(.video-agent-send) {
   position: static !important;
   display: grid;
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
-  min-height: 44px;
-  flex: 0 0 44px;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  flex: 0 0 34px;
   border: 0;
-  border-radius: 13px;
+  border-radius: 999px;
   place-items: center;
   color: #fff;
-  background: var(--aw-mint);
+  background: #4176e6;
   box-shadow: none;
+  /* Opts out of the toolbar's vertical centering exactly like DSH's .primary:
+     the send circle keeps its seat while the taller chips sit lower. */
+  transform: translateY(-2px);
   transition:
+    background-color 100ms ease,
     transform 160ms ease-out,
     opacity 160ms ease-out !important;
 }
 
 .root :global(.video-agent-send:hover:not(:disabled)) {
   filter: none;
-  transform: translateY(-1px);
+  transform: translateY(-3px);
+  background: #679efe;
 }
 
 .root :global(.video-agent-send:active:not(:disabled)) {
-  transform: translateY(1px);
+  transform: translateY(-1px);
 }
 
+/* Stop face: DSH primary-button parity — same circle and info-blue fill as
+   send, swapped to a filled rounded square glyph while the answer is running. */
 .root :global(.video-agent-send.is-stop) {
-  display: inline-flex;
-  width: auto;
-  padding: 0 15px;
-  align-items: center;
-  justify-content: center;
-  color: var(--foreground);
-  background: var(--aw-soft-strong);
+  display: grid;
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
+  place-items: center;
+  color: #fff;
+  background: #4176e6;
 }
 
-.root :global(.video-agent-send.is-stop span) {
-  margin-left: 6px;
-  font-size: 0.72rem;
-  font-weight: 680;
+.root :global(.video-agent-send.is-stop:hover:not(:disabled)) {
+  filter: none;
+  transform: translateY(-3px);
+  background: #679efe;
+}
+
+.root :global(.video-agent-send.is-stop:active:not(:disabled)) {
+  transform: translateY(-1px);
+}
+
+.root :global(.video-agent-send.is-stop svg) {
+  display: block;
 }
 
 .root :global(.video-agent-composer-count) {
@@ -2102,13 +2557,9 @@
   font-variant-numeric: tabular-nums;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .root :global(.video-agent-message.is-streaming .video-agent-answer-markdown::after) { animation: none; }
-}
-
 .root :global(.video-agent-send:disabled) {
-  cursor: not-allowed;
-  opacity: 0.38;
+  cursor: default;
+  opacity: 0.4;
 }
 
 .root :global(.video-agent-source-tools) {
@@ -3724,7 +4175,7 @@
 }
 
 .root :global(.video-agent-thread-skeleton) {
-  width: min(100%, 760px);
+  width: min(100%, 748px);
   margin: 0 auto;
   padding-top: 16px;
 }
@@ -3890,11 +4341,11 @@
   }
 
   .root :global(.video-agent-thread) {
-    padding: 22px clamp(28px, 3.2vw, 52px) 24px;
+    padding: 22px max(22px, calc((100% - 748px) / 2)) 24px;
   }
 
   .root :global(.video-agent-welcome) {
-    width: min(100%, 760px);
+    width: min(100%, 748px);
     min-height: 0;
     padding: 22px 0 30px;
     justify-content: flex-start;
@@ -3924,7 +4375,7 @@
   }
 
   .root :global(.video-agent-composer-region) {
-    padding: 9px clamp(22px, 3.2vw, 42px) 10px;
+    padding: 9px max(22px, calc((100% - 748px) / 2)) 10px;
   }
 
   .root :global(.video-agent-composer textarea) {
@@ -3937,12 +4388,12 @@
   }
 
   .root :global(.video-agent-send) {
-    width: 44px;
-    height: 44px;
-    min-width: 44px;
-    min-height: 44px;
-    flex-basis: 44px;
-    border-radius: 11px;
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+    min-height: 34px;
+    flex-basis: 34px;
+    border-radius: 999px;
   }
 
   .root :global(.video-agent-source-tools) {
@@ -4192,6 +4643,154 @@
   .root :global(.video-agent-studio-detail > footer) {
     margin-top: 14px;
   }
+}
+
+/*
+ * 详情页完整复用正式 Agent 控制器、消息、输入区、来源和工作室。
+ * 所有抽屉都限制在此根节点内；嵌入模式不挂 `video-agent-page`，避免触发全页 body 锁。
+ */
+.root.embedded {
+  --agent-accent: var(--accent-sky);
+  --agent-accent-strong: var(--accent-sky-strong);
+  --agent-action: var(--accent-brand);
+  --agent-accent-soft: var(--accent-sky-soft);
+  --agent-rail: #f4f4f2;
+  --agent-main: #ffffff;
+  --agent-subtle: color-mix(in srgb, var(--foreground) 3.8%, transparent);
+  --agent-hover: color-mix(in srgb, var(--agent-accent) 7%, transparent);
+  --agent-active: color-mix(in srgb, var(--agent-accent) 12%, transparent);
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+  background: var(--agent-main);
+}
+
+:global([data-theme="dark"]) .root.embedded {
+  --agent-action: var(--accent-brand);
+  --agent-rail: #141418;
+  --agent-main: #19191e;
+}
+
+.root.embedded :global(.video-agent-shell) {
+  position: relative;
+  width: 100%;
+  height: 100% !important;
+  min-height: 0;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  grid-template-areas: "main";
+  grid-template-columns: minmax(0, 1fr) !important;
+  background: var(--agent-main);
+  box-shadow: none;
+}
+
+.root.embedded :global(.video-agent-main) {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.root.embedded :global(.video-agent-backdrop) {
+  position: absolute;
+  inset: 0;
+}
+
+.root.embedded :global(.video-agent-history) {
+  position: absolute !important;
+  z-index: 96;
+  top: 8px;
+  right: auto;
+  bottom: 8px;
+  left: 8px;
+  width: min(340px, calc(100% - 16px));
+  height: auto;
+  padding: 0;
+  border: 1px solid var(--aw-line);
+  border-radius: 14px;
+  background: var(--aw-surface);
+  box-shadow: 12px 0 28px color-mix(in srgb, var(--card-shadow) 54%, transparent);
+  transform: translateX(-18px);
+}
+
+.root.embedded :global(.video-agent-history.is-open) {
+  transform: translateX(0);
+}
+
+.root.embedded :global(.video-agent-sources),
+.root.embedded :global(.video-agent-studio) {
+  position: absolute !important;
+  z-index: 96;
+  top: 8px;
+  bottom: 8px;
+  display: flex;
+  width: min(400px, calc(100% - 16px));
+  height: auto;
+  min-height: 0;
+  padding-bottom: 0;
+  border: 1px solid var(--aw-line);
+  border-radius: 14px;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+  transition:
+    transform 160ms ease-out,
+    opacity 160ms ease-out !important;
+}
+
+.root.embedded :global(.video-agent-sources) {
+  right: auto;
+  left: 8px;
+  background: var(--aw-surface);
+  box-shadow: 12px 0 28px color-mix(in srgb, var(--card-shadow) 54%, transparent);
+  transform: translateX(-18px);
+}
+
+.root.embedded :global(.video-agent-studio) {
+  right: 8px;
+  left: auto;
+  background: var(--aw-rail);
+  box-shadow: -12px 0 28px color-mix(in srgb, var(--card-shadow) 54%, transparent);
+  transform: translateX(18px);
+}
+
+.root.embedded :global(.video-agent-sources.is-open),
+.root.embedded :global(.video-agent-studio.is-open) {
+  opacity: 1;
+  pointer-events: auto;
+  visibility: visible;
+  transform: translateX(0);
+}
+
+.root.embedded :global(.video-agent-sources .video-agent-mobile-close),
+.root.embedded :global(.video-agent-studio .video-agent-mobile-close) {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.root.embedded :global(.video-agent-topbar-actions button.is-studio) {
+  display: flex;
+}
+
+.root.embedded :global(.video-agent-automation-sheet) {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  bottom: 8px;
+  left: auto;
+  width: min(560px, calc(100% - 16px));
+  height: auto;
+  padding-bottom: 0;
+  border: 1px solid var(--aw-line);
+  border-radius: 14px;
+  box-shadow: -12px 0 28px color-mix(in srgb, var(--card-shadow) 54%, transparent);
 }
 
 @media (min-width: 768px) and (max-width: 1279px) {
@@ -4565,20 +5164,33 @@
 
   .root :global(.video-agent-message) {
     width: 100%;
-    margin-bottom: 28px;
+    margin-bottom: 24px;
   }
 
   .root :global(.video-agent-message.is-user) {
+    display: flex;
+    width: 100%;
+    max-width: 100%;
+    margin-bottom: 16px;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: flex-start;
+  }
+
+  .root :global(.video-agent-message.is-user .video-agent-message-content) {
     width: fit-content;
     max-width: 88%;
-    margin-bottom: 18px;
+    padding: 9px 14px;
+    border-radius: 20px;
+    font-size: 15px;
+    line-height: 23px;
   }
 
   .root :global(.video-agent-answer-markdown) {
     max-width: none;
-    padding-left: 14px;
-    font-size: 0.93rem;
-    line-height: 1.75;
+    padding: 0;
+    font-size: 15px;
+    line-height: 25px;
   }
 
   .root :global(.video-agent-message-delivery.is-failed) {
@@ -4695,16 +5307,16 @@
   }
 
   .root :global(.video-agent-send) {
-    width: 48px;
-    height: 48px;
-    min-width: 48px;
-    min-height: 48px;
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+    min-height: 34px;
   }
 
   .root :global(.video-agent-send.is-stop) {
-    width: auto;
-    min-width: 78px;
-    padding-inline: 12px;
+    width: 34px;
+    min-width: 34px;
+    padding: 0;
   }
 
   .root :global(.video-agent-composer-count) {

@@ -13,11 +13,14 @@ import type {
   DesktopMediaAsset,
   DesktopRuntimeInfo,
   DesktopUpdateResult,
+  DesktopZhicuiLoginStatus,
+  DesktopZhicuiSession,
   PlatformAccountStatus,
 } from './contract';
 import { DouyinDesktopLogin } from './douyin-login';
 import { DesktopMediaLibrary } from './media-library';
 import { PlatformAccountConnector } from './platform-account';
+import { ZhicuiWebLogin } from './zhicui-login';
 import {
   assertTrustedIpcSender,
   configuredAppUrl,
@@ -92,6 +95,19 @@ function emitLoginStatus(status: DesktopLoginStatus): void {
   mainWindow.webContents.send('desktop:douyin-login-status', status);
 }
 
+function emitZhicuiLoginStatus(status: DesktopZhicuiLoginStatus): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('desktop:zhicui-login-status', status);
+}
+
+function emitZhicuiSession(session: DesktopZhicuiSession): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('desktop:zhicui-session', session);
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
 function emitPlatformAccountStatus(status: PlatformAccountStatus): void {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send('desktop:platform-account-status', status);
@@ -108,6 +124,11 @@ function emitMediaStatus(status: DesktopMediaAsset): void {
 }
 
 const douyinLogin = new DouyinDesktopLogin(emitLoginStatus);
+const zhicuiLogin = new ZhicuiWebLogin(
+  () => configuredAppUrl().origin,
+  emitZhicuiLoginStatus,
+  emitZhicuiSession,
+);
 const platformAccounts = new PlatformAccountConnector(
   () => join(app.getPath('userData'), 'platform-sessions'),
   emitPlatformAccountStatus,
@@ -231,6 +252,14 @@ function registerIpc(): void {
   ipcMain.handle('desktop:cancel-douyin-login', (event) => {
     assertTrustedIpcSender(event);
     return douyinLogin.cancel();
+  });
+  ipcMain.handle('desktop:begin-zhicui-login', (event) => {
+    assertTrustedIpcSender(event);
+    return zhicuiLogin.start();
+  });
+  ipcMain.handle('desktop:cancel-zhicui-login', (event) => {
+    assertTrustedIpcSender(event);
+    return zhicuiLogin.cancel();
   });
   ipcMain.handle('desktop:login-platform-account', (event, request) => {
     assertTrustedIpcSender(event);
@@ -357,6 +386,7 @@ app.on('activate', () => {
 
 app.on('before-quit', () => {
   void douyinLogin.cancel();
+  void zhicuiLogin.cancel();
 });
 
 app.on('window-all-closed', () => {

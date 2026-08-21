@@ -177,6 +177,8 @@ export default function PlanTodayView({
   const [savingFocus, setSavingFocus] = useState(false);
   const [dateLoading, setDateLoading] = useState(false);
   const [taskView, setTaskView] = useState<TaskView>('list');
+  const [otherOpen, setOtherOpen] = useState(true);
+  const [overdueOpen, setOverdueOpen] = useState(true);
   const [error, setError] = useState('');
 
   const candidates = useMemo(
@@ -372,27 +374,45 @@ export default function PlanTodayView({
 
               <div className={styles.secondarySections}>
                 {otherToday.length > 0 && (
-                  <details className={styles.disclosure} open>
+                  <details
+                    className={styles.disclosure}
+                    data-ui="stable"
+                    data-state={otherOpen ? 'open' : 'closed'}
+                    data-render={otherOpen ? 'open' : 'closed'}
+                    open={otherOpen}
+                    onToggle={event => setOtherOpen(event.currentTarget.open)}
+                  >
                     <summary><span>今天的其他任务 · {otherToday.length}</span><CaretDown size={15} /></summary>
-                    <div className={styles.disclosureBody}>
-                      {otherToday.map(task => (
-                        <TaskRow key={taskKey(task)} task={task} compact busy={busyKeys.has(taskKey(task))} onToggle={onToggle} />
-                      ))}
-                    </div>
+                    {otherOpen && (
+                      <div className={styles.disclosureBody}>
+                        {otherToday.map(task => (
+                          <TaskRow key={taskKey(task)} task={task} compact busy={busyKeys.has(taskKey(task))} onToggle={onToggle} />
+                        ))}
+                      </div>
+                    )}
                   </details>
                 )}
 
                 {overview.overdue.length > 0 && (
-                  <details className={styles.disclosure}>
+                  <details
+                    className={styles.disclosure}
+                    data-ui="stable"
+                    data-state={overdueOpen ? 'open' : 'closed'}
+                    data-render={overdueOpen ? 'open' : 'closed'}
+                    open={overdueOpen}
+                    onToggle={event => setOverdueOpen(event.currentTarget.open)}
+                  >
                     <summary>
                       <span className={styles.warningLabel}><WarningCircle size={16} />需要重新安排 · {overview.overdue.length}</span>
                       <CaretDown size={15} />
                     </summary>
-                    <div className={styles.disclosureBody}>
-                      {overview.overdue.map(task => (
-                        <TaskRow key={taskKey(task)} task={{ ...task, recommendation_reason: '已逾期' }} compact busy={busyKeys.has(taskKey(task))} onToggle={onToggle} />
-                      ))}
-                    </div>
+                    {overdueOpen && (
+                      <div className={styles.disclosureBody}>
+                        {overview.overdue.map(task => (
+                          <TaskRow key={taskKey(task)} task={{ ...task, recommendation_reason: '已逾期' }} compact busy={busyKeys.has(taskKey(task))} onToggle={onToggle} />
+                        ))}
+                      </div>
+                    )}
                   </details>
                 )}
               </div>

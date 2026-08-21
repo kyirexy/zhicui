@@ -313,6 +313,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [applySession]);
 
+  // 桌面端联动登录：主进程在网页登录完成后把 JWT 会话回填给渲染进程。
+  useEffect(() => {
+    const bridge = typeof window !== 'undefined'
+      ? window.zhicuiDesktop
+      : undefined;
+    if (!bridge || typeof bridge.onZhicuiSession !== 'function') return;
+    const unsubscribe = bridge.onZhicuiSession((session) => {
+      if (!session?.token) return;
+      applySession({
+        token: session.token,
+        user: {
+          id: session.user?.id || '',
+          email: session.user?.email || '',
+          username: session.user?.username ?? null,
+          is_active: session.user?.is_active ?? true,
+          is_admin: session.user?.is_admin ?? false,
+          email_verified: false,
+          created_at: '',
+        },
+      });
+    });
+    return unsubscribe;
+  }, [applySession]);
+
   const login = useCallback(async (email: string, password: string) => {
     setError(null);
     const response = await authRequest<AuthSession>('/api/auth/login', {

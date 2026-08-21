@@ -23,7 +23,12 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.auth import get_current_user, get_current_user_optional, get_current_admin
 from app.models.note import Note
-from app.models.user import User as UserModel, list_users, count_users
+from app.models.user import (
+    User as UserModel,
+    get_user_by_id,
+    list_users,
+    count_users,
+)
 from app.services import (
     ai_juicer,
     activity_service,
@@ -34,6 +39,7 @@ from app.services import (
     creator_connectors,
     creator_sync_service,
     creator_sync_worker,
+    desktop_handoff_service,
     douyin_binding_service,
     douyin_library,
     error_log_service,
@@ -44,6 +50,7 @@ from app.services import (
     llm_usage_service,
     knowledge_service,
     note_service,
+    omniroute_workspace_service,
     platform_library_service,
     plan_service,
     settings_service,
@@ -163,6 +170,7 @@ class ExtractRequest(BaseModel):
 
 class PlatformLibraryImportRequest(BaseModel):
     urls: list[str] = Field(..., min_length=1, max_length=10)
+    source_mode: Literal["collect", "like", "post"] | None = None
 
     @field_validator("urls")
     @classmethod
@@ -181,7 +189,21 @@ class CreatorSourceRequest(BaseModel):
 
 
 class CreatorSyncRunRequest(BaseModel):
-    limit: Literal[20, 50, 100] = 50
+    operation: Literal[
+        "recent_transcript", "catalog_all", "selected_transcript"
+    ] | None = None
+    limit: Literal[20, 50, 100] | None = None
+    item_ids: list[str] = Field(default_factory=list, max_length=50)
+
+    @field_validator("item_ids")
+    @classmethod
+    def validate_creator_item_ids(cls, values: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(
+            str(value or "").strip() for value in values if str(value or "").strip()
+        ))
+        if any(len(value) > 48 for value in normalized):
+            raise ValueError("作品标识格式无效")
+        return normalized
 
 
 class NoteChatHistoryItem(BaseModel):
@@ -277,12 +299,12 @@ class LibraryAskRequest(BaseModel):
     note_ids: list[str] = Field(..., min_length=1, max_length=50)
     question: str = Field(..., min_length=1, max_length=600)
     history: list[NoteChatHistoryItem] = Field(default_factory=list, max_length=6)
-    research_mode: Literal["fast", "deep"] = "fast"
+    research_mode: Literal["auto", "fast", "deep"] = "auto"
     output_style: Literal[
         "answer", "summary", "comparison", "action_plan", "custom"
     ] = "answer"
     custom_instruction: str = Field(default="", max_length=600)
-    web_scope: Literal["auto", "video_only"] = "auto"
+    web_scope: Literal["auto", "video_only"] = "video_only"
 
 
 class PlanAgentRequest(BaseModel):
@@ -336,6 +358,25 @@ class UserChatModelRequest(BaseModel):
     offering_id: str = Field(..., min_length=36, max_length=36)
 
 
+class UserCustomChatModelCreateRequest(BaseModel):
+    name: str = Field(default="OpenAI Compatible", max_length=80)
+    provider_name: str = Field(default="OpenAI Compatible", max_length=80)
+    model: str = Field(..., min_length=1, max_length=160)
+    api_base: str = Field(..., min_length=1, max_length=512)
+    api_key: str = Field(..., min_length=1, max_length=4096)
+    enabled: bool = True
+    select: bool = False
+
+
+class UserCustomChatModelUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=80)
+    provider_name: str | None = Field(default=None, max_length=80)
+    model: str | None = Field(default=None, min_length=1, max_length=160)
+    api_base: str | None = Field(default=None, min_length=1, max_length=512)
+    api_key: str | None = Field(default=None, max_length=4096)
+    enabled: bool | None = None
+
+
 class AdminChatModelRequest(BaseModel):
     code: str = Field(..., min_length=2, max_length=80)
     name: str = Field(..., min_length=1, max_length=120)
@@ -367,6 +408,11 @@ class LoginRequest(BaseModel):
     # 登录只校验凭据是否填写；长度规则只属于注册和重置密码流程。
     email: str = Field(..., min_length=1, max_length=128)
     password: str = Field(..., min_length=1, max_length=128)
+
+
+class DesktopHandoffRequest(BaseModel):
+    # 桌面客户端本地生成的随机会话票据（32 字节 base64url）。
+    session_id: str = Field(..., min_length=32, max_length=64)
 
 
 # ---------------------------------------------------------------------------
@@ -563,6 +609,78 @@ def auth_dev_session(request: Request, db: Session = Depends(get_db)) -> dict:
         ip=request.client.host if request.client else None,
     )
     return _ok({"token": token, "user": user.to_dict()})
+
+
+# ---------------------------------------------------------------------------
+# 桌面端 ↔ Web 联动登录（一次性票据交接）
+# 流程：客户端生成 session_id → 打开浏览器 /login?desktop=1&session=…
+#      → 网页登录成功后 claim → 客户端轮询 status 换取 JWT
+# ---------------------------------------------------------------------------
+
+@router.post("/api/auth/desktop-handoff/request", include_in_schema=False)
+def desktop_handoff_request(
+    body: DesktopHandoffRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    """客户端发起联动登录：登记一个 pending 票据。"""
+    session_id = desktop_handoff_service.normalize_session_id(body.session_id)
+    if session_id is None:
+        raise HTTPException(status_code=400, detail="登录票据格式不正确")
+    handoff = desktop_handoff_service.create_handoff(db, session_id)
+    if handoff is None:
+        raise HTTPException(status_code=409, detail="该登录票据已存在，请重新发起")
+    return _ok({"status": handoff.status, "expires_at": handoff.expires_at.isoformat()})
+
+
+@router.post("/api/auth/desktop-handoff/claim", include_in_schema=False)
+def desktop_handoff_claim(
+    body: DesktopHandoffRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """网页登录成功后声明票据，把登录身份交接给客户端。"""
+    session_id = desktop_handoff_service.normalize_session_id(body.session_id)
+    if session_id is None:
+        raise HTTPException(status_code=400, detail="登录票据格式不正确")
+    result = desktop_handoff_service.claim_handoff(db, session_id, current_user.id)
+    if result == "not_found":
+        raise HTTPException(status_code=404, detail="登录票据不存在或已过期")
+    if result == "expired":
+        raise HTTPException(status_code=410, detail="登录票据已过期，请返回客户端重新发起")
+    if result == "already_consumed":
+        raise HTTPException(status_code=409, detail="登录票据已被使用")
+    if result == "already_claimed":
+        raise HTTPException(status_code=409, detail="登录票据已被其他账号声明")
+    return _ok({"status": "claimed"})
+
+
+@router.get("/api/auth/desktop-handoff/status/{session_id}", include_in_schema=False)
+def desktop_handoff_status(
+    session_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """客户端轮询：pending → 继续等待；claimed → 签发 JWT 并消费票据。"""
+    normalized = desktop_handoff_service.normalize_session_id(session_id)
+    if normalized is None:
+        raise HTTPException(status_code=400, detail="登录票据格式不正确")
+    desktop_handoff_service.expire_stale(db)
+    status, user_id = desktop_handoff_service.consume_handoff(db, normalized)
+    if status == "not_found":
+        return _err("登录票据不存在或已过期")
+    if status == "pending":
+        return _ok({"status": "pending"})
+    if status in {"expired", "consumed"}:
+        return _err("登录票据已过期或已被使用，请返回客户端重新发起")
+    # status == "success"
+    user = get_user_by_id(db, user_id) if user_id else None
+    if user is None:
+        return _err("登录用户不存在，请返回客户端重新发起")
+    token = auth_service.create_access_token(user.id, user.email)
+    return _ok({
+        "status": "success",
+        "token": token,
+        "user": user.to_dict(),
+    })
 
 
 @router.get("/api/auth/me")
@@ -1202,7 +1320,10 @@ def import_platform_library_items(
     """Import up to ten Bilibili/Xiaohongshu links without implicit LLM work."""
     try:
         result = platform_library_service.import_many(
-            db, user_id=current_user.id, values=body.urls,
+            db,
+            user_id=current_user.id,
+            values=body.urls,
+            source_mode=body.source_mode,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -2529,6 +2650,44 @@ def create_creator_source(
         raise _creator_http_error(exc) from exc
 
 
+@router.get("/api/creator-sources/{source_id}")
+def get_creator_source(
+    source_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        return _ok(creator_sync_service.get_source_detail(
+            db, user_id=current_user.id, source_id=source_id,
+        ))
+    except creator_sync_service.CreatorSyncError as exc:
+        raise _creator_http_error(exc) from exc
+
+
+@router.get("/api/creator-sources/{source_id}/items")
+def get_creator_source_items(
+    source_id: str,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=50),
+    search: str = Query("", max_length=100),
+    status: Literal["all", "untranscribed", "imported", "failed"] = Query("all"),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        return _ok(creator_sync_service.list_source_items(
+            db,
+            user_id=current_user.id,
+            source_id=source_id,
+            page=page,
+            per_page=per_page,
+            search=search,
+            status=status,
+        ))
+    except creator_sync_service.CreatorSyncError as exc:
+        raise _creator_http_error(exc) from exc
+
+
 @router.delete("/api/creator-sources/{source_id}")
 def delete_creator_source(
     source_id: str,
@@ -2559,6 +2718,8 @@ def create_creator_sync_run(
             user_id=current_user.id,
             source_id=source_id,
             limit=body.limit,
+            operation=body.operation,
+            item_ids=body.item_ids,
         )
     except creator_sync_service.CreatorSyncError as exc:
         raise _creator_http_error(exc) from exc
@@ -2589,6 +2750,44 @@ def get_creator_sync_run(
     if run is None:
         raise HTTPException(status_code=404, detail="同步任务不存在")
     return _ok(run.to_dict())
+
+
+@router.get("/api/creator-sync-runs/{run_id}/items")
+def get_creator_sync_run_items(
+    run_id: str,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=50),
+    status: Literal["all", "pending", "succeeded", "failed"] = Query("all"),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        return _ok(creator_sync_service.list_run_items(
+            db,
+            user_id=current_user.id,
+            run_id=run_id,
+            page=page,
+            per_page=per_page,
+            status=status,
+        ))
+    except creator_sync_service.CreatorSyncError as exc:
+        raise _creator_http_error(exc) from exc
+
+
+@router.post("/api/creator-sync-runs/{run_id}/retry")
+def retry_creator_sync_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        run, reused = creator_sync_service.retry_run(
+            db, user_id=current_user.id, run_id=run_id,
+        )
+    except creator_sync_service.CreatorSyncError as exc:
+        raise _creator_http_error(exc) from exc
+    creator_sync_worker.runner.submit(run.id)
+    return _ok({"run": run.to_dict(), "reused": reused})
 
 
 @router.delete("/api/creator-sync-runs/{run_id}")
@@ -2766,6 +2965,158 @@ def test_user_ai_provider(
         "provider": cfg["provider"],
         "model": cfg["model"],
     })
+
+
+def _test_custom_model_config(
+    db: Session,
+    user_id: str,
+    model_id: str,
+) -> dict:
+    cfg = user_ai_provider_service.effective_custom_config(db, user_id, model_id)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="自定义模型不存在或不可用")
+    try:
+        from litellm import completion
+
+        response = completion(
+            model=cfg["runtime_model"],
+            api_base=cfg["api_base"] or None,
+            api_key=cfg["api_key"] or None,
+            messages=[{"role": "user", "content": "只回复 OK"}],
+            max_tokens=8,
+            temperature=0,
+            timeout=20,
+        )
+        message = response.choices[0].message
+        content = str(message.content or "").strip()
+        reasoning_content = str(
+            getattr(message, "reasoning_content", "") or ""
+        ).strip()
+        if not content and not reasoning_content and not getattr(message, "tool_calls", None):
+            raise RuntimeError("模型没有返回可见内容")
+    except Exception as exc:
+        error_log_service.record_exception_safely(
+            exc,
+            source="llm",
+            status_code=502,
+            user_id=user_id,
+            metadata={
+                "provider": "custom",
+                "model": cfg.get("model", ""),
+                "operation": "custom_chat_model_test",
+            },
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="连接测试失败，请检查网关状态、模型名称和访问权限",
+        ) from exc
+    return _ok({
+        "connected": True,
+        "provider": "custom",
+        "model": cfg["model"],
+    })
+
+
+@router.get("/api/user/custom-chat-models")
+def list_user_custom_chat_models(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    return _ok(user_ai_provider_service.list_custom_models(db, current_user.id))
+
+
+@router.post("/api/user/custom-chat-models")
+def create_user_custom_chat_model(
+    body: UserCustomChatModelCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        data = user_ai_provider_service.create_custom_model(
+            db,
+            current_user.id,
+            name=body.name,
+            provider_name=body.provider_name,
+            model=body.model,
+            api_base=body.api_base,
+            api_key=body.api_key,
+            enabled=body.enabled,
+            select=body.select,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _ok(data)
+
+
+@router.put("/api/user/custom-chat-models/select-platform")
+def select_user_platform_model(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    return _ok(user_ai_provider_service.select_platform(db, current_user.id))
+
+
+@router.put("/api/user/custom-chat-models/{model_id}")
+def update_user_custom_chat_model(
+    model_id: str,
+    body: UserCustomChatModelUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        data = user_ai_provider_service.update_custom_model(
+            db,
+            current_user.id,
+            model_id,
+            name=body.name,
+            provider_name=body.provider_name,
+            model=body.model,
+            api_base=body.api_base,
+            api_key=body.api_key,
+            enabled=body.enabled,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="自定义模型不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _ok(data)
+
+
+@router.delete("/api/user/custom-chat-models/{model_id}")
+def delete_user_custom_chat_model(
+    model_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        data = user_ai_provider_service.delete_custom_model(db, current_user.id, model_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="自定义模型不存在") from exc
+    return _ok(data)
+
+
+@router.put("/api/user/custom-chat-models/{model_id}/select")
+def select_user_custom_chat_model(
+    model_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    try:
+        data = user_ai_provider_service.select_custom_model(db, current_user.id, model_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="自定义模型不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _ok(data)
+
+
+@router.post("/api/user/custom-chat-models/{model_id}/test")
+def test_user_custom_chat_model(
+    model_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    return _test_custom_model_config(db, current_user.id, model_id)
 
 
 @router.get("/api/notes")
@@ -3514,6 +3865,87 @@ def admin_delete_chat_model(
     return _ok({"deleted": True})
 
 
+@router.get("/api/admin/omniroute-config")
+def admin_get_omniroute_config(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    del current_user
+    return _ok(settings_service.get_omniroute_config_masked(db))
+
+
+@router.put("/api/admin/omniroute-config")
+def admin_put_omniroute_config(
+    body: OmniRouteConfigRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    if body.api_base:
+        _validate_http_url(body.api_base, "API Base")
+    if body.dashboard_url:
+        _validate_http_url(body.dashboard_url, "控制台地址")
+    value = settings_service.set_omniroute_config(
+        db,
+        api_base=body.api_base,
+        api_key=body.api_key,
+        model=body.model,
+        dashboard_url=body.dashboard_url,
+    )
+    changed: dict = {}
+    for field in ("api_base", "model", "dashboard_url"):
+        if getattr(body, field):
+            changed[field] = getattr(body, field)
+    if body.api_key:
+        changed["api_key"] = "***updated***"
+    if changed:
+        audit_service.log_action(
+            db,
+            admin_user_id=current_user.id,
+            action="omniroute_config_update",
+            target_type="config",
+            target_id="omniroute",
+            detail=changed,
+            ip=_client_ip(request),
+        )
+    omniroute_workspace_service.clear_cache()
+    return _ok(value)
+
+
+@router.get("/api/admin/omniroute/workspace")
+def admin_get_omniroute_workspace(
+    refresh: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    del current_user
+    workspace = omniroute_workspace_service.get_workspace(
+        refresh=refresh,
+        include_admin=True,
+        db=db,
+    )
+    return _ok(workspace)
+
+
+@router.post("/api/admin/omniroute/test")
+def admin_test_omniroute(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    del current_user
+    config = settings_service.get_omniroute_config(db)
+    if not config["api_base"] or not config["api_key"]:
+        return _err("请先填写 OmniRoute API Base 与 API Key")
+    workspace = omniroute_workspace_service.get_workspace(refresh=True, db=db)
+    return _ok({
+        "configured": True,
+        "online": bool(workspace["status"]["online"]),
+        "message": str(workspace["status"]["message"]),
+        "latency_ms": int(workspace["status"]["latency_ms"] or 0),
+        "model_count": len(workspace["models"]),
+    })
+
+
 @router.get("/api/admin/stats")
 def admin_stats(
     db: Session = Depends(get_db),
@@ -3777,10 +4209,17 @@ def admin_reset_user_password(
 # Admin endpoints — runtime LLM/ASR configuration (no restart needed)
 # ---------------------------------------------------------------------------
 class LlmConfigRequest(BaseModel):
-    provider: Literal["deepseek", "custom"] | None = None
+    provider: Literal["deepseek", "custom", "omniroute"] | None = None
     model: str | None = None
     api_base: str | None = None
     api_key: str | None = None  # None/empty = leave unchanged
+
+
+class OmniRouteConfigRequest(BaseModel):
+    api_base: str | None = None
+    api_key: str | None = None  # None/empty = leave unchanged
+    model: str | None = None
+    dashboard_url: str | None = None
 
 
 class AsrConfigRequest(BaseModel):
@@ -3810,6 +4249,12 @@ class CreatorSyncConfigRequest(BaseModel):
     xiaohongshu_concurrency: int = Field(default=1, ge=1, le=4)
 
 
+class AgentV2ConfigRequest(BaseModel):
+    enabled: bool = False
+    rollout_percent: int = Field(default=0, ge=0, le=100)
+    allowlist: list[str] = Field(default_factory=list, max_length=500)
+
+
 class CreatorConnectorTestRequest(BaseModel):
     platform: Literal["douyin", "bilibili", "xiaohongshu"]
     profile_ref: str | None = Field(default=None, max_length=1024)
@@ -3829,6 +4274,43 @@ def admin_get_creator_sync_config(
     current_user: UserModel = Depends(get_current_admin),
 ) -> dict:
     return _ok(settings_service.get_creator_sync_config(db))
+
+
+@router.get("/api/admin/agent-v2-config")
+def admin_get_agent_v2_config(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    return _ok(settings_service.get_agent_v2_config(db))
+
+
+@router.put("/api/admin/agent-v2-config")
+def admin_put_agent_v2_config(
+    body: AgentV2ConfigRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_admin),
+) -> dict:
+    value = settings_service.set_agent_v2_config(
+        db,
+        enabled=body.enabled,
+        rollout_percent=body.rollout_percent,
+        allowlist=body.allowlist,
+    )
+    audit_service.log_action(
+        db,
+        admin_user_id=current_user.id,
+        action="agent_v2_config_update",
+        target_type="config",
+        target_id="agent-v2",
+        detail={
+            "enabled": value["enabled"],
+            "rollout_percent": value["rollout_percent"],
+            "allowlist_count": len(value["allowlist"]),
+        },
+        ip=_client_ip(request),
+    )
+    return _ok(value)
 
 
 @router.put("/api/admin/creator-sync-config")
@@ -3870,6 +4352,27 @@ def admin_test_creator_sync_connector(
 ) -> dict:
     config = settings_service.get_creator_sync_config(db, include_secret=True)
     tested_at = datetime.now(timezone.utc).isoformat()
+
+    def catalog_readiness(platform: str, session_scope: str = "") -> dict:
+        if platform not in {"douyin", "bilibili"}:
+            return {
+                "platform": platform,
+                "healthy": True,
+                "supports_catalog_all": False,
+            }
+        try:
+            return creator_connectors.catalog_health(
+                platform,
+                douyin_session_scope=session_scope,
+            )
+        except Exception:
+            return {
+                "platform": platform,
+                "healthy": False,
+                "supports_catalog_all": False,
+                "error_code": "catalog_health_failed",
+            }
+
     if body.platform == "xiaohongshu" and not config.get("xhs_cookie"):
         settings_service.record_creator_connector_test(
             db, platform=body.platform, healthy=False, tested_at=tested_at
@@ -3893,31 +4396,55 @@ def admin_test_creator_sync_connector(
                 db, platform=body.platform, healthy=False, tested_at=tested_at
             )
             return _err(str(exc))
+        catalog_state = catalog_readiness(
+            body.platform,
+            binding.session_scope if binding else "",
+        )
+        if (
+            body.platform in {"douyin", "bilibili"}
+            and not bool(catalog_state.get("supports_catalog_all"))
+        ):
+            settings_service.record_creator_connector_test(
+                db, platform=body.platform, healthy=False, tested_at=tested_at
+            )
+            return _err("近期连接器可用，但全部作品连接器尚未通过健康检查")
         settings_service.record_creator_connector_test(
             db, platform=body.platform, healthy=True, tested_at=tested_at
         )
-        return _ok({"healthy": True, "preview": preview})
+        return _ok({
+            "healthy": True,
+            "preview": preview,
+            "catalog_health": catalog_state,
+        })
     if body.platform == "douyin":
         binding = douyin_binding_service.get_or_create(db, current_user.id)
         state = douyin_library.connection_status(binding.session_scope)
-        healthy = bool(state.get("connected"))
+        catalog_state = catalog_readiness("douyin", binding.session_scope)
+        healthy = bool(
+            state.get("connected")
+            and catalog_state.get("supports_catalog_all")
+        )
         settings_service.record_creator_connector_test(
             db, platform=body.platform, healthy=healthy, tested_at=tested_at
         )
         return _ok({
             "healthy": healthy,
             "platform": body.platform,
-            "message": "连接器可用" if state.get("connected") else "抖音连接器不可用",
+            "message": "近期与全部作品连接器均可用" if healthy else "抖音连接器或全量能力不可用",
+            "catalog_health": catalog_state,
         })
     if body.platform == "bilibili":
-        healthy = importlib.util.find_spec("yt_dlp") is not None
+        recent_healthy = importlib.util.find_spec("yt_dlp") is not None
+        catalog_state = catalog_readiness("bilibili")
+        healthy = bool(recent_healthy and catalog_state.get("supports_catalog_all"))
         settings_service.record_creator_connector_test(
             db, platform=body.platform, healthy=healthy, tested_at=tested_at
         )
         return _ok({
             "healthy": healthy,
             "platform": body.platform,
-            "message": "yt-dlp 已就绪" if healthy else "服务器未安装 yt-dlp",
+            "message": "近期与全部作品连接器均可用" if healthy else "yt-dlp 或 yutto 全量连接器未就绪",
+            "catalog_health": catalog_state,
         })
     settings_service.record_creator_connector_test(
         db, platform=body.platform, healthy=False, tested_at=tested_at

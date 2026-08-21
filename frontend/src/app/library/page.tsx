@@ -83,9 +83,17 @@ import {
   detectDesktopRuntime,
   openInstalledDesktopApp,
 } from '@/lib/desktopRuntime';
-import { formatCollectionSyncMessage } from '@/lib/douyinSyncFeedback';
+import {
+  formatCollectionSyncMessage,
+  formatDouyinSyncError,
+} from '@/lib/douyinSyncFeedback';
 import { useLocalStorage } from '@/lib/hooks/useLocalStorage';
 import { useMarqueeSelection } from '@/lib/hooks/useMarqueeSelection';
+import {
+  QUICK_SYNC_MAX_COUNT,
+  readLibraryQuickSyncPreferences,
+  saveLibraryQuickSyncPreferences,
+} from '@/lib/libraryQuickSync';
 import type {
   DouyinCollectionJob,
   DouyinBatchExtractionJob,
@@ -117,6 +125,15 @@ interface CollectionJobWaitResult {
   error: string;
 }
 
+interface SyncCollectionModeResult {
+  requestedMode: DouyinSourceMode;
+  refreshed: DouyinLibraryItem[] | null;
+  newlyVisible: DouyinLibraryItem[];
+  overview: DouyinLibraryListResult | null;
+  finalJob: DouyinCollectionJob | null;
+  error: string;
+}
+
 interface CollectionProgressSnapshot {
   current: number;
   target: number;
@@ -139,7 +156,7 @@ type SourceManagerView = 'douyin' | 'bilibili' | 'xiaohongshu' | 'import';
 type LibraryLayoutMode = 'list' | 'grid';
 
 const MAX_SELECTION = 50;
-const MAX_SYNC_COUNT = 100;
+const MAX_SYNC_COUNT = QUICK_SYNC_MAX_COUNT;
 const DEFAULT_SOURCE_SORTS: Record<'like' | 'collect', DouyinLibrarySort> = {
   like: 'collection',
   collect: 'collection',
@@ -150,6 +167,8 @@ const QR_AUTO_RECOVERY_ATTEMPTS = 15;
 const JOB_POLL_TIMEOUT_MS = 10_000;
 type DouyinSessionAction = 'logout' | 'rebind';
 type BindingClient = 'desktop-app' | 'desktop-web' | 'mobile-web' | 'android-app';
+const SOURCE_MODE_STORAGE_KEY = 'zhicui-library-source-mode-v1';
+
 const SOURCE_MODES: Array<{
   value: DouyinSourceMode;
   label: string;
@@ -225,7 +244,6 @@ const PLATFORM_TABS: Array<{
   { value: 'all', label: '全部视频' },
   { value: 'douyin', label: '抖音' },
   { value: 'bilibili', label: 'B站' },
-  { value: 'xiaohongshu', label: '小红书' },
 ];
 
 const SOURCE_MANAGER_TABS: Array<{
@@ -234,7 +252,6 @@ const SOURCE_MANAGER_TABS: Array<{
 }> = [
   { value: 'douyin', label: '抖音' },
   { value: 'bilibili', label: 'B站' },
-  { value: 'xiaohongshu', label: '小红书' },
   { value: 'import', label: '分享链接' },
 ];
 
@@ -302,13 +319,15 @@ export default function VideoLibraryPage() {
   const layoutMode: LibraryLayoutMode = isLibraryLayoutMode(storedLayoutMode)
     ? storedLayoutMode
     : 'grid';
-  const [sourceManagerMode, setSourceManagerMode] = useState<DouyinSourceMode>(sourceMode);
+  const [sourceManagerModes, setSourceManagerModes] = useState<DouyinSourceMode[]>(
+    () => readLibraryQuickSyncPreferences().modes,
+  );
   const [sourceSorts, setSourceSorts] = useLocalStorage(
     'zhicui-library-source-sorts-v1',
     DEFAULT_SOURCE_SORTS,
   );
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
-  const [syncCount, setSyncCount] = useState(50);
+  const [syncCount, setSyncCount] = useState(() => readLibraryQuickSyncPreferences().count);
   const [items, setItems] = useState<DouyinLibraryItem[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectedPlatform, setSelectedPlatform] = useState<Set<string>>(new Set());
@@ -365,6 +384,7 @@ export default function VideoLibraryPage() {
   const [statusError, setStatusError] = useState('');
   const [notice, setNotice] = useState('');
   const [sourceManagerNotice, setSourceManagerNotice] = useState('');
+  const [autoSyncing, setAutoSyncing] = useState(false);
   const activeRef = useRef(true);
   const batchExtractingRef = useRef(false);
   const extractionRevisionRef = useRef('');
@@ -382,6 +402,8 @@ export default function VideoLibraryPage() {
   const sourceManagerRailRef = useRef<HTMLDivElement | null>(null);
   const librarySelectionSurfaceRef = useRef<HTMLDivElement | null>(null);
   const sourceManagerRestoreFocusRef = useRef(true);
+  const quickSyncCheckedRef = useRef(false);
+  const [quickSyncRequested, setQuickSyncRequested] = useState(false);
   const sortMenuRef = useRef<HTMLDivElement | null>(null);
   const sortTriggerRef = useRef<HTMLButtonElement | null>(null);
   const activeSort: DouyinLibrarySort = sourceMode === 'post'
@@ -662,9 +684,14 @@ export default function VideoLibraryPage() {
     && loginBrowserMode === 'visible_chrome'
   );
   const sourceLabel = SOURCE_MODES.find((mode) => mode.value === sourceMode)?.label || '视频';
-  const sourceManagerLabel = SOURCE_MODES.find(
-    (mode) => mode.value === sourceManagerMode,
-  )?.label || '视频';
+  const sourceManagerLabel = sourceManagerModes.length === SOURCE_MODES.length
+    ? '全部内容'
+    : sourceManagerModes.length === 0
+      ? '视频'
+      : sourceManagerModes
+        .map((value) => SOURCE_MODES.find((mode) => mode.value === value)?.label || '')
+        .filter(Boolean)
+        .join(' + ');
   const collectionProgress = getCollectionProgress(collectionJob, syncCount);
   const showDouyinItems = platformFilter === 'all' || platformFilter === 'douyin';
   const showPlatformItems = platformFilter !== 'douyin';
@@ -753,7 +780,7 @@ export default function VideoLibraryPage() {
         return next;
       }
       if (next.size + selectedPlatform.size >= MAX_SELECTION) {
-        setNotice(`视频研伴一次最多使用 ${MAX_SELECTION} 条视频`);
+        setNotice(`知萃 Harness 一次最多使用 ${MAX_SELECTION} 条视频`);
         return current;
       }
       next.add(awemeId);
@@ -1061,7 +1088,7 @@ export default function VideoLibraryPage() {
     });
 
     if (missingTranscript.length > 0) {
-      setNotice(`正在为 ${missingTranscript.length} 条视频准备文稿，完成后将自动进入视频研伴`);
+      setNotice(`正在为 ${missingTranscript.length} 条视频准备文稿，完成后将自动进入知萃 Harness`);
       const result = await extractItems(missingTranscript, 'transcript');
       result.job?.items.forEach((item) => {
         if (item.state === 'done' && item.note_id && item.transcript_chars > 0) {
@@ -1086,7 +1113,7 @@ export default function VideoLibraryPage() {
     }
 
     window.location.assign(
-      `/agent?source_ids=${encodeURIComponent(noteIds.join(','))}`,
+      `/harness?source_ids=${encodeURIComponent(noteIds.join(','))}`,
     );
   };
 
@@ -1095,7 +1122,7 @@ export default function VideoLibraryPage() {
       void openSelectedInAgent();
       return;
     }
-    window.location.assign('/agent?new=1&source_scope=all_ready');
+    window.location.assign('/harness?new=1&source_scope=all_ready');
   };
 
   const refreshLoginStatus = useCallback(async (): Promise<DouyinLibraryStatus | null> => {
@@ -1704,9 +1731,10 @@ export default function VideoLibraryPage() {
     };
   };
 
-  const syncCollection = async (requestedMode: DouyinSourceMode) => {
-    if (refreshing || !loggedIn) return;
-    const requestedCount = clampInteger(syncCount, 1, MAX_SYNC_COUNT);
+  const collectOneSource = async (
+    requestedMode: DouyinSourceMode,
+    requestedCount: number,
+  ): Promise<SyncCollectionModeResult> => {
     const requestedSourceLabel = SOURCE_MODES.find(
       (mode) => mode.value === requestedMode,
     )?.label || '视频';
@@ -1715,16 +1743,13 @@ export default function VideoLibraryPage() {
       : sourceSorts[requestedMode] === 'published'
         ? 'published'
         : 'collection';
-    let baselineKnown = requestedMode === sourceModeRef.current;
+    const baselineKnown = requestedMode === sourceModeRef.current;
     let baselineItems = baselineKnown ? items : [];
-    setSyncCount(requestedCount);
-    setRefreshing(true);
+    const progressPrefix = batchExtractingRef.current
+      ? `正在同步${requestedSourceLabel}；已有文案任务继续在后台处理`
+      : `正在同步${requestedSourceLabel}；视频会先进入视频资料`;
+    publishSourceManagerNotice(progressPrefix);
     setCollectionJob(null);
-    if (!batchExtractingRef.current) setExtractionJob(null);
-    setPipelineStage('collect');
-    publishSourceManagerNotice(batchExtractingRef.current
-      ? `正在检查最近 ${requestedCount} 条${requestedSourceLabel}；已有文案任务继续在后台处理`
-      : `正在检查最近 ${requestedCount} 条${requestedSourceLabel}；视频会先进入视频资料`);
 
     if (!baselineKnown) {
       const baselineResponse = await listDouyinLibraryItems(
@@ -1733,7 +1758,6 @@ export default function VideoLibraryPage() {
         requestedSort,
       );
       if (baselineResponse.success && baselineResponse.data) {
-        baselineKnown = true;
         baselineItems = baselineResponse.data.items;
       }
     }
@@ -1741,10 +1765,17 @@ export default function VideoLibraryPage() {
 
     const response = await collectDouyinLibrary(requestedCount, requestedMode);
     if (!response.success || !response.data) {
-      setRefreshing(false);
-      setPipelineStage('idle');
-      publishSourceManagerNotice(response.error || `${requestedSourceLabel}采集任务启动失败`);
-      return;
+      return {
+        requestedMode,
+        refreshed: null,
+        newlyVisible: [],
+        overview: null,
+        finalJob: null,
+        error: formatDouyinSyncError(
+          response.error || `${requestedSourceLabel}采集任务启动失败`,
+          requestedSourceLabel,
+        ),
+      };
     }
 
     const waitResult = await waitForCollectionJob(
@@ -1754,25 +1785,32 @@ export default function VideoLibraryPage() {
     );
     const finalJob = waitResult.job;
     if (!finalJob && waitResult.error) {
-      setRefreshing(false);
-      setPipelineStage('idle');
-      publishSourceManagerNotice(waitResult.error);
-      return;
+      return {
+        requestedMode,
+        refreshed: null,
+        newlyVisible: [],
+        overview: null,
+        finalJob: null,
+        error: waitResult.error,
+      };
     }
     if (!finalJob || finalJob.status === 'failed') {
-      setRefreshing(false);
-      setPipelineStage('idle');
-      publishSourceManagerNotice(
-        finalJob
+      return {
+        requestedMode,
+        refreshed: null,
+        newlyVisible: [],
+        overview: null,
+        finalJob,
+        error: finalJob
           ? formatCollectionSyncMessage({
               ...finalJob,
               sourceLabel: requestedSourceLabel,
               requestedCount,
             })
           : '同步没有完成，请稍后重试',
-      );
-      return;
+      };
     }
+
     publishSourceManagerNotice(formatCollectionSyncMessage({
       ...finalJob,
       sourceLabel: requestedSourceLabel,
@@ -1783,82 +1821,137 @@ export default function VideoLibraryPage() {
       requestedMode,
       requestedSort,
     );
-    setRefreshing(false);
     if (!refreshedResponse.success || !refreshedResponse.data) {
-      setPipelineStage('idle');
-      publishSourceManagerNotice(
-        `${requestedSourceLabel}已经同步，但暂时无法刷新视频列表，请稍后重试`,
-      );
-      return;
+      return {
+        requestedMode,
+        refreshed: null,
+        newlyVisible: [],
+        overview: null,
+        finalJob,
+        error: `${requestedSourceLabel}已经同步，但暂时无法刷新视频列表，请稍后重试`,
+      };
     }
     const refreshedResult = refreshedResponse.data;
     const refreshed = refreshedResult.items || [];
-    const synchronized = finalJob.success || finalJob.total || 0;
     const newlyVisible = baselineKnown
       ? refreshed.filter((item) => !previousIds.has(item.aweme_id))
       : [];
-    sourceModeRef.current = requestedMode;
-    libraryRequestRef.current += 1;
-    setSourceMode(requestedMode);
-    setItems(refreshed);
-    setLibraryOverview({
-      sourceTotal: refreshedResult.source_total,
-      temporaryHidden: refreshedResult.hidden.temporary,
-      permanentHidden: refreshedResult.permanent_hidden_total,
-    });
-    setSelected(new Set());
-    setError('');
-    setLoading(false);
-    setPipelineStage('done');
-    if (synchronized === 0) {
-      publishSourceManagerNotice(formatCollectionSyncMessage({
-        ...finalJob,
-        sourceLabel: requestedSourceLabel,
-        requestedCount,
-      }));
-      return;
-    }
-    if (!baselineKnown) {
-      publishSourceManagerNotice(
-        '视频已同步；因同步前列表暂时不可用，新视频文案未自动准备，可在列表中选择后补提文案',
-      );
-      return;
-    }
-    const transcriptTargets = newlyVisible
-      .slice(0, requestedCount)
-      .filter((item) => item.can_extract && !item.extracted);
-    const permanentHidden = refreshedResult.permanent_hidden_total || 0;
-    const sourceTotal = refreshedResult.source_total || finalJob.success || 0;
-    if (transcriptTargets.length === 0) {
-      if (refreshed.length === 0 && sourceTotal > 0 && permanentHidden > 0) {
+    return {
+      requestedMode,
+      refreshed,
+      newlyVisible,
+      overview: refreshedResult,
+      finalJob,
+      error: '',
+    };
+  };
+
+  const syncCollection = async (
+    requestedModes: DouyinSourceMode[],
+    persistedModes: DouyinSourceMode[],
+    countOverride?: number,
+  ): Promise<{ started: boolean }> => {
+    const modes = requestedModes.length > 0
+      ? requestedModes.slice(0, SOURCE_MODES.length)
+      : [sourceModeRef.current];
+    if (refreshing || !loggedIn || modes.length === 0) return { started: false };
+    const requestedCount = clampInteger(countOverride ?? syncCount, 1, MAX_SYNC_COUNT);
+    saveLibraryQuickSyncPreferences(
+      requestedModes.length > 0 ? modes : persistedModes,
+      requestedCount,
+    );
+    setSyncCount(requestedCount);
+    setRefreshing(true);
+    if (!batchExtractingRef.current) setExtractionJob(null);
+    setPipelineStage('collect');
+    publishSourceManagerNotice(
+      `即将按顺序同步 ${modes.length} 个来源：${modes
+        .map((value) => SOURCE_MODES.find((mode) => mode.value === value)?.label || '')
+        .filter(Boolean)
+        .join('、')}`,
+    );
+
+    const results: SyncCollectionModeResult[] = [];
+    let failed = false;
+    for (const requestedMode of modes) {
+      if (!activeRef.current) return { started: true };
+      const result = await collectOneSource(requestedMode, requestedCount);
+      results.push(result);
+      if (result.error) {
+        failed = true;
         publishSourceManagerNotice(
-          `已同步 ${sourceTotal} 条${requestedSourceLabel}，其中 ${permanentHidden} 条在“已永久隐藏”中；可以打开并恢复`,
+          `${SOURCE_MODES.find((mode) => mode.value === requestedMode)?.label || '该来源'}：${result.error}`,
         );
-      } else {
-        const restoredCopy = finalJob.temporary_restored
-          ? `，${finalJob.temporary_restored} 条之前移出的视频已重新显示`
-          : '';
-        publishSourceManagerNotice(
-          newlyVisible.length > 0
-            ? `视频已同步：检查 ${synchronized} 条，新增显示 ${newlyVisible.length} 条；视频资料现有 ${refreshed.length} 条${requestedSourceLabel}${restoredCopy}`
-            : `已检查 ${synchronized} 条${requestedSourceLabel}，没有新增；视频资料现有 ${refreshed.length} 条`,
-        );
+        break;
       }
-      return;
+      const refreshed = result.refreshed || [];
+      const overview = result.overview;
+      sourceModeRef.current = requestedMode;
+      libraryRequestRef.current += 1;
+      setSourceMode(requestedMode);
+      setItems(refreshed);
+      if (overview) {
+        setLibraryOverview({
+          sourceTotal: overview.source_total,
+          temporaryHidden: overview.hidden.temporary,
+          permanentHidden: overview.permanent_hidden_total,
+        });
+      }
+      setSelected(new Set());
+      setError('');
+      setLoading(false);
+      publishSourceManagerNotice(`${SOURCE_MODES.find((mode) => mode.value === requestedMode)?.label || '该来源'}已更新，视频资料现有 ${refreshed.length} 条`);
     }
 
-    const restoredCopy = finalJob.temporary_restored
-      ? `，${finalJob.temporary_restored} 条之前移出的视频已重新显示`
-      : '';
-    publishSourceManagerNotice(
-      `视频已同步：检查 ${synchronized} 条，新增显示 ${newlyVisible.length} 条${restoredCopy}；${transcriptTargets.length} 条新视频文案将在后台准备`,
-    );
+    setRefreshing(false);
+    setPipelineStage(failed ? 'idle' : 'done');
+
+    const successful = results.filter((result) => !result.error && result.finalJob);
+    const allRefreshed = results.filter((result) => !result.error && result.refreshed !== null);
+    if (successful.length === 0) {
+      if (results.length === 0) publishSourceManagerNotice('没有可同步的来源');
+      return { started: true };
+    }
+    if (modes.length === 1) {
+      const result = successful[0];
+      if (result) publishSourceManagerNotice(
+        formatCollectionSyncMessage({
+          ...result.finalJob!,
+          sourceLabel: SOURCE_MODES.find((mode) => mode.value === result.requestedMode)?.label || '视频',
+          requestedCount,
+        }),
+      );
+    } else {
+      const checkedTotal = successful.reduce(
+        (total, result) => total + (result.finalJob?.success || result.finalJob?.total || 0),
+        0,
+      );
+      const newTotal = allRefreshed.reduce(
+        (total, result) => total + result.newlyVisible.length,
+        0,
+      );
+      const failedLabels = results
+        .filter((result) => result.error)
+        .map((result) => SOURCE_MODES.find((mode) => mode.value === result.requestedMode)?.label || '')
+        .filter(Boolean);
+      const suffix = failedLabels.length > 0 ? `；${failedLabels.join('、')}未完成，可稍后单独重试` : '';
+      publishSourceManagerNotice(
+        `已同步 ${successful.length} 个来源，共检查 ${checkedTotal} 条，新显示 ${newTotal} 条${suffix}`,
+      );
+    }
+
+    const transcriptTargets = allRefreshed
+      .flatMap((result) => result.newlyVisible)
+      .slice(0, requestedCount * modes.length)
+      .filter((item) => item.can_extract && !item.extracted);
+    if (transcriptTargets.length === 0) return { started: true };
     if (batchExtractingRef.current) {
       publishSourceManagerNotice(
-        `视频已同步：检查 ${synchronized} 条，新增显示 ${newlyVisible.length} 条；当前文案任务仍在处理，新视频可稍后补全文案`,
+        `${transcriptTargets.length} 条新视频文案可稍后补提；当前文案任务仍在处理`,
       );
-      return;
+      return { started: true };
     }
+    publishSourceManagerNotice(`${transcriptTargets.length} 条新视频文案将在后台准备`);
     void (async () => {
       await wait(700);
       if (!activeRef.current || batchExtractingRef.current) return;
@@ -1874,7 +1967,11 @@ export default function VideoLibraryPage() {
         );
       }
     })();
+    return { started: true };
   };
+
+  const syncCollectionRef = useRef(syncCollection);
+  syncCollectionRef.current = syncCollection;
 
   const deleteExtraction = async (item: DouyinLibraryItem): Promise<boolean> => {
     const noteId = item.extracted_note_id;
@@ -1940,7 +2037,6 @@ export default function VideoLibraryPage() {
     const dialog = sourceManagerDialogRef.current;
     if (!dialog || dialog.open) return;
     if (platformFilter !== 'all') setSourceManagerView(platformFilter);
-    if (!refreshing) setSourceManagerMode(sourceModeRef.current);
     if (sourceManagerRailRef.current) sourceManagerRailRef.current.scrollTop = 0;
     sourceManagerRestoreFocusRef.current = true;
     setSourceManagerOpen(true);
@@ -1953,6 +2049,8 @@ export default function VideoLibraryPage() {
   };
 
   useEffect(() => {
+    if (quickSyncCheckedRef.current || typeof window === 'undefined') return;
+    quickSyncCheckedRef.current = true;
     const currentUrl = new URL(window.location.href);
     if (currentUrl.searchParams.get('sync') !== '1') return;
     currentUrl.searchParams.delete('sync');
@@ -1961,8 +2059,34 @@ export default function VideoLibraryPage() {
       '',
       `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`,
     );
-    openSourceManager();
+    setQuickSyncRequested(true);
   }, []);
+
+  useEffect(() => {
+    if (!quickSyncRequested || loading || refreshing) return;
+    setQuickSyncRequested(false);
+    const preferences = readLibraryQuickSyncPreferences();
+    setSourceManagerModes(preferences.modes);
+    setSyncCount(preferences.count);
+    if (!preferences.configured || !connected || !loggedIn) {
+      openSourceManager();
+      return;
+    }
+    setAutoSyncing(true);
+    void syncCollectionRef.current(
+      preferences.modes,
+      preferences.modes,
+      preferences.count,
+    ).then((result) => {
+      if (!activeRef.current) return;
+      setAutoSyncing(false);
+      if (!result.started) {
+        openSourceManager();
+        return;
+      }
+      void refreshLoginStatus();
+    });
+  }, [connected, loading, loggedIn, quickSyncRequested, refreshing, refreshLoginStatus]);
 
   const closeSourceManager = (restoreFocus = true) => {
     sourceManagerRestoreFocusRef.current = restoreFocus;
@@ -2499,13 +2623,13 @@ export default function VideoLibraryPage() {
         <div className={styles.sourceDialogCard}>
           <header className={styles.sourceDialogHeader}>
             <div>
-              <h2 id="library-source-heading">添加或同步视频</h2>
-              <span id="library-source-description">选择一个来源开始</span>
+              <h2 id="library-source-heading">同步视频</h2>
+              <span id="library-source-description">选择一个或多个来源开始同步</span>
             </div>
             <button
               type="button"
               onClick={() => closeSourceManager()}
-              aria-label="关闭添加或同步视频"
+              aria-label="关闭同步视频"
             >
               <X size={18} />
             </button>
@@ -2637,29 +2761,38 @@ export default function VideoLibraryPage() {
               </div>
             </div>
             <div className="library-source-main">
-              <div className="library-source-modes">
-                {SOURCE_MODES.map(({ value, label, Icon }) => (
-                  <button
-                    type="button"
-                    key={value}
-                    className={sourceManagerMode === value ? 'is-active' : ''}
-                    aria-pressed={sourceManagerMode === value}
-                    disabled={refreshing || batchExtracting}
-                    onClick={() => {
-                      setSourceManagerMode(value);
-                      setSourceManagerNotice('');
-                    }}
-                  >
-                    <Icon size={16} />
-                    <strong>{label}</strong>
-                  </button>
-                ))}
+              <div className="library-source-modes" role="group" aria-label="选择要同步的抖音来源，可多选">
+                {SOURCE_MODES.map(({ value, label, Icon }) => {
+                  const active = sourceManagerModes.includes(value);
+                  return (
+                    <button
+                      type="button"
+                      key={value}
+                      className={active ? 'is-active' : ''}
+                      aria-pressed={active}
+                      disabled={refreshing || batchExtracting}
+                      onClick={() => {
+                        setSourceManagerModes((current) => {
+                          const next = current.includes(value)
+                            ? current.filter((mode) => mode !== value)
+                            : [...current, value];
+                          return next.length > 0 ? next : current;
+                        });
+                        setSourceManagerNotice('');
+                      }}
+                    >
+                      <Icon size={17} />
+                      <strong>{label}</strong>
+                      <small>{active ? '已选' : '未选'}</small>
+                    </button>
+                  );
+                })}
               </div>
               <div className="library-pipeline-action">
                 <button
                   type="button"
-                  onClick={() => void syncCollection(sourceManagerMode)}
-                  disabled={!connected || !loggedIn || refreshing}
+                  onClick={() => void syncCollection(sourceManagerModes, sourceManagerModes)}
+                  disabled={!connected || !loggedIn || refreshing || sourceManagerModes.length === 0}
                   className="library-pipeline-button"
                 >
                   {refreshing ? (
@@ -2798,29 +2931,37 @@ export default function VideoLibraryPage() {
               <span>{visibleItemCount.toLocaleString('zh-CN')} 条</span>
             </div>
             <div className={styles.headerAiActions}>
+              <Link
+                href="/library/creators"
+                className={styles.headerAiAction}
+                aria-label="打开博主作品清单"
+              >
+                <UserRound size={17} aria-hidden="true" />
+                <span>博主</span>
+              </Link>
               <button
                 ref={sourceManagerTriggerRef}
                 type="button"
                 className={styles.headerSourceAction}
                 aria-haspopup="dialog"
                 aria-expanded={sourceManagerOpen}
-                aria-label={refreshing ? '抖音视频同步中，查看进度' : '添加或同步视频'}
+                aria-label={refreshing || autoSyncing ? '视频同步中，查看进度' : '同步视频'}
                 onClick={openSourceManager}
               >
-                {refreshing ? (
+                {refreshing || autoSyncing ? (
                   <LoaderCircle size={17} className="animate-spin" aria-hidden="true" />
                 ) : (
                   <Plus size={17} aria-hidden="true" />
                 )}
-                <span>{refreshing ? '同步中' : '添加视频'}</span>
+                <span>{refreshing || autoSyncing ? '同步中' : '同步视频'}</span>
               </button>
               {showDouyinItems && (
                 <button
                   type="button"
                   className={styles.headerAiAction}
                   aria-label={selectedCount > 0
-                    ? `带已选的 ${selectedCount} 条视频进入视频研伴`
-                    : '用全部视频进入视频研伴'}
+                    ? `带已选的 ${selectedCount} 条视频进入知萃 Harness`
+                    : '用全部视频进入知萃 Harness'}
                   onClick={openLibraryInAgent}
                 >
                   <MessageSquareText size={18} aria-hidden="true" />
@@ -2832,9 +2973,13 @@ export default function VideoLibraryPage() {
                   <MoreHorizontal size={18} aria-hidden="true" />
                 </summary>
                 <div>
-                  <Link href="/agent" aria-label="打开视频研伴">
+                  <Link href="/library/creators" aria-label="管理博主作品清单">
+                    <UserRound size={16} aria-hidden="true" />
+                    博主作品
+                  </Link>
+                  <Link href="/harness" aria-label="打开知萃 Harness">
                     <Bot size={16} aria-hidden="true" />
-                    视频研伴
+                    知萃 Harness
                   </Link>
                   {libraryOverview.permanentHidden > 0 && (
                     <button type="button" onClick={openHiddenManager}>
@@ -3018,6 +3163,28 @@ export default function VideoLibraryPage() {
                     ? '正在准备资料'
                     : `去提问 · ${selectedCount}`}
                 </button>
+                <button
+                  type="button"
+                  className={styles.batchDirectRemoval}
+                  data-danger="true"
+                  onClick={() => openRemovalDialog(selectedItems)}
+                  disabled={selectedItems.length === 0 || removalPending || batchExtracting || refreshing}
+                  aria-label={`移出视频资料，${selectedItems.length} 条抖音视频`}
+                >
+                  <CircleMinus size={15} aria-hidden="true" />
+                  移出视频资料 · {selectedItems.length}
+                </button>
+                <button
+                  type="button"
+                  className={styles.batchDirectRemoval}
+                  data-danger="true"
+                  onClick={() => openRemovalDialog(selectedItems, 'permanent')}
+                  disabled={selectedItems.length === 0 || removalPending || batchExtracting || refreshing}
+                  aria-label={`永久隐藏，${selectedItems.length} 条抖音视频`}
+                >
+                  <EyeOff size={15} aria-hidden="true" />
+                  永久隐藏 · {selectedItems.length}
+                </button>
                 <details className={styles.batchMore}>
                   <summary aria-label="更多批量操作">
                     <MoreHorizontal size={17} aria-hidden="true" />
@@ -3038,21 +3205,25 @@ export default function VideoLibraryPage() {
                     />
                     <button
                       type="button"
+                      className={styles.batchCompactRemoval}
                       data-danger="true"
                       onClick={() => openRemovalDialog(selectedItems)}
                       disabled={selectedItems.length === 0 || removalPending || batchExtracting || refreshing}
+                      aria-label={`移出视频资料，${selectedItems.length} 条抖音视频`}
                     >
-                      <CircleMinus size={15} />
-                      移出视频资料
+                      <CircleMinus size={15} aria-hidden="true" />
+                      移出视频资料 · {selectedItems.length}
                     </button>
                     <button
                       type="button"
+                      className={styles.batchCompactRemoval}
                       data-danger="true"
                       onClick={() => openRemovalDialog(selectedItems, 'permanent')}
                       disabled={selectedItems.length === 0 || removalPending || batchExtracting || refreshing}
+                      aria-label={`永久隐藏，${selectedItems.length} 条抖音视频`}
                     >
-                      <EyeOff size={15} />
-                      永久隐藏
+                      <EyeOff size={15} aria-hidden="true" />
+                      永久隐藏 · {selectedItems.length}
                     </button>
                     {selectedItems.length === 1
                       && selectedItems[0].extracted
@@ -3164,11 +3335,11 @@ export default function VideoLibraryPage() {
                     ? '换个关键词或平台试试。'
                     : platformFilter === 'douyin'
                       ? loggedIn
-                        ? `添加${sourceLabel}后会显示在这里。`
-                        : '登录抖音后即可添加视频。'
+                        ? `同步${sourceLabel}后会显示在这里。`
+                        : '登录抖音后即可同步视频。'
                       : platformFilter === 'bilibili' || platformFilter === 'xiaohongshu'
                         ? '连接账号或导入视频链接。'
-                        : '添加或同步视频后会显示在这里。'}
+                        : '同步视频后会显示在这里。'}
                 </p>
                 {!search && platformFilter === 'douyin' && libraryOverview.permanentHidden > 0 && (
                   <button type="button" onClick={openHiddenManager}>
@@ -3179,7 +3350,7 @@ export default function VideoLibraryPage() {
                 {!search && !(platformFilter === 'douyin' && libraryOverview.permanentHidden > 0) && (
                   <button type="button" onClick={openSourceManager}>
                     <Plus size={15} />
-                    添加视频
+                    同步视频
                   </button>
                 )}
               </div>

@@ -598,7 +598,7 @@ function KnowledgeWorkspace({ initialView }: { initialView: KnowledgeView }) {
           <h1>我的知识</h1>
         </div>
         <div className={styles.headerActions}>
-          <Link href="/agent" className={styles.agentLink}>
+          <Link href="/harness" className={styles.agentLink}>
             <Robot size={18} aria-hidden="true" />去提问
           </Link>
           <button type="button" className={styles.primaryButton} onClick={() => openEditor()}>
@@ -684,7 +684,7 @@ function KnowledgeWorkspace({ initialView }: { initialView: KnowledgeView }) {
               ) : view === 'pages' ? (
                 <button type="button" onClick={() => openEditor()}>新建知识页</button>
               ) : (
-                <Link href="/agent">去提问</Link>
+                <Link href="/harness">去提问</Link>
               )}
             </section>
           ) : (

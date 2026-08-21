@@ -23,8 +23,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import {
-  PRODUCT_DESTINATIONS,
-  isProductDestinationActive,
+  DESKTOP_PRODUCT_DESTINATIONS,
+  isDesktopProductDestinationActive,
 } from '@/lib/productNavigation';
 import { PRODUCT_NAVIGATION_ICONS } from '@/lib/productNavigationIcons';
 import {
@@ -104,9 +104,9 @@ function DesktopNavigation() {
         </Link>
 
         <nav className="desktop-sidebar__nav" aria-label="主导航">
-          {PRODUCT_DESTINATIONS.map((item) => {
+          {DESKTOP_PRODUCT_DESTINATIONS.map((item) => {
             const Icon = PRODUCT_NAVIGATION_ICONS[item.id];
-            const active = isProductDestinationActive(item.id, pathname);
+            const active = isDesktopProductDestinationActive(item.id, pathname);
             return (
               <Link
                 key={item.href}
@@ -264,7 +264,7 @@ export default function DesktopAppFrame({ children }: { children: ReactNode }) {
       root.removeAttribute('data-desktop-workspace');
       return;
     }
-    if (pathname.startsWith('/agent')) {
+    if (pathname.startsWith('/harness')) {
       root.setAttribute('data-desktop-workspace', 'agent');
     } else if (pathname.startsWith('/settings')) {
       root.setAttribute('data-desktop-workspace', 'settings');

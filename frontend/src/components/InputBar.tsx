@@ -93,11 +93,11 @@ export default function InputBar({
           {/* Input row */}
           <div className="flex items-center gap-2.5 md:gap-3 px-4 py-3.5 md:px-5 md:py-4">
             {/* Inner emerald glow on focus — spans full input area */}
-            <div className="absolute inset-0 bg-gradient-to-r from-accent-emerald/[0.02] via-transparent to-accent-emerald/[0.02] opacity-0 group-focus-within:opacity-100 transition-opacity duration-500 pointer-events-none" />
+            <div className="absolute inset-0 bg-gradient-to-r from-accent-brand/[0.02] via-transparent to-accent-brand/[0.02] opacity-0 group-focus-within:opacity-100 transition-opacity duration-500 pointer-events-none" />
 
             <Link2
               size={18}
-              className="text-foreground-muted flex-shrink-0 md:w-5 md:h-5 transition-colors duration-300 group-focus-within:text-accent-emerald/60"
+              className="text-foreground-muted flex-shrink-0 md:w-5 md:h-5 transition-colors duration-300 group-focus-within:text-accent-brand/60"
             />
             <input
               ref={inputRef}
@@ -178,7 +178,7 @@ export default function InputBar({
                   }
                   router.push(`/login?redirect=${encodeURIComponent(window.location.pathname)}`);
                 }}
-                className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-accent-emerald hover:underline"
+                className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-accent-brand hover:underline"
               >
                 <LogIn size={12} />
                 登录 / 注册

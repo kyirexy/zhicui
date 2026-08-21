@@ -1,4 +1,10 @@
-export type ProductDestinationId = 'home' | 'library' | 'assistant' | 'knowledge' | 'plans';
+export type ProductDestinationId =
+  | 'home'
+  | 'library'
+  | 'creators'
+  | 'harness'
+  | 'knowledge'
+  | 'plans';
 
 export interface ProductDestination {
   id: ProductDestinationId;
@@ -27,10 +33,10 @@ export const PRODUCT_DESTINATIONS: ProductDestination[] = [
     group: 'knowledge-flow',
   },
   {
-    id: 'assistant',
-    href: '/agent',
-    label: '视频研伴',
-    mobileLabel: '研伴',
+    id: 'harness',
+    href: '/harness',
+    label: '知萃 Harness',
+    mobileLabel: 'Harness',
     description: '基于视频提问和研究',
     group: 'knowledge-flow',
   },
@@ -52,13 +58,43 @@ export const PRODUCT_DESTINATIONS: ProductDestination[] = [
   },
 ];
 
+const CREATOR_DESTINATION: ProductDestination = {
+  id: 'creators',
+  href: '/library/creators',
+  label: '博主作品',
+  mobileLabel: '博主',
+  description: '按博主管理和批量提取作品',
+  group: 'knowledge-flow',
+};
+
+/** 桌面端左侧导航可容纳独立博主入口；移动端继续保持五个主 Tab。 */
+export const DESKTOP_PRODUCT_DESTINATIONS: ProductDestination[] = PRODUCT_DESTINATIONS.flatMap(
+  (destination) => (
+    destination.id === 'library'
+      ? [destination, CREATOR_DESTINATION]
+      : [destination]
+  ),
+);
+
 export function isProductDestinationActive(
   destination: ProductDestinationId,
   pathname: string,
 ): boolean {
   if (destination === 'home') return pathname === '/';
   if (destination === 'plans') return pathname.startsWith('/plans');
+  if (destination === 'creators') return pathname.startsWith('/library/creators');
   if (destination === 'library') return pathname.startsWith('/library');
-  if (destination === 'assistant') return pathname.startsWith('/agent');
+  if (destination === 'harness') return pathname.startsWith('/harness');
   return pathname.startsWith('/notes');
+}
+
+export function isDesktopProductDestinationActive(
+  destination: ProductDestinationId,
+  pathname: string,
+): boolean {
+  if (destination === 'creators') return pathname.startsWith('/library/creators');
+  if (destination === 'library') {
+    return pathname.startsWith('/library') && !pathname.startsWith('/library/creators');
+  }
+  return isProductDestinationActive(destination, pathname);
 }

@@ -51,8 +51,8 @@
 }
 
 .search:focus-within {
-  border-color: color-mix(in srgb, var(--accent-emerald) 48%, var(--border-color));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-emerald) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent-brand) 48%, var(--border-color));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-brand) 10%, transparent);
 }
 
 .search input {
@@ -136,7 +136,7 @@
   margin-top: 8px;
   border: 0;
   padding: 0;
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
   background: transparent;
   cursor: pointer;
 }
@@ -220,7 +220,7 @@
   font-weight: 660;
 }
 
-.summaryRow b.healthy { color: var(--accent-emerald); }
+.summaryRow b.healthy { color: var(--accent-brand); }
 
 .mobileActions {
   display: none;

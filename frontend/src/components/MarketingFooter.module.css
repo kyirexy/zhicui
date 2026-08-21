@@ -1,8 +1,8 @@
 .footer {
   position: relative;
   z-index: 2;
-  border-top: 1px solid #e1e1df;
-  color: #242426;
+  border-top: 1px solid #e5e8eb;
+  color: var(--foreground);
   background: #ffffff;
 }
 
@@ -42,7 +42,7 @@
 
 .identity span {
   margin-top: 0.26rem;
-  color: #74747b;
+  color: var(--accent-sky);
   font-size: 0.72rem;
 }
 
@@ -69,14 +69,14 @@
 }
 
 .inner nav a:hover {
-  color: #242426;
-  background: #f1f1ef;
+  color: var(--foreground);
+  background: #e8f0fe;
 }
 
 .inner > p {
   grid-column: 1 / -1;
   padding-top: 1.4rem;
-  border-top: 1px solid #e1e1df;
+  border-top: 1px solid #e5e8eb;
   color: #929298;
   font-size: 0.64rem;
 }

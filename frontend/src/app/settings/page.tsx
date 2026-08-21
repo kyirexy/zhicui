@@ -29,7 +29,9 @@ import AgentSourceLimitSettingsCard from '@/components/AgentSourceLimitSettingsC
 import AutoSyncSettingsCard from '@/components/AutoSyncSettingsCard';
 import DesktopMediaSettingsCard from '@/components/DesktopMediaSettingsCard';
 import LocalDataSettingsCard from '@/components/LocalDataSettingsCard';
+import QuickSyncSettingsCard from '@/components/QuickSyncSettingsCard';
 import UserAIProviderSettingsCard from '@/components/UserAIProviderSettingsCard';
+import UserCustomModelsSettingsCard from '@/components/UserCustomModelsSettingsCard';
 import UserVisionProviderSettingsCard from '@/components/UserVisionProviderSettingsCard';
 import { useDesktopApp } from '@/components/DesktopAppFrame';
 import ThemeSelector from '@/components/theme/ThemeSelector';
@@ -42,7 +44,7 @@ import styles from './SettingsWorkspace.module.css';
 
 const WEB_APP_VERSION = '1.1.9';
 
-type SettingsSectionId = 'general' | 'appearance' | 'storage' | 'sync' | 'ai' | 'about';
+type SettingsSectionId = 'general' | 'appearance' | 'storage' | 'sync' | 'models' | 'ai' | 'about';
 
 interface SettingsSection {
   id: SettingsSectionId;
@@ -82,10 +84,17 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     icon: ArrowsClockwise,
   },
   {
+    id: 'models',
+    label: '模型',
+    description: '选择平台模型或接入多条自己的模型',
+    keywords: '模型 自定义 供应商 API Key Base OpenAI DeepSeek 接入',
+    icon: ChatCircleDots,
+  },
+  {
     id: 'ai',
     label: 'AI 服务',
     description: '默认即可使用，需要时再接入自己的模型',
-    keywords: '模型 供应商 API Key Base OpenAI 基础 AI',
+    keywords: '视觉 图片 问答 供应商 API Key Base 基础 AI',
     icon: Cpu,
   },
   {
@@ -338,9 +347,15 @@ function SettingsWorkspace() {
 
             {activeSection.id === 'sync' && (
               <>
+                <QuickSyncSettingsCard />
                 <AgentSourceLimitSettingsCard />
                 <AutoSyncSettingsCard />
               </>
+            )}
+            {activeSection.id === 'models' && (
+              <section className={styles.technicalSection}>
+                <UserCustomModelsSettingsCard />
+              </section>
             )}
             {activeSection.id === 'ai' && !isMobile && (
               <section className={styles.technicalSection}>

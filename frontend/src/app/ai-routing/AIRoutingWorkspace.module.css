@@ -1,5 +1,5 @@
 .shell {
-  --routing-accent: #303034;
+  --routing-accent: var(--accent-brand);
   --routing-accent-soft: color-mix(in srgb, var(--routing-accent) 8%, var(--card-bg));
   --routing-border: color-mix(in srgb, var(--foreground) 11%, transparent);
   width: min(100%, 1100px);

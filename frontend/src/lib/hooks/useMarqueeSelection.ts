@@ -41,6 +41,8 @@ interface UseMarqueeSelectionOptions {
   isDisabled?: () => boolean;
   activationDistance?: number;
   alwaysAdditive?: boolean;
+  /** 普通框选（不按 Ctrl/Meta）采用异或语义：再次框住已选项会取消它们。 */
+  toggleOnHitSelected?: boolean;
   shouldStart?: (target: HTMLElement, container: HTMLElement) => boolean;
   onSelectionChange: (next: Set<string>) => void;
   onCommit?: (details: MarqueeCommitDetails) => void;
@@ -176,6 +178,7 @@ export function useMarqueeSelection({
   isDisabled,
   activationDistance = 6,
   alwaysAdditive = false,
+  toggleOnHitSelected = false,
   shouldStart,
   onSelectionChange,
   onCommit,
@@ -196,6 +199,7 @@ export function useMarqueeSelection({
     isDisabled,
     activationDistance,
     alwaysAdditive,
+    toggleOnHitSelected,
     shouldStart,
     onSelectionChange,
     onCommit,
@@ -210,6 +214,7 @@ export function useMarqueeSelection({
     isDisabled,
     activationDistance,
     alwaysAdditive,
+    toggleOnHitSelected,
     shouldStart,
     onSelectionChange,
     onCommit,
@@ -362,13 +367,18 @@ export function useMarqueeSelection({
       const hitIds = gesture.items
         .filter((item) => marqueeRectsIntersect(nextRect, item.rect))
         .map((item) => item.id);
-      const next = gesture.additive
+      const toggle = optionsRef.current.toggleOnHitSelected && !gesture.additive;
+      const next: Set<string> = gesture.additive || toggle
         ? new Set(gesture.baseSelection)
         : new Set<string>();
       let limited = false;
 
       hitIds.forEach((id) => {
-        if (next.has(id)) return;
+        if (next.has(id)) {
+          if (!toggle) return;
+          next.delete(id);
+          return;
+        }
         if (next.size >= optionsRef.current.maxSelection) {
           limited = true;
           return;

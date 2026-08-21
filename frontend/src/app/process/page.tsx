@@ -25,7 +25,7 @@ function MissingId() {
     <div className="min-h-[60vh] flex flex-col items-center justify-center text-center px-4">
       <p className="text-4xl mb-4">🔍</p>
       <p className="text-foreground-secondary mb-4">请指定笔记 ID</p>
-      <Link href="/notes" className="text-accent-emerald hover:underline text-sm">
+      <Link href="/notes" className="text-accent-brand hover:underline text-sm">
         ← 返回知识库
       </Link>
     </div>
@@ -69,7 +69,7 @@ function ProcessView({ id }: { id: string }) {
       <div className="min-h-[60vh] flex flex-col items-center justify-center text-center px-4">
         <p className="text-4xl mb-4">😕</p>
         <p className="text-foreground-secondary mb-4">{error || '笔记不存在'}</p>
-        <Link href="/notes" className="text-accent-emerald hover:underline text-sm">
+        <Link href="/notes" className="text-accent-brand hover:underline text-sm">
           ← 返回知识库
         </Link>
       </div>

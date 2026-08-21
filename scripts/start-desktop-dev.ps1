@@ -1,4 +1,4 @@
-﻿param(
+param(
     [ValidateRange(1, 65535)]
     [int]$BackendPort = 8000,
 
@@ -20,7 +20,7 @@ $logRoot = Join-Path $repoRoot '.tmp\desktop-dev'
 $backendUrl = "http://127.0.0.1:$BackendPort"
 $frontendUrl = "http://localhost:$FrontendPort"
 $backendHealthUrl = "$backendUrl/api/health"
-$frontendHealthUrl = "$frontendUrl/agent"
+$frontendHealthUrl = "$frontendUrl/harness"
 
 $backendProcess = $null
 $frontendProcess = $null

@@ -4,7 +4,7 @@
   --knowledge-line-strong: color-mix(in srgb, var(--foreground) 18%, transparent);
   --knowledge-soft: color-mix(in srgb, var(--foreground) 4%, transparent);
   --knowledge-pane: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
-  --knowledge-accent-soft: color-mix(in srgb, var(--accent-emerald) 9%, transparent);
+  --knowledge-accent-soft: color-mix(in srgb, var(--accent-brand) 9%, transparent);
   width: 100%;
   color: var(--foreground);
 }
@@ -79,8 +79,8 @@
 }
 
 .primaryButton {
-  border: 1px solid var(--accent-emerald);
-  background: var(--accent-emerald);
+  border: 1px solid var(--accent-brand);
+  background: var(--accent-brand);
   color: #fff;
 }
 
@@ -143,7 +143,7 @@
 .document a:focus-visible,
 .document button:focus-visible,
 .dialogSurface button:focus-visible {
-  outline: 2px solid var(--accent-emerald);
+  outline: 2px solid var(--accent-brand);
   outline-offset: 3px;
 }
 
@@ -211,7 +211,7 @@
 }
 
 .viewTabs .activeTab {
-  border-bottom-color: var(--accent-emerald);
+  border-bottom-color: var(--accent-brand);
   background: transparent;
   color: var(--foreground);
   box-shadow: none;
@@ -319,7 +319,7 @@
 }
 
 .knowledgeRow > .selectedRow {
-  box-shadow: inset 3px 0 0 var(--accent-emerald);
+  box-shadow: inset 3px 0 0 var(--accent-brand);
 }
 
 .sourceThumbnail,
@@ -331,7 +331,7 @@
   overflow: hidden;
   border-radius: .55rem;
   background: var(--knowledge-soft);
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
 }
 
 .sourceThumbnail > img {
@@ -406,7 +406,7 @@
 }
 
 .rowFacts > :first-child {
-  color: var(--accent-emerald);
+  color: var(--foreground-muted);
   font-weight: 650;
 }
 
@@ -426,7 +426,7 @@
 }
 
 .listState > svg {
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
 }
 
 .listState h2,
@@ -456,7 +456,7 @@
   border: 0;
   padding: .45rem .6rem;
   background: transparent;
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
   font-size: .77rem;
   font-weight: 670;
 }
@@ -524,7 +524,7 @@
 }
 
 .readerEmpty > svg {
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
 }
 
 .readerEmpty h2,
@@ -578,7 +578,7 @@
 }
 
 .readerEyebrow {
-  color: var(--accent-emerald);
+  color: var(--foreground-muted);
   font-size: .7rem;
   font-weight: 680;
 }
@@ -623,7 +623,7 @@
   margin: 0 0 1.55rem;
   padding: .15rem 0 .15rem 1rem;
   border: 0;
-  border-left: 3px solid var(--accent-emerald);
+  border-left: 3px solid var(--accent-brand);
   border-radius: 0;
   background: transparent;
 }
@@ -632,14 +632,14 @@
   max-width: 78ch;
   margin: 1.5rem 0;
   padding: 1rem 1.1rem;
-  border: 1px solid color-mix(in srgb, var(--accent-emerald) 22%, var(--knowledge-line));
+  border: 1px solid color-mix(in srgb, var(--accent-brand) 22%, var(--knowledge-line));
   border-radius: .7rem;
   background: var(--knowledge-accent-soft);
 }
 
 .readerLead small,
 .documentLead small {
-  color: var(--accent-emerald);
+  color: var(--foreground-muted);
   font-size: .68rem;
   font-weight: 680;
 }
@@ -711,7 +711,7 @@
 
 .readerSections > section > span,
 .documentSections > section > span {
-  color: var(--accent-emerald);
+  color: var(--foreground-muted);
   font-size: .68rem;
   font-variant-numeric: tabular-nums;
 }
@@ -808,7 +808,7 @@
 }
 
 .editor > header span {
-  color: var(--accent-emerald);
+  color: var(--foreground-muted);
   font-size: .7rem;
   font-weight: 680;
 }
@@ -932,7 +932,7 @@
 }
 
 .document > header > span {
-  color: var(--accent-emerald);
+  color: var(--foreground-muted);
   font-size: .72rem;
   font-weight: 680;
 }
@@ -982,8 +982,8 @@
 }
 
 .document > header .primaryButton {
-  border-color: var(--accent-emerald);
-  background: var(--accent-emerald);
+  border-color: var(--accent-brand);
+  background: var(--accent-brand);
   color: #fff;
 }
 
@@ -1057,7 +1057,7 @@
   border: 0;
   padding: .55rem;
   background: transparent;
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
   font-size: .78rem;
   font-weight: 660;
 }

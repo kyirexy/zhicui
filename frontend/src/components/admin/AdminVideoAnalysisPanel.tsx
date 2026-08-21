@@ -192,7 +192,7 @@ export default function AdminVideoAnalysisPanel({
     <section className="space-y-4" aria-labelledby="admin-video-analysis-title">
       <header className="flex flex-wrap items-start justify-between gap-4 border-t border-card-border pt-6">
         <div>
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase text-accent-emerald">
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase text-accent-brand">
             <Eye size={14} aria-hidden="true" />Video analysis
           </div>
           <h2 id="admin-video-analysis-title" className="mt-2 text-xl font-bold text-foreground">详细视频解析</h2>
@@ -213,7 +213,7 @@ export default function AdminVideoAnalysisPanel({
       <section className="admin-panel p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="flex items-start gap-3">
-            <span className={`mt-0.5 size-2.5 rounded-full ${settings.enabled ? 'bg-accent-emerald' : 'bg-foreground-muted/35'}`} />
+            <span className={`mt-0.5 size-2.5 rounded-full ${settings.enabled ? 'bg-accent-brand' : 'bg-foreground-muted/35'}`} />
             <div>
               <h3 className="text-sm font-semibold text-foreground">功能总开关</h3>
               <p className="mt-1 text-xs leading-5 text-foreground-muted">
@@ -226,7 +226,7 @@ export default function AdminVideoAnalysisPanel({
             role="switch"
             aria-checked={settings.enabled}
             onClick={() => setSettings(current => ({ ...current, enabled: !current.enabled }))}
-            className={`min-h-10 rounded-full px-4 text-xs font-semibold ${settings.enabled ? 'bg-accent-emerald text-white' : 'bg-[var(--admin-surface-2)] text-foreground-muted'}`}
+            className={`min-h-10 rounded-full px-4 text-xs font-semibold ${settings.enabled ? 'bg-accent-brand text-white' : 'bg-[var(--admin-surface-2)] text-foreground-muted'}`}
           >
             {settings.enabled ? '已开启' : '保持关闭'}
           </button>
@@ -257,7 +257,7 @@ export default function AdminVideoAnalysisPanel({
             <select
               value={settings.recommended_offering_id || ''}
               onChange={event => setSettings(current => ({ ...current, recommended_offering_id: event.target.value || null }))}
-              className="min-h-11 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-emerald/60"
+              className="min-h-11 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-brand/60"
             >
               <option value="">按发布排序自动推荐</option>
               {publishedOfferings.map(offering => <option key={offering.id} value={offering.id}>{offering.name}</option>)}
@@ -270,7 +270,7 @@ export default function AdminVideoAnalysisPanel({
             type="button"
             onClick={() => void saveSettings()}
             disabled={savingSettings}
-            className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-accent-emerald px-4 text-sm font-semibold text-white disabled:opacity-50"
+            className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-accent-brand px-4 text-sm font-semibold text-white disabled:opacity-50"
           >
             {savingSettings && <LoaderCircle size={15} className="animate-spin" />}
             {savingSettings ? '正在保存' : '保存详细解析设置'}
@@ -412,7 +412,7 @@ function ListHeader({ icon: Icon, title, description, onAdd }: { icon: typeof Ey
   return (
     <header className="flex items-center justify-between gap-3 border-b border-card-border p-4">
       <div className="flex min-w-0 items-center gap-3">
-        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-accent-emerald/10 text-accent-emerald"><Icon size={17} /></span>
+        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-accent-brand/10 text-accent-brand"><Icon size={17} /></span>
         <span className="min-w-0"><strong className="block text-sm text-foreground">{title}</strong><small className="block truncate text-xs text-foreground-muted">{description}</small></span>
       </div>
       <button type="button" onClick={onAdd} className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-lg border border-card-border px-3 text-xs font-semibold text-foreground"><Plus size={14} />新增</button>
@@ -424,7 +424,7 @@ function NumberField({ label, value, min = 0, max, onChange }: { label: string; 
   return (
     <label className="grid gap-1 text-xs text-foreground-muted">
       {label}
-      <input type="number" min={min} max={max} value={value} onChange={event => onChange(Math.max(min, Math.min(max ?? Number.MAX_SAFE_INTEGER, Math.trunc(Number(event.target.value) || 0))))} className="min-h-11 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm tabular-nums text-foreground outline-none focus:border-accent-emerald/60" />
+      <input type="number" min={min} max={max} value={value} onChange={event => onChange(Math.max(min, Math.min(max ?? Number.MAX_SAFE_INTEGER, Math.trunc(Number(event.target.value) || 0))))} className="min-h-11 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm tabular-nums text-foreground outline-none focus:border-accent-brand/60" />
     </label>
   );
 }
@@ -432,7 +432,7 @@ function NumberField({ label, value, min = 0, max, onChange }: { label: string; 
 function StatusBadge({ value }: { value?: string }) {
   const positive = value === 'healthy' || value === 'published';
   const negative = value === 'unhealthy' || value === 'disabled' || value === 'circuit_open';
-  return <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${positive ? 'bg-accent-emerald/10 text-accent-emerald' : negative ? 'bg-accent-rose/10 text-accent-rose' : 'bg-[var(--admin-surface-2)] text-foreground-muted'}`}>{statusLabel(value)}</span>;
+  return <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${positive ? 'bg-accent-brand/10 text-accent-brand' : negative ? 'bg-accent-rose/10 text-accent-rose' : 'bg-[var(--admin-surface-2)] text-foreground-muted'}`}>{statusLabel(value)}</span>;
 }
 
 function Tag({ children, warning = false }: { children: React.ReactNode; warning?: boolean }) {
@@ -617,19 +617,19 @@ function EditorGroup({ title, children }: { title: string; children: React.React
 }
 
 function TextField({ label, value, onChange, placeholder, type = 'text', disabled = false }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; type?: string; disabled?: boolean }) {
-  return <label className="grid gap-1 text-xs text-foreground-muted">{label}<input type={type} value={value} onChange={event => onChange(event.target.value)} placeholder={placeholder} disabled={disabled} autoComplete={type === 'password' ? 'off' : undefined} className="min-h-11 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-emerald/60 disabled:opacity-60" /></label>;
+  return <label className="grid gap-1 text-xs text-foreground-muted">{label}<input type={type} value={value} onChange={event => onChange(event.target.value)} placeholder={placeholder} disabled={disabled} autoComplete={type === 'password' ? 'off' : undefined} className="min-h-11 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-brand/60 disabled:opacity-60" /></label>;
 }
 
 function SelectField({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: Array<[string, string]> }) {
-  return <label className="grid gap-1 text-xs text-foreground-muted">{label}<select value={value} onChange={event => onChange(event.target.value)} className="min-h-11 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-emerald/60">{options.map(([option, text]) => <option key={option} value={option}>{text}</option>)}</select></label>;
+  return <label className="grid gap-1 text-xs text-foreground-muted">{label}<select value={value} onChange={event => onChange(event.target.value)} className="min-h-11 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm text-foreground outline-none focus:border-accent-brand/60">{options.map(([option, text]) => <option key={option} value={option}>{text}</option>)}</select></label>;
 }
 
 function NumberEditor({ label, value, onChange, min = 0, max }: { label: string; value: number; onChange: (value: number) => void; min?: number; max?: number }) {
-  return <label className="grid gap-1 text-xs text-foreground-muted">{label}<input type="number" value={value} min={min} max={max} onChange={event => onChange(Math.max(min, Math.min(max ?? Number.MAX_SAFE_INTEGER, Math.trunc(Number(event.target.value) || 0))))} className="min-h-11 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm tabular-nums text-foreground outline-none focus:border-accent-emerald/60" /></label>;
+  return <label className="grid gap-1 text-xs text-foreground-muted">{label}<input type="number" value={value} min={min} max={max} onChange={event => onChange(Math.max(min, Math.min(max ?? Number.MAX_SAFE_INTEGER, Math.trunc(Number(event.target.value) || 0))))} className="min-h-11 rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 text-sm tabular-nums text-foreground outline-none focus:border-accent-brand/60" /></label>;
 }
 
 function CheckField({ label, checked, onChange }: { label: string; checked: boolean; onChange: (checked: boolean) => void }) {
-  return <label className="flex min-h-11 items-center gap-2 rounded-lg bg-[var(--admin-surface-2)] px-3 text-xs font-medium text-foreground"><input type="checkbox" checked={checked} onChange={event => onChange(event.target.checked)} className="size-4 accent-emerald-500" />{label}</label>;
+  return <label className="flex min-h-11 items-center gap-2 rounded-lg bg-[var(--admin-surface-2)] px-3 text-xs font-medium text-foreground"><input type="checkbox" checked={checked} onChange={event => onChange(event.target.checked)} className="size-4 accent-brand-500" />{label}</label>;
 }
 
 function Warning({ text }: { text: string }) {
@@ -637,5 +637,5 @@ function Warning({ text }: { text: string }) {
 }
 
 function EditorActions({ onClose, onSave, saving, disabled }: { onClose: () => void; onSave: () => void; saving: boolean; disabled: boolean }) {
-  return <footer className="sticky bottom-0 -mx-2 flex justify-end gap-2 border-t border-card-border bg-background/95 px-2 py-4 backdrop-blur"><button type="button" onClick={onClose} disabled={saving} className="min-h-11 rounded-lg border border-card-border px-4 text-sm text-foreground">取消</button><button type="button" onClick={onSave} disabled={saving || disabled} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-accent-emerald px-4 text-sm font-semibold text-white disabled:opacity-50">{saving && <LoaderCircle size={15} className="animate-spin" />}{saving ? '正在保存' : '保存草稿'}</button></footer>;
+  return <footer className="sticky bottom-0 -mx-2 flex justify-end gap-2 border-t border-card-border bg-background/95 px-2 py-4 backdrop-blur"><button type="button" onClick={onClose} disabled={saving} className="min-h-11 rounded-lg border border-card-border px-4 text-sm text-foreground">取消</button><button type="button" onClick={onSave} disabled={saving || disabled} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-accent-brand px-4 text-sm font-semibold text-white disabled:opacity-50">{saving && <LoaderCircle size={15} className="animate-spin" />}{saving ? '正在保存' : '保存草稿'}</button></footer>;
 }

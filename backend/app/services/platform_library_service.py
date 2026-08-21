@@ -289,7 +289,13 @@ def _safe_error(platform: str, exc: Exception) -> str:
     return "当前只支持 B站和小红书链接"
 
 
-def import_one(db: Session, *, user_id: str, value: str) -> dict[str, Any]:
+def import_one(
+    db: Session,
+    *,
+    user_id: str,
+    value: str,
+    source_mode: str | None = None,
+) -> dict[str, Any]:
     url = normalize_shared_url(value)
     platform = video_extractor._detect_platform(url)
     if platform not in SUPPORTED_PLATFORMS:
@@ -298,6 +304,8 @@ def import_one(db: Session, *, user_id: str, value: str) -> dict[str, Any]:
         info, transcript, source_meta = _extract_bilibili(url, db)
     else:
         info, transcript, source_meta = _extract_xiaohongshu(url, db)
+    if source_mode in {"collect", "like", "post"}:
+        source_meta["source_mode"] = source_mode
     note, reused = _save_or_refresh(
         db,
         user_id=user_id,
@@ -309,7 +317,13 @@ def import_one(db: Session, *, user_id: str, value: str) -> dict[str, Any]:
     return {"status": "reused" if reused else "imported", "item": serialize_item(note)}
 
 
-def import_many(db: Session, *, user_id: str, values: list[str]) -> dict[str, Any]:
+def import_many(
+    db: Session,
+    *,
+    user_id: str,
+    values: list[str],
+    source_mode: str | None = None,
+) -> dict[str, Any]:
     if not 1 <= len(values) <= MAX_IMPORT_URLS:
         raise ValueError(f"每次需要提交 1–{MAX_IMPORT_URLS} 条链接")
     results: list[dict[str, Any]] = []
@@ -320,7 +334,12 @@ def import_many(db: Session, *, user_id: str, values: list[str]) -> dict[str, An
                 platform = video_extractor._detect_platform(normalize_shared_url(raw_value))
             except ValueError:
                 platform = "unknown"
-            result = import_one(db, user_id=user_id, value=raw_value)
+            result = import_one(
+                db,
+                user_id=user_id,
+                value=raw_value,
+                source_mode=source_mode,
+            )
             results.append({"input": raw_value, "success": True, **result})
         except Exception as exc:
             db.rollback()
@@ -384,6 +403,7 @@ def serialize_item(note: Note) -> dict[str, Any]:
         "degraded": bool(meta.get("degraded")),
         "ai_initialized": bool(note.ai_initialized),
         "card_type": note.card_type,
+        "source_mode": str(meta.get("source_mode") or "import").strip() or "import",
         "note": data,
     }
 

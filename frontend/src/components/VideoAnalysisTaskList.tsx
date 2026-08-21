@@ -62,7 +62,7 @@ function RunRow({ run }: { run: VideoAnalysisRun }) {
     const suffix = run.agent_thread_id
       ? `?thread=${encodeURIComponent(run.agent_thread_id)}`
       : '';
-    window.location.assign(`/agent${suffix}`);
+    window.location.assign(`/harness${suffix}`);
   };
 
   const cancel = async () => {

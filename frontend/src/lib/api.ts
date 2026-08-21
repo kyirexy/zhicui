@@ -16,16 +16,22 @@ import type {
   AgentSourceScope,
   AgentStreamProgress,
   AgentThread,
+  AgentTurn,
   AgentThreadCreate,
   AgentThreadList,
   AgentThreadUpdate,
   ApiResponse,
   CardData,
   CreatorSource,
+  CreatorSourceItem,
   CreatorSourceListResult,
   CreatorSourcePlatform,
   CreatorSourcePreview,
+  CreatorCatalogItemStatus,
+  CreatorPaginatedResult,
+  CreatorSyncOperation,
   CreatorSyncRun,
+  CreatorSyncRunItem,
   DouyinCollectionJob,
   DouyinBatchExtractionJob,
   DouyinBatchExtractionOperation,
@@ -548,10 +554,14 @@ export async function getDouyinLibraryStatus(): Promise<ApiResponse<DouyinLibrar
 
 export async function importPlatformLibraryItems(
   urls: string[],
+  sourceMode?: 'collect' | 'like' | 'post',
 ): Promise<ApiResponse<PlatformLibraryImportResult>> {
   return request<PlatformLibraryImportResult>('/api/library/imports', {
     method: 'POST',
-    body: JSON.stringify({ urls: urls.slice(0, 10) }),
+    body: JSON.stringify({
+      urls: urls.slice(0, 10),
+      ...(sourceMode ? { source_mode: sourceMode } : {}),
+    }),
   });
 }
 
@@ -621,12 +631,46 @@ export async function deleteCreatorSource(
 
 export async function createCreatorSyncRun(
   sourceId: string,
-  limit: 20 | 50 | 100,
+  requestBody: (20 | 50 | 100) | {
+    operation: CreatorSyncOperation;
+    limit?: 20 | 50 | 100;
+    item_ids?: string[];
+  },
 ): Promise<ApiResponse<{ run: CreatorSyncRun; reused: boolean }>> {
   return request(`/api/creator-sources/${encodeURIComponent(sourceId)}/runs`, {
     method: 'POST',
-    body: JSON.stringify({ limit }),
+    body: JSON.stringify(
+      typeof requestBody === 'number' ? { limit: requestBody } : requestBody,
+    ),
   });
+}
+
+export async function getCreatorSource(
+  sourceId: string,
+): Promise<ApiResponse<CreatorSource>> {
+  return request(`/api/creator-sources/${encodeURIComponent(sourceId)}`);
+}
+
+export async function listCreatorSourceItems(
+  sourceId: string,
+  options: {
+    page?: number;
+    perPage?: number;
+    search?: string;
+    status?: CreatorCatalogItemStatus;
+  } = {},
+  signal?: AbortSignal,
+): Promise<ApiResponse<CreatorPaginatedResult<CreatorSourceItem>>> {
+  const params = new URLSearchParams({
+    page: String(Math.max(1, options.page || 1)),
+    per_page: String(Math.max(1, Math.min(50, options.perPage || 50))),
+    status: options.status || 'all',
+  });
+  if (options.search?.trim()) params.set('search', options.search.trim());
+  return request(
+    `/api/creator-sources/${encodeURIComponent(sourceId)}/items?${params.toString()}`,
+    { signal },
+  );
 }
 
 export async function listCreatorSyncRuns(
@@ -640,6 +684,34 @@ export async function getCreatorSyncRun(
   signal?: AbortSignal,
 ): Promise<ApiResponse<CreatorSyncRun>> {
   return request(`/api/creator-sync-runs/${encodeURIComponent(runId)}`, { signal });
+}
+
+export async function listCreatorSyncRunItems(
+  runId: string,
+  options: {
+    page?: number;
+    perPage?: number;
+    status?: 'all' | 'pending' | 'succeeded' | 'failed';
+  } = {},
+  signal?: AbortSignal,
+): Promise<ApiResponse<CreatorPaginatedResult<CreatorSyncRunItem>>> {
+  const params = new URLSearchParams({
+    page: String(Math.max(1, options.page || 1)),
+    per_page: String(Math.max(1, Math.min(50, options.perPage || 50))),
+    status: options.status || 'all',
+  });
+  return request(
+    `/api/creator-sync-runs/${encodeURIComponent(runId)}/items?${params.toString()}`,
+    { signal },
+  );
+}
+
+export async function retryCreatorSyncRun(
+  runId: string,
+): Promise<ApiResponse<{ run: CreatorSyncRun; reused: boolean }>> {
+  return request(`/api/creator-sync-runs/${encodeURIComponent(runId)}/retry`, {
+    method: 'POST',
+  });
 }
 
 export async function cancelCreatorSyncRun(
@@ -857,10 +929,10 @@ export async function askVideoLibrary(
       note_ids: noteIds.slice(0, 50),
       question,
       history: history.slice(-6),
-      research_mode: options?.researchMode || 'fast',
+      research_mode: options?.researchMode || 'auto',
       output_style: options?.outputStyle || 'answer',
       custom_instruction: options?.customInstruction?.trim() || '',
-      web_scope: options?.webScope || 'auto',
+      web_scope: options?.webScope || 'video_only',
     }),
     signal,
   });
@@ -1279,11 +1351,114 @@ export async function sendAgentMessage(
 }
 
 export interface AgentMessageStreamCallbacks {
+  onTurn?: (turnId: string) => void;
   onProgress?: (progress: AgentStreamProgress) => void;
   onAssistantStart?: (message: AgentMessage) => void;
   onDelta?: (delta: string) => void;
   onApprovalRequired?: (data: AgentMessageResult) => void;
   onAnalysisStarted?: (data: AgentMessageResult) => void;
+}
+
+async function consumeAgentMessageStream(
+  response: Response,
+  callbacks: AgentMessageStreamCallbacks,
+): Promise<ApiResponse<AgentMessageResult>> {
+  if (!response.ok) {
+    return {
+      success: false,
+      error: await responseErrorMessage(response),
+      status: response.status,
+    };
+  }
+  if (!response.body) {
+    return { success: false, error: '浏览器没有收到回答数据流' };
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let finalData: AgentMessageResult | undefined;
+  let streamError: string | undefined;
+  let streamStatus: number | undefined;
+
+  const consumeEvent = (block: string) => {
+    const payloadText = block
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart())
+      .join('\n');
+    if (!payloadText) return;
+    const raw: unknown = JSON.parse(payloadText);
+    if (!isRecord(raw) || typeof raw.type !== 'string') return;
+
+    if (raw.type === 'turn' && typeof raw.turn_id === 'string') {
+      callbacks.onTurn?.(raw.turn_id);
+      return;
+    }
+    if (
+      raw.type === 'progress'
+      && typeof raw.stage === 'string'
+      && typeof raw.message === 'string'
+    ) {
+      if (typeof raw.turn_id === 'string') callbacks.onTurn?.(raw.turn_id);
+      callbacks.onProgress?.(raw as unknown as AgentStreamProgress);
+      return;
+    }
+    if (raw.type === 'assistant_start' && isRecord(raw.message)) {
+      callbacks.onAssistantStart?.(
+        normalizeAgentMessage(raw.message as unknown as AgentMessage),
+      );
+      return;
+    }
+    if (raw.type === 'delta' && typeof raw.delta === 'string') {
+      callbacks.onDelta?.(raw.delta);
+      return;
+    }
+    if (raw.type === 'done' && isRecord(raw.data)) {
+      finalData = normalizedAgentMessageResult(
+        raw.data as unknown as AgentMessageResult,
+      );
+      return;
+    }
+    if (
+      (raw.type === 'approval_required' || raw.type === 'analysis_started')
+      && isRecord(raw.data)
+    ) {
+      finalData = normalizedAgentMessageResult(
+        raw.data as unknown as AgentMessageResult,
+      );
+      if (raw.type === 'approval_required') {
+        callbacks.onApprovalRequired?.(finalData);
+      } else {
+        callbacks.onAnalysisStarted?.(finalData);
+      }
+      return;
+    }
+    if (raw.type === 'error') {
+      streamError = typeof raw.message === 'string'
+        ? raw.message
+        : '视频 Agent 暂时没有完成回答';
+      streamStatus = typeof raw.status === 'number' ? raw.status : 502;
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const blocks = buffer.split(/\r?\n\r?\n/);
+    buffer = blocks.pop() || '';
+    blocks.forEach(consumeEvent);
+    if (done) break;
+  }
+  if (buffer.trim()) consumeEvent(buffer);
+
+  if (streamError) {
+    return { success: false, error: streamError, status: streamStatus };
+  }
+  if (!finalData) {
+    return { success: false, error: '回答数据流提前结束，请重新生成' };
+  }
+  return { success: true, data: finalData, status: response.status };
 }
 
 function normalizedAgentMessageResult(data: AgentMessageResult): AgentMessageResult {
@@ -1310,105 +1485,66 @@ export async function streamAgentMessage(
         body: JSON.stringify({
           ...body,
           content: body.content.trim(),
+          client_turn_id: body.client_turn_id || crypto.randomUUID(),
           custom_instruction: body.custom_instruction?.trim() || '',
         }),
         signal,
       },
     );
-    if (!response.ok) {
-      return {
-        success: false,
-        error: await responseErrorMessage(response),
-        status: response.status,
-      };
-    }
-    if (!response.body) {
-      return { success: false, error: '浏览器没有收到回答数据流' };
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let finalData: AgentMessageResult | undefined;
-    let streamError: string | undefined;
-    let streamStatus: number | undefined;
-
-    const consumeEvent = (block: string) => {
-      const payloadText = block
-        .split(/\r?\n/)
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice(5).trimStart())
-        .join('\n');
-      if (!payloadText) return;
-      const raw: unknown = JSON.parse(payloadText);
-      if (!isRecord(raw) || typeof raw.type !== 'string') return;
-
-      if (
-        raw.type === 'progress'
-        && typeof raw.stage === 'string'
-        && typeof raw.message === 'string'
-      ) {
-        callbacks.onProgress?.(raw as unknown as AgentStreamProgress);
-        return;
-      }
-      if (raw.type === 'assistant_start' && isRecord(raw.message)) {
-        callbacks.onAssistantStart?.(
-          normalizeAgentMessage(raw.message as unknown as AgentMessage),
-        );
-        return;
-      }
-      if (raw.type === 'delta' && typeof raw.delta === 'string') {
-        callbacks.onDelta?.(raw.delta);
-        return;
-      }
-      if (raw.type === 'done' && isRecord(raw.data)) {
-        finalData = normalizedAgentMessageResult(
-          raw.data as unknown as AgentMessageResult,
-        );
-        return;
-      }
-      if (
-        (raw.type === 'approval_required' || raw.type === 'analysis_started')
-        && isRecord(raw.data)
-      ) {
-        finalData = normalizedAgentMessageResult(
-          raw.data as unknown as AgentMessageResult,
-        );
-        if (raw.type === 'approval_required') {
-          callbacks.onApprovalRequired?.(finalData);
-        } else {
-          callbacks.onAnalysisStarted?.(finalData);
-        }
-        return;
-      }
-      if (raw.type === 'error') {
-        streamError = typeof raw.message === 'string'
-          ? raw.message
-          : '视频 Agent 暂时没有完成回答';
-        streamStatus = typeof raw.status === 'number' ? raw.status : 502;
-      }
-    };
-
-    while (true) {
-      const { done, value } = await reader.read();
-      buffer += decoder.decode(value, { stream: !done });
-      const blocks = buffer.split(/\r?\n\r?\n/);
-      buffer = blocks.pop() || '';
-      blocks.forEach(consumeEvent);
-      if (done) break;
-    }
-    if (buffer.trim()) consumeEvent(buffer);
-
-    if (streamError) {
-      return { success: false, error: streamError, status: streamStatus };
-    }
-    if (!finalData) {
-      return { success: false, error: '回答数据流提前结束，请重新生成' };
-    }
-    return { success: true, data: finalData, status: response.status };
+    return await consumeAgentMessageStream(response, callbacks);
   } catch (error) {
     return { success: false, error: requestFailureMessage(error) };
   }
+}
+
+export async function resumeAgentTurnStream(
+  threadId: string,
+  turnId: string,
+  callbacks: AgentMessageStreamCallbacks = {},
+  signal?: AbortSignal,
+): Promise<ApiResponse<AgentMessageResult>> {
+  try {
+    const response = await fetch(
+      `${API_BASE}/api/agent/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/stream`,
+      {
+        method: 'GET',
+        headers: authHeaders({ Accept: 'text/event-stream' }),
+        signal,
+      },
+    );
+    return await consumeAgentMessageStream(response, callbacks);
+  } catch (error) {
+    return { success: false, error: requestFailureMessage(error) };
+  }
+}
+
+export async function getAgentTurn(
+  threadId: string,
+  turnId: string,
+): Promise<ApiResponse<AgentTurn>> {
+  return request<AgentTurn>(
+    `/api/agent/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}`,
+  );
+}
+
+export async function cancelAgentTurn(
+  threadId: string,
+  turnId: string,
+): Promise<ApiResponse<AgentTurn>> {
+  return request<AgentTurn>(
+    `/api/agent/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/cancel`,
+    { method: 'POST' },
+  );
+}
+
+export async function retryAgentTurn(
+  threadId: string,
+  turnId: string,
+): Promise<ApiResponse<AgentTurn>> {
+  return request<AgentTurn>(
+    `/api/agent/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/retry`,
+    { method: 'POST' },
+  );
 }
 
 export async function decideAgentVideoAnalysis(
@@ -1705,7 +1841,7 @@ export interface AdminFeedbackPage {
 }
 
 export interface LlmConfig {
-  provider: 'deepseek' | 'custom';
+  provider: 'deepseek' | 'custom' | 'omniroute';
   model: string;
   api_base: string;
   api_key_masked: string;
@@ -1735,6 +1871,12 @@ export interface CreatorSyncAdminConfig {
   concurrency: Record<'douyin' | 'bilibili' | 'xiaohongshu', number>;
   xhs_cookie_masked: string;
   last_tested_at: Record<'douyin' | 'bilibili' | 'xiaohongshu', string | null>;
+}
+
+export interface AgentV2AdminConfig {
+  enabled: boolean;
+  rollout_percent: number;
+  allowlist: string[];
 }
 
 export async function getAdminStats(): Promise<ApiResponse<AdminStats>> {
@@ -2040,7 +2182,7 @@ export async function getLlmConfig(): Promise<ApiResponse<LlmConfig>> {
 }
 
 export async function putLlmConfig(
-  body: { provider?: 'deepseek' | 'custom'; model?: string; api_base?: string; api_key?: string },
+  body: { provider?: 'deepseek' | 'custom' | 'omniroute'; model?: string; api_base?: string; api_key?: string },
 ): Promise<ApiResponse<LlmConfig>> {
   return request<LlmConfig>('/api/admin/llm-config', { method: 'PUT', body: JSON.stringify(body) });
 }
@@ -2070,6 +2212,17 @@ export async function putExtractionConfig(
 
 export async function getCreatorSyncAdminConfig(): Promise<ApiResponse<CreatorSyncAdminConfig>> {
   return request<CreatorSyncAdminConfig>('/api/admin/creator-sync-config');
+}
+
+export async function getAgentV2AdminConfig(): Promise<ApiResponse<AgentV2AdminConfig>> {
+  return request<AgentV2AdminConfig>('/api/admin/agent-v2-config');
+}
+
+export async function putAgentV2AdminConfig(body: AgentV2AdminConfig): Promise<ApiResponse<AgentV2AdminConfig>> {
+  return request<AgentV2AdminConfig>('/api/admin/agent-v2-config', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
 }
 
 export async function putCreatorSyncAdminConfig(body: {
@@ -2504,6 +2657,8 @@ export interface UserAIProviderConfig {
   api_key_masked: string;
   selected_offering_id: string;
   selected_offering_name: string;
+  selected_custom_model_id: string | null;
+  custom_models: UserCustomChatModel[];
   policy: {
     mode: string;
     label: string;
@@ -2511,6 +2666,92 @@ export interface UserAIProviderConfig {
     features: string[];
     custom_unlocks: string[];
   };
+}
+
+export interface UserCustomChatModel {
+  id: string;
+  name: string;
+  provider_name: string;
+  model: string;
+  api_base: string;
+  api_key_set: boolean;
+  api_key_masked: string;
+  enabled: boolean;
+  is_selected: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface UserCustomChatModels {
+  items: UserCustomChatModel[];
+  selected_id: string | null;
+  active_selection: {
+    kind: 'custom' | 'platform';
+    custom_model_id: string | null;
+  };
+}
+
+export interface UserCustomChatModelInput {
+  name?: string;
+  provider_name?: string;
+  model: string;
+  api_base: string;
+  api_key?: string;
+  enabled?: boolean;
+}
+
+export async function listUserCustomChatModels(): Promise<ApiResponse<UserCustomChatModels>> {
+  return request<UserCustomChatModels>('/api/user/custom-chat-models');
+}
+
+export async function createUserCustomChatModel(body: UserCustomChatModelInput & {
+  select?: boolean;
+}): Promise<ApiResponse<UserCustomChatModel>> {
+  return request<UserCustomChatModel>('/api/user/custom-chat-models', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateUserCustomChatModel(
+  id: string,
+  body: UserCustomChatModelInput,
+): Promise<ApiResponse<UserCustomChatModel>> {
+  return request<UserCustomChatModel>(`/api/user/custom-chat-models/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteUserCustomChatModel(id: string): Promise<ApiResponse<{
+  deleted: boolean;
+  selection_reset: boolean;
+}>> {
+  return request(`/api/user/custom-chat-models/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function selectUserCustomChatModel(id: string): Promise<ApiResponse<UserCustomChatModels>> {
+  return request<UserCustomChatModels>(`/api/user/custom-chat-models/${encodeURIComponent(id)}/select`, {
+    method: 'PUT',
+  });
+}
+
+export async function selectPlatformChatModel(): Promise<ApiResponse<UserCustomChatModels>> {
+  return request<UserCustomChatModels>('/api/user/custom-chat-models/select-platform', {
+    method: 'PUT',
+  });
+}
+
+export async function testUserCustomChatModel(id: string): Promise<ApiResponse<{
+  connected: boolean;
+  provider: string;
+  model: string;
+}>> {
+  return request(`/api/user/custom-chat-models/${encodeURIComponent(id)}/test`, {
+    method: 'POST',
+  });
 }
 
 export async function getUserAIProvider(): Promise<ApiResponse<UserAIProviderConfig>> {
@@ -2608,6 +2849,50 @@ export async function updateAdminChatModel(id: string, body: AdminChatModelInput
 
 export async function deleteAdminChatModel(id: string): Promise<ApiResponse<{ deleted: boolean }>> {
   return request(`/api/admin/chat-models/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export interface OmniRouteAdminConfig {
+  configured: boolean;
+  api_base: string;
+  api_key_masked: string;
+  model: string;
+  dashboard_url: string;
+}
+
+export interface OmniRouteAdminTest {
+  configured: boolean;
+  online: boolean;
+  message: string;
+  latency_ms: number;
+  model_count: number;
+}
+
+export async function getAdminOmniRouteConfig(): Promise<ApiResponse<OmniRouteAdminConfig>> {
+  return request<OmniRouteAdminConfig>('/api/admin/omniroute-config');
+}
+
+export async function putAdminOmniRouteConfig(body: {
+  api_base?: string;
+  api_key?: string;
+  model?: string;
+  dashboard_url?: string;
+}): Promise<ApiResponse<OmniRouteAdminConfig>> {
+  return request<OmniRouteAdminConfig>('/api/admin/omniroute-config', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function getAdminOmniRouteWorkspace(
+  refresh = false,
+): Promise<ApiResponse<AIRoutingWorkspace>> {
+  return request<AIRoutingWorkspace>(
+    `/api/admin/omniroute/workspace${refresh ? '?refresh=true' : ''}`,
+  );
+}
+
+export async function testAdminOmniRoute(): Promise<ApiResponse<OmniRouteAdminTest>> {
+  return request<OmniRouteAdminTest>('/api/admin/omniroute/test', { method: 'POST' });
 }
 
 export async function resetUserAIProvider(): Promise<ApiResponse<UserAIProviderConfig>> {

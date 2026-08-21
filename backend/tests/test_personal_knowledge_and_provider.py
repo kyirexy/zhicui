@@ -16,6 +16,7 @@ from app.models.note import Note
 from app.models.system_setting import SystemSetting
 from app.models.user import User
 from app.models.user_ai_provider_config import UserAIProviderConfig
+from app.models.user_custom_chat_model import UserCustomChatModel
 from app.services import (
     agent_service,
     chat_model_catalog_service,
@@ -41,6 +42,7 @@ class PersonalKnowledgeServiceTests(unittest.TestCase):
                 Note.__table__,
                 KnowledgeEntry.__table__,
                 UserAIProviderConfig.__table__,
+                UserCustomChatModel.__table__,
                 ChatModelOffering.__table__,
                 ChatModelFreeUsage.__table__,
                 SystemSetting.__table__,
@@ -128,7 +130,7 @@ class PersonalKnowledgeServiceTests(unittest.TestCase):
         self.assertEqual(candidate["section_count"], 1)
         self.assertTrue(candidate["transcript_ready"])
 
-    def test_custom_provider_is_encrypted_and_user_scoped(self) -> None:
+    def test_omniroute_mode_is_not_a_user_selectable_mode(self) -> None:
         with (
             patch.object(
                 user_ai_provider_service.settings_service,
@@ -157,6 +159,72 @@ class PersonalKnowledgeServiceTests(unittest.TestCase):
             self.assertEqual(other["mode"], "platform")
             self.assertTrue(other["enabled"])
             self.assertFalse(other["api_key_set"])
+
+    def test_custom_provider_promotes_to_selectable_custom_model(self) -> None:
+        with (
+            patch.object(
+                user_ai_provider_service.settings_service,
+                "encrypt_value",
+                side_effect=lambda value: f"ENC:{value[::-1]}",
+            ),
+            patch.object(
+                user_ai_provider_service.settings_service,
+                "decrypt_value",
+                side_effect=lambda value: value[4:][::-1],
+            ),
+        ):
+            user_ai_provider_service.save(
+                self.db,
+                self.user_a.id,
+                mode="custom",
+                provider_name="My Provider",
+                model="my-model",
+                api_base="https://example.com/v1",
+                api_key="secret-key-1234",
+            )
+            models = user_ai_provider_service.list_custom_models(self.db, self.user_a.id)
+            self.assertEqual(len(models["items"]), 1)
+            self.assertEqual(models["selected_id"], models["items"][0]["id"])
+            self.assertEqual(models["items"][0]["model"], "my-model")
+
+            user_ai_provider_service.select_platform(self.db, self.user_a.id)
+            listing = user_ai_provider_service.list_custom_models(self.db, self.user_a.id)
+            self.assertIsNone(listing["selected_id"])
+            self.assertFalse(listing["items"][0]["is_selected"])
+
+    def test_effective_config_prefers_selected_enabled_custom_model(self) -> None:
+        with (
+            patch.object(
+                user_ai_provider_service.settings_service,
+                "encrypt_value",
+                side_effect=lambda value: f"ENC:{value[::-1]}",
+            ),
+            patch.object(
+                user_ai_provider_service.settings_service,
+                "decrypt_value",
+                side_effect=lambda value: value[4:][::-1],
+            ),
+        ):
+            created = user_ai_provider_service.create_custom_model(
+                self.db,
+                self.user_a.id,
+                name="DeepSeek",
+                provider_name="DeepSeek",
+                model="deepseek-chat",
+                api_base="https://example.com/v1",
+                api_key="secret-key-4321",
+                select=True,
+            )
+            self.assertTrue(created["is_selected"])
+            cfg = user_ai_provider_service.effective_config(self.db, self.user_a.id)
+            self.assertEqual(cfg["model"], "deepseek-chat")
+            self.assertEqual(cfg["runtime_model"], "openai/deepseek-chat")
+            self.assertEqual(cfg["api_key"], "secret-key-4321")
+            self.assertTrue(user_ai_provider_service.uses_custom_provider(self.db, self.user_a.id))
+            public = user_ai_provider_service.serialize(self.db, self.user_a.id)
+            self.assertEqual(public["mode"], "custom")
+            self.assertEqual(public["selected_custom_model_id"], created["id"])
+            self.assertNotIn("secret-key-4321", str(public))
 
     def test_omniroute_mode_is_not_a_user_selectable_mode(self) -> None:
         with self.assertRaisesRegex(ValueError, "模式无效"):

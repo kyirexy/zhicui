@@ -121,7 +121,7 @@ export default function BottomSheet({
             type="button"
             onClick={close}
             aria-label="关闭"
-            className="flex h-11 w-11 items-center justify-center rounded-full text-foreground-muted transition-colors duration-150 hover:bg-black/[0.04] hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-emerald"
+            className="flex h-11 w-11 items-center justify-center rounded-full text-foreground-muted transition-colors duration-150 hover:bg-black/[0.04] hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-brand"
           >
             <X size={18} />
           </button>

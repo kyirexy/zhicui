@@ -228,7 +228,7 @@ export default function AdminFeedbackPanel() {
         <button
           type="button"
           onClick={runSearch}
-          className="min-h-10 rounded-xl bg-accent-emerald px-4 text-sm font-bold text-white hover:brightness-95"
+          className="min-h-10 rounded-xl bg-accent-brand px-4 text-sm font-bold text-white hover:brightness-95"
         >
           搜索
         </button>
@@ -240,7 +240,7 @@ export default function AdminFeedbackPanel() {
           className={`rounded-xl border px-3 py-2.5 text-sm ${
             error
               ? 'border-accent-rose/20 bg-accent-rose/5 text-accent-rose'
-              : 'border-accent-emerald/20 bg-accent-emerald/5 text-accent-emerald'
+              : 'border-accent-brand/20 bg-accent-brand/5 text-accent-brand'
           }`}
         >
           {error || message}
@@ -273,7 +273,7 @@ export default function AdminFeedbackPanel() {
                   onClick={() => chooseFeedback(item)}
                   aria-pressed={selected?.id === item.id}
                   className={`block w-full px-4 py-4 text-left hover:bg-[var(--admin-surface-2)] ${
-                    selected?.id === item.id ? 'bg-accent-emerald/5' : ''
+                    selected?.id === item.id ? 'bg-accent-brand/5' : ''
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
@@ -378,7 +378,7 @@ export default function AdminFeedbackPanel() {
                 type="button"
                 onClick={saveFeedback}
                 disabled={saving}
-                className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-accent-emerald px-4 text-sm font-bold text-white hover:brightness-95 disabled:opacity-60"
+                className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-accent-brand px-4 text-sm font-bold text-white hover:brightness-95 disabled:opacity-60"
               >
                 <CheckCircle2 size={17} aria-hidden="true" />
                 {saving ? '正在保存…' : '保存处理结果'}

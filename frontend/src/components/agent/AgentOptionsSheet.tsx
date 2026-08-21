@@ -13,6 +13,7 @@ const RESEARCH_OPTIONS: Array<{
   label: string;
   description: string;
 }> = [
+  { value: 'auto', label: '自动判断', description: '按问题与视频数量选择深度' },
   { value: 'fast', label: '快速回答', description: '适合明确、直接的问题' },
   { value: 'deep', label: '深度分析', description: '阅读更多视频并交叉核对' },
 ];

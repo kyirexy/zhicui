@@ -201,6 +201,7 @@ def extract_library_item(
     llm_gate: threading.Semaphore | None = None,
     progress: ProgressCallback | None = None,
     operation: LibraryExtractionOperation = "full",
+    item: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run one idempotent transcript or AI stage with text-only persistence."""
     clean_id = aweme_id.strip()
@@ -245,7 +246,7 @@ def extract_library_item(
                 raise ValueError("完整文案尚未就绪，请先完成文案提取")
 
             binding = douyin_binding_service.get_or_create(db, user_id)
-            item = douyin_library.get_item(
+            item = item or douyin_library.get_item(
                 binding.session_scope,
                 binding.id,
                 clean_id,
@@ -436,6 +437,7 @@ def _run_job_item(
     operation: LibraryExtractionOperation,
     asr_gate: threading.Semaphore,
     llm_gate: threading.Semaphore,
+    item: dict[str, Any] | None = None,
 ) -> None:
     def progress(state: str) -> None:
         _update_item(job_id, aweme_id, state=state, error="")
@@ -448,6 +450,7 @@ def _run_job_item(
             llm_gate=llm_gate,
             progress=progress,
             operation=operation,
+            item=item,
         )
         _update_item(
             job_id,
@@ -554,6 +557,25 @@ def create_batch_job(
     with _JOBS_LOCK:
         _JOBS[job_id] = job
 
+    # 一次性预取全量条目，避免每条任务各自重新拉取完整 manifest；
+    # 同一用户同批任务共享同一份快照，落库前仍会在锁内复核。
+    item_by_id: dict[str, dict[str, Any]] = {}
+    try:
+        with SessionLocal() as db:
+            binding = douyin_binding_service.get_or_create(db, user_id)
+            item_by_id = {
+                str(item.get("aweme_id") or "").strip(): item
+                for item in douyin_library.list_items(
+                    binding.session_scope,
+                    binding.id,
+                    limit=0,
+                )
+                if str(item.get("aweme_id") or "").strip()
+            }
+    except Exception:
+        # 预取失败不阻塞任务：任务内会退回逐条 get_item。
+        item_by_id = {}
+
     asr_gate = threading.Semaphore(safe_asr)
     llm_gate = threading.Semaphore(safe_llm)
     for aweme_id in clean_ids:
@@ -565,6 +587,7 @@ def create_batch_job(
             operation,
             asr_gate,
             llm_gate,
+            item_by_id.get(aweme_id),
         )
     with _JOBS_LOCK:
         return _snapshot(job)

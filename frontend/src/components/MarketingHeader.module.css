@@ -5,7 +5,7 @@
   width: 100%;
   padding: 0 clamp(1rem, 3vw, 3rem);
   border-bottom: 1px solid #e7e7e5;
-  color: #242426;
+  color: var(--foreground);
   background: rgba(255, 255, 255, 0.96);
   backdrop-filter: blur(14px);
 }
@@ -31,7 +31,7 @@
   flex: none;
   align-items: center;
   gap: 0.62rem;
-  color: #242426;
+  color: var(--foreground);
 }
 
 .brand img {
@@ -69,8 +69,8 @@
 }
 
 .links a:hover {
-  color: #242426;
-  background: rgba(36, 36, 38, 0.045);
+  color: var(--foreground);
+  background: rgba(16, 24, 40, 0.045);
 }
 
 .actions {
@@ -95,8 +95,8 @@
 }
 
 .adminLink:hover {
-  color: #242426;
-  background: rgba(36, 36, 38, 0.045);
+  color: var(--foreground);
+  background: rgba(16, 24, 40, 0.045);
 }
 
 .downloadLink {
@@ -107,7 +107,7 @@
   gap: 0.45rem;
   border-radius: 0.72rem;
   color: #ffffff;
-  background: #303034;
+  background: var(--accent-brand);
   font-size: 0.72rem;
   font-weight: 680;
   transition:
@@ -116,7 +116,7 @@
 }
 
 .downloadLink:hover {
-  background: #242426;
+  background: var(--foreground);
 }
 
 .downloadLink:active,
@@ -129,7 +129,7 @@
 .adminLink:focus-visible,
 .links a:focus-visible,
 .brand:focus-visible {
-  outline: 3px solid rgba(48, 48, 52, 0.28);
+  outline: 3px solid color-mix(in srgb, var(--accent-brand) 28%, transparent);
   outline-offset: 3px;
 }
 

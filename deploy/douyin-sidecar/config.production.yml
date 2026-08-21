@@ -8,9 +8,9 @@ folderstyle: true
 group_by_mode: true
 download_pinned: false
 
-thread: 5
+thread: 1
 retry_times: 3
-rate_limit: 2
+rate_limit: 0.5
 proxy: ""
 database: false
 
@@ -18,7 +18,7 @@ progress:
   quiet_logs: true
 
 browser_fallback:
-  enabled: true
+  enabled: false
   headless: false
   max_scrolls: 240
   idle_rounds: 8

@@ -12,6 +12,7 @@ import {
   ArrowsOut,
   ArrowClockwise,
   CalendarBlank,
+  CaretDown,
   CaretRight,
   ChatsCircle,
   CheckCircle,
@@ -54,14 +55,23 @@ import {
   type AgentStudioResult,
 } from '@/lib/agentStudio';
 import {
+  DEFAULT_AGENT_RESEARCH_MODE,
+  DEFAULT_AGENT_WEB_SCOPE,
+  researchProgressDetail,
+  shouldResumeAgentTurn,
+  threadHasBackgroundWork,
+} from '@/lib/agentTurnUi';
+import {
   createAgentAutomation,
   createAgentThread,
+  cancelAgentTurn,
   deleteAgentSources,
   decideAgentVideoAnalysis,
   confirmAgentEmailVerification,
   deleteAgentAutomation,
   deleteAgentThread,
   getAgentThread,
+  getAgentTurn,
   getAgentEmailStatus,
   getUserAIProvider,
   getUserChatModels,
@@ -69,11 +79,17 @@ import {
   listAgentAutomations,
   listAgentSources,
   listAgentThreads,
+  resetUserAIProvider,
+  retryAgentTurn,
+  resumeAgentTurnStream,
   runAgentAutomation,
+  saveUserAIProvider,
   searchAgentSources,
-  sendAgentEmailVerification,
   selectUserChatModel,
+  selectUserCustomChatModel,
+  sendAgentEmailVerification,
   streamAgentMessage,
+  testUserAIProvider,
   updateAgentAutomation,
   type UserAIProviderConfig,
   type UserChatModelCatalog,
@@ -94,6 +110,7 @@ import type {
   AgentSourceScope,
   AgentStreamProgress,
   AgentThread,
+  AgentTurn,
   LibraryOutputStyle,
   LibraryResearchMode,
   ResearchScope,
@@ -110,7 +127,6 @@ const SOURCE_PLATFORMS: Array<{ value: AgentSourcePlatform; label: string }> = [
   { value: 'all', label: '全部' },
   { value: 'douyin', label: '抖音' },
   { value: 'bilibili', label: 'B站' },
-  { value: 'xiaohongshu', label: '小红书' },
 ];
 
 function SourcePlatformIcon({ platform }: { platform: AgentSourcePlatform }) {
@@ -118,7 +134,7 @@ function SourcePlatformIcon({ platform }: { platform: AgentSourcePlatform }) {
   return (
     <PlatformBrandIcon
       platform={platform}
-      size={platform === 'xiaohongshu' ? 28 : 20}
+      size={20}
     />
   );
 }
@@ -138,6 +154,23 @@ type DraftSourceMode = 'scope' | 'selected';
 
 function isBrowseSourceScope(value: string | null): value is BrowseSourceScope {
   return SOURCE_SCOPES.some((scope) => scope.value === value);
+}
+
+function normalizeSourceIds(values: readonly string[] | undefined): string[] {
+  return Array.from(new Set(
+    (values || [])
+      .map((value) => String(value).trim())
+      .filter(Boolean),
+  )).slice(0, MAX_SELECTED_SOURCES);
+}
+
+function threadContainsAllSources(thread: AgentThread, requiredSourceIds: readonly string[]): boolean {
+  if (requiredSourceIds.length === 0) return true;
+  const threadSourceIds = new Set([
+    ...(thread.source_ids || []).map((value) => String(value).trim()),
+    ...(thread.sources || []).map((source) => String(source.note_id).trim()),
+  ].filter(Boolean));
+  return requiredSourceIds.every((sourceId) => threadSourceIds.has(sourceId));
 }
 
 function useEventCallback<Args extends unknown[], Result>(
@@ -336,10 +369,6 @@ function createStreamingAssistantMessage(threadId: string): AgentMessage {
   };
 }
 
-function threadHasBackgroundWork(thread: AgentThread | null | undefined): boolean {
-  return thread?.status === 'running' || thread?.status === 'running_analysis';
-}
-
 function threadBlocksNewQuestion(thread: AgentThread | null | undefined): boolean {
   return threadHasBackgroundWork(thread) || thread?.status === 'awaiting_approval';
 }
@@ -468,7 +497,28 @@ function AgentSourceOption({ source, selected, onToggle, disabled = false }: Age
   );
 }
 
-export default function VideoAgentWorkspace() {
+export interface VideoAgentWorkspaceProps {
+  /**
+   * 以指定来源初始化新会话。仅在工作区挂载时读取一次；切换详情时请用新 key 重挂载。
+   */
+  initialSourceIds?: string[];
+  /** 恢复指定的持久化会话，而不是创建草稿。 */
+  initialThreadId?: string | null;
+  /** 嵌入其他工作区渲染，不触发全页壳层规则。 */
+  embedded?: boolean;
+  /** 当前工作区是否可见；重新显示时恢复此前的跟随滚动状态。 */
+  active?: boolean;
+  /** 回报持久化会话变化，包括回到草稿时清空会话。 */
+  onThreadChange?: (threadId: string | null) => void;
+}
+
+export default function VideoAgentWorkspace({
+  initialSourceIds,
+  initialThreadId = null,
+  embedded = false,
+  active = true,
+  onThreadChange,
+}: VideoAgentWorkspaceProps) {
   const { user } = useAuth();
   const { settings } = useSettings();
   const { trackRun: trackVideoAnalysisRun } = useVideoAnalysis();
@@ -485,7 +535,7 @@ export default function VideoAgentWorkspace() {
   const [streamProgress, setStreamProgress] = useState<AgentStreamProgress | null>(null);
   const [threadsLoading, setThreadsLoading] = useState(true);
   const [threadLoading, setThreadLoading] = useState(false);
-  const [isCompact, setIsCompact] = useState(false);
+  const [isCompact, setIsCompact] = useState(embedded);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [sourceSyncOpen, setSourceSyncOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
@@ -516,10 +566,11 @@ export default function VideoAgentWorkspace() {
   const [chatModelCatalog, setChatModelCatalog] = useState<UserChatModelCatalog | null>(null);
   const [modelCatalogLoading, setModelCatalogLoading] = useState(true);
   const [modelSaving, setModelSaving] = useState(false);
+  const [modelConfigSaving, setModelConfigSaving] = useState(false);
   const [modelError, setModelError] = useState('');
-  const [researchMode, setResearchMode] = useState<LibraryResearchMode>('fast');
+  const [researchMode, setResearchMode] = useState<LibraryResearchMode>(DEFAULT_AGENT_RESEARCH_MODE);
   const [outputStyle, setOutputStyle] = useState<LibraryOutputStyle>('answer');
-  const [webScope, setWebScope] = useState<ResearchScope>('auto');
+  const [webScope, setWebScope] = useState<ResearchScope>(DEFAULT_AGENT_WEB_SCOPE);
   const [customInstruction, setCustomInstruction] = useState('');
   const [sending, setSending] = useState(false);
   const [studioGeneratingType, setStudioGeneratingType] = useState<
@@ -530,6 +581,8 @@ export default function VideoAgentWorkspace() {
   >(null);
   const [studioCustomOpen, setStudioCustomOpen] = useState(false);
   const [backgroundThreadId, setBackgroundThreadId] = useState<string | null>(null);
+  const [terminalTurn, setTerminalTurn] = useState<AgentTurn | null>(null);
+  const [turnAction, setTurnAction] = useState<'cancel' | 'retry' | ''>('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [pendingThreadDelete, setPendingThreadDelete] = useState<string | null>(null);
@@ -575,10 +628,29 @@ export default function VideoAgentWorkspace() {
   });
 
   const abortRef = useRef<AbortController | null>(null);
+  const resumeAbortRef = useRef<AbortController | null>(null);
+  const durableTurnIdRef = useRef<string | null>(null);
   const sourceRequestRef = useRef<AbortController | null>(null);
+  const initialSourceIdsRef = useRef(initialSourceIds);
+  const initialSourceIdsProvidedRef = useRef(initialSourceIds !== undefined);
+  const initialThreadIdRef = useRef(initialThreadId);
+  const embeddedInitialSourceIdsRef = useRef<string[] | null>(
+    embedded && initialSourceIds !== undefined
+      ? normalizeSourceIds(initialSourceIds)
+      : null,
+  );
   const requestedSourceIdsRef = useRef<string[]>([]);
   const sourceHandoffNoticeSettledRef = useRef(false);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const threadScrollRef = useRef<HTMLDivElement | null>(null);
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  // DSH follows only while the viewer is pinned to the bottom; scrolling up
+  // releases the pin, scrolling back down re-arms it. Content growth itself
+  // never toggles the pin.
+  const followingRef = useRef(true);
+  const followingBeforeInactiveRef = useRef(true);
+  const wasActiveRef = useRef(active);
   const questionRef = useRef<AgentComposerHandle | null>(null);
   const historyTriggerRef = useRef<HTMLButtonElement | null>(null);
   const historyCloseRef = useRef<HTMLButtonElement | null>(null);
@@ -590,6 +662,70 @@ export default function VideoAgentWorkspace() {
   const studioCloseRef = useRef<HTMLButtonElement | null>(null);
   const lastStudioTriggerRef = useRef<HTMLButtonElement | null>(null);
   const studioWasOpenRef = useRef(false);
+  const notifiedThreadIdRef = useRef<string | null>(null);
+
+  const notifyThreadChange = useEventCallback((threadId: string | null) => {
+    onThreadChange?.(threadId);
+  });
+
+  const invalidateThreadPointer = useEventCallback(() => {
+    notifiedThreadIdRef.current = null;
+    notifyThreadChange(null);
+  });
+
+  useEffect(() => {
+    const threadId = activeThread?.id ?? null;
+    if (notifiedThreadIdRef.current === threadId) return;
+    notifiedThreadIdRef.current = threadId;
+    notifyThreadChange(threadId);
+  }, [activeThread?.id, notifyThreadChange]);
+
+  useEffect(() => {
+    const activeTurn = activeThread?.active_turn;
+    if (!activeTurn) return;
+    durableTurnIdRef.current = activeTurn.id;
+    if (['queued', 'running', 'retry_wait'].includes(activeTurn.status)) {
+      setTerminalTurn(null);
+    }
+  }, [activeThread?.active_turn?.id, activeThread?.active_turn?.status]);
+
+  const threadMatchesEmbeddedSources = useCallback((thread: AgentThread) => {
+    const requiredSourceIds = embeddedInitialSourceIdsRef.current;
+    return requiredSourceIds === null
+      || threadContainsAllSources(thread, requiredSourceIds);
+  }, []);
+
+  const returnToEmbeddedSourceDraft = useEventCallback((
+    message: string,
+    tone: 'notice' | 'error',
+  ): boolean => {
+    const sourceIds = embeddedInitialSourceIdsRef.current;
+    if (sourceIds === null) return false;
+    requestedSourceIdsRef.current = sourceIds;
+    sourceHandoffNoticeSettledRef.current = true;
+    setActiveThread(null);
+    setMessages([]);
+    setMessageDeliveryStates({});
+    setMessageDeliveryErrors({});
+    setStreamingMessageId(null);
+    setStreamProgress(null);
+    setBackgroundThreadId(null);
+    setDraftSourceMode('selected');
+    setSelectedSourceIds(new Set(sourceIds));
+    setHistoryOpen(false);
+    setSourcesOpen(false);
+    setStudioOpen(false);
+    setSelectedStudioResultId(null);
+    followingRef.current = true;
+    if (tone === 'error') {
+      setNotice('');
+      setError(message);
+    } else {
+      setError('');
+      setNotice(message);
+    }
+    return true;
+  });
 
   const rememberSources = useCallback((items: AgentSource[] | undefined) => {
     if (!items?.length) return;
@@ -602,15 +738,25 @@ export default function VideoAgentWorkspace() {
     });
   }, []);
 
+  const restoreThreadSourceSelection = useCallback((thread: AgentThread) => {
+    const sourceIds = normalizeSourceIds([
+      ...(thread.source_ids || []),
+      ...(thread.sources || []).map((source) => source.note_id),
+    ]);
+    rememberSources(thread.sources);
+    setSelectedSourceIds(new Set(sourceIds));
+    setDraftSourceMode(sourceIds.length > 0 ? 'selected' : 'scope');
+  }, [rememberSources]);
+
   const loadThreads = useCallback(async (selectFirst = false) => {
     setThreadsLoading(true);
     const response = await listAgentThreads();
     setThreadsLoading(false);
     if (!response.success || !response.data) {
-      setError(response.error || '暂时无法读取视频研伴会话');
+      setError(response.error || '暂时无法读取知萃 Harness 会话');
       return;
     }
-    const nextThreads = response.data.items || [];
+    const nextThreads = (response.data.items || []).filter(threadMatchesEmbeddedSources);
     setThreads(nextThreads);
     if (selectFirst && !activeThread && nextThreads[0]) {
       const detailResponse = await getAgentThread(nextThreads[0].id);
@@ -621,15 +767,14 @@ export default function VideoAgentWorkspace() {
         setMessageDeliveryErrors(restoredDeliveryErrors(detailResponse.data));
         setStreamingMessageId(null);
         setStreamProgress(null);
-        setDraftSourceMode('scope');
-        setSelectedSourceIds(new Set());
-        rememberSources(detailResponse.data.sources);
+        followingRef.current = true;
+        restoreThreadSourceSelection(detailResponse.data);
         if (threadHasBackgroundWork(detailResponse.data)) {
           setBackgroundThreadId(detailResponse.data.id);
         }
       }
     }
-  }, [activeThread, rememberSources]);
+  }, [activeThread, restoreThreadSourceSelection, threadMatchesEmbeddedSources]);
 
   const loadSources = useCallback(async (
     scope: BrowseSourceScope,
@@ -766,24 +911,85 @@ export default function VideoAgentWorkspace() {
 
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search);
-    const requestedSourceIds = Array.from(new Set(
-      (searchParams.get('source_ids') || '')
-        .split(',')
-        .map((value) => value.trim())
-        .filter(Boolean),
-    )).slice(0, MAX_SELECTED_SOURCES);
-    const requestedThreadId = searchParams.get('thread');
-    const requestedScopeParam = searchParams.get('source_scope');
+    const hasInitialSourceIds = initialSourceIdsProvidedRef.current;
+    const explicitThreadId = String(initialThreadIdRef.current || '').trim();
+    const useRouteDraft = !hasInitialSourceIds && !explicitThreadId;
+    const requestedSourceIds = normalizeSourceIds(
+      hasInitialSourceIds
+        ? initialSourceIdsRef.current || []
+        : (searchParams.get('source_ids') || '').split(','),
+    );
+    const requestedThreadId = explicitThreadId
+      || (useRouteDraft ? String(searchParams.get('thread') || '').trim() : '');
+    const requestedScopeParam = useRouteDraft
+      ? searchParams.get('source_scope')
+      : null;
     const requestedScope = isBrowseSourceScope(requestedScopeParam)
       ? requestedScopeParam
       : null;
-    const forceNewThread = searchParams.get('new') === '1';
+    const forceNewThread = useRouteDraft && searchParams.get('new') === '1';
     requestedSourceIdsRef.current = requestedSourceIds;
     sourceHandoffNoticeSettledRef.current = requestedSourceIds.length === 0;
 
     if (requestedScope) setBrowseScope(requestedScope);
 
-    if (requestedSourceIds.length > 0) {
+    // 显式会话优先于默认来源。详情页 URL 可能带有无关参数，因此只有调用方未提供
+    // 初始化参数时，才读取当前路由里的 Harness 状态。
+    if (requestedThreadId) {
+      sourceHandoffNoticeSettledRef.current = true;
+      void loadThreads(false);
+      let active = true;
+      setThreadLoading(true);
+      void getAgentThread(requestedThreadId).then((response) => {
+        if (!active) return;
+        setThreadLoading(false);
+        if (!response.success || !response.data) {
+          const terminal = response.status === 404 || response.status === 410;
+          if (terminal) {
+            if (!returnToEmbeddedSourceDraft(
+              '原会话已失效，已回到当前视频的新会话。',
+              'notice',
+            )) {
+              setError('');
+              setNotice('原会话已失效，请新建会话。');
+            }
+            invalidateThreadPointer();
+          } else {
+            const recoveryError = `${response.error || '暂时无法恢复原会话'}；恢复指针已保留，可先基于当前视频提问。`;
+            if (!returnToEmbeddedSourceDraft(recoveryError, 'error')) {
+              setNotice('');
+              setError(recoveryError);
+            }
+          }
+          return;
+        }
+        if (!threadMatchesEmbeddedSources(response.data)) {
+          returnToEmbeddedSourceDraft(
+            '原会话不属于当前视频，已回到当前视频的新会话。',
+            'notice',
+          );
+          invalidateThreadPointer();
+          return;
+        }
+        requestedSourceIdsRef.current = [];
+        sourceHandoffNoticeSettledRef.current = true;
+        setActiveThread(response.data);
+        setMessages(threadConversationMessages(response.data));
+        setMessageDeliveryStates(restoredDeliveryStates(response.data));
+        setMessageDeliveryErrors(restoredDeliveryErrors(response.data));
+        setStreamingMessageId(null);
+        setStreamProgress(null);
+        restoreThreadSourceSelection(response.data);
+        if (threadHasBackgroundWork(response.data)) {
+          setBackgroundThreadId(response.data.id);
+        }
+      });
+      return () => {
+        active = false;
+      };
+    }
+
+    if (hasInitialSourceIds || requestedSourceIds.length > 0) {
       void loadThreads(false);
       setActiveThread(null);
       setMessages([]);
@@ -793,7 +999,9 @@ export default function VideoAgentWorkspace() {
       setStreamProgress(null);
       setDraftSourceMode('selected');
       setSelectedSourceIds(new Set(requestedSourceIds));
-      setNotice(`已带入 ${requestedSourceIds.length} 条视频，正在核对资料状态。`);
+      setNotice(requestedSourceIds.length > 0
+        ? `已带入 ${requestedSourceIds.length} 条视频，正在核对资料状态。`
+        : '当前没有可用的视频资料，请重新选择。');
       return;
     }
 
@@ -812,36 +1020,8 @@ export default function VideoAgentWorkspace() {
       return;
     }
 
-    if (!requestedThreadId) {
-      void loadThreads(true);
-      return;
-    }
-
-    void loadThreads(false);
-    let active = true;
-    setThreadLoading(true);
-    void getAgentThread(requestedThreadId).then((response) => {
-      if (!active) return;
-      setThreadLoading(false);
-      if (!response.success || !response.data) {
-        setError(response.error || '邮件摘要关联的任务暂时无法打开');
-        return;
-      }
-      setActiveThread(response.data);
-      setMessages(threadConversationMessages(response.data));
-      setMessageDeliveryStates(restoredDeliveryStates(response.data));
-      setMessageDeliveryErrors(restoredDeliveryErrors(response.data));
-      setStreamingMessageId(null);
-      setStreamProgress(null);
-      setSelectedSourceIds(new Set());
-      rememberSources(response.data.sources);
-      if (threadHasBackgroundWork(response.data)) {
-        setBackgroundThreadId(response.data.id);
-      }
-    });
-    return () => {
-      active = false;
-    };
+    void loadThreads(true);
+    return;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -895,12 +1075,16 @@ export default function VideoAgentWorkspace() {
   }, [user?.id]);
 
   useEffect(() => {
+    if (embedded) {
+      setIsCompact(true);
+      return;
+    }
     const media = window.matchMedia('(max-width: 1279px)');
     const updateViewport = () => setIsCompact(media.matches);
     updateViewport();
     media.addEventListener('change', updateViewport);
     return () => media.removeEventListener('change', updateViewport);
-  }, []);
+  }, [embedded]);
 
   useEffect(() => {
     if (historyOpen) {
@@ -1003,6 +1187,26 @@ export default function VideoAgentWorkspace() {
   }, [automationOpen, loadAutomations, loadEmailStatus]);
 
   useEffect(() => {
+    const wasActive = wasActiveRef.current;
+    if (wasActive && !active) {
+      followingBeforeInactiveRef.current = followingRef.current;
+    }
+    const shouldRestoreFollowing = !wasActive
+      && active
+      && followingBeforeInactiveRef.current;
+    wasActiveRef.current = active;
+    if (!shouldRestoreFollowing) return;
+
+    followingRef.current = true;
+    const frame = window.requestAnimationFrame(() => {
+      const scroller = threadScrollRef.current;
+      if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [active]);
+
+  useEffect(() => {
+    if (!activeRef.current || !followingRef.current) return;
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     messageEndRef.current?.scrollIntoView({
       block: 'nearest',
@@ -1010,8 +1214,44 @@ export default function VideoAgentWorkspace() {
     });
   }, [messages.length, sending]);
 
+  // Back-to-bottom visibility — mirrors the DSH harness toBottomSlot button.
+  // The scroll listener only reads scroll geometry; it never mutates the DOM.
+  const [showBackToBottom, setShowBackToBottom] = useState(false);
+  useEffect(() => {
+    if (!active) return;
+    const el = threadScrollRef.current;
+    if (!el) return;
+    const update = () => {
+      if (!activeRef.current) return;
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      // DSH-style pin: once a user scrolls away from the bottom, stop chasing
+      // it until they return; the button mirrors that state.
+      followingRef.current = distance <= 2;
+      setShowBackToBottom(distance > 56);
+    };
+    update();
+    el.addEventListener('scroll', update, { passive: true });
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => {
+      el.removeEventListener('scroll', update);
+      observer.disconnect();
+    };
+  }, [active, threadLoading]);
+
+  const scrollThreadToBottom = useCallback(() => {
+    followingRef.current = true;
+    setShowBackToBottom(false);
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    threadScrollRef.current?.scrollTo({
+      top: threadScrollRef.current.scrollHeight,
+      behavior: reduceMotion ? 'auto' : 'smooth',
+    });
+  }, []);
+
   useEffect(() => () => {
     abortRef.current?.abort();
+    resumeAbortRef.current?.abort();
     sourceRequestRef.current?.abort();
   }, []);
 
@@ -1032,8 +1272,11 @@ export default function VideoAgentWorkspace() {
 
   const availableChatModels = chatModelCatalog?.items || [];
 
-  const selectedChatModel = aiProviderConfig?.mode === 'custom'
-    ? '__custom__'
+  const selectedCustomModel = aiProviderConfig?.custom_models?.find(
+    (model) => model.id === aiProviderConfig.selected_custom_model_id,
+  );
+  const selectedChatModel = aiProviderConfig?.mode === 'custom' && selectedCustomModel
+    ? `custom:${selectedCustomModel.id}`
     : chatModelCatalog?.selected_offering_id
       || aiProviderConfig?.selected_offering_id
       || '';
@@ -1042,6 +1285,29 @@ export default function VideoAgentWorkspace() {
     if (modelSaving || modelId === selectedChatModel || modelId === '__custom__') return;
     setModelSaving(true);
     setModelError('');
+
+    if (modelId.startsWith('custom:')) {
+      const customModelId = modelId.slice('custom:'.length);
+      const response = await selectUserCustomChatModel(customModelId);
+      setModelSaving(false);
+      if (!response.success || !response.data) {
+        setModelError(response.error || '模型切换失败，请稍后重试');
+        return;
+      }
+      const selected = response.data.items.find((model) => model.id === customModelId);
+      setAiProviderConfig((current) => current ? {
+        ...current,
+        mode: 'custom',
+        selected_custom_model_id: customModelId,
+        custom_models: response.data!.items,
+        provider_name: selected?.provider_name || current.provider_name,
+        model: selected?.model || current.model,
+        api_base: selected?.api_base || current.api_base,
+      } : current);
+      setNotice(`已切换到 ${selected?.name || customModelId}`);
+      return;
+    }
+
     const response = await selectUserChatModel(modelId);
     setModelSaving(false);
     if (!response.success || !response.data) {
@@ -1058,10 +1324,60 @@ export default function VideoAgentWorkspace() {
       model: response.data!.selected_offering_id,
       selected_offering_id: response.data!.selected_offering_id,
       selected_offering_name: response.data!.item.name,
+      selected_custom_model_id: null,
     } : current);
     const selectedModel = availableChatModels.find((model) => model.id === modelId);
     setNotice(`已切换到 ${selectedModel?.name || modelId}`);
   };
+
+  const applyCustomModelConfig = useEventCallback(async (
+    draft: { providerName: string; model: string; apiBase: string; apiKey: string },
+    action: 'save' | 'test' | 'reset',
+  ): Promise<{ kind: 'saved' | 'tested' | 'reset'; label: string } | null> => {
+    if (modelConfigSaving) return null;
+    setModelConfigSaving(true);
+    setModelError('');
+    try {
+      if (action === 'reset') {
+        const response = await resetUserAIProvider();
+        if (!response.success || !response.data) {
+          setModelError(response.error || '恢复默认模型失败');
+          return null;
+        }
+        setAiProviderConfig(response.data);
+        setNotice('已恢复平台模型');
+        return { kind: 'reset', label: '已恢复平台模型' };
+      }
+
+      const response = await saveUserAIProvider({
+        mode: 'custom',
+        provider_name: draft.providerName,
+        model: draft.model,
+        api_base: draft.apiBase,
+        api_key: draft.apiKey,
+      });
+      if (!response.success || !response.data) {
+        setModelError(response.error || '保存失败，请检查配置');
+        return null;
+      }
+      setAiProviderConfig(response.data);
+      setNotice(action === 'save' ? '已启用你的模型' : `保存成功：${response.data.model}`);
+
+      if (action === 'test') {
+        const testResponse = await testUserAIProvider();
+        if (!testResponse.success || !testResponse.data) {
+          setModelError(testResponse.error || '连接失败，请检查模型、地址和密钥');
+          return null;
+        }
+        setNotice(`连接成功：${testResponse.data.model}`);
+        return { kind: 'tested', label: `连接成功：${testResponse.data.model}` };
+      }
+
+      return { kind: 'saved', label: `已启用你的模型：${response.data.model}` };
+    } finally {
+      setModelConfigSaving(false);
+    }
+  });
 
   const selectedSources = useMemo(
     () => Array.from(selectedSourceIds)
@@ -1085,7 +1401,8 @@ export default function VideoAgentWorkspace() {
     containerRef: sourceSelectionSurfaceRef,
     selectedIds: selectedSourceIds,
     maxSelection: MAX_SELECTED_SOURCES,
-    alwaysAdditive: true,
+    alwaysAdditive: false,
+    toggleOnHitSelected: true,
     disabled: sourceLoading
       || Boolean(sourceError)
       || (platformSources.length === 0 && visibleSelectedSources.length === 0),
@@ -1184,7 +1501,24 @@ export default function VideoAgentWorkspace() {
     const response = await getAgentThread(threadId);
     setThreadLoading(false);
     if (!response.success || !response.data) {
-      setError(response.error || '暂时无法打开这项任务');
+      const terminal = response.status === 404 || response.status === 410;
+      if (terminal && returnToEmbeddedSourceDraft(
+        '这项会话已失效，已回到当前视频的新会话。',
+        'notice',
+      )) {
+        invalidateThreadPointer();
+      } else {
+        setNotice('');
+        setError(response.error || '暂时无法打开这项任务，当前会话已保留。');
+      }
+      return;
+    }
+    if (!threadMatchesEmbeddedSources(response.data)) {
+      returnToEmbeddedSourceDraft(
+        '这项会话不属于当前视频，已回到当前视频的新会话。',
+        'notice',
+      );
+      invalidateThreadPointer();
       return;
     }
     setActiveThread(response.data);
@@ -1193,9 +1527,8 @@ export default function VideoAgentWorkspace() {
     setMessageDeliveryErrors(restoredDeliveryErrors(response.data));
     setStreamingMessageId(null);
     setStreamProgress(null);
-    setDraftSourceMode('scope');
-    setSelectedSourceIds(new Set());
-    rememberSources(response.data.sources);
+    followingRef.current = true;
+    restoreThreadSourceSelection(response.data);
     setBackgroundThreadId(
       threadHasBackgroundWork(response.data) ? response.data.id : null,
     );
@@ -1210,6 +1543,7 @@ export default function VideoAgentWorkspace() {
       setNotice('上一条回答仍在后台处理中；完成后会自动更新，再开始新任务。');
       return;
     }
+    const embeddedDefaultSourceIds = embeddedInitialSourceIdsRef.current;
     abortRef.current?.abort();
     setSending(false);
     setActiveThread(null);
@@ -1220,9 +1554,19 @@ export default function VideoAgentWorkspace() {
     setStreamProgress(null);
     questionRef.current?.clear();
     setError('');
-    setNotice(draftSourceMode === 'scope'
-      ? `新会话将整体参考${sourceScopeLabel(browseScope)}`
-      : `新会话将参考已选的 ${selectedSourceIds.size} 条视频`);
+    if (embeddedDefaultSourceIds) {
+      requestedSourceIdsRef.current = embeddedDefaultSourceIds;
+      sourceHandoffNoticeSettledRef.current = true;
+      setDraftSourceMode('selected');
+      setSelectedSourceIds(new Set(embeddedDefaultSourceIds));
+      setNotice(embeddedDefaultSourceIds.length > 0
+        ? `新会话将参考当前 ${embeddedDefaultSourceIds.length} 条视频`
+        : '当前没有可用的视频资料，请重新选择。');
+    } else {
+      setNotice(draftSourceMode === 'scope'
+        ? `新会话将整体参考${sourceScopeLabel(browseScope)}`
+        : `新会话将参考已选的 ${selectedSourceIds.size} 条视频`);
+    }
     setHistoryOpen(false);
     setSourcesOpen(false);
     setStudioOpen(false);
@@ -1400,9 +1744,9 @@ export default function VideoAgentWorkspace() {
   const refreshThreadList = useCallback(async () => {
     const response = await listAgentThreads();
     if (response.success && response.data) {
-      setThreads(response.data.items || []);
+      setThreads((response.data.items || []).filter(threadMatchesEmbeddedSources));
     }
-  }, []);
+  }, [threadMatchesEmbeddedSources]);
 
   useEffect(() => {
     if (!backgroundThreadId) return;
@@ -1426,7 +1770,7 @@ export default function VideoAgentWorkspace() {
         setMessageDeliveryStates(restoredDeliveryStates(response.data));
         setMessageDeliveryErrors(restoredDeliveryErrors(response.data));
         setStreamingMessageId(null);
-        setStreamProgress(null);
+        if (!response.data.active_turn) setStreamProgress(null);
       }
 
       if (threadHasBackgroundWork(response.data)) {
@@ -1453,6 +1797,94 @@ export default function VideoAgentWorkspace() {
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [activeThread?.id, backgroundThreadId, refreshThreadList]);
+
+  useEffect(() => {
+    const threadId = activeThread?.id;
+    const turnId = activeThread?.active_turn?.id;
+    if (!threadId || !turnId || !shouldResumeAgentTurn({
+      active,
+      sending,
+      thread: activeThread,
+    })) return;
+
+    resumeAbortRef.current?.abort();
+    const controller = new AbortController();
+    resumeAbortRef.current = controller;
+    durableTurnIdRef.current = turnId;
+    setBackgroundThreadId(threadId);
+    setNotice('已恢复上一条研究任务，完成后会自动显示回答。');
+
+    const followTurn = async () => {
+      while (!controller.signal.aborted) {
+        const response = await resumeAgentTurnStream(
+          threadId,
+          turnId,
+          {
+            onProgress: (progress) => setStreamProgress(progress),
+          },
+          controller.signal,
+        );
+        if (controller.signal.aborted) return;
+        if (response.success && response.data) {
+          const nextThread = response.data.thread;
+          setActiveThread(nextThread);
+          setMessages(threadConversationMessages(nextThread));
+          setMessageDeliveryStates({});
+          setMessageDeliveryErrors({});
+          setStreamingMessageId(null);
+          setStreamProgress(null);
+          setBackgroundThreadId(null);
+          setTerminalTurn(null);
+          durableTurnIdRef.current = null;
+          setNotice('研究已完成，回答和逐条依据已恢复。');
+          followingRef.current = true;
+          void refreshThreadList();
+          return;
+        }
+        if (response.status === 409 || response.status === 502) {
+          const [refreshed, turnResponse] = await Promise.all([
+            getAgentThread(threadId),
+            getAgentTurn(threadId, turnId),
+          ]);
+          if (refreshed.success && refreshed.data && !threadHasBackgroundWork(refreshed.data)) {
+            setActiveThread(refreshed.data);
+            setMessages(threadConversationMessages(refreshed.data));
+            setBackgroundThreadId(null);
+            setStreamProgress(null);
+            if (
+              turnResponse.success
+              && turnResponse.data
+              && ['failed', 'cancelled'].includes(turnResponse.data.status)
+            ) {
+              setTerminalTurn(turnResponse.data);
+              durableTurnIdRef.current = turnResponse.data.id;
+            }
+            setError(response.error || '后台研究没有完成，可以重试本轮研究。');
+            return;
+          }
+        }
+        setNotice('研究仍在后台运行；实时连接暂时中断，正在自动重连。');
+        await new Promise<void>((resolve) => {
+          const timeout = window.setTimeout(resolve, 1500);
+          controller.signal.addEventListener('abort', () => {
+            window.clearTimeout(timeout);
+            resolve();
+          }, { once: true });
+        });
+      }
+    };
+    void followTurn().finally(() => {
+      if (resumeAbortRef.current === controller) resumeAbortRef.current = null;
+    });
+
+    return () => controller.abort();
+  }, [
+    active,
+    activeThread?.active_turn?.id,
+    activeThread?.id,
+    refreshThreadList,
+    sending,
+  ]);
 
   const submitQuestion = async (
     event?: FormEvent,
@@ -1504,7 +1936,7 @@ export default function VideoAgentWorkspace() {
       if (!created.success || !created.data) {
         setSending(false);
         questionRef.current?.setValue(content);
-        setError(created.error || '暂时无法创建视频研伴会话');
+        setError(created.error || '暂时无法创建知萃 Harness 会话');
         return;
       }
       thread = created.data;
@@ -1527,24 +1959,67 @@ export default function VideoAgentWorkspace() {
     setStreamingMessageId(streamingAssistant.id);
     setStreamProgress({
       stage: 'queued',
-      message: '正在连接视频研伴',
+      message: '正在连接知萃 Harness',
     });
     const controller = new AbortController();
     abortRef.current = controller;
-    let bufferedDelta = '';
-    let deltaFlushTimer: number | undefined;
-    const flushBufferedDelta = () => {
-      if (!bufferedDelta) return;
-      const nextDelta = bufferedDelta;
-      bufferedDelta = '';
-      deltaFlushTimer = undefined;
+    followingRef.current = true;
+    setShowBackToBottom(false);
+    // Keep the first visible provider delta immediate, then publish the
+    // accumulated answer at most once per browser paint. SSE callbacks run in
+    // separate async turns, so relying on React to batch every delta still
+    // reparses the growing Markdown far more often than the display can show.
+    let pendingDelta = '';
+    let deltaFrame = 0;
+    let hasVisibleDelta = false;
+    let followFrame = 0;
+    const scheduleFollow = () => {
+      if (!activeRef.current || !followingRef.current || followFrame) return;
+      followFrame = window.requestAnimationFrame(() => {
+        followFrame = 0;
+        if (!activeRef.current || !followingRef.current) return;
+        const scroller = threadScrollRef.current;
+        if (scroller) scroller.scrollTop = scroller.scrollHeight;
+      });
+    };
+    const commitStreamingDelta = (delta: string) => {
+      if (!delta) return;
       setMessages((current) => current.map((message) => (
         message.id === streamingAssistant.id
-          ? { ...message, content: `${message.content}${nextDelta}` }
+          ? { ...message, content: `${message.content}${delta}` }
           : message
       )));
+      scheduleFollow();
+    };
+    const commitPendingDelta = () => {
+      if (!pendingDelta) return;
+      const nextDelta = pendingDelta;
+      pendingDelta = '';
+      commitStreamingDelta(nextDelta);
+    };
+    const flushPendingDelta = () => {
+      if (deltaFrame) {
+        window.cancelAnimationFrame(deltaFrame);
+        deltaFrame = 0;
+      }
+      commitPendingDelta();
+    };
+    const enqueueStreamingDelta = (delta: string) => {
+      if (!delta) return;
+      if (!hasVisibleDelta) {
+        hasVisibleDelta = true;
+        commitStreamingDelta(delta);
+        return;
+      }
+      pendingDelta += delta;
+      if (deltaFrame) return;
+      deltaFrame = window.requestAnimationFrame(() => {
+        deltaFrame = 0;
+        commitPendingDelta();
+      });
     };
     let response: Awaited<ReturnType<typeof streamAgentMessage>>;
+    let durableTurnId = '';
     try {
       response = await streamAgentMessage(
         thread.id,
@@ -1556,7 +2031,15 @@ export default function VideoAgentWorkspace() {
           web_scope: webScope,
         },
         {
+          onTurn: (turnId) => {
+            durableTurnId = turnId;
+            durableTurnIdRef.current = turnId;
+          },
           onProgress: (progress) => {
+            if (progress.turn_id) {
+              durableTurnId = progress.turn_id;
+              durableTurnIdRef.current = progress.turn_id;
+            }
             setStreamProgress(progress);
             setMessageDeliveryStates((current) => {
               const next = { ...current };
@@ -1572,10 +2055,7 @@ export default function VideoAgentWorkspace() {
             )));
           },
           onDelta: (delta) => {
-            bufferedDelta += delta;
-            if (deltaFlushTimer === undefined) {
-              deltaFlushTimer = window.setTimeout(flushBufferedDelta, 32);
-            }
+            enqueueStreamingDelta(delta);
           },
           onApprovalRequired: () => {
             setStreamProgress({
@@ -1593,10 +2073,11 @@ export default function VideoAgentWorkspace() {
         controller.signal,
       );
     } finally {
-      if (deltaFlushTimer !== undefined) {
-        window.clearTimeout(deltaFlushTimer);
+      flushPendingDelta();
+      if (followFrame) {
+        window.cancelAnimationFrame(followFrame);
+        followFrame = 0;
       }
-      flushBufferedDelta();
       if (abortRef.current === controller) abortRef.current = null;
       setSending(false);
     }
@@ -1618,7 +2099,55 @@ export default function VideoAgentWorkspace() {
         (message) => message.id !== streamingAssistant.id,
       ));
       setStreamingMessageId(null);
-      setStreamProgress(null);
+      if (!durableTurnId) setStreamProgress(null);
+      if (durableTurnId && (response.status === 409 || response.status === 502)) {
+        const [restored, turnResponse] = await Promise.all([
+          getAgentThread(thread.id),
+          getAgentTurn(thread.id, durableTurnId),
+        ]);
+        if (
+          turnResponse.success
+          && turnResponse.data
+          && ['failed', 'cancelled'].includes(turnResponse.data.status)
+        ) {
+          setMessages((current) => current.filter(
+            (message) => message.id !== optimistic.id,
+          ));
+          setMessageDeliveryStates((current) => {
+            const next = { ...current };
+            delete next[optimistic.id];
+            return next;
+          });
+          if (restored.success && restored.data) {
+            setActiveThread(restored.data);
+            setMessages(threadConversationMessages(restored.data));
+          }
+          setTerminalTurn(turnResponse.data);
+          durableTurnIdRef.current = turnResponse.data.id;
+          setBackgroundThreadId(null);
+          setStreamProgress(null);
+          setError(response.error || '本轮研究没有完成，可以重试。');
+          return;
+        }
+      }
+      if (durableTurnId && response.status !== 409) {
+        setMessages((current) => current.filter(
+          (message) => message.id !== optimistic.id,
+        ));
+        setMessageDeliveryStates((current) => {
+          const next = { ...current };
+          delete next[optimistic.id];
+          return next;
+        });
+        setBackgroundThreadId(thread.id);
+        setNotice('实时连接中断，但研究任务仍在后台执行；重新进入页面也会自动恢复。');
+        const restored = await getAgentThread(thread.id);
+        if (restored.success && restored.data) {
+          setActiveThread(restored.data);
+          setMessages(threadConversationMessages(restored.data));
+        }
+        return;
+      }
       if (response.status === 409) {
         setMessages((current) => current.filter(
           (message) => message.id !== optimistic.id,
@@ -1639,7 +2168,7 @@ export default function VideoAgentWorkspace() {
       }));
       setMessageDeliveryErrors((current) => ({
         ...current,
-        [optimistic.id]: response.error || '视频研伴暂时无法回答，请稍后重试',
+        [optimistic.id]: response.error || '知萃 Harness 暂时无法回答，请稍后重试',
       }));
       return;
     }
@@ -1655,6 +2184,8 @@ export default function VideoAgentWorkspace() {
     setMessageDeliveryErrors({});
     setStreamingMessageId(null);
     setStreamProgress(null);
+    setTerminalTurn(null);
+    durableTurnIdRef.current = null;
     setMessages(
       nextMessages.length
         ? nextMessages
@@ -1663,6 +2194,7 @@ export default function VideoAgentWorkspace() {
             response.data.assistant_message,
           ],
     );
+    followingRef.current = true;
     if (threadHasBackgroundWork(nextThread)) {
       setBackgroundThreadId(nextThread.id);
       setNotice('详细解析已进入后台，完成后会自动继续回答。');
@@ -1809,6 +2341,89 @@ export default function VideoAgentWorkspace() {
     setNotice('已停止等待；后台仍在处理这条回答，完成后会自动更新。');
   };
 
+  const cancelCurrentTurn = async () => {
+    const threadId = activeThread?.id;
+    const turnId = activeThread?.active_turn?.id || durableTurnIdRef.current;
+    if (!threadId || !turnId) {
+      stopSending();
+      return;
+    }
+    if (turnAction) return;
+    setTurnAction('cancel');
+    setError('');
+    const response = await cancelAgentTurn(threadId, turnId);
+    setTurnAction('');
+    if (!response.success || !response.data) {
+      setError(response.error || '取消研究暂时没有完成');
+      return;
+    }
+
+    const turn = response.data;
+    durableTurnIdRef.current = turn.id;
+    if (turn.status === 'cancelled') {
+      abortRef.current?.abort();
+      resumeAbortRef.current?.abort();
+      setSending(false);
+      setBackgroundThreadId(null);
+      setStreamProgress(null);
+      setTerminalTurn(turn);
+      setActiveThread((current) => (
+        current?.id === threadId ? { ...current, active_turn: null } : current
+      ));
+      setNotice('本轮研究已取消；需要时可以从原进度重新排队。');
+      return;
+    }
+
+    setActiveThread((current) => (
+      current?.id === threadId ? { ...current, active_turn: turn } : current
+    ));
+    setBackgroundThreadId(threadId);
+    setStreamProgress({
+      stage: 'finalizing',
+      message: '正在安全停止研究任务',
+      turn_id: turn.id,
+      source_total_count: turn.source_total_count,
+      scanned_count: turn.scanned_count,
+      mapped_count: turn.mapped_count,
+      deep_read_count: turn.deep_read_count,
+    });
+    setNotice('已发送取消请求；当前工具返回后会安全停止。');
+  };
+
+  const retryTerminalTurn = async () => {
+    const threadId = activeThread?.id;
+    if (
+      !threadId
+      || !terminalTurn
+      || terminalTurn.thread_id !== threadId
+      || turnAction
+    ) return;
+    setTurnAction('retry');
+    setError('');
+    const response = await retryAgentTurn(threadId, terminalTurn.id);
+    setTurnAction('');
+    if (!response.success || !response.data) {
+      setError(response.error || '重新排队暂时没有完成');
+      return;
+    }
+    const turn = response.data;
+    durableTurnIdRef.current = turn.id;
+    setTerminalTurn(null);
+    setActiveThread((current) => (
+      current?.id === threadId
+        ? { ...current, status: 'running', active_turn: turn }
+        : current
+    ));
+    setStreamProgress({
+      stage: 'queued',
+      message: '研究已重新排队',
+      turn_id: turn.id,
+      source_total_count: turn.source_total_count,
+    });
+    setBackgroundThreadId(threadId);
+    setNotice('本轮研究已重新排队，会从保存的来源范围继续。');
+  };
+
   const handleComposerSubmit = useEventCallback((content: string) => {
     void submitQuestion(undefined, content);
   });
@@ -1828,7 +2443,7 @@ export default function VideoAgentWorkspace() {
     setWebScope(nextWebScope);
   });
   const handleComposerStop = useEventCallback(() => {
-    stopSending();
+    void cancelCurrentTurn();
   });
 
   const removeThread = async (threadId: string) => {
@@ -2004,9 +2619,18 @@ export default function VideoAgentWorkspace() {
     setPendingThreadDelete(null);
     setPendingAutomationDelete(null);
   };
+  const workspaceClassName = [
+    styles.root,
+    embedded ? styles.embedded : 'video-agent-page',
+    embedded ? 'video-agent-embedded' : 'desktop-core-page',
+    'video-agent-refined',
+  ].join(' ');
+  const ConversationContainer = embedded ? 'div' : 'main';
+  const conversationBlocked = isCompact
+    && (historyOpen || sourcesOpen || studioOpen || automationOpen);
 
   return (
-    <div className={`${styles.root} video-agent-page video-agent-refined desktop-core-page`}>
+    <div className={workspaceClassName} data-embedded={embedded || undefined}>
       <div
         className={`video-agent-backdrop ${
           (isCompact && (historyOpen || sourcesOpen || studioOpen))
@@ -2025,7 +2649,7 @@ export default function VideoAgentWorkspace() {
 
       <section
         className="video-agent-shell"
-        aria-label="视频研伴"
+        aria-label="知萃 Harness"
       >
         <aside
           id="video-agent-history-panel"
@@ -2102,10 +2726,12 @@ export default function VideoAgentWorkspace() {
 
         </aside>
 
-        <main
+        <ConversationContainer
           className="video-agent-main"
-          aria-hidden={isCompact && (sourcesOpen || studioOpen)}
-          inert={isCompact && (sourcesOpen || studioOpen)}
+          role={embedded ? 'region' : undefined}
+          aria-label={embedded ? '知萃 Harness 对话' : undefined}
+          aria-hidden={conversationBlocked}
+          inert={conversationBlocked}
         >
           <header className="video-agent-topbar">
             <div className="video-agent-topbar-leading">
@@ -2122,7 +2748,7 @@ export default function VideoAgentWorkspace() {
                   aria-controls="video-agent-history-panel"
                   title="查看会话记录"
                 >
-                  <h1>{activeThread?.title || '视频研伴'}</h1>
+                  <h1>{activeThread?.title || '知萃 Harness'}</h1>
                   <CaretRight size={14} aria-hidden="true" />
                 </button>
                 <p>
@@ -2192,7 +2818,7 @@ export default function VideoAgentWorkspace() {
             </div>
           </header>
 
-          <nav className="video-agent-mobile-tabs" aria-label="视频研伴功能">
+          <nav className="video-agent-mobile-tabs" aria-label="知萃 Harness 功能">
             <button
               type="button"
               onClick={(event) => openSourcesPanel(event.currentTarget)}
@@ -2244,6 +2870,7 @@ export default function VideoAgentWorkspace() {
           )}
 
           <div
+            ref={threadScrollRef}
             className="video-agent-thread"
             role="log"
             aria-live="polite"
@@ -2308,15 +2935,88 @@ export default function VideoAgentWorkspace() {
                 <span><i /><i /><i /></span>
                 {researchMode === 'deep'
                   ? '正在分批阅读资料并综合依据'
-                  : '正在检索完整文案并组织回答'}
+                  : researchMode === 'fast'
+                    ? '正在检索完整文案并组织回答'
+                    : '正在判断问题范围并选择研究深度'}
               </div>
             )}
             {!sending && backgroundThreadId && (
               <div className="video-agent-thinking" role="status" aria-live="polite">
                 <span><i /><i /><i /></span>
-                后台仍在处理上一条回答，完成后会自动更新
+                <span className="video-agent-thinking-copy">
+                  <strong>
+                    {activeThread?.active_turn?.cancellation_requested
+                      ? '正在安全停止研究任务'
+                      : streamProgress?.message || '后台仍在处理上一条回答'}
+                  </strong>
+                  <small>
+                    {researchProgressDetail(streamProgress)
+                      || '完成后会自动更新，刷新或切换页面不会丢失'}
+                  </small>
+                </span>
+                {activeThread?.active_turn?.id && (
+                  <button
+                    type="button"
+                    className="video-agent-turn-action"
+                    disabled={
+                      turnAction === 'cancel'
+                      || activeThread.active_turn.cancellation_requested
+                    }
+                    onClick={() => void cancelCurrentTurn()}
+                    aria-label="取消研究"
+                  >
+                    <X size={14} aria-hidden="true" />
+                    {activeThread.active_turn.cancellation_requested
+                      ? '正在停止'
+                      : turnAction === 'cancel'
+                        ? '正在取消'
+                        : '取消研究'}
+                  </button>
+                )}
               </div>
             )}
+            {!sending
+              && !backgroundThreadId
+              && terminalTurn
+              && terminalTurn.thread_id === activeThread?.id && (
+              <div className="video-agent-thinking is-terminal" role="status" aria-live="polite">
+                <span className="video-agent-turn-terminal-icon" aria-hidden="true">
+                  <X size={14} />
+                </span>
+                <span className="video-agent-thinking-copy">
+                  <strong>
+                    {terminalTurn.status === 'cancelled'
+                      ? '本轮研究已取消'
+                      : '本轮研究没有完成'}
+                  </strong>
+                  <small>
+                    {terminalTurn.error_message || '已保留来源范围和安全事件，可以重新排队'}
+                  </small>
+                </span>
+                <button
+                  type="button"
+                  className="video-agent-turn-action"
+                  disabled={turnAction === 'retry'}
+                  onClick={() => void retryTerminalTurn()}
+                  aria-label="重试研究"
+                >
+                  <ArrowClockwise size={14} aria-hidden="true" />
+                  {turnAction === 'retry' ? '正在排队' : '重试研究'}
+                </button>
+              </div>
+            )}
+            <div className="video-agent-to-bottom-slot" aria-hidden={!showBackToBottom}>
+              <button
+                type="button"
+                className={`video-agent-back-to-bottom ${showBackToBottom ? 'is-visible' : ''}`}
+                onClick={scrollThreadToBottom}
+                aria-label="回到最新消息"
+                title="回到最新消息"
+                tabIndex={showBackToBottom ? 0 : -1}
+              >
+                <CaretDown size={17} weight="bold" />
+              </button>
+            </div>
             <div ref={messageEndRef} />
           </div>
 
@@ -2333,10 +3033,11 @@ export default function VideoAgentWorkspace() {
             modelCatalogLoading={modelCatalogLoading}
             modelError={modelError}
             modelSaving={modelSaving}
+            modelConfigSaving={modelConfigSaving}
             outputLabel={OUTPUT_LABELS[outputStyle]}
             outputStyle={outputStyle}
             researchMode={researchMode}
-            researchLabel={researchMode === 'deep' ? '深度' : '快速'}
+            researchLabel={researchMode === 'deep' ? '深度' : researchMode === 'fast' ? '快速' : '自动'}
             selectedModel={selectedChatModel}
             sourceLabel={sourceScopeLabel(activeScope)}
             sourcesExpanded={isCompact ? sourcesOpen : undefined}
@@ -2347,19 +3048,20 @@ export default function VideoAgentWorkspace() {
                   ? '正在切换回答方式'
                   : sending
                     ? streamProgress?.message || '正在准备回答'
-                    : `${researchMode === 'deep' ? '深度研究' : '快速回答'} · ${activeSourceCount} 条视频`
+                    : `${researchMode === 'deep' ? '深度研究' : researchMode === 'fast' ? '快速回答' : '自动研究'} · ${activeSourceCount} 条视频`
             }
             webLabel={webScope === 'auto' ? '按需查证' : '仅视频'}
             webScope={webScope}
             sending={sending}
             onChangeCustomInstruction={setCustomInstruction}
             onChangeModel={handleComposerModelChange}
+            onConfigureCustomModel={applyCustomModelConfig}
             onApplyOptions={handleComposerApplyOptions}
             onOpenSources={handleComposerOpenSources}
             onStop={handleComposerStop}
             onSubmitQuestion={handleComposerSubmit}
           />
-        </main>
+        </ConversationContainer>
 
         <aside
           id="video-agent-sources-panel"
@@ -2554,7 +3256,7 @@ export default function VideoAgentWorkspace() {
           )}
 
           <p id="video-agent-marquee-help" className="sr-only">
-            桌面端可用鼠标拖动框选视频来源，新圈选会追加到已选资料。
+            桌面端可用鼠标拖动框选视频来源；再次框住已选视频即可取消选择，按住 Ctrl 或 Command 拖动可追加选择。
           </p>
           <div
             ref={sourceSelectionSurfaceRef}
@@ -3199,7 +3901,7 @@ export default function VideoAgentWorkspace() {
                           <p className="is-error">{latestRun.delivery_error}</p>
                         )}
                         {latestRun.agent_thread_id && (
-                          <a href={`/agent?thread=${encodeURIComponent(latestRun.agent_thread_id)}`}>
+                          <a href={`/harness?thread=${encodeURIComponent(latestRun.agent_thread_id)}`}>
                             继续这次对话
                             <CaretRight size={13} />
                           </a>

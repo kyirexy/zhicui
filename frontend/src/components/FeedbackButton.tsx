@@ -217,7 +217,7 @@ export default function FeedbackButton() {
                 className={`mb-4 flex items-start gap-2 rounded-xl border px-3 py-2.5 text-sm ${
                   error
                     ? 'border-accent-rose/20 bg-accent-rose/5 text-accent-rose'
-                    : 'border-accent-emerald/20 bg-accent-emerald/5 text-accent-emerald'
+                    : 'border-accent-brand/20 bg-accent-brand/5 text-accent-brand'
                 }`}
               >
                 {success && <CheckCircle2 className="mt-0.5 shrink-0" size={17} aria-hidden="true" />}
@@ -282,7 +282,7 @@ export default function FeedbackButton() {
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-accent-emerald px-4 text-sm font-bold text-white hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-accent-brand px-4 text-sm font-bold text-white hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Send size={17} aria-hidden="true" />
                   {submitting ? '正在提交…' : '提交反馈'}
@@ -299,7 +299,7 @@ export default function FeedbackButton() {
                     <button
                       type="button"
                       onClick={() => setView('compose')}
-                      className="mt-4 min-h-11 rounded-lg bg-accent-emerald px-4 text-sm font-bold text-white"
+                      className="mt-4 min-h-11 rounded-lg bg-accent-brand px-4 text-sm font-bold text-white"
                     >
                       提交第一条反馈
                     </button>
@@ -323,8 +323,8 @@ export default function FeedbackButton() {
                         </div>
                         <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-foreground-secondary">{item.content}</p>
                         {item.admin_reply && (
-                          <div className="mt-3 rounded-lg border border-accent-emerald/20 bg-accent-emerald/5 px-3 py-2.5">
-                            <p className="text-xs font-semibold text-accent-emerald">知萃回复</p>
+                          <div className="mt-3 rounded-lg border border-accent-brand/20 bg-accent-brand/5 px-3 py-2.5">
+                            <p className="text-xs font-semibold text-accent-brand">知萃回复</p>
                             <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-foreground">{item.admin_reply}</p>
                           </div>
                         )}

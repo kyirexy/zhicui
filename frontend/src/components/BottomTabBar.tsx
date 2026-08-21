@@ -50,7 +50,7 @@ export default function BottomTabBar() {
       style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
       aria-label="底部导航"
     >
-      <div className="border-t border-card-border bg-white">
+      <div className="border-t border-card-border bg-background">
         <ul className="flex h-16 items-stretch justify-around">
           {PRODUCT_DESTINATIONS.map((tab) => {
             const active = isProductDestinationActive(tab.id, pathname);

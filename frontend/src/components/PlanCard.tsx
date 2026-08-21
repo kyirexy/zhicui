@@ -51,7 +51,7 @@ export default function PlanCard({ plan, onDelete }: PlanCardProps) {
             <span
               className={`h-2 w-2 flex-none rounded-full ${
                 isComplete
-                  ? 'bg-accent-emerald'
+                  ? 'bg-accent-brand'
                   : overdueTasks.length > 0
                     ? 'bg-accent-rose'
                     : 'bg-foreground-muted/50'
@@ -92,7 +92,7 @@ export default function PlanCard({ plan, onDelete }: PlanCardProps) {
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-background-secondary">
             <span
               className={`block h-full rounded-full ${
-                isComplete ? 'bg-accent-emerald' : 'bg-foreground-secondary'
+                isComplete ? 'bg-accent-brand' : 'bg-foreground-secondary'
               }`}
               style={{ width: `${pct}%` }}
             />
@@ -103,7 +103,7 @@ export default function PlanCard({ plan, onDelete }: PlanCardProps) {
               {overdueTasks.length} 项逾期
             </span>
           ) : isComplete ? (
-            <span className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-accent-emerald">
+            <span className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-accent-brand">
               <CheckCircle2 size={12} />
               目标已达成
             </span>

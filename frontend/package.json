@@ -3,9 +3,10 @@
   "version": "1.1.9",
   "private": true,
   "scripts": {
-    "dev": "next dev --webpack",
-    "dev:turbo": "next dev --turbopack",
+    "dev": "next dev --turbopack",
+    "dev:webpack": "next dev --webpack",
     "build": "next build",
+    "test:agent-v2": "node --experimental-strip-types --test src/lib/agentTurnUi.test.ts",
     "start": "next start",
     "cap:build": "CAPACITOR_BUILD=true NEXT_PUBLIC_API_URL=http://10.0.2.2:8000 next build && cap sync android",
     "cap:build:prod": "CAPACITOR_BUILD=true NEXT_PUBLIC_API_URL=https://luxai.cn next build && cap sync android",

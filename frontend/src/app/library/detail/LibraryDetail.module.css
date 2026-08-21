@@ -27,6 +27,36 @@
   background: var(--background);
 }
 
+@media (min-width: 1181px) {
+  .page :global(.video-knowledge-shell) {
+    grid-template-columns: minmax(400px, 0.8fr) minmax(520px, 1fr);
+  }
+
+  .page :global(.video-knowledge-stage) {
+    min-height: 0;
+    max-height: none;
+    flex: 1 1 0;
+  }
+
+  .page :global(.video-knowledge-title),
+  .page :global(.video-knowledge-meta),
+  .page :global(.video-knowledge-facts) {
+    flex: 0 0 auto;
+  }
+
+  .page :global(.video-knowledge-title) {
+    padding-top: 12px;
+  }
+
+  .page :global(.video-knowledge-meta) {
+    padding-top: 6px;
+  }
+
+  .page :global(.video-knowledge-facts) {
+    padding-top: 8px;
+  }
+}
+
 @media (max-width: 767px) {
   .page :global(.video-knowledge-shell) {
     border-right: 0;

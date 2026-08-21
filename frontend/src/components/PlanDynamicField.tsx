@@ -34,7 +34,7 @@ export default function PlanDynamicField({ field }: PlanDynamicFieldProps) {
                 <span className="text-lg font-bold text-foreground tabular-nums">{pct}%</span>
               </div>
               <div className="h-2 rounded-full bg-card-bg overflow-hidden">
-                <div className="h-full rounded-full bg-accent-emerald" style={{ width: `${pct}%` }} />
+                <div className="h-full rounded-full bg-accent-brand" style={{ width: `${pct}%` }} />
               </div>
             </div>
           );
@@ -44,7 +44,7 @@ export default function PlanDynamicField({ field }: PlanDynamicFieldProps) {
       case 'quote':
         if (typeof value === 'string') {
           return (
-            <div className="relative pl-3 border-l-2 border-accent-emerald/30 italic text-sm text-foreground-secondary leading-relaxed">
+            <div className="relative pl-3 border-l-2 border-accent-brand/30 italic text-sm text-foreground-secondary leading-relaxed">
               {value}
             </div>
           );
@@ -57,7 +57,7 @@ export default function PlanDynamicField({ field }: PlanDynamicFieldProps) {
             <ul className="space-y-1.5">
               {value.map((item, i) => (
                 <li key={i} className="flex items-start gap-2 text-sm text-foreground-secondary">
-                  <span className="text-accent-emerald mt-0.5 flex-shrink-0">✓</span>
+                  <span className="text-accent-brand mt-0.5 flex-shrink-0">✓</span>
                   <span>{String(item)}</span>
                 </li>
               ))}

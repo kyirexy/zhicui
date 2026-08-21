@@ -17,8 +17,10 @@ interface CreatorSyncContextValue {
   activeRuns: CreatorSyncRun[];
   recentRuns: CreatorSyncRun[];
   loading: boolean;
+  lastUpdatedAt: number;
   refreshActive: () => Promise<void>;
   refreshRecent: () => Promise<CreatorSyncRun[]>;
+  refreshAll: () => Promise<void>;
   trackRun: (run: CreatorSyncRun) => void;
 }
 
@@ -29,6 +31,7 @@ export function CreatorSyncProvider({ children }: { children: React.ReactNode })
   const [activeRuns, setActiveRuns] = useState<CreatorSyncRun[]>([]);
   const [recentRuns, setRecentRuns] = useState<CreatorSyncRun[]>([]);
   const [loading, setLoading] = useState(false);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(0);
   const trackedRef = useRef<CreatorSyncRun[]>([]);
   const initializedRef = useRef(false);
 
@@ -40,7 +43,10 @@ export function CreatorSyncProvider({ children }: { children: React.ReactNode })
     if (!user) return [];
     const response = await listCreatorSyncRuns('recent');
     const next = response.data?.items || [];
-    if (response.success) setRecentRuns(next);
+    if (response.success) {
+      setRecentRuns(next);
+      setLastUpdatedAt(Date.now());
+    }
     return next;
   }, [user]);
 
@@ -56,6 +62,7 @@ export function CreatorSyncProvider({ children }: { children: React.ReactNode })
         .filter((run) => !nextIds.has(run.id))
         .map((run) => run.id);
       setActiveRuns(next);
+      setLastUpdatedAt(Date.now());
       if (!initial && completedIds.length) {
         const recent = await refreshRecent();
         const completed = recent.filter((run) => completedIds.includes(run.id));
@@ -65,8 +72,11 @@ export function CreatorSyncProvider({ children }: { children: React.ReactNode })
           }));
           if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
             const latest = completed[0];
-            new Notification('博主同步已完成', {
-              body: `新增 ${latest.new_count} · 已存在 ${latest.reused_count} · 失败 ${latest.failed_count}`,
+            const catalogRun = latest.operation === 'catalog_all';
+            new Notification(catalogRun ? '博主作品清单已更新' : '博主文稿任务已完成', {
+              body: catalogRun
+                ? `已发现 ${latest.discovered_count} 条公开作品`
+                : `新增 ${latest.new_count} · 已存在 ${latest.reused_count} · 失败 ${latest.failed_count}`,
               icon: '/icons/icon-192.png',
             });
           }
@@ -77,15 +87,21 @@ export function CreatorSyncProvider({ children }: { children: React.ReactNode })
     if (initial) setLoading(false);
   }, [refreshRecent, user]);
 
+  const refreshAll = useCallback(async () => {
+    await Promise.all([refreshActive(), refreshRecent()]);
+  }, [refreshActive, refreshRecent]);
+
   const trackRun = useCallback((run: CreatorSyncRun) => {
     trackedRef.current = [run, ...trackedRef.current.filter((item) => item.id !== run.id)];
     setActiveRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]);
+    setLastUpdatedAt(Date.now());
     window.dispatchEvent(new Event('vc:creator-sync-run-started'));
   }, []);
 
   useEffect(() => {
     if (authLoading) return;
     initializedRef.current = false;
+    trackedRef.current = [];
     setActiveRuns([]);
     setRecentRuns([]);
     if (!user) return;
@@ -113,10 +129,12 @@ export function CreatorSyncProvider({ children }: { children: React.ReactNode })
     activeRuns,
     recentRuns,
     loading,
+    lastUpdatedAt,
     refreshActive,
     refreshRecent,
+    refreshAll,
     trackRun,
-  }), [activeRuns, loading, recentRuns, refreshActive, refreshRecent, trackRun]);
+  }), [activeRuns, lastUpdatedAt, loading, recentRuns, refreshActive, refreshAll, refreshRecent, trackRun]);
 
   return <CreatorSyncContext.Provider value={value}>{children}</CreatorSyncContext.Provider>;
 }

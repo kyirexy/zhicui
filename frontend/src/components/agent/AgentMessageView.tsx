@@ -87,6 +87,12 @@ function AgentMessageView({
   onVideoAnalysisDecision,
 }: AgentMessageViewProps) {
   const isAssistant = message.role === 'assistant';
+  // DSH rows keep assistant output full-width all the way through streaming; a
+  // markdown-only pass has no `[object Object]`-style noise to hide, so it
+  // stays as the last visible source.
+  const liveContent = typeof message.content === 'string' ? message.content : '';
+  const streamed = streaming && liveContent.trim() !== '';
+  const claims = message.result?.claims || [];
   const evidenceCount = message.evidence?.length || 0;
   const transcriptEvidenceCount = message.evidence?.filter(
     (evidence) => evidence.source === 'transcript',
@@ -129,7 +135,7 @@ function AgentMessageView({
       : null,
   ].filter((part): part is string => Boolean(part));
   const displayContent = isAssistant
-    ? readableAssistantContent(message.content)
+    ? (streamed ? message.content : readableAssistantContent(message.content))
     : message.content;
 
   const copyAnswer = async () => {
@@ -255,7 +261,54 @@ function AgentMessageView({
             || agentTrace.length > 0
             || limitations.length > 0) && (
             <div className="video-agent-grounding-body">
-              {evidenceCount > 0 && (
+              {claims.length > 0 && (
+                <section className="video-agent-grounding-section is-claims">
+                  <header className="video-agent-grounding-section-header">
+                    <ListChecks size={16} />
+                    <h4>已验证观点</h4>
+                    <span>{claims.length}</span>
+                  </header>
+                  <ol className="video-agent-grounding-claims">
+                    {claims.map((claim, claimIndex) => (
+                      <li key={claim.claim_id || `claim-${claimIndex}`}>
+                        <header>
+                          <span className="video-agent-grounding-index">
+                            {claimIndex + 1}
+                          </span>
+                          <span>
+                            <strong>{claim.text}</strong>
+                            <small>
+                              已核验 {claim.support_count} 条视频 · 研究范围 {claim.research_source_count} 条
+                            </small>
+                          </span>
+                        </header>
+                        {claim.explanation && <p>{claim.explanation}</p>}
+                        <ul>
+                          {claim.evidence.map((evidence, evidenceIndex) => (
+                            <li key={`${claim.claim_id}-${evidence.note_id}-${evidenceIndex}`}>
+                              <a href={`/notes?id=${encodeURIComponent(evidence.note_id)}`}>
+                                {evidence.title || '视频原文'}
+                              </a>
+                              <small>
+                                {evidence.source === 'transcript'
+                                  ? '完整文案'
+                                  : evidence.source === 'visual'
+                                    ? `画面观察${formatTimestamp(evidence.timestamp_ms)
+                                      ? ` · ${formatTimestamp(evidence.timestamp_ms)}`
+                                      : ''}`
+                                    : '摘要笔记'}
+                              </small>
+                              <blockquote>“{evidence.quote}”</blockquote>
+                            </li>
+                          ))}
+                        </ul>
+                      </li>
+                    ))}
+                  </ol>
+                </section>
+              )}
+
+              {claims.length === 0 && evidenceCount > 0 && (
                 <section className="video-agent-grounding-section is-evidence">
                   <header className="video-agent-grounding-section-header">
                     <ListChecks size={16} />

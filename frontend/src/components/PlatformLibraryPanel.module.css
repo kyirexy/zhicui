@@ -49,7 +49,7 @@
 }
 
 .kicker {
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
   font-size: 0.75rem;
   font-weight: 700;
 }
@@ -135,7 +135,7 @@
   max-width: 190px;
   border-left: 1px solid var(--border, rgba(15, 23, 42, 0.1));
   padding-left: 14px;
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
 }
 
 .localOnly > span {
@@ -171,7 +171,7 @@
 }
 
 .accountCard[data-connected='true'] {
-  border-color: rgba(48, 48, 52, 0.24);
+  border-color: color-mix(in srgb, var(--accent-brand) 24%, transparent);
 }
 
 .accountCardHeader {
@@ -253,11 +253,11 @@
 }
 
 .connectionState[data-connected='true'] {
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
 }
 
 .connectionState[data-connected='true'] i {
-  background: var(--accent-emerald);
+  background: var(--accent-brand);
 }
 
 .accountStatus {
@@ -285,8 +285,8 @@
 }
 
 .accountStatus[data-stage='success'] {
-  background: rgba(48, 48, 52, 0.07);
-  color: var(--accent-emerald);
+  background: color-mix(in srgb, var(--accent-brand) 7%, transparent);
+  color: var(--accent-brand);
 }
 
 .accountStatus button {
@@ -340,9 +340,33 @@
 
 .syncActions .primarySyncButton,
 .connectAction > button {
-  border-color: var(--accent-emerald);
-  background: var(--accent-emerald);
+  border-color: var(--accent-brand);
+  background: var(--accent-brand);
   color: white;
+}
+
+.syncActions .modeSelector {
+  display: flex;
+  flex: 1 1 0;
+  gap: 6px;
+}
+
+.syncActions .modeSelector button {
+  flex: 1 1 0;
+  min-height: 44px;
+  padding: 0 10px;
+  gap: 6px;
+  border-color: var(--border, rgba(15, 23, 42, 0.1));
+  background: var(--background, #fff);
+  color: var(--foreground-secondary);
+  font-size: 0.8125rem;
+}
+
+.syncActions .modeSelector button[data-active='true'] {
+  border-color: var(--accent-brand);
+  background: var(--accent-brand-soft, rgba(16, 185, 129, 0.12));
+  color: var(--accent-brand);
+  box-shadow: inset 0 0 0 1px var(--accent-brand);
 }
 
 .connectAction > button {
@@ -594,11 +618,11 @@
   width: 42px;
   height: 42px;
   flex: 0 0 auto;
-  border: 1px solid color-mix(in srgb, var(--accent-emerald) 20%, var(--border, rgba(15, 23, 42, 0.1)));
+  border: 1px solid color-mix(in srgb, var(--accent-brand) 20%, var(--border, rgba(15, 23, 42, 0.1)));
   border-radius: 10px;
   place-items: center;
-  color: var(--accent-emerald);
-  background: color-mix(in srgb, var(--accent-emerald) 6%, var(--background, #fff));
+  color: var(--accent-brand);
+  background: color-mix(in srgb, var(--accent-brand) 6%, var(--background, #fff));
 }
 
 .inputRow {
@@ -631,7 +655,7 @@
 .accountManagement button:focus-visible,
 .accountStatus button:focus-visible,
 .disconnectDialogActions button:focus-visible {
-  outline: 2px solid var(--accent-emerald);
+  outline: 2px solid var(--accent-brand);
   outline-offset: 2px;
 }
 
@@ -652,7 +676,7 @@
   gap: 8px;
   border: 0;
   padding: 0 18px;
-  background: var(--accent-emerald);
+  background: var(--accent-brand);
   color: white;
 }
 
@@ -820,7 +844,7 @@
 }
 
 .results li[data-success='true'] svg {
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
 }
 
 .results li[data-success='false'] svg {
@@ -857,9 +881,9 @@
 }
 
 .filters button[data-active='true'] {
-  border-color: rgba(48, 48, 52, 0.28);
-  background: rgba(48, 48, 52, 0.09);
-  color: var(--accent-emerald);
+  border-color: color-mix(in srgb, var(--accent-brand) 28%, transparent);
+  background: color-mix(in srgb, var(--accent-brand) 9%, transparent);
+  color: var(--accent-brand);
 }
 
 .grid,
@@ -988,7 +1012,7 @@
 }
 
 .actions button {
-  color: var(--accent-emerald);
+  color: var(--accent-brand);
 }
 
 .empty {
@@ -1085,7 +1109,7 @@
 }
 
 .section[data-presentation='controls'] .accountCard[data-connected='true'] {
-  border-color: color-mix(in srgb, var(--accent-emerald) 24%, var(--border, rgba(15, 23, 42, 0.1)));
+  border-color: color-mix(in srgb, var(--accent-brand) 24%, var(--border, rgba(15, 23, 42, 0.1)));
 }
 
 .section[data-presentation='controls'] .accountCardHeader {
@@ -1360,7 +1384,14 @@
     grid-template-columns: 1fr;
   }
 
+  .syncActions,
+  .syncActions .modeSelector {
+    flex-direction: column;
+    width: 100%;
+  }
+
   .syncActions button,
+  .syncActions .modeSelector button,
   .connectAction > button,
   .accountManagement button,
   .accountStatus button {

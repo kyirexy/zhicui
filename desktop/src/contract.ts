@@ -31,6 +31,42 @@ export interface DesktopLoginResult {
   error?: string;
 }
 
+// ---------------------------------------------------------------------------
+// 知萃账号 桌面端 ↔ Web 联动登录
+// ---------------------------------------------------------------------------
+
+export type DesktopZhicuiLoginStage =
+  | 'starting'
+  | 'browser-open'
+  | 'waiting'
+  | 'success'
+  | 'cancelled'
+  | 'error';
+
+export interface DesktopZhicuiLoginStatus {
+  stage: DesktopZhicuiLoginStage;
+  message: string;
+}
+
+export interface DesktopZhicuiUser {
+  id: string;
+  email: string;
+  username: string | null;
+  is_active: boolean;
+  is_admin: boolean;
+}
+
+export interface DesktopZhicuiSession {
+  token: string;
+  user: DesktopZhicuiUser;
+}
+
+export interface DesktopZhicuiLoginResult {
+  success: boolean;
+  cancelled?: boolean;
+  error?: string;
+}
+
 export type PlatformAccountProvider = 'bilibili' | 'xiaohongshu';
 export type PlatformAccountSourceMode = 'like' | 'collect';
 export type PlatformAccountStage =
@@ -152,6 +188,14 @@ export interface ZhicuiDesktopBridge {
   revealMedia(awemeId: string): Promise<boolean>;
   onDouyinLoginStatus(
     listener: (status: DesktopLoginStatus) => void,
+  ): () => void;
+  beginZhicuiWebLogin(): Promise<DesktopZhicuiLoginResult>;
+  cancelZhicuiWebLogin(): Promise<DesktopZhicuiLoginResult>;
+  onZhicuiLoginStatus(
+    listener: (status: DesktopZhicuiLoginStatus) => void,
+  ): () => void;
+  onZhicuiSession(
+    listener: (session: DesktopZhicuiSession) => void,
   ): () => void;
   onPlatformAccountStatus(
     listener: (status: PlatformAccountStatus) => void,

@@ -15,7 +15,7 @@ export default function AndroidBanner() {
 
   return (
     <div className="glass-card p-4 mb-4 flex items-center gap-3 animate-fade-in">
-      <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-accent-emerald/15 flex items-center justify-center">
+      <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-accent-brand/15 flex items-center justify-center">
         <svg
           width="20"
           height="20"
@@ -25,7 +25,7 @@ export default function AndroidBanner() {
           strokeWidth="2"
           strokeLinecap="round"
           strokeLinejoin="round"
-          className="text-accent-emerald"
+          className="text-accent-brand"
         >
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
           <polyline points="7 10 12 15 17 10" />

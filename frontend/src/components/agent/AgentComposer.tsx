@@ -22,8 +22,8 @@ import {
   Gift,
   MagnifyingGlass,
   PaperPlaneTilt,
+  Plus,
   SlidersHorizontal,
-  Stop,
 } from '@phosphor-icons/react';
 import Anthropic from '@lobehub/icons/es/Anthropic/components/Mono';
 import AzureAI from '@lobehub/icons/es/AzureAI/components/Color';
@@ -52,11 +52,13 @@ import SiliconCloud from '@lobehub/icons/es/SiliconCloud/components/Color';
 import VertexAI from '@lobehub/icons/es/VertexAI/components/Color';
 import Volcengine from '@lobehub/icons/es/Volcengine/components/Color';
 import Zhipu from '@lobehub/icons/es/Zhipu/components/Color';
+import AgentModelConfigSheet, {
+  type ModelConfigDraft,
+  type ModelConfigSaveResult,
+} from '@/components/agent/AgentModelConfigSheet';
 import AgentOptionsSheet from '@/components/agent/AgentOptionsSheet';
-import type {
-  UserAIProviderConfig,
-  UserChatModel,
-} from '@/lib/api';
+import { useRouter } from 'next/navigation';
+import type { UserAIProviderConfig, UserChatModel } from '@/lib/api';
 import type {
   LibraryOutputStyle,
   LibraryResearchMode,
@@ -81,6 +83,7 @@ interface AgentComposerProps {
   modelCatalogLoading: boolean;
   modelError: string;
   modelSaving: boolean;
+  modelConfigSaving: boolean;
   outputLabel: string;
   outputStyle: LibraryOutputStyle;
   researchMode: LibraryResearchMode;
@@ -95,6 +98,7 @@ interface AgentComposerProps {
   onChangeCustomInstruction: (value: string) => void;
   onChangeModel: (modelId: string) => void;
   onOpenSources: (trigger: HTMLButtonElement) => void;
+  onConfigureCustomModel: (value: ModelConfigDraft, action: 'save' | 'test' | 'reset') => Promise<ModelConfigSaveResult | null>;
   onApplyOptions: (
     researchMode: LibraryResearchMode,
     outputStyle: LibraryOutputStyle,
@@ -131,7 +135,7 @@ function getModelIdentity(option: ComposerModelOption) {
 }
 
 function getModelGroupId(option: ComposerModelOption): typeof MODEL_GROUPS[number]['id'] {
-  return option.id === '__custom__' ? 'custom' : 'platform';
+  return option.id === '__custom__' || option.id.startsWith('custom:') ? 'custom' : 'platform';
 }
 
 function ComposerModelIcon({
@@ -230,6 +234,9 @@ function ComposerModelIcon({
   if (option.id === '__platform__') {
     return <Brain size={size} weight="duotone" aria-hidden="true" />;
   }
+  if (option.id.startsWith('custom:')) {
+    return <Cloud size={size} weight="regular" aria-hidden="true" />;
+  }
   return <Cpu size={size} weight="duotone" aria-hidden="true" />;
 }
 
@@ -244,6 +251,7 @@ const AgentComposer = memo(forwardRef<AgentComposerHandle, AgentComposerProps>(
     modelCatalogLoading,
     modelError,
     modelSaving,
+    modelConfigSaving,
     outputLabel,
     outputStyle,
     researchMode,
@@ -258,11 +266,13 @@ const AgentComposer = memo(forwardRef<AgentComposerHandle, AgentComposerProps>(
     onChangeCustomInstruction,
     onChangeModel,
     onOpenSources,
+    onConfigureCustomModel,
     onApplyOptions,
     onStop,
     onSubmitQuestion,
   }, ref) {
     const isMobile = useIsMobile();
+    const router = useRouter();
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
     const modelPickerRef = useRef<HTMLDivElement | null>(null);
     const modelTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -272,6 +282,18 @@ const AgentComposer = memo(forwardRef<AgentComposerHandle, AgentComposerProps>(
     const [modelMenuOpen, setModelMenuOpen] = useState(false);
     const [modelMenuPosition, setModelMenuPosition] = useState<ModelMenuPosition | null>(null);
     const [modelQuery, setModelQuery] = useState('');
+    const [modelConfigOpen, setModelConfigOpen] = useState(false);
+    const [modelConfigBusy, setModelConfigBusy] = useState<'' | 'save' | 'test' | 'reset'>('');
+    const [modelConfigDraft, setModelConfigDraft] = useState<ModelConfigDraft>({
+      providerName: 'OpenAI Compatible',
+      model: '',
+      apiBase: '',
+      apiKey: '',
+    });
+    const [modelConfigFeedback, setModelConfigFeedback] = useState<{
+      error: string;
+      success: string;
+    }>({ error: '', success: '' });
     const [optionsOpen, setOptionsOpen] = useState(false);
     const [draftResearchMode, setDraftResearchMode] = useState(researchMode);
     const [draftOutputStyle, setDraftOutputStyle] = useState(outputStyle);
@@ -291,16 +313,16 @@ const AgentComposer = memo(forwardRef<AgentComposerHandle, AgentComposerProps>(
             : `今日可用 ${item.free_remaining_today ?? 0}/${item.free_daily_limit} 次`
           : `${item.points_per_request} 萃点/次`,
       }));
-      if (aiProviderConfig?.mode === 'custom') {
+      (aiProviderConfig?.custom_models ?? []).forEach((item) => {
         options.push({
-          id: '__custom__',
-          name: aiProviderConfig.model,
-          provider: aiProviderConfig.provider_name || '自带供应商',
+          id: `custom:${item.id}`,
+          name: item.name || item.provider_name,
+          provider: item.provider_name || '自带供应商',
           free: false,
           points: 0,
-          detail: '使用你的 API Key',
+          detail: item.enabled ? '使用你的 API Key' : '已停用',
         });
-      }
+      });
       return options;
     }, [aiProviderConfig, availableModels]);
 
@@ -397,6 +419,68 @@ const AgentComposer = memo(forwardRef<AgentComposerHandle, AgentComposerProps>(
       modelTriggerRef.current?.focus();
     };
 
+    const openModelConfig = () => {
+      setModelMenuOpen(false);
+      setModelQuery('');
+      const customConfig = aiProviderConfig?.mode === 'custom' ? aiProviderConfig : null;
+      setModelConfigDraft({
+        providerName: customConfig?.provider_name || 'OpenAI Compatible',
+        model: customConfig?.model || '',
+        apiBase: customConfig?.api_base || '',
+        apiKey: '',
+      });
+      setModelConfigFeedback({ error: '', success: '' });
+      setModelConfigOpen(true);
+    };
+
+    const goToModelSettings = () => {
+      setModelMenuOpen(false);
+      setModelQuery('');
+      router.push('/settings?section=models');
+    };
+
+    const closeModelConfig = () => {
+      setModelConfigOpen(false);
+      setModelConfigBusy('');
+      setModelConfigFeedback({ error: '', success: '' });
+      modelTriggerRef.current?.focus();
+    };
+
+    const patchModelConfig = (patch: Partial<ModelConfigDraft>) => {
+      setModelConfigDraft((current) => ({ ...current, ...patch }));
+    };
+
+    const runModelConfigAction = async (action: 'save' | 'test' | 'reset') => {
+      if (modelConfigBusy) return;
+      setModelConfigBusy(action);
+      setModelConfigFeedback({ error: '', success: '' });
+      const result = await onConfigureCustomModel(modelConfigDraft, action);
+      setModelConfigBusy('');
+      if (result) {
+        setModelConfigFeedback(
+          result.kind === 'tested'
+            ? { error: '', success: result.label }
+            : { error: '', success: result.label },
+        );
+      }
+      if (result?.kind === 'saved' || result?.kind === 'reset') {
+        setModelConfigOpen(false);
+      }
+    };
+
+    useEffect(() => {
+      if (!modelConfigOpen) return;
+      const closeOnEscape = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') {
+          closeModelConfig();
+        }
+      };
+      document.addEventListener('keydown', closeOnEscape);
+      return () => {
+        document.removeEventListener('keydown', closeOnEscape);
+      };
+    }, [modelConfigOpen]);
+
     useImperativeHandle(ref, () => ({
       clear: () => setQuestion(''),
       focus: () => textareaRef.current?.focus(),
@@ -412,6 +496,7 @@ const AgentComposer = memo(forwardRef<AgentComposerHandle, AgentComposerProps>(
     };
 
     const openOptions = () => {
+      setModelConfigOpen(false);
       setModelMenuOpen(false);
       setModelQuery('');
       setDraftResearchMode(researchMode);
@@ -518,14 +603,16 @@ const AgentComposer = memo(forwardRef<AgentComposerHandle, AgentComposerProps>(
                               role="option"
                               aria-selected={active}
                               className={active ? 'is-active' : ''}
-                              onClick={() => chooseModel(option.id)}
+                              onClick={() => (
+                                option.id === '__custom__' ? openModelConfig() : chooseModel(option.id)
+                              )}
                             >
                               <span className="video-agent-model-glyph" aria-hidden="true">
                                 <ComposerModelIcon option={option} size={18} />
                               </span>
                               <span>
                                 <strong>{option.name}</strong>
-                                <small>{isMobile && option.id === '__custom__' ? '已连接' : option.detail}</small>
+                                <small>{isMobile && option.id === '__custom__' ? '点按编辑连接' : option.id === '__custom__' ? '点按编辑连接' : option.detail}</small>
                               </span>
                               <em aria-label={option.free ? '已包含额度' : option.points > 0 ? `${option.points} 萃点` : '自定义模型'} title={option.free ? '已包含额度' : undefined}>
                                 {option.free ? <Gift size={15} weight="duotone" aria-hidden="true" /> : option.points > 0 ? `${option.points} 萃点` : '自定义'}
@@ -539,6 +626,15 @@ const AgentComposer = memo(forwardRef<AgentComposerHandle, AgentComposerProps>(
                       <p>{isMobile ? '没有找到匹配的回答方式' : '没有找到匹配的模型'}</p>
                     )}
                   </div>
+                  <button
+                    type="button"
+                    className="video-agent-model-config-link"
+                    onClick={goToModelSettings}
+                  >
+                    <Plus size={15} weight="bold" aria-hidden="true" />
+                    <span>配置自定义模型</span>
+                    {(aiProviderConfig?.custom_models?.length ?? 0) > 0 && <em>已接入 {(aiProviderConfig?.custom_models ?? []).length} 个</em>}
+                  </button>
                 </section>
               )}
             </div>
@@ -547,7 +643,7 @@ const AgentComposer = memo(forwardRef<AgentComposerHandle, AgentComposerProps>(
             </span>
           </div>
 
-          {modelError && (
+          {modelError && !modelConfigOpen && (
             <div className="video-agent-model-error" role="alert">
               {modelError}
             </div>
@@ -646,11 +742,12 @@ const AgentComposer = memo(forwardRef<AgentComposerHandle, AgentComposerProps>(
                 type="button"
                 className="video-agent-send is-stop"
                 onClick={onStop}
-                aria-label="停止等待，后台继续处理"
-                title="停止等待，后台继续处理"
+                aria-label="停止生成"
+                title="停止生成"
               >
-                <Stop size={16} weight="fill" />
-                <span>停止</span>
+                <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                  <rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor" />
+                </svg>
               </button>
             ) : (
               <button
@@ -665,6 +762,22 @@ const AgentComposer = memo(forwardRef<AgentComposerHandle, AgentComposerProps>(
           </div>
         </form>
         </footer>
+
+        <AgentModelConfigSheet
+          open={modelConfigOpen}
+          busy={modelConfigBusy}
+          apiKeySet={aiProviderConfig?.api_key_set || false}
+          apiKeyMasked={aiProviderConfig?.api_key_masked || ''}
+          draft={modelConfigDraft}
+          disabled={modelConfigSaving}
+          error={modelConfigFeedback.error || (modelConfigOpen ? modelError : '')}
+          success={modelConfigFeedback.success}
+          onDraftChange={patchModelConfig}
+          onSave={() => void runModelConfigAction('save')}
+          onTest={() => void runModelConfigAction('test')}
+          onReset={() => void runModelConfigAction('reset')}
+          onClose={closeModelConfig}
+        />
       </>
     );
   },

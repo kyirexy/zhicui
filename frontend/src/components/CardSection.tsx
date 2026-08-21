@@ -95,7 +95,7 @@ function formatContent(content: string): React.ReactNode {
 export default function CardSection({
   section,
   index,
-  accentColor = 'var(--accent-emerald)',
+  accentColor = 'var(--accent-brand)',
 }: CardSectionProps) {
   const emoji = section.emoji || '📌';
 

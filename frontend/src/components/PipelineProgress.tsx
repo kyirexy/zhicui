@@ -27,8 +27,8 @@ export default function PipelineProgress({ steps }: PipelineProgressProps) {
       {/* Pulsing orb header */}
       <div className="flex items-center justify-center gap-2.5 mb-6">
         <div className="relative">
-          <div className="w-2.5 h-2.5 rounded-full bg-accent-emerald animate-pulse" />
-          <div className="absolute inset-0 w-2.5 h-2.5 rounded-full bg-accent-emerald animate-ping opacity-40" />
+          <div className="w-2.5 h-2.5 rounded-full bg-accent-brand animate-pulse" />
+          <div className="absolute inset-0 w-2.5 h-2.5 rounded-full bg-accent-brand animate-ping opacity-40" />
         </div>
         <span className="text-sm font-medium text-foreground-secondary">
           AI 正在处理中...
@@ -51,9 +51,9 @@ export default function PipelineProgress({ steps }: PipelineProgressProps) {
                   <div
                     className={`h-full w-px transition-colors duration-500 ${
                       status === 'done'
-                        ? 'bg-accent-emerald/40'
+                        ? 'bg-accent-brand/40'
                         : status === 'active'
-                          ? 'bg-accent-emerald/20'
+                          ? 'bg-accent-brand/20'
                           : 'bg-card-border'
                     }`}
                   />
@@ -65,9 +65,9 @@ export default function PipelineProgress({ steps }: PipelineProgressProps) {
                 <div
                   className={`w-8 h-8 rounded-full flex items-center justify-center transition-all duration-500 ${
                     status === 'done'
-                      ? 'bg-accent-emerald/15 border border-accent-emerald/30 text-accent-emerald'
+                      ? 'bg-accent-brand/15 border border-accent-brand/30 text-accent-brand'
                       : status === 'active'
-                        ? 'bg-accent-emerald/10 border border-accent-emerald/25 text-accent-emerald'
+                        ? 'bg-accent-brand/10 border border-accent-brand/25 text-accent-brand'
                         : status === 'error'
                           ? 'bg-accent-rose/10 border border-accent-rose/25 text-accent-rose'
                           : 'bg-card-bg border border-card-border text-foreground-muted'

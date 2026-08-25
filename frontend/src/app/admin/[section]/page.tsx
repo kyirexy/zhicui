@@ -558,6 +558,7 @@ export default function AdminPage() {
                   <StatCard label="注册用户" value={stats.users} icon={Users} featured />
                   <StatCard label="知识笔记" value={stats.notes} icon={FileText} />
                   <StatCard label="行动计划" value={stats.plans} icon={ListTodo} />
+                  <StatCard label="客户端下载" value={stats.downloads.total} icon={Download} />
                 </section>
 
                 <section className={`${styles.healthPanel} admin-panel`} aria-label="系统状态">
@@ -580,32 +581,25 @@ export default function AdminPage() {
                   )}
                 </section>
               </div>
-              {stats.type_dist && Object.keys(stats.type_dist).length > 0 && (
-                <div className={`${styles.distributionPanel} admin-panel p-4`}>
-                  <div className={styles.panelTitle}>
-                    <span>
-                      <ChartNoAxesCombined size={17} aria-hidden="true" />
-                      <strong>笔记类型分布</strong>
-                    </span>
-                    <small>共 {stats.notes} 条</small>
-                  </div>
-                  <div className="space-y-1.5">
-                    {Object.entries(stats.type_dist).map(([k, v]) => {
-                      const max = Math.max(...Object.values(stats.type_dist));
-                      return (
-                        <div key={k} className="flex items-center gap-2 text-xs">
-                          <span className="w-12 text-foreground-muted">{CARD_TYPE_LABELS[k] || k}</span>
-                          <div className="flex-1 h-4 rounded bg-[var(--admin-surface-2)] overflow-hidden">
-                            <div className="h-full bg-accent-brand/60" style={{ width: `${Math.round((Number(v) / max) * 100)}%` }} />
-                          </div>
-                          <span className="w-8 text-right font-medium text-foreground">{v}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
+              <section className="admin-panel p-4" aria-label="客户端下载统计">
+                <div className={styles.panelTitle}>
+                  <span><Download size={17} aria-hidden="true" /><strong>客户端下载量</strong></span>
+                  <small>统计下载启动次数，不代表唯一用户或安装完成数</small>
                 </div>
-              )}
-
+                <div className="grid gap-3 sm:grid-cols-4">
+                  <div className="rounded-xl bg-[var(--admin-surface-2)] p-3"><div className="text-xs text-foreground-muted">今日</div><strong className="mt-1 block text-xl text-foreground">{stats.downloads.today}</strong></div>
+                  <div className="rounded-xl bg-[var(--admin-surface-2)] p-3"><div className="text-xs text-foreground-muted">近 7 日</div><strong className="mt-1 block text-xl text-foreground">{stats.downloads.last_7_days}</strong></div>
+                  <div className="rounded-xl bg-[var(--admin-surface-2)] p-3"><div className="text-xs text-foreground-muted">Android</div><strong className="mt-1 block text-xl text-foreground">{stats.downloads.by_platform.android}</strong></div>
+                  <div className="rounded-xl bg-[var(--admin-surface-2)] p-3"><div className="text-xs text-foreground-muted">Windows</div><strong className="mt-1 block text-xl text-foreground">{stats.downloads.by_platform.windows}</strong></div>
+                </div>
+                <div className="mt-4 flex h-24 items-end gap-1" aria-label="最近 14 天下载趋势">
+                  {stats.downloads.daily.map((item) => {
+                    const peak = Math.max(1, ...stats.downloads.daily.map((day) => day.count));
+                    return <div key={item.date} className="group flex min-w-0 flex-1 items-end" title={`${item.date}：${item.count} 次`}><div className="w-full rounded-t bg-accent-brand/65 transition-colors group-hover:bg-accent-brand" style={{ height: `${Math.max(item.count ? 10 : 2, Math.round((item.count / peak) * 100))}%` }} /></div>;
+                  })}
+                </div>
+                <div className="mt-1 flex justify-between text-[11px] text-foreground-muted"><span>{stats.downloads.daily[0]?.date.slice(5)}</span><span>最近 14 天</span><span>{stats.downloads.daily.at(-1)?.date.slice(5)}</span></div>
+              </section>
               <section className="admin-panel overflow-hidden" aria-label="模型服务状态">
                 <div className={styles.panelTitle}>
                   <span>
@@ -1074,10 +1068,10 @@ export default function AdminPage() {
                     const result = await putAgentV2AdminConfig(value);
                     if (result.success && result.data) {
                       setAgentV2Config(result.data);
-                      flash('知萃 Harness V2 配置已保存');
+                      flash('知萃 AI 配置已保存');
                       return true;
                     }
-                    setErr(result.error || 'Harness V2 配置保存失败');
+                    setErr(result.error || '知萃 AI 配置保存失败');
                     return false;
                   }}
                 />
@@ -1530,7 +1524,7 @@ function AgentV2ConfigPanel({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 id="agent-v2-config-title" className="text-balance text-base font-semibold text-foreground">
-            知萃 Harness V2
+            知萃 AI
           </h2>
           <p className="mt-1 max-w-2xl text-pretty text-xs leading-5 text-foreground-muted">
             开启持久 Turn、断线恢复、自动深度研究、逐条观点校验与兼容模式降级。建议先把自己的用户 ID 加入白名单验证，再逐步提高比例。
@@ -1601,7 +1595,7 @@ function AgentV2ConfigPanel({
         }}
         className="mt-4 min-h-11 rounded-lg bg-accent-brand px-4 text-sm font-semibold text-white hover:bg-accent-brand/90 disabled:opacity-50"
       >
-        {saving ? '保存中…' : '保存 Harness V2 设置'}
+        {saving ? '保存中…' : '保存知萃 AI 设置'}
       </button>
     </section>
   );
@@ -1623,7 +1617,11 @@ function CreatorSyncConfigPanel({
   onTest: (
     platform: 'douyin' | 'bilibili' | 'xiaohongshu',
     profileRef?: string,
-  ) => Promise<ApiResponse<{ healthy: boolean; message?: string }>>;
+  ) => Promise<ApiResponse<{
+    healthy: boolean;
+    catalog_healthy?: boolean;
+    message?: string;
+  }>>;
 }) {
   const [enabled, setEnabled] = useState(config.enabled);
   const [cookie, setCookie] = useState('');
@@ -1714,7 +1712,7 @@ function CreatorSyncConfigPanel({
               const result = await onTest(testPlatform, testProfile);
               setTesting(false);
               setLocalMessage(result.success && result.data?.healthy
-                ? '连接测试通过'
+                ? result.data.message || '连接测试通过'
                 : result.error || result.data?.message || '连接测试未通过');
             }}
             className="min-h-11 rounded-lg border border-card-border px-4 text-sm font-semibold text-foreground disabled:opacity-50"

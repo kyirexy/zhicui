@@ -18,7 +18,7 @@ export default function QRCodeDownload() {
           <div className="flex-shrink-0 bg-white p-3 rounded-xl">
             {url && (
               <QRCodeSVG
-                value={`${url}/download/zhicui.apk`}
+                value={`${url}/api/client-downloads/android`}
                 size={140}
                 level="M"
                 bgColor="#ffffff"
@@ -34,8 +34,7 @@ export default function QRCodeDownload() {
               扫描二维码，直接安装 APK 到手机
             </p>
             <a
-              href="/download/zhicui.apk"
-              download
+              href="/api/client-downloads/android"
               className="btn-primary inline-flex items-center gap-2 px-4 py-2 text-sm font-medium mb-3 min-h-[44px]"
             >
               <svg
@@ -68,8 +67,7 @@ export default function QRCodeDownload() {
           📱 获取应用
         </h3>
         <a
-          href="/download/zhicui.apk"
-          download
+          href="/api/client-downloads/android"
           className="btn-primary flex items-center justify-center gap-2 w-full px-4 py-3 text-sm font-medium mb-4"
         >
           <svg

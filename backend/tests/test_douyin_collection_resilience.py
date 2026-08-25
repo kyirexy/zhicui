@@ -1,0 +1,81 @@
+from __future__ import annotations
+
+import unittest
+from unittest.mock import patch
+
+from app.services import douyin_library
+
+
+class DouyinCollectionResilienceTests(unittest.TestCase):
+    def test_job_diagnostics_are_normalized_and_bounded(self):
+        result = douyin_library._safe_job_diagnostics(
+            {
+                "mode": "collection",
+                "error_code": "source_blocked",
+                "channel": "circuit_breaker",
+                "fallback_attempted": True,
+                "retry_after_seconds": 999999,
+                "needs_action": False,
+                "cookie": "must-not-escape",
+            }
+        )
+
+        self.assertEqual(result["source_mode"], "collect")
+        self.assertEqual(result["error_code"], "source_blocked")
+        self.assertEqual(result["channel"], "circuit_breaker")
+        self.assertEqual(result["retry_after_seconds"], 21600)
+        self.assertNotIn("cookie", result)
+
+    def test_connection_status_keeps_account_and_source_capability_separate(self):
+        responses = [
+            {
+                "status": "ok",
+                "storage_mode": "metadata_only",
+                "max_sync_count": 100,
+                "capabilities": ["creator_catalog", "collection_resilience", "unsafe"],
+                "collection_resilience": {
+                    "enabled": True,
+                    "api_first": True,
+                    "browser_fallback": True,
+                    "browser_headless": True,
+                    "cooldown_seconds": 900,
+                    "cooldown_cap_seconds": 21600,
+                },
+            },
+            {"valid": True, "count": 12},
+        ]
+        with patch.object(douyin_library, "_request", side_effect=responses):
+            status = douyin_library.connection_status("scope-safe")
+
+        self.assertTrue(status["connected"])
+        self.assertTrue(status["cookie_valid"])
+        self.assertEqual(
+            status["capabilities"],
+            ["creator_catalog", "collection_resilience"],
+        )
+        self.assertTrue(status["collection_resilience"]["browser_headless"])
+
+    def test_get_job_preserves_only_safe_diagnostics(self):
+        payload = {
+            "job_id": "safe-job",
+            "status": "failed",
+            "mode": "collection",
+            "error": "收藏暂不可读取",
+            "error_code": "source_blocked",
+            "channel": "browser",
+            "fallback_attempted": True,
+            "retry_after_seconds": 900,
+            "needs_action": False,
+            "authorization": "secret",
+        }
+        with patch.object(douyin_library, "_request", return_value=payload):
+            result = douyin_library.get_job("scope-safe", "safe-job")
+
+        self.assertEqual(result["source_mode"], "collect")
+        self.assertEqual(result["channel"], "browser")
+        self.assertEqual(result["retry_after_seconds"], 900)
+        self.assertNotIn("authorization", result)
+
+
+if __name__ == "__main__":
+    unittest.main()

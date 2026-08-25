@@ -559,14 +559,6 @@
   font-size: 0.72rem;
 }
 
-.distributionPanel {
-  padding: 0 !important;
-}
-
-.distributionPanel > div:last-child {
-  padding: 0.8rem 1rem 1rem;
-}
-
 .panelTitle {
   margin: 0 !important;
 }

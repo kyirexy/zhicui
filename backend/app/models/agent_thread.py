@@ -73,6 +73,12 @@ class AgentThread(Base):
     source_truncated: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
+    context_type: Mapped[str] = mapped_column(
+        String(24), default="video", nullable=False
+    )
+    context_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, index=True
+    )
     status: Mapped[str] = mapped_column(
         String(24), default="ready", nullable=False
     )
@@ -104,6 +110,8 @@ class AgentThread(Base):
             "source_available_count": self.source_available_count,
             "source_selected_count": self.source_selected_count,
             "source_truncated": bool(self.source_truncated),
+            "context_type": self.context_type or "video",
+            "context_id": self.context_id,
             "status": self.status,
             "created_at": _iso_utc(self.created_at),
             "updated_at": _iso_utc(self.updated_at),

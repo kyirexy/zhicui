@@ -11,7 +11,7 @@ WorkingDirectory=/opt/yutto-sidecar
 Environment=PYTHONUTF8=1
 Environment=PYTHONIOENCODING=utf-8
 Environment=HOME=/opt/yutto-sidecar
-ExecStart=/opt/yutto-sidecar/.venv/bin/yutto serve --host 127.0.0.1 --port 11223 --token-file /opt/yutto-sidecar/server.token --download-root /opt/yutto-sidecar/blocked-downloads --tmp-root /opt/yutto-sidecar/tmp --max-fetch-workers 16 --max-download-workers 1 --task-limit 64 --jobs 1
+ExecStart=/opt/yutto-sidecar/.venv/bin/yutto serve --host 127.0.0.1 --port 11223 --token-file /opt/yutto-sidecar/server.token --download-root /opt/yutto-sidecar/blocked-downloads --tmp-root /opt/yutto-sidecar/tmp --max-fetch-workers 16 --max-download-workers 8 --task-limit 64 --jobs 1
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30

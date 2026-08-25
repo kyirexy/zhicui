@@ -663,7 +663,7 @@ class CreatorCatalogServiceTests(unittest.TestCase):
 
 
 class CreatorConnectorAdminGateTests(unittest.TestCase):
-    def test_bilibili_profile_test_requires_catalog_health(self) -> None:
+    def test_bilibili_profile_test_keeps_recent_available_when_catalog_is_unhealthy(self) -> None:
         from app.api import routes
 
         body = routes.CreatorConnectorTestRequest(
@@ -696,9 +696,12 @@ class CreatorConnectorAdminGateTests(unittest.TestCase):
                 current_user=SimpleNamespace(id="admin-1"),
             )
 
-        self.assertFalse(result["success"])
+        self.assertTrue(result["success"])
+        self.assertTrue(result["data"]["healthy"])
+        self.assertFalse(result["data"]["catalog_healthy"])
         record_test.assert_called_once()
-        self.assertFalse(record_test.call_args.kwargs["healthy"])
+        self.assertTrue(record_test.call_args.kwargs["healthy"])
+        self.assertFalse(record_test.call_args.kwargs["catalog_healthy"])
 
     def test_xiaohongshu_profile_test_keeps_recent_only_health_gate(self) -> None:
         from app.api import routes
@@ -791,6 +794,24 @@ class CreatorCatalogMigrationTests(unittest.TestCase):
                     "VALUES ('bad','source-1',7,0)"
                 ))
         engine.dispose()
+
+    def test_silent_douyin_work_uses_creator_caption_as_text_fallback(self) -> None:
+        transcript = library_extraction_service._metadata_transcript_fallback({
+            "title": "九秒文字作品",
+            "caption": "这里是创作者发布的完整说明，内容足以作为可搜索文稿。",
+        })
+        self.assertIn("【作品标题】", transcript)
+        self.assertIn("九秒文字作品", transcript)
+        self.assertIn("【作品发布文案】", transcript)
+
+    def test_caption_fallback_rejects_empty_or_too_short_metadata(self) -> None:
+        self.assertEqual(
+            library_extraction_service._metadata_transcript_fallback({
+                "title": "没有语音",
+                "caption": "太短",
+            }),
+            "",
+        )
 
 
 if __name__ == "__main__":

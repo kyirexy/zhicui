@@ -574,7 +574,10 @@ export default function AgentSourceSyncSheet({
     >
       <section className={styles.panel} role="dialog" aria-modal={open || undefined} aria-label="同步视频">
         <header className={styles.header}>
-          <h2>同步视频</h2>
+          <div>
+            <h2>同步视频</h2>
+            <p>仅在你点击同步按钮后读取平台资料</p>
+          </div>
           <button type="button" className={styles.close} onClick={closeOrBackground} aria-label={busy ? '收起并后台运行' : '关闭同步视频'}><X size={18} /></button>
         </header>
         <div className={styles.content}>
@@ -685,7 +688,7 @@ export default function AgentSourceSyncSheet({
                   </div>
                   <span>条</span>
                 </div>
-                <p>新视频会在后台准备普通文稿，不会自动分析画面。</p>
+                <p>不会定时或启动时自动同步；点击下方按钮后，新视频会在后台准备普通文稿。</p>
                 <button className={styles.primary} type="button" disabled={pending} data-loading={pending} onClick={syncDouyin}>
                   {pending ? <SpinnerGap size={18} weight="bold" aria-hidden="true" /> : <CloudArrowDown size={19} weight="bold" aria-hidden="true" />}
                   <span>{pending ? '正在同步' : `同步抖音${douyinMode === 'collect' ? '收藏' : '喜欢'}`}</span>
@@ -724,7 +727,7 @@ export default function AgentSourceSyncSheet({
                       </div>
                     </>
                   ) : (
-                    <p>登录你自己的 B站 账号，同步收藏和点赞过的视频；登录状态仅保存在本机。</p>
+                    <p>登录状态仅保存在本机；连接成功后仍需手动点击同步，不会自动读取视频。</p>
                   )}
 
                   {biliMessage && <p className={styles.status} role="status" aria-live="polite" data-error={biliStage === 'error'}>{biliMessage}</p>}

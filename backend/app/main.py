@@ -32,6 +32,7 @@ from app.models.admin_audit_log import AdminAuditLog  # noqa: F401
 from app.models.llm_usage_log import LlmUsageLog  # noqa: F401
 from app.models.user_activity_log import UserActivityLog  # noqa: F401
 from app.models.application_error_log import ApplicationErrorLog  # noqa: F401
+from app.models.client_download_daily import ClientDownloadDaily  # noqa: F401
 from app.models.feedback import Feedback  # noqa: F401
 from app.models.library_hidden_item import LibraryHiddenItem  # noqa: F401
 from app.models.douyin_account_binding import DouyinAccountBinding  # noqa: F401
@@ -640,6 +641,25 @@ def _migrate_db() -> None:
                 conn.execute(text(
                     "ALTER TABLE plans ADD COLUMN completed_at TIMESTAMP NULL"
                 ))
+        if insp.has_table("agent_threads"):
+            thread_cols = {c["name"] for c in insp.get_columns("agent_threads")}
+            if "context_type" not in thread_cols:
+                conn.execute(text(
+                    "ALTER TABLE agent_threads ADD COLUMN "
+                    "context_type VARCHAR(24) NOT NULL DEFAULT 'video'"
+                ))
+            if "context_id" not in thread_cols:
+                conn.execute(text(
+                    "ALTER TABLE agent_threads ADD COLUMN context_id VARCHAR(36) NULL"
+                ))
+            conn.execute(text(
+                "UPDATE agent_threads SET context_type = 'video' "
+                "WHERE context_type IS NULL OR context_type = ''"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_agent_threads_context_id "
+                "ON agent_threads (context_id)"
+            ))
         if insp.has_table("video_source_ledgers"):
             ledger_cols = {
                 c["name"] for c in insp.get_columns("video_source_ledgers")

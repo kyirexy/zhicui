@@ -12,7 +12,7 @@ index 43ac08ab7c75823c341a4051e53da756f1bab94d..0d525011854fa93b31b2ddbbf370a55e
  | Highest-quality selection | Auto-picks highest bitrate from `video.bit_rate` ladder (video + live-photo) |
  | **Live stream recording** | `live.douyin.com/{room_id}` → FLV/HLS, preserves partial data on stream end |
 @@ -72,8 +72,8 @@ _Screenshots were captured from the current desktop `main` build. Demonstration
-
+ 
  - Browser fallback is fully validated for `post`; `like/mix/music` currently relies on API pagination
  - `number.allmix` / `increase.allmix` are retained as compatibility aliases and normalized to `mix`
 -- `collect` / `collectmix` currently work for the account represented by the logged-in cookies only
@@ -23,17 +23,17 @@ index 43ac08ab7c75823c341a4051e53da756f1bab94d..0d525011854fa93b31b2ddbbf370a55e
  - Live stream recording saves FLV natively; HLS sources only save the playlist (use ffmpeg for playable output)
  - The webcast room endpoint is not verified against every live scenario — treat as experimental
 @@ -131,6 +131,7 @@ mode:
-
+ 
  number:
    post: 0
 +  collection: 0
    collect: 0
    collectmix: 0
-
+ 
 @@ -268,7 +269,18 @@ mode:
-
+ 
  Cross-mode deduplication: the same aweme_id won't be downloaded twice across different modes.
-
+ 
 -### Download logged-in favorites collection items
 +### Download all/default collected videos
 +
@@ -47,11 +47,11 @@ index 43ac08ab7c75823c341a4051e53da756f1bab94d..0d525011854fa93b31b2ddbbf370a55e
 +```
 +
 +### Download manually-created favorites folders
-
+ 
  ```yaml
  link:
 @@ -439,8 +451,8 @@ pytest -q
-
+ 
  | Field | Description |
  |-------|-------------|
 -| `mode` | Supports `post`/`like`/`mix`/`music`; logged-in favorites mode additionally supports standalone `collect`/`collectmix` |
@@ -62,38 +62,50 @@ index 43ac08ab7c75823c341a4051e53da756f1bab94d..0d525011854fa93b31b2ddbbf370a55e
  | `start_time` / `end_time` | Time filter (format: `YYYY-MM-DD`) |
  | `folderstyle` | Create per-item subdirectories |
 diff --git a/config.example.yml b/config.example.yml
-index adb0afdda88a9d64ae32cb3d30358f95ee8b56f0..cf650bf5ef49517902866142ffb05108040cb4fe 100644
+index ac75464af34be8b76fa9219275ebc617c07489c0..2e1d7a753fad5d653fd28ff17c82a2f1094dc1a0 100644
 --- a/config.example.yml
 +++ b/config.example.yml
-@@ -45,6 +45,7 @@ number:
+@@ -39,6 +39,7 @@ number:
    allmix: 0
    mix: 0
    music: 0
 +  collection: 0
    collect: 0
    collectmix: 0
-
-@@ -54,6 +55,7 @@ increase:
+ 
+@@ -48,6 +49,7 @@ increase:
    allmix: false
    mix: false
    music: false
 +  collection: false
-
+ 
  thread: 5
  retry_times: 3
-@@ -129,6 +131,7 @@ notifications:
-
+@@ -79,7 +81,7 @@ transcript:
+ 
+ browser_fallback:
+   enabled: true
+-  headless: false
++  headless: true
+   max_scrolls: 240
+   idle_rounds: 8
+   wait_timeout_seconds: 600
+@@ -118,6 +120,10 @@ notifications:
+ 
  # REST API 服务模式（可选，需额外安装 fastapi + uvicorn）
  server:
 +  metadata_only: true
++  collection_resilience_enabled: true
++  collection_cooldown_seconds: 900
++  collection_cooldown_cap_seconds: 21600
    max_jobs: 500
    job_ttl_seconds: 86400   # 完成态 job 保留 24 小时
-
+ 
 diff --git a/config/default_config.py b/config/default_config.py
-index fc4c1a56fc14239d694c3f1ee53f48b00d42ca50..e9e7580ffbc791790dd58be8604b47d0cdb0c30a 100644
+index 9961fadd66f4e24218268245a5c04e061fdfd201..8943b6e1b8d51e64bf16fb74a74a496c3f0071c4 100644
 --- a/config/default_config.py
 +++ b/config/default_config.py
-@@ -37,6 +37,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
+@@ -31,6 +31,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
          "allmix": 0,
          "mix": 0,
          "music": 0,
@@ -101,7 +113,7 @@ index fc4c1a56fc14239d694c3f1ee53f48b00d42ca50..e9e7580ffbc791790dd58be8604b47d0
          "collect": 0,
          "collectmix": 0,
      },
-@@ -46,6 +47,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
+@@ -40,6 +41,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
          "allmix": False,
          "mix": False,
          "music": False,
@@ -109,20 +121,1019 @@ index fc4c1a56fc14239d694c3f1ee53f48b00d42ca50..e9e7580ffbc791790dd58be8604b47d0
      },
      "thread": 5,
      "retry_times": 3,
+@@ -77,7 +79,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
+     "auto_cookie": False,
+     "browser_fallback": {
+         "enabled": True,
+-        "headless": False,
++        "headless": True,
+         "max_scrolls": 240,
+         "idle_rounds": 8,
+         "wait_timeout_seconds": 600,
+diff --git a/core/api_client.py b/core/api_client.py
+index eefc764e706ff830c5cd67037d1798ac4e209873..04a0682cfabf032810d7f0a17fe9b6905d859ecb 100644
+--- a/core/api_client.py
++++ b/core/api_client.py
+@@ -162,6 +162,14 @@ class DouyinAPIClient:
+         self._session: Optional[aiohttp.ClientSession] = None
+         self._browser_post_aweme_items: Dict[str, Dict[str, Any]] = {}
+         self._browser_post_stats: Dict[str, int] = {}
++        self._browser_tab_aweme_items: Dict[str, Dict[str, Any]] = {}
++        self._browser_tab_stats: Dict[str, int] = {}
++        self._browser_last_challenge: str = ""
++        self.last_http_status: int = 0
++        self.last_http_path: str = ""
++        # Safe, bounded classification for the most recent response.  The
++        # server consumes this instead of leaking a raw Douyin body upstream.
++        self.last_response_signal: str = ""
+         selected_ua = random.choice(_USER_AGENT_POOL)
+         self.headers = {
+             "User-Agent": selected_ua,
+@@ -291,21 +299,34 @@ class DouyinAPIClient:
+         max_retries: int = 3,
+         base_url: Optional[str] = None,
+         request_headers: Optional[Dict[str, str]] = None,
++        method: str = "GET",
++        json_body: Optional[Dict[str, Any]] = None,
++        unsigned: bool = False,
+     ) -> Dict[str, Any]:
+         await self._ensure_session()
++        self.last_http_status = 0
++        self.last_http_path = path
++        self.last_response_signal = ""
+         delays = [1, 2, 5]
+         last_exc: Optional[Exception] = None
++        request_method = str(method or "GET").strip().upper()
++        if request_method not in {"GET", "POST"}:
++            raise ValueError(f"Unsupported HTTP method: {request_method}")
+ 
+         for attempt in range(max_retries):
+             started = time.monotonic()
+-            if base_url:
++            if unsigned:
++                endpoint = f"{(base_url or self.BASE_URL).rstrip('/')}{path}"
++                signed_url = f"{endpoint}?{urlencode(params)}"
++                ua = self.headers["User-Agent"]
++            elif base_url:
+                 signed_url, ua = self.build_signed_path(path, params, base_url=base_url)
+             else:
+                 signed_url, ua = self.build_signed_path(path, params)
+-            signer = "a_bogus" if "a_bogus=" in signed_url else "x_bogus"
++            signer = "unsigned" if unsigned else ("a_bogus" if "a_bogus=" in signed_url else "x_bogus")
+             logger.info(
+                 "Douyin API request: path=%s attempt=%d/%d signer=%s proxy_enabled=%s "
+-                "base=%s param_keys=%s",
++                "base=%s param_keys=%s unsigned=%s",
+                 path,
+                 attempt + 1,
+                 max_retries,
+@@ -313,16 +334,34 @@ class DouyinAPIClient:
+                 bool(self.proxy),
+                 "custom" if base_url else "default",
+                 ",".join(sorted(str(key) for key in params)),
++                unsigned,
+             )
+             try:
+-                async with self._session.get(
+-                    signed_url,
+-                    headers={**self.headers, **(request_headers or {}), "User-Agent": ua},
+-                    proxy=self.proxy or None,
+-                ) as response:
++                request_kwargs = {
++                    "headers": {
++                        **self.headers,
++                        **(request_headers or {}),
++                        "User-Agent": ua,
++                    },
++                    "proxy": self.proxy or None,
++                }
++                if request_method == "POST":
++                    request_context = self._session.post(
++                        signed_url,
++                        json=json_body if json_body is not None else params,
++                        **request_kwargs,
++                    )
++                else:
++                    request_context = self._session.get(
++                        signed_url,
++                        **request_kwargs,
++                    )
++                async with request_context as response:
++                    self.last_http_status = int(response.status)
+                     if response.status == 200:
+                         body = await response.read()
+                         if not body:
++                            self.last_response_signal = "anti_bot_empty"
+                             # Empty 200 response is a common anti-bot signal
+                             # from Douyin. Retry with a fresh signature.
+                             retry_status = (
+@@ -350,6 +389,10 @@ class DouyinAPIClient:
+                             try:
+                                 data = _json.loads(body)
+                             except Exception:
++                                body_marker = body[:64].decode("utf-8", errors="ignore").strip().lower()
++                                self.last_response_signal = (
++                                    "blocked" if body_marker == "blocked" else "non_json"
++                                )
+                                 logger.warning(
+                                     "Non-JSON 200 response for %s, length=%d duration_ms=%d",
+                                     path,
+@@ -358,6 +401,8 @@ class DouyinAPIClient:
+                                 )
+                                 return {}
+                         result = data if isinstance(data, dict) else {}
++                        if str(result.get("status_msg") or "").lower().find("verify") >= 0:
++                            self.last_response_signal = "verification_required"
+                         _log_api_response(path, attempt, max_retries, body, result, started)
+                         if _is_login_required(result):
+                             raise LoginRequiredError(
+@@ -367,6 +412,7 @@ class DouyinAPIClient:
+                             )
+                         return result
+                     if response.status < 500 and response.status != 429:
++                        self.last_response_signal = f"http_{int(response.status)}"
+                         log_fn = logger.info if suppress_error else logger.error
+                         log_fn(
+                             "Douyin API HTTP failure: path=%s attempt=%d/%d status=%s "
+@@ -380,6 +426,7 @@ class DouyinAPIClient:
+                         )
+                         return {}
+                     last_exc = RuntimeError(f"HTTP {response.status} for {path}")
++                    self.last_response_signal = f"http_{int(response.status)}"
+                     logger.warning(
+                         "Douyin API retryable HTTP failure: path=%s attempt=%d/%d status=%s "
+                         "duration_ms=%d",
+@@ -417,11 +464,12 @@ class DouyinAPIClient:
+ 
+         log_fn = logger.info if suppress_error else logger.error
+         log_fn(
+-            "Douyin API request exhausted: path=%s attempts=%d suppress_error=%s "
++            "Douyin API request exhausted: path=%s attempts=%d suppress_error=%s unsigned=%s "
+             "error_type=%s error=%s",
+             path,
+             max_retries,
+             suppress_error,
++            unsigned,
+             type(last_exc).__name__ if last_exc else "-",
+             _safe_error_text(last_exc) if last_exc else "-",
+         )
+@@ -503,6 +551,58 @@ class DouyinAPIClient:
+         )
+         return params
+ 
++    async def _build_favorite_plain_params(
++        self, sec_uid: str, max_cursor: int = 0, count: int = 18
++    ) -> Dict[str, Any]:
++        """构建「喜欢」接口的无签名直连参数模板。
++
++        参数模板忠实复刻 dysync.net（抖小云）验证过的 ``InitUserFavoriteParams``：
++        该模板在宽松风控窗口下曾稳定命中真实 ``www.douyin.com`` 并拿到
++        ``aweme_list=19``。关键差异点：version_code=170400 / version_name=17.4.0、
++        屏幕 1536x960、browser_version=140、min_cursor/cut_version=1，且不携带
++        ``uifid`` 参数（而不是空串）。签名路径的 ``_default_query`` 保持不动，
++        此方法只服务 ``get_user_like_plain`` 这一条无签名快路径。
++        """
++        ms_token = await self._ensure_ms_token()
++        return {
++            "device_platform": "webapp",
++            "aid": "6383",
++            "channel": "channel_pc_web",
++            "update_version_code": "170400",
++            "pc_client_type": "1",
++            "pc_libra_divert": "Windows",
++            "version_code": "170400",
++            "version_name": "17.4.0",
++            "cookie_enabled": "true",
++            "screen_width": "1536",
++            "screen_height": "960",
++            "browser_language": "zh-CN",
++            "browser_platform": "Win32",
++            "browser_name": "Chrome",
++            "browser_version": "140.0.0.0",
++            "browser_online": "true",
++            "engine_name": "Blink",
++            "engine_version": "140.0.0.0",
++            "os_name": "Windows",
++            "os_version": "10",
++            "cpu_core_num": "20",
++            "device_memory": "8",
++            "platform": "PC",
++            "downlink": "10",
++            "effective_type": "4g",
++            "round_trip_time": "0",
++            "support_h265": "1",
++            "support_dash": "1",
++            "min_cursor": "0",
++            "cut_version": "1",
++            "whale_cut_token": "",
++            "msToken": ms_token,
++            "sec_user_id": sec_uid,
++            "max_cursor": str(max_cursor),
++            "count": str(count),
++            "locate_query": "false",
++        }
++
+     # aid=1128 works for videos but filters out image/note content;
+     # aid=6383 works for notes/gallery but may miss some video content.
+     _DETAIL_AID_CANDIDATES = ("6383", "1128")
+@@ -572,6 +672,130 @@ class DouyinAPIClient:
+         raw = await self._request_json("/aweme/v1/web/aweme/favorite/", params)
+         return self._normalize_paged_response(raw, item_keys=["aweme_list"])
+ 
++    async def get_user_like_plain(
++        self, sec_uid: str, max_cursor: int = 0, count: int = 20
++    ) -> Dict[str, Any]:
++        """无签名直连喜欢接口（favorite/）。
++
++        本地生成的 a_bogus 可能过期/被误杀：带错签名会 403 或被护航到
++        www-hj.douyin.com，而不带任何签名反而命中真实 www.douyin.com。
++        此方法用于签名路径 403 后的第一优先兜底。仅 favorite（喜欢）:
++        listcollection（收藏）的无签名直连实测仍被 waf 拦截成 "blocked"。
++
++        与 ``get_user_like`` 的差异：使用 dysync 验证过的 favorite 参数模板
++        并使用与登录页一致的 Referer，避免触发 Argus 的 UIFID/签名双重校验。
++        """
++        params = await self._build_favorite_plain_params(sec_uid, max_cursor, count)
++        raw = await self._request_json(
++            "/aweme/v1/web/aweme/favorite/",
++            params,
++            unsigned=True,
++            request_headers={
++                "Accept": "application/json, text/plain, */*",
++                "Referer": "https://www.douyin.com/user/self?showTab=like",
++            },
++        )
++        return self._normalize_paged_response(raw, item_keys=["aweme_list"])
++
++    async def _build_collection_plain_params(
++        self, cursor: int = 0, count: int = 18
++    ) -> Dict[str, Any]:
++        """构建「收藏」接口（listcollection/）的无签名直连参数模板。
++
++        与 ``_build_favorite_plain_params`` 共用 dysync 验证过的浏览器指纹
++        （Chrome/140、1536x960、20 核、version 17.4.0、不携带 ``uifid``）。
++        收藏接口是 cookie 作用域，不需要 ``sec_user_id``；分页键是 ``cursor``。
++        """
++        ms_token = await self._ensure_ms_token()
++        return {
++            "device_platform": "webapp",
++            "aid": "6383",
++            "channel": "channel_pc_web",
++            "update_version_code": "170400",
++            "pc_client_type": "1",
++            "pc_libra_divert": "Windows",
++            "version_code": "170400",
++            "version_name": "17.4.0",
++            "cookie_enabled": "true",
++            "screen_width": "1536",
++            "screen_height": "960",
++            "browser_language": "zh-CN",
++            "browser_platform": "Win32",
++            "browser_name": "Chrome",
++            "browser_version": "140.0.0.0",
++            "browser_online": "true",
++            "engine_name": "Blink",
++            "engine_version": "140.0.0.0",
++            "os_name": "Windows",
++            "os_version": "10",
++            "cpu_core_num": "20",
++            "device_memory": "8",
++            "platform": "PC",
++            "downlink": "10",
++            "effective_type": "4g",
++            "round_trip_time": "0",
++            "support_h265": "1",
++            "support_dash": "1",
++            "whale_cut_token": "",
++            "msToken": ms_token,
++            "cursor": str(cursor),
++            "count": str(count),
++        }
++
++    async def get_user_collection_plain(
++        self, sec_uid: str, max_cursor: int = 0, count: int = 18
++    ) -> Dict[str, Any]:
++        """无签名直连收藏接口（listcollection/），只用于低频探测。
++
++        收藏接口 cookie 作用域、需要 ``self`` 语义；分页键用 ``cursor``。
++        与签名路径的 ``get_user_collection`` 差异：GET + 无签名 + 已验证
++        浏览器模板 + 收藏页 Referer，避免 Argus UIFID/签名校验。
++        """
++        if sec_uid and sec_uid != "self":
++            return self._normalize_paged_response(
++                {},
++                item_keys=["aweme_list"],
++                source="api",
++            )
++        params = await self._build_collection_plain_params(max_cursor, count)
++        raw = await self._request_json(
++            "/aweme/v1/web/aweme/listcollection/",
++            params,
++            unsigned=True,
++            request_headers={
++                "Accept": "application/json, text/plain, */*",
++                "Referer": "https://www.douyin.com/user/self?showTab=favorite_collection",
++            },
++        )
++        return self._normalize_paged_response(raw, item_keys=["aweme_list"])
++
++    async def get_user_collection(
++        self, sec_uid: str, max_cursor: int = 0, count: int = 20
++    ) -> Dict[str, Any]:
++        """Fetch the logged-in account's default/all collected aweme.
++
++        Douyin's collection endpoint is cookie-scoped: it does not accept a
++        target ``sec_uid`` and must be called with POST. This is different
++        from ``get_user_collects()``, which only enumerates manually-created
++        collection folders.
++        """
++        if sec_uid and sec_uid != "self":
++            logger.warning("Default collection requires self sec_uid, got=%s", sec_uid)
++            return self._normalize_paged_response(
++                {},
++                item_keys=["aweme_list"],
++                source="api",
++            )
++
++        params = await self._build_collect_page_params(max_cursor, count)
++        raw = await self._request_json(
++            "/aweme/v1/web/aweme/listcollection/",
++            params,
++            method="POST",
++            json_body=params,
++        )
++        return self._normalize_paged_response(raw, item_keys=["aweme_list"])
++
+     async def get_user_mix(
+         self, sec_uid: str, max_cursor: int = 0, count: int = 20
+     ) -> Dict[str, Any]:
+@@ -1159,6 +1383,50 @@ class DouyinAPIClient:
+         idle_rounds: int = 8,
+         wait_timeout_seconds: int = 600,
+     ) -> List[str]:
++        """Post-mode browser fallback (kept for the existing post path)."""
++        return await self.collect_aweme_ids_via_browser(
++            target_url=f"{self.BASE_URL}/user/{sec_uid}",
++            xhr_path_filter="/aweme/v1/web/aweme/post/",
++            tab_selector="",
++            tab_text=None,
++            include_login_cookies=False,
++            expected_count=expected_count,
++            headless=headless,
++            max_scrolls=max_scrolls,
++            idle_rounds=idle_rounds,
++            wait_timeout_seconds=wait_timeout_seconds,
++            stat_prefix="post",
++        )
++
++    async def collect_aweme_ids_via_browser(
++        self,
++        *,
++        target_url: str,
++        xhr_path_filter: str,
++        tab_selector: str = "",
++        tab_text: Optional[str] = None,
++        include_login_cookies: bool = True,
++        expected_count: int = 0,
++        headless: bool = False,
++        max_scrolls: int = 240,
++        idle_rounds: int = 8,
++        wait_timeout_seconds: int = 600,
++        stat_prefix: str = "tab",
++        profile_dir: str = "",
++    ) -> List[str]:
++        """Reuse the logged-in browser's own XHR to harvest ``aweme_id`` list.
++
++        Douyin rejects the like/collection paging endpoints from pure HTTP
++        (Argus/UIFID signature). The logged-in page in a real browser carries
++        valid signatures, so we navigate there, click the target tab when a
++        ``tab_selector``/``tab_text`` is given, intercept the matching XHR
++        responses and extract ``aweme_list`` ids. Login-bearing cookies must be
++        injected in full for like/collection, hence ``include_login_cookies``.
++
++        当 ``profile_dir`` 给定时使用持久化持久浏览器配置（launch_persistent_context），
++        使站点下发的 UIFID/msToken bd-ticket 与 localStorage 反爬状态跨运行保留，
++        避免每次冷启动都被反爬护航到挑战域。
++        """
+         browser_started = time.monotonic()
+         try:
+             from playwright.async_api import async_playwright
+@@ -1166,16 +1434,18 @@ class DouyinAPIClient:
+             logger.warning("Playwright not available, browser fallback disabled: %s", exc)
+             return []
+ 
+-        target_url = f"{self.BASE_URL}/user/{sec_uid}"
+         timeout_ms = max(30, int(wait_timeout_seconds)) * 1000
+         ids: List[str] = []
+         seen: set[str] = set()
+-        post_api_ids: List[str] = []
+-        post_api_seen: set[str] = set()
+-        post_api_aweme_items: Dict[str, Dict[str, Any]] = {}
+-        post_api_page_hits = 0
+-        self._browser_post_aweme_items = {}
+-        self._browser_post_stats = {}
++        api_ids: List[str] = []
++        api_seen: set[str] = set()
++        api_aweme_items: Dict[str, Dict[str, Any]] = {}
++        api_page_hits = 0
++        challenge_host_hits = 0
++        real_host_hits = 0
++        self._browser_tab_aweme_items = {}
++        self._browser_tab_stats = {}
++        self._browser_last_challenge = ""
+ 
+         def _merge(new_ids: List[str]):
+             for aweme_id in new_ids:
+@@ -1184,9 +1454,11 @@ class DouyinAPIClient:
+                     ids.append(aweme_id)
+ 
+         logger.warning(
+-            "API翻页受限，启动浏览器兜底采集：target=%s expected_count=%s "
+-            "headless=%s max_scrolls=%s idle_rounds=%s timeout_s=%s",
++            "API翻页受限，启动浏览器兜底采集：target=%s filter=%s tab=%r "
++            "expected_count=%s headless=%s max_scrolls=%s idle_rounds=%s timeout_s=%s",
+             safe_log_url(target_url),
++            xhr_path_filter,
++            tab_selector or tab_text or "-",
+             expected_count,
+             headless,
+             max_scrolls,
+@@ -1197,47 +1469,150 @@ class DouyinAPIClient:
+         async with async_playwright() as playwright:
+             executable_path = str(getattr(playwright.chromium, "executable_path", "") or "")
+             logger.info(
+-                "Browser fallback runtime: executable=%s exists=%s",
++                "Browser fallback runtime: executable=%s exists=%s persistent=%s",
+                 executable_path or "-",
+                 bool(executable_path and os.path.exists(executable_path)),
++                bool(profile_dir),
+             )
+-            browser = await playwright.chromium.launch(
+-                headless=headless,
+-                args=[
+-                    "--disable-blink-features=AutomationControlled",
+-                    "--disable-dev-shm-usage",
+-                    "--no-sandbox",
+-                ],
+-            )
+-            context = await browser.new_context(
+-                user_agent=self.headers.get("User-Agent", ""),
+-                locale="zh-CN",
+-                viewport={"width": 1600, "height": 900},
++            cookie_payload = self._browser_cookie_payload(
++                include_login=include_login_cookies,
+             )
+-            cookies = self._browser_cookie_payload()
+             logger.info(
+-                "Browser fallback context ready: cookie_count=%s cookie_names=%s",
+-                len(cookies),
+-                ",".join(sorted(str(cookie.get("name")) for cookie in cookies)) or "-",
++                "Browser fallback context ready: cookie_count=%s cookie_names=%s persistent=%s",
++                len(cookie_payload),
++                ",".join(
++                    sorted(str(cookie.get("name")) for cookie in cookie_payload)
++                ) or "-",
++                bool(profile_dir),
+             )
+-            if cookies:
+-                await context.add_cookies(cookies)
+ 
+-            page = await context.new_page()
++            browser = None
++            context = None
++            page = None
++            browser_created_here = False
++            try:
++                if profile_dir:
++                    try:
++                        os.makedirs(profile_dir, exist_ok=True)
++                    except Exception as exc:
++                        logger.warning(
++                            "Browser persistent profile dir unavailable: %s", exc
++                        )
++                        profile_dir = ""
++                if profile_dir:
++                    # 持久化配置：LaunchPersistentContext 自带一个稳定 context，
++                    # 站点写入的 cookie／localStorage 反爬 token 跨运行保留。
++                    try:
++                        context = await playwright.chromium.launch_persistent_context(
++                            profile_dir,
++                            headless=headless,
++                            channel="chrome",
++                            user_agent=self.headers.get("User-Agent", ""),
++                            locale="zh-CN",
++                            viewport={"width": 1600, "height": 900},
++                            args=[
++                                "--disable-blink-features=AutomationControlled",
++                                "--disable-dev-shm-usage",
++                                "--no-sandbox",
++                            ],
++                            no_viewport=False,
++                        )
++                    except Exception as exc:
++                        logger.warning(
++                            "Persistent browser context launch failed, "
++                            "falling back to ephemeral context: %s",
++                            exc,
++                        )
++                        context = None
++                if context is None:
++                    browser = await playwright.chromium.launch(
++                        headless=headless,
++                        channel="chrome",
++                        args=[
++                            "--disable-blink-features=AutomationControlled",
++                            "--disable-dev-shm-usage",
++                            "--no-sandbox",
++                            "--profile-directory=Default",
++                        ],
++                    )
++                    browser_created_here = True
++                    context = await browser.new_context(
++                        user_agent=self.headers.get("User-Agent", ""),
++                        locale="zh-CN",
++                        viewport={"width": 1600, "height": 900},
++                    )
++                # 持久化 context 会在会话内自行保留登录态；此处仍需注入外部
++                # cookies 以补齐 UIFID/odin_tt 等未写入持久目录的字段。
++                if cookie_payload:
++                    try:
++                        await context.add_cookies(cookie_payload)
++                    except Exception as exc:
++                        logger.warning("Browser fallback add_cookies failed: %s", exc)
++                page = await context.new_page() if not page else page
++            except Exception as exc:
++                logger.warning("Browser fallback launch failed: %s", exc)
++                if browser is not None and browser_created_here:
++                    try:
++                        await browser.close()
++                    except Exception:
++                        pass
++                return []
++
+             pending_response_tasks: List[asyncio.Task] = []
+ 
+             async def _handle_response(response):
+-                nonlocal post_api_page_hits
++                nonlocal api_page_hits
++                nonlocal challenge_host_hits
++                nonlocal real_host_hits
+                 url = response.url or ""
+-                if "/aweme/v1/web/aweme/post/" not in url:
++                if xhr_path_filter not in url:
++                    return
++                try:
++                    from urllib.parse import urlparse
++
++                    response_host = (urlparse(url).hostname or "").lower()
++                except Exception:
++                    response_host = ""
++                # 抖音把疑似风控的 favorite/ 请求护航到挑战域 www-hj.douyin.com，
++                # 返回 HTTP 200 但空 body。区分护航域与真实接口域，便于快速失败。
++                if response_host in ("www-hj.douyin.com", "www-az.douyin.com"):
++                    challenge_host_hits += 1
++                elif response_host in ("www.douyin.com", "webcast.amemv.com"):
++                    real_host_hits += 1
++                # 抖音 like/collection 的 200 响应体不能用 response.json() 读取
++                #（会在 JSON 解析阶段静默失败），必须 response.text() + json.loads
++                try:
++                    txt = await response.text()
++                except Exception as exc:
++                    logger.warning(
++                        "Browser fallback XHR body read failed: status=%s url=%s err=%s",
++                        response.status,
++                        safe_log_url(url),
++                        exc,
++                    )
+                     return
++                logger.info(
++                    "Browser fallback XHR matched: status=%s bytes=%s host=%s url=%s body=%r",
++                    response.status,
++                    len(txt),
++                    response_host or "-",
++                    safe_log_url(url),
++                    txt[:160],
++                )
+                 try:
+-                    data = await response.json()
++                    data = json.loads(txt)
+                 except Exception:
++                    logger.warning("Browser fallback XHR body is not JSON: %r", txt[:120])
+                     return
+                 aweme_items = data.get("aweme_list") if isinstance(data, dict) else None
++                logger.info(
++                    "Browser fallback XHR decoded: status_code=%s msg=%r aweme_list=%s",
++                    data.get("status_code") if isinstance(data, dict) else None,
++                    (data.get("status_msg") if isinstance(data, dict) else None),
++                    len(aweme_items) if isinstance(aweme_items, list) else "NA",
++                )
+                 if isinstance(aweme_items, list):
+-                    post_api_page_hits += 1
++                    api_page_hits += 1
+                     extracted: List[str] = []
+                     for item in aweme_items:
+                         if not isinstance(item, dict):
+@@ -1247,13 +1622,13 @@ class DouyinAPIClient:
+                             continue
+                         aweme_id_str = str(aweme_id)
+                         extracted.append(aweme_id_str)
+-                        if aweme_id_str not in post_api_aweme_items:
+-                            post_api_aweme_items[aweme_id_str] = item
++                        if aweme_id_str not in api_aweme_items:
++                            api_aweme_items[aweme_id_str] = item
+                     _merge(extracted)
+                     for aweme_id in extracted:
+-                        if aweme_id not in post_api_seen:
+-                            post_api_seen.add(aweme_id)
+-                            post_api_ids.append(aweme_id)
++                        if aweme_id not in api_seen:
++                            api_seen.add(aweme_id)
++                            api_ids.append(aweme_id)
+ 
+             def _on_response(response):
+                 pending_response_tasks.append(asyncio.create_task(_handle_response(response)))
+@@ -1261,6 +1636,18 @@ class DouyinAPIClient:
+             page.on("response", _on_response)
+ 
+             try:
++                # 先暖场主页，把登录会话与 Argus 签名上下文建立起来；
++                # 直接冷开 user 页偶尔会因未完整初始化拿不到翻页 XHR。
++                try:
++                    await page.goto(
++                        f"{self.BASE_URL}/",
++                        wait_until="domcontentloaded",
++                        timeout=timeout_ms,
++                    )
++                    await page.wait_for_timeout(2000)
++                except Exception as exc:
++                    logger.info("Browser warmup homepage skipped: %s", exc)
++
+                 try:
+                     await page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                 except Exception as exc:
+@@ -1269,6 +1656,22 @@ class DouyinAPIClient:
+                         exc,
+                     )
+ 
++                # 等待 SPA 真正渲染完成。domcontentloaded 只是 HTML 就绪，
++                # 抖音是 React 单页，title 只有在登录态路由挂载后才变为
++                # 用户昵称（否则一直是空 ''）。在 title 非空前点击 tab 会
++                # 落空或触发一个空 body 的 favorite/ 请求（probe4 run4 实测）。
++                for _ in range(16):
++                    if page.is_closed():
++                        break
++                    try:
++                        if (await page.title()) != "":
++                            break
++                    except Exception:
++                        pass
++                    await page.wait_for_timeout(500)
++                if not page.is_closed():
++                    await page.wait_for_timeout(2500)
++
+                 title = ""
+                 try:
+                     title = await page.title()
+@@ -1300,6 +1703,117 @@ class DouyinAPIClient:
+                         except Exception as exc:
+                             logger.warning("Reload user page after verification failed: %s", exc)
+ 
++                # 点击目标 tab（like 需要点击 [id="semiTablike"] 才会触发
++                # favorite/ XHR；collection 用 showTab=favorite_collection 直达）。
++                if not page.is_closed():
++                    await self._click_browser_tab(
++                        page,
++                        tab_selector=tab_selector,
++                        tab_text=tab_text,
++                    )
++
++                # 抖音 like 的 favorite/ 请求会被浏览器反爬 UIFID 校验
++                # 间歇性拒绝（返回 200 但空 body），且失败后 React 认为该 tab
++                # 已加载（空数据），滚动不会再发新请求、原地重复点击也无用。
++                # 唯一有效重试是重新导航 profile 再点 tab，让页面重新初始化
++                # Argus/UIFID 上下文（probe6 实测首次命中时即成功 19 条）。
++                if tab_selector and not page.is_closed():
++                    for click_attempt in range(3):
++                        if api_page_hits:
++                            break
++                        await page.wait_for_timeout(2500)
++                        if api_page_hits:
++                            break
++                        # 快速失败：第一次点击后只要出现任一护航域响应、且还没有
++                        # 真实域数据，就说明本站正在对该接口做风控护航（favorite/
++                        # 被路由到 www-hj.douyin.com 返回 200 空 body）。继续重新导航
++                        # 只会向风控系统多发一轮 favorite/ 请求，反而加重账号被标记。
++                        # collection 在同一窗口实测仍能命中真实域，说明护航是按接口
++                        # 维度触发的，重试不改变结果。
++                        if pending_response_tasks:
++                            await asyncio.gather(
++                                *pending_response_tasks, return_exceptions=True
++                            )
++                            pending_response_tasks = []
++                        if challenge_host_hits and not real_host_hits and not api_page_hits:
++                            break
++                        logger.info(
++                            "Browser favorite reload attempt=%s: re-navigating profile",
++                            click_attempt + 2,
++                        )
++                        try:
++                            # 重新暖场主页，重建 Argus/UIFID 上下文；直接冷开
++                            # profile 页在风控下会持续被护航域 www-hj.douyin.com
++                            # 拦截成 200 空 body（E2E 实测）。
++                            await page.goto(
++                                f"{self.BASE_URL}/",
++                                wait_until="domcontentloaded",
++                                timeout=timeout_ms,
++                            )
++                            await page.wait_for_timeout(2000)
++                        except Exception as exc:
++                            logger.info("Browser favorite reload warmup: %s", exc)
++                        try:
++                            await page.goto(
++                                target_url,
++                                wait_until="domcontentloaded",
++                                timeout=timeout_ms,
++                            )
++                        except Exception as exc:
++                            logger.info("Browser favorite reload goto: %s", exc)
++                        for _ in range(16):
++                            if page.is_closed():
++                                break
++                            try:
++                                if (await page.title()) != "":
++                                    break
++                            except Exception:
++                                pass
++                            await page.wait_for_timeout(500)
++                        if not page.is_closed():
++                            await page.wait_for_timeout(2500)
++                            await self._click_browser_tab(
++                                page,
++                                tab_selector=tab_selector,
++                                tab_text=tab_text,
++                            )
++
++                # 兜底判定：favorite/listcollection XHR 全部落到护航挑战域
++                # www-hj.douyin.com 时（HTTP 200 但空 body），页面永远拿不到数据，
++                # React 会认定 tab 已加载、滚动不再发新请求。此时再滚 max_scrolls
++                # 纯属空转 6 分钟，必须快速失败并给出可重试的错误码。
++                if pending_response_tasks:
++                    await asyncio.gather(*pending_response_tasks, return_exceptions=True)
++                    pending_response_tasks = []
++                if (tab_selector and challenge_host_hits and not real_host_hits) or (
++                    not tab_selector and challenge_host_hits and not api_page_hits
++                ):
++                    self._browser_last_challenge = (
++                        "抖音反爬护航：接口请求被路由到挑战域 "
++                        f"{'www-hj.douyin.com' if challenge_host_hits else 'challenge'} "
++                        "（200 空响应）。请稍后重试，或保持浏览器窗口可见并确认 "
++                        "登录态未失效。"
++                    )
++                    self._browser_tab_aweme_items = {}
++                    self._browser_tab_stats = {
++                        "merged_ids": len(ids),
++                        "api_ids": len(api_ids),
++                        "selected_ids": 0,
++                        "items": 0,
++                        "pages": api_page_hits,
++                        "challenge_host_hits": challenge_host_hits,
++                        "real_host_hits": real_host_hits,
++                    }
++                    logger.warning(
++                        "Browser fallback aborted: challenge_route hit=%s real=%s "
++                        "pages=%s ids=%s",
++                        challenge_host_hits,
++                        real_host_hits,
++                        api_page_hits,
++                        len(ids),
++                    )
++                    return []
++
+                 try:
+                     warmup_seconds = min(20, max(3, int(wait_timeout_seconds)))
+                     for _ in range(warmup_seconds):
+@@ -1307,7 +1821,7 @@ class DouyinAPIClient:
+                             logger.warning("Browser page closed during warmup")
+                             break
+                         _merge(await self._extract_aweme_ids_from_page(page))
+-                        if ids:
++                        if api_page_hits:
+                             break
+                         await page.wait_for_timeout(1000)
+ 
+@@ -1341,56 +1855,178 @@ class DouyinAPIClient:
+             finally:
+                 if pending_response_tasks:
+                     await asyncio.gather(*pending_response_tasks, return_exceptions=True)
+-                try:
+-                    browser_cookies = await context.cookies(self.BASE_URL)
+-                    self._sync_browser_cookies(browser_cookies)
+-                except Exception as exc:
+-                    logger.debug("Sync browser cookies skipped: %s", exc)
+-                await context.close()
+-                await browser.close()
++                if context is not None:
++                    try:
++                        browser_cookies = await context.cookies(self.BASE_URL)
++                        self._sync_browser_cookies(browser_cookies)
++                    except Exception as exc:
++                        logger.debug("Sync browser cookies skipped: %s", exc)
++                    try:
++                        await context.close()
++                    except Exception as exc:
++                        logger.debug("Browser context close skipped: %s", exc)
++                if browser is not None:
++                    try:
++                        await browser.close()
++                    except Exception as exc:
++                        logger.debug("Browser close skipped: %s", exc)
+ 
+         selected_ids: List[str] = []
+         selected_seen: set[str] = set()
+-        for aweme_id in post_api_ids + ids:
++        for aweme_id in api_ids + ids:
+             if aweme_id and aweme_id not in selected_seen:
+                 selected_seen.add(aweme_id)
+                 selected_ids.append(aweme_id)
+-        self._browser_post_aweme_items = post_api_aweme_items
+-        self._browser_post_stats = {
++        self._browser_tab_aweme_items = api_aweme_items
++        self._browser_tab_stats = {
+             "merged_ids": len(ids),
+-            "post_api_ids": len(post_api_ids),
++            "api_ids": len(api_ids),
+             "selected_ids": len(selected_ids),
+-            "post_items": len(post_api_aweme_items),
+-            "post_pages": post_api_page_hits,
++            "items": len(api_aweme_items),
++            "pages": api_page_hits,
++            "challenge_host_hits": challenge_host_hits,
++            "real_host_hits": real_host_hits,
+         }
+         logger.warning(
+-            "浏览器兜底采集 aweme_id: duration_ms=%s merged=%s from_post_api=%s "
+-            "selected=%s post_items=%s post_pages=%s",
++            "浏览器兜底采集 aweme_id: prefix=%s duration_ms=%s merged=%s from_api=%s "
++            "selected=%s items=%s pages=%s",
++            stat_prefix,
+             _elapsed_ms(browser_started),
+             len(ids),
+-            len(post_api_ids),
++            len(api_ids),
+             len(selected_ids),
+-            len(post_api_aweme_items),
+-            post_api_page_hits,
++            len(api_aweme_items),
++            api_page_hits,
+         )
+         return selected_ids
+ 
++    async def _click_browser_tab(
++        self,
++        page,
++        *,
++        tab_selector: str = "",
++        tab_text: Optional[str] = None,
++    ) -> None:
++        """Click the tab element that triggers the target XHR.
++
++        优先使用 CSS selector（如 ``[id="semiTablike"]``）；否则按可见文本
++        找点击目标。找不到时不报错——页面直达的 tab（如收藏）无需点击。
++        """
++        selector = (tab_selector or "").strip()
++        if selector:
++            # 等 SPA 就绪：tab 出现后再点。等待期间页面会先挂载 React 组件，
++            # 过早点击会被 React 重新渲染覆盖成空操作（probe3 实测 0 命中）。
++            for _ in range(20):
++                if page.is_closed():
++                    break
++                try:
++                    present = await page.evaluate(
++                        "(sel) => !!document.querySelector(sel)", selector
++                    )
++                    if present:
++                        break
++                except Exception:
++                    pass
++                await page.wait_for_timeout(500)
++            # 组件出现后再给 React 一小段稳定时间绑定事件。
++            if not page.is_closed():
++                await page.wait_for_timeout(1600)
++            try:
++                clicked = await page.evaluate(
++                    """
++                    (sel) => {
++                      const node = document.querySelector(sel);
++                      if (!node) return 'no-tab';
++                      node.click();
++                      return 'clicked';
++                    }
++                    """,
++                    selector,
++                )
++                if clicked == "clicked":
++                    logger.info("Browser tab clicked via selector %s", selector)
++                    # 点击后留给组件切换 + 数据 XHR 的时间。
++                    # probe4 证明点击过早只会带来空 body；这里多等。
++                    await page.wait_for_timeout(5000)
++                    return
++                logger.info("Browser tab selector %s not found (%s)", selector, clicked)
++            except Exception as exc:
++                logger.debug("Browser tab selector click failed: %s", exc)
++
++        text = (tab_text or "").strip()
++        if not text:
++            return
++        try:
++            clicked = await page.evaluate(
++                """
++                (t) => {
++                  const nodes = Array.from(document.querySelectorAll('div, span, a, button, li'));
++                  for (const node of nodes) {
++                    const own = (node.textContent || '').trim();
++                    if ((own === t || own.startsWith(t)) && node.children.length <= 2) {
++                      const style = window.getComputedStyle(node);
++                      const rect = node.getBoundingClientRect();
++                      if (style.display !== 'none' && style.visibility !== 'hidden' &&
++                          rect.width > 0 && rect.height > 0) {
++                        node.click();
++                        return 'clicked:' + own;
++                      }
++                    }
++                  }
++                  return 'not-found';
++                }
++                """,
++                text,
++            )
++            if str(clicked or "").startswith("clicked"):
++                logger.info("Browser tab clicked via text %s (%s)", text, clicked)
++                await page.wait_for_timeout(2000)
++            else:
++                logger.info("Browser tab text %s not found (%s)", text, clicked)
++        except Exception as exc:
++            logger.debug("Browser tab text click failed: %s", exc)
++
+     def pop_browser_post_aweme_items(self) -> Dict[str, Dict[str, Any]]:
+         items = self._browser_post_aweme_items
+         self._browser_post_aweme_items = {}
++        if not items:
++            items = self._browser_tab_aweme_items
++            self._browser_tab_aweme_items = {}
+         return items
+ 
+     def pop_browser_post_stats(self) -> Dict[str, int]:
+         stats = self._browser_post_stats
+         self._browser_post_stats = {}
++        if not stats:
++            stats = self._browser_tab_stats
++            self._browser_tab_stats = {}
++        return stats
++
++    def pop_browser_tab_aweme_items(self) -> Dict[str, Dict[str, Any]]:
++        items = self._browser_tab_aweme_items
++        self._browser_tab_aweme_items = {}
++        if isinstance(items, dict):
++            return items
++        return {}
++
++    def pop_browser_last_challenge(self) -> str:
++        challenge = self._browser_last_challenge
++        self._browser_last_challenge = ""
++        return challenge or ""
++
++    def pop_browser_tab_stats(self) -> Dict[str, int]:
++        stats = self._browser_tab_stats
++        self._browser_tab_stats = {}
+         return stats
+ 
+-    def _browser_cookie_payload(self) -> List[Dict[str, str]]:
++    def _browser_cookie_payload(
++        self, *, include_login: bool = False
++    ) -> List[Dict[str, str]]:
+         payload: List[Dict[str, str]] = []
+         for name, value in self.cookies.items():
+             if not name:
+                 continue
+-            if name in self._BROWSER_COOKIE_BLOCKLIST:
++            if not include_login and name in self._BROWSER_COOKIE_BLOCKLIST:
+                 continue
+             payload.append(
+                 {
 diff --git a/core/user_downloader.py b/core/user_downloader.py
-index e527d365baa2c4db50057b459710e8680ade356f..319c9f6f3a69ae3a0625b0fcaa5495dd35b0b54d 100644
+index 6b2f38ecaf8c15bc12b1fcbe6b5d9f94898c6882..8da6b9994bb0c15c08f7c3f7b52a5c4df96decb4 100644
 --- a/core/user_downloader.py
 +++ b/core/user_downloader.py
 @@ -27,7 +27,7 @@ def _user_info_summary(user_info: Dict[str, Any]) -> Dict[str, Any]:
-
-
+ 
+ 
  class UserDownloader(BaseDownloader):
 -    SELF_COLLECT_MODES = {"collect", "collectmix"}
 +    SELF_COLLECT_MODES = {"collection", "collect", "collectmix"}
-
+ 
      def __init__(self, *args, **kwargs):
          super().__init__(*args, **kwargs)
-@@ -226,13 +226,16 @@ class UserDownloader(BaseDownloader):
+@@ -153,13 +153,16 @@ class UserDownloader(BaseDownloader):
              collects_id = (str(self.config.get("collects_id") or "")).strip()
              if not collects_id:
                  logger.error(
@@ -140,7 +1151,7 @@ index e527d365baa2c4db50057b459710e8680ade356f..319c9f6f3a69ae3a0625b0fcaa5495dd
 +            )
              return False
          return True
-
+ 
 diff --git a/core/user_mode_registry.py b/core/user_mode_registry.py
 index 9443b6e39eb289a50a1d1e5e0a80db0f15113e9f..2a3ebe62513503879241f58c4bcfbe2aa29a8a74 100644
 --- a/core/user_mode_registry.py
@@ -160,7 +1171,7 @@ index 9443b6e39eb289a50a1d1e5e0a80db0f15113e9f..2a3ebe62513503879241f58c4bcfbe2a
 +            "collection": CollectionUserModeStrategy,
              "collectmix": CollectMixUserModeStrategy,
          }
-
+ 
 diff --git a/core/user_modes/__init__.py b/core/user_modes/__init__.py
 index 47f560fb91d4d42aa87c7e57e4d77ad46b2b8c59..3d2f8d1fa05cc3cb17806b4cdcf5e30fb1e3f1fc 100644
 --- a/core/user_modes/__init__.py
@@ -206,7 +1217,7 @@ index 17cb6f2ebdfca46489ca42053af0116603be721f..c08fbc26ad325a7002b8b263d86076d5
 +    # Detect and crop QR codes rendered inside Douyin's closed login component.
 +    "opencv-python-headless>=4.10,<5",
  ]
-
+ 
  [project.optional-dependencies]
 diff --git a/requirements.txt b/requirements.txt
 index 3b0900b675722c3e3045620e89d8e0862b5a428d..309d46cbee1bcb1758520067acf1303426966a5a 100644
@@ -219,13 +1230,13 @@ index 3b0900b675722c3e3045620e89d8e0862b5a428d..309d46cbee1bcb1758520067acf13034
 +# Detect and crop QR codes rendered inside Douyin's closed login component.
 +opencv-python-headless>=4.10,<5
 diff --git a/server/app.py b/server/app.py
-index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f230a035f 100644
+index 418f875d330a45d207dd52428636dedd197e27af..5ccb0e8baf2b7b46e90cae6f1463064a15897996 100644
 --- a/server/app.py
 +++ b/server/app.py
-@@ -1,93 +1,1327 @@
+@@ -1,93 +1,1903 @@
 -"""FastAPI REST 服务入口。
 +"""FastAPI REST 服务入口 + 轻量前端。
-
+ 
  HTTP 层薄封装：
 -- 接收 URL，创建 job，返回 job_id
 -- 实际下载委托给 cli.main.download_url 的简化复用
@@ -234,19 +1245,19 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +- ``/api/v1/fetch-cookie`` GET/POST —— Playwright 自动检测登录态，扫码后自动提取
 +- ``/api/v1/download`` / ``/api/v1/crawl`` POST —— 提交下载，crawl 必须带 mode
 +- ``/`` —— 前端单页 ``server/static/index.html``
-
+ 
  fastapi/uvicorn 是**可选**依赖。若未安装，导入本模块会 ImportError。
  """
-
+ 
  from __future__ import annotations
-
+ 
 +import asyncio
 +import copy
 +import hashlib
 +import json
++import logging
 +import os
 +import re
-+import secrets
 +import signal
 +import subprocess
 +import threading
@@ -257,7 +1268,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +from pathlib import Path
 +from typing import Any, Dict, List, Optional
 +from urllib.parse import urlparse
-
+ 
 -from fastapi import FastAPI, HTTPException
 -from pydantic import BaseModel
 +import aiofiles
@@ -272,26 +1283,32 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +)
 +from fastapi.staticfiles import StaticFiles
 +from pydantic import BaseModel, Field
-
+ 
  from auth import CookieManager
  from config import ConfigLoader
  from control import QueueManager, RateLimiter, RetryHandler
- from core import DouyinAPIClient, DownloaderFactory, URLParser
+-from core import DouyinAPIClient, DownloaderFactory, URLParser
 -from server.jobs import JobManager
++from core import DouyinAPIClient, DownloaderFactory, LoginRequiredError, URLParser
 +from server.jobs import JobManager, ProgressCallback
  from storage import FileManager
 +from utils.cookie_utils import sanitize_cookies
  from utils.logger import setup_logger
  from utils.validators import is_short_url, normalize_short_url
-
+ 
  logger = setup_logger("REST")
-
+ 
++# 本地诊断开关：DOUYIN_VERBOSE_LOG=1 时把内部 INFO/DEBUG 也打到 stderr。
++# 仅影响本机 sidecar 排障，不改变任何业务行为。
++if os.environ.get("DOUYIN_VERBOSE_LOG", "").strip().lower() in {"1", "true", "yes", "on"}:
++    from utils.logger import set_console_log_level
++
++    set_console_log_level(logging.INFO)
++
 +STATIC_DIR = Path(__file__).resolve().parent / "static"
 +SOURCE_ORDER_FILENAME = "source_order.json"
 +LIBRARY_CATALOG_FILENAME = "library_catalog.json"
 +MAX_SYNC_COUNT = 100
-+MAX_CATALOG_PAGE_SIZE = 50
-+MAX_CATALOG_ITEMS = 50000
 +MAX_QR_IMAGE_BYTES = 512 * 1024
 +QR_REFRESH_SECONDS = 4
 +QR_DISCOVERY_TIMEOUT_SECONDS = 60
@@ -300,6 +1317,48 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +MEDIA_STREAM_CACHE_TTL_SECONDS = 300
 +DEFAULT_SESSION_SCOPE = "default"
 +SESSION_SCOPE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{32,64}$")
++# 喜欢接口的低频自动探测：风控窗口关闭时静默等待，窗口打开后自动补同步。
++SEC_UID_CACHE_FILENAME = "sec_uid.txt"
++DEFAULT_AUTO_PROBE_INTERVAL_SECONDS = 1800  # 成功后的基础间隔：30 分钟
++DEFAULT_AUTO_PROBE_START_SECONDS = 60        # 启动后首次探测延迟
++DEFAULT_AUTO_PROBE_MAX_INTERVAL_SECONDS = 21600  # 连续风控时封顶：6 小时
++DEFAULT_AUTO_PROBE_SYNC_COUNT = 100          # 探测成功后自动同步条数
++DEFAULT_COLLECTION_COOLDOWN_SECONDS = 900
++DEFAULT_COLLECTION_COOLDOWN_CAP_SECONDS = 21600
++COLLECTION_BLOCK_SIGNALS = frozenset(
++    {"blocked", "anti_bot_empty", "non_json", "http_403", "http_429"}
++)
++
++
++class SourceSyncError(RuntimeError):
++    """Safe source-level failure carried through the in-memory job contract."""
++
++    def __init__(
++        self,
++        safe_message: str,
++        *,
++        error_code: str,
++        source_mode: str,
++        channel: str = "api",
++        fallback_attempted: bool = False,
++        retry_after_seconds: int = 0,
++        needs_action: bool = False,
++    ) -> None:
++        super().__init__(safe_message)
++        self.safe_message = safe_message
++        self.error_code = error_code
++        self.source_mode = source_mode
++        self.channel = channel
++        self.fallback_attempted = fallback_attempted
++        self.retry_after_seconds = max(0, int(retry_after_seconds or 0))
++        self.needs_action = needs_action
++
++
++def scope_dir_safe(scope: str) -> str:
++    """把会话 scope 转成安全的文件目录名。"""
++    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", scope or "")
++    safe = safe.strip("._")[:64]
++    return safe or DEFAULT_SESSION_SCOPE
 +AUTHENTICATED_SESSION_COOKIE_NAMES = frozenset(
 +    {
 +        "passport_auth_status",
@@ -357,22 +1416,22 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +    "music",
 +)
 +
-
+ 
  class DownloadRequest(BaseModel):
      url: str
 +    mode: Optional[str] = None      # post/like/collection/collect/collectmix/mix/music
 +    count: Optional[int] = None     # 0 = 全部
 +    cookie: Optional[str] = None    # 可选 cookie 字符串/JSON，本次用并持久化
-
-
+ 
+ 
  class JobResponse(BaseModel):
      job_id: str
      status: str
      url: str
 +    target: int = 0
 +    processed: int = 0
-
-
+ 
+ 
 -class _ServerDeps:
 -    """跨请求复用的重量级依赖。
 +class CookieRequest(BaseModel):
@@ -394,27 +1453,6 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +    count: int = Field(default=50, ge=1, le=100)
 +
 +
-+class CreatorResolveRequest(BaseModel):
-+    profile_url: str = Field(min_length=1, max_length=1024)
-+
-+
-+class CreatorWorksRequest(BaseModel):
-+    creator_id: str = Field(min_length=12, max_length=192)
-+    limit: int = Field(default=50, ge=1, le=100)
-+
-+
-+class CreatorCatalogRequest(BaseModel):
-+    creator_id: str = Field(min_length=12, max_length=192)
-+    cursor: Optional[str] = Field(default=None, max_length=256)
-+    page_size: int = Field(default=50, ge=1, le=MAX_CATALOG_PAGE_SIZE)
-+    catalog_id: Optional[str] = Field(default=None, min_length=16, max_length=96)
-+    metadata_only: bool = True
-+
-
--    REST 服务在进程生命周期内只需要一份 FileManager / RateLimiter / RetryHandler /
--    QueueManager / CookieManager；每个请求重新构造既浪费又会触发文件系统 mkdir。
--    DouyinAPIClient 由于持有 aiohttp.ClientSession，依旧按请求创建，避免跨请求泄漏
--    连接状态或触发 "Session is closed" 错误。
 +def _now_utc_iso() -> str:
 +    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 +
@@ -424,7 +1462,11 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +    if raw is None:
 +        return default
 +    return raw.strip().lower() in {"1", "true", "yes", "on"}
-+
+ 
+-    REST 服务在进程生命周期内只需要一份 FileManager / RateLimiter / RetryHandler /
+-    QueueManager / CookieManager；每个请求重新构造既浪费又会触发文件系统 mkdir。
+-    DouyinAPIClient 由于持有 aiohttp.ClientSession，依旧按请求创建，避免跨请求泄漏
+-    连接状态或触发 "Session is closed" 错误。
 +
 +def _configured_login_browser_mode() -> str:
 +    """Describe where the interactive login surface is actually visible."""
@@ -480,16 +1522,8 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +      </body>
 +    </html>
      """
-
--    def __init__(self, config: ConfigLoader):
--        self.config = config
--        # Resolve the cookie file path relative to the config file's directory
--        # so the sidecar can find it regardless of its working directory (which
--        # on macOS is often '/' when launched by Electron).
--        if config.config_path:
--            from pathlib import Path
-
--            cookie_file = str(Path(config.config_path).resolve().parent / ".cookies.json")
+ 
++
 +def _has_authenticated_session(cookies: Dict[str, str]) -> bool:
 +    """Recognize login evidence without relying on one historical Cookie pair."""
 +    return any(
@@ -1048,8 +2082,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +        if scope == DEFAULT_SESSION_SCOPE:
 +            cookie_file = owner.legacy_cookie_file
 +            library_path = str(owner.config.get("path") or "./Downloaded")
-         else:
--            cookie_file = ".cookies.json"
++        else:
 +            scope_root = owner.sessions_root / scope
 +            scope_root.mkdir(parents=True, exist_ok=True)
 +            if os.name != "nt":
@@ -1057,22 +2090,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +            cookie_file = str(scope_root / "cookies.json")
 +            library_path = str(scope_root / "library")
 +
-         self.cookie_manager = CookieManager(cookie_file=cookie_file)
--        # Load cookies from the config (env var / YAML cookie key) first, then
--        # fall back to whatever is already on disk in the cookie file. This
--        # ensures that cookies saved by a previous session are picked up on
--        # restart even when the config doesn't embed them inline.
--        initial_cookies = config.get_cookies()
--        if initial_cookies:
--            self.cookie_manager.set_cookies(initial_cookies)
--        else:
--            # Trigger a load from disk so get_cookies() returns the persisted
--            # session without requiring a fresh login on every app restart.
--            self.cookie_manager.get_cookies()
--        self.file_manager = FileManager(config.get("path"))
--        self.rate_limiter = RateLimiter(max_per_second=float(config.get("rate_limit", 2) or 2))
--        self.retry_handler = RetryHandler(max_retries=int(config.get("retry_times", 3) or 3))
--        self.queue_manager = QueueManager(max_workers=int(config.get("thread", 5) or 5))
++        self.cookie_manager = CookieManager(cookie_file=cookie_file)
 +        if scope == DEFAULT_SESSION_SCOPE:
 +            # The standalone console preserves its existing config fallback.
 +            # Scoped Zhicui users never inherit the legacy/global Cookie.
@@ -1091,16 +2109,17 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +            self.file_manager.base_path / LIBRARY_CATALOG_FILENAME
 +        )
 +        self.catalog_lock = asyncio.Lock()
-+        # Full creator catalogs are streamed to Zhicui and are intentionally
-+        # not persisted here. The map holds only bounded, process-local task
-+        # control state so DELETE can interrupt API/browser discovery.
-+        self.creator_catalog_tasks: Dict[str, Dict[str, Any]] = {}
-+        self.creator_catalog_lock = asyncio.Lock()
 +        self.media_stream_cache: Dict[
 +            str,
 +            tuple[float, str, Dict[str, str]],
 +        ] = {}
-+        self.media_stream_lock = asyncio.Lock()
++        # 每作品一把锁：不同作品的媒体 URL 解析可以完全并行，
++        # 只有同一作品并发请求时才串行（避免重复解析同一 URL）。
++        self.media_stream_locks: Dict[str, asyncio.Lock] = {}
++        self.media_stream_locks_guard = asyncio.Lock()
++        # 媒体解析（get_video_detail）的受控并发：全并行会瞬间打出几十个
++        # 详情请求触发反爬；8 并发在安全与速度之间平衡（≈7 倍于原串行）。
++        self.media_resolve_semaphore = asyncio.Semaphore(8)
 +        self.fetch_status: Dict[str, Any] = {
 +            "running": False,
 +            "message": "",
@@ -1118,6 +2137,35 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +        self.fetch_worker_running = False
 +        self.fetch_driver_process: Any = None
 +        self.login_browser_semaphore = owner.login_browser_semaphore
++        # 喜欢低频自动探测状态：只在 sidecar 显式启用时运行。
++        self.probe_enabled = owner.auto_probe_enabled
++        self.probe_lock = asyncio.Lock()
++        self.probe_task: Optional[asyncio.Task] = None
++        self.probe_interval = owner.auto_probe_interval
++        self.probe_max_interval = owner.auto_probe_max_interval
++        self.probe_start_seconds = owner.auto_probe_start_seconds
++        self.probe_last_result = ""
++        self.probe_last_check_at = ""
++        self.probe_last_open_at = ""
++        self.probe_last_success_count = 0
++        self.action = ""
++        self.action_at = ""
++        # 收藏低频自动探测状态（与喜欢共用开关/最大间隔，但独立退避）。
++        self.probe_task_collection: Optional[asyncio.Task] = None
++        self.probe_interval_collection = owner.auto_probe_interval
++        self.probe_last_result_collection = ""
++        self.probe_last_check_at_collection = ""
++        self.probe_last_open_at_collection = ""
++        self.probe_last_success_count_collection = 0
++        self.action_collection = ""
++        self.action_at_collection = ""
++        self.collection_sync_lock = asyncio.Lock()
++        self.collection_failure_count = 0
++        self.collection_blocked_until = 0.0
++        self.collection_resilience_enabled = owner.collection_resilience_enabled
++        self.collection_cooldown_seconds = owner.collection_cooldown_seconds
++        self.collection_cooldown_cap_seconds = owner.collection_cooldown_cap_seconds
++        self.sec_uid_cache_path = Path(library_path) / SEC_UID_CACHE_FILENAME
 +
 +    def clear_qr(self) -> None:
 +        self.fetch_qr_image = None
@@ -1138,8 +2186,13 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +class _ServerDeps:
 +    """Process-wide resources plus lazily-created user session namespaces."""
 +
-+    def __init__(self, config: ConfigLoader):
-+        self.config = config
+     def __init__(self, config: ConfigLoader):
+         self.config = config
+-        # Resolve the cookie file path relative to the config file's directory
+-        # so the sidecar can find it regardless of its working directory (which
+-        # on macOS is often '/' when launched by Electron).
+-        if config.config_path:
+-            from pathlib import Path
 +        config_root = (
 +            Path(config.config_path).resolve().parent
 +            if config.config_path
@@ -1158,6 +2211,62 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +        if not isinstance(server_config, dict):
 +            server_config = {}
 +        self.metadata_only = bool(server_config.get("metadata_only", False))
++        self.collection_resilience_enabled = bool(
++            server_config.get("collection_resilience_enabled", True)
++        ) and self.metadata_only
++        try:
++            collection_cooldown = int(
++                server_config.get(
++                    "collection_cooldown_seconds",
++                    DEFAULT_COLLECTION_COOLDOWN_SECONDS,
++                )
++            )
++        except (TypeError, ValueError):
++            collection_cooldown = DEFAULT_COLLECTION_COOLDOWN_SECONDS
++        try:
++            collection_cooldown_cap = int(
++                server_config.get(
++                    "collection_cooldown_cap_seconds",
++                    DEFAULT_COLLECTION_COOLDOWN_CAP_SECONDS,
++                )
++            )
++        except (TypeError, ValueError):
++            collection_cooldown_cap = DEFAULT_COLLECTION_COOLDOWN_CAP_SECONDS
++        self.collection_cooldown_seconds = max(60, collection_cooldown)
++        self.collection_cooldown_cap_seconds = max(
++            self.collection_cooldown_seconds,
++            collection_cooldown_cap,
++        )
++        # 喜欢低频自动探测开关与间隔（默认关闭，仅 metadata_only 模式有意义）。
++        self.auto_probe_enabled = bool(
++            server_config.get("like_probe_enabled", False)
++        ) and self.metadata_only
++        raw_probe_interval = server_config.get(
++            "like_probe_interval_seconds", DEFAULT_AUTO_PROBE_INTERVAL_SECONDS
++        )
++        try:
++            probe_interval = int(raw_probe_interval)
++        except (TypeError, ValueError):
++            probe_interval = DEFAULT_AUTO_PROBE_INTERVAL_SECONDS
++        self.auto_probe_interval = max(60, probe_interval)
++        self.auto_probe_max_interval = max(
++            self.auto_probe_interval,
++            int(
++                server_config.get(
++                    "like_probe_backoff_cap_seconds",
++                    DEFAULT_AUTO_PROBE_MAX_INTERVAL_SECONDS,
++                )
++                or DEFAULT_AUTO_PROBE_MAX_INTERVAL_SECONDS,
++            ),
++        )
++        raw_probe_start = server_config.get(
++            "like_probe_start_seconds", DEFAULT_AUTO_PROBE_START_SECONDS
++        )
++        try:
++            probe_start = int(raw_probe_start)
++        except (TypeError, ValueError):
++            probe_start = DEFAULT_AUTO_PROBE_START_SECONDS
++        self.auto_probe_start_seconds = max(5, probe_start)
 +        raw_login_concurrency = (
 +            os.environ.get("DOUYIN_LOGIN_BROWSER_CONCURRENCY")
 +            or server_config.get("login_browser_concurrency")
@@ -1192,22 +2301,15 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +            current = _SessionDeps(self, scope)
 +            self._sessions[scope] = current
 +        return current
-
-
--async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
--    """简化版 download_url：只负责执行并返回成功/失败计数。
++
++
 +async def _resolve_self_sec_uid(api_client) -> str:
 +    """用当前 cookie 调 profile/self/ 拿登录用户的真 sec_uid。
-
--    有意不复用 cli.main.download_url —— 后者绑定了 progress_display 的 rich 状态。
--    API client 仍按请求创建（aiohttp session 不跨请求复用）；其余重量级依赖从
--    _ServerDeps 共享。
++
 +    抖音的 favorite（喜欢）和 post（主页发布）API 都要真 sec_uid，
 +    self 链接解析出的 "self" 字符串它们不认；cookie 作用域的 collection
 +    与 collects/list 接受 "self" 上下文。所以 like/post 模式下要先解出真 sec_uid。
-     """
--    # proxy 与 cli.main.download_url 对齐:API 请求、短链解析和 CDN 媒体
--    # 下载(downloader_base 读 api_client.proxy)统一走配置代理。
++    """
 +    try:
 +        params = await api_client._default_query()
 +        raw = await api_client._request_json("/aweme/v1/web/user/profile/self/", params)
@@ -1215,6 +2317,206 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +    except Exception as exc:
 +        logger.warning("resolve self sec_uid failed: %s", exc)
 +        return ""
++
++
++def _probe_like_success(page: Dict[str, Any]) -> bool:
++    """判定单发 favorite 探测是否命中真实喜欢列表。
++
++    抖音风控不会总是显式 403：有时返回 200 空壳里放 ``www-hj`` 或
++    argus/verify 风险字段。只把「aweme_list 非空」当作成功，避免把
++    护航空响应误判为窗口打开。
++    """
++    if not isinstance(page, dict):
++        return False
++    items = page.get("items")
++    if not isinstance(items, list) or not items:
++        return False
++    raw = page.get("raw") if isinstance(page.get("raw"), dict) else {}
++    if "www-hj" in json.dumps(raw, ensure_ascii=False):
++        return False
++    risk = page.get("risk_flags") if isinstance(page.get("risk_flags"), dict) else {}
++    return not bool(risk.get("verify_page") or risk.get("login_tip"))
++
++
++def _probe_like_suspect_hint(page: Dict[str, Any]) -> str:
++    """从风控空响应中提取可读原因，用于日志通知；成功时返回空串。"""
++    if not isinstance(page, dict):
++        return "接口返回空"
++    raw = page.get("raw") if isinstance(page.get("raw"), dict) else {}
++    raw_text = json.dumps(raw, ensure_ascii=False)
++    if "www-hj" in raw_text:
++        return "被风控护航到 www-hj.douyin.com（200 空响应）"
++    for key in ("aweme_detail", "status_msg", "message", "filter_detail"):
++        value = raw.get(key)
++        if isinstance(value, dict):
++            text = str(value.get("url") or value.get("title") or value.get("msg") or "")
++            if text:
++                return text[:160]
++        if isinstance(value, str) and value.strip():
++            return value[:160]
++    try:
++        status_code = raw.get("status_code")
++    except AttributeError:
++        status_code = None
++    return f"接口状态 {status_code}" if status_code is not None else "接口返回空"
++
++
++async def _secure_sec_uid_from_session(deps: "_SessionDeps") -> str:
++    """解析并缓存 like 探测所需的真 sec_uid；失败时安全回退为空串。
++
++    缓存文件放在会话库根：真 sec_uid 不新鲜无所谓，探测最终要靠
++    favorite 接口实际返回判断，缓存只是减少一次 profile 请求。
++    """
++    cache_path = deps.sec_uid_cache_path
++    try:
++        existing = cache_path.read_text(encoding="utf-8").strip()
++        if existing:
++            logger.info("like-probe: reuse cached sec_uid scope=%s", deps.scope)
++            return existing
++    except OSError:
++        pass
++
++    sec_uid = await _safe_resolve_sec_uid(deps)
++    if sec_uid:
++        try:
++            cache_path.parent.mkdir(parents=True, exist_ok=True)
++            cache_path.write_text(sec_uid, encoding="utf-8")
++            logger.info("like-probe: resolved and cached sec_uid scope=%s", deps.scope)
++        except OSError as exc:
++            logger.warning("like-probe: cache sec_uid failed scope=%s: %s", deps.scope, exc)
++    return sec_uid
++
++
++async def _safe_resolve_sec_uid(deps: "_SessionDeps") -> str:
++    """解析真 sec_uid，任何异常都静默回退为空串，绝不抛给探测循环。"""
++    try:
++        async with DouyinAPIClient(
++            deps.cookie_manager.get_cookies(),
++            proxy=deps.config.get("proxy"),
++        ) as api_client:
++            return await _resolve_self_sec_uid(api_client)
++    except Exception as exc:
++        logger.warning("like-probe: resolve sec_uid failed scope=%s: %s", deps.scope, exc)
++        return ""
++
++
++async def _browser_library_fallback(
++    api_client,
++    deps: "_SessionDeps",
++    mode: str,
++    sec_uid: str,
++    limit: int,
++) -> List[Dict[str, Any]]:
++    """用登录浏览器复用站内 XHR，兜底同步喜欢/收藏元数据。
++
++    抖音对 ``favorite/`` 与 ``listcollection/`` 的纯 HTTP 签名翻页会 403
++    （Argus/UIFID 签名校验），但登录页自己的浏览器 XHR 携带页面算出的有效
++    签名。这里复用 ``collect_aweme_ids_via_browser``：喜欢需要真 sec_uid +
++    点击 ``semiTablike`` tab，收藏走 ``showTab=favorite_collection`` 直达
++    （cookie 作用域，无需 sec_uid）。返回按浏览器顺序排列的 aweme 字典。
++    """
++    if mode not in {"like", "collection"}:
++        return []
++    browser_cfg = deps.config.get("browser_fallback", {}) or {}
++    if not browser_cfg.get("enabled", True):
++        logger.info("Library browser fallback skipped: disabled by config")
++        return []
++
++    # 两种模式都要求真 sec_uid：喜欢/收藏直达 URL 用 /user/{sec_uid}
++    # 才能携带 showTab 触发对应 XHR；/user/self 会被站点重定向并丢掉 showTab。
++    if not sec_uid or sec_uid == "self":
++        sec_uid = await _resolve_self_sec_uid(api_client)
++    if not sec_uid:
++        logger.warning("Library browser fallback for %s: no sec_uid resolved", mode)
++        return []
++
++    if mode == "like":
++        # 不带 showTab：落到用户主页后由显式点击 [id="semiTablike"] 触发
++        # favorite/ XHR。带 showTab=like 会让页面在 session 就绪前自动拉一次
++        # 空结果，之后点击不再触发新 XHR（probe2 实测 title 为空、0 命中）。
++        target_url = f"{DouyinAPIClient.BASE_URL}/user/{sec_uid}"
++        xhr_path_filter = "/aweme/v1/web/aweme/favorite/"
++        tab_selector = '[id="semiTablike"]'
++    else:
++        target_url = (
++            f"{DouyinAPIClient.BASE_URL}/user/{sec_uid}"
++            "?showTab=favorite_collection&from_tab_name=main"
++        )
++        xhr_path_filter = "/aweme/v1/web/aweme/listcollection/"
++        tab_selector = ""
++
++    # 反爬策略随账号状态变化：此前 like 的 favorite/ 用 headless Chromium
++    # 能拿到 aweme_list（probe6 实测 19 条），于是强制 headless。但线上
++    # E2E 实测 headless 下页面 SPA 不挂载（title 恒为空），所有 favorite/
++    # XHR 被护航域 www-hj.douyin.com 拦截成 200 空 body；而 collection 用
++    # 可见 Chrome（headless=false）首个 XHR 即命中真实 www.douyin.com 拿到
++    # aweme_list=10。因此 like 与 collection 统一跟随配置（默认可见浏览器），
++    # 不让 headless 触发护航风控。
++    configured_headless = bool(browser_cfg.get("headless", False))
++    fallback_headless = configured_headless
++    if not fallback_headless:
++        logger.info(
++            "Library browser fallback for %s: headless=False (visible browser)",
++            mode,
++        )
++
++    # 关键：持久化浏览器 profile。冷启动的 Chromium 每次都是全新反爬指纹，
++    # UIFID/msToken/bd-ticket 与 localStorage 反爬状态都从零开始，favorite/
++    # 首次 XHR 必被护航到 www-hj.douyin.com（HTTP 200 空 body）。只有跨运行
++    # 保留 profile，站点累积的反爬预热状态才能让后续 XHR 命中真实域拿数据。
++    profile_root = browser_cfg.get("profile_dir", "")
++    if not profile_root:
++        profile_root = str(
++            Path(__file__).resolve().parents[1] / "Downloaded" / ".browser-profiles"
++        )
++    try:
++        profile_dir = os.path.join(profile_root, scope_dir_safe(deps.scope), mode)
++    except Exception as exc:
++        logger.warning("Library browser fallback profile dir failed: %s", exc)
++        profile_dir = ""
++
++    try:
++        ids = await api_client.collect_aweme_ids_via_browser(
++            target_url=target_url,
++            xhr_path_filter=xhr_path_filter,
++            tab_selector=tab_selector,
++            include_login_cookies=True,
++            expected_count=limit,
++            headless=fallback_headless,
++            max_scrolls=int(browser_cfg.get("max_scrolls", 240) or 240),
++            idle_rounds=int(browser_cfg.get("idle_rounds", 8) or 8),
++            wait_timeout_seconds=int(browser_cfg.get("wait_timeout_seconds", 600) or 600),
++            stat_prefix=mode,
++            profile_dir=profile_dir,
++        )
++    except Exception as exc:
++        logger.warning("Library browser fallback failed for %s: %s", mode, exc)
++        return []
++
++    item_map = api_client.pop_browser_tab_aweme_items() or {}
++    challenge = api_client.pop_browser_last_challenge()
++    if challenge and not item_map:
++        source_label = "喜欢" if mode == "like" else "收藏"
++        if mode == "like" and "www-hj.douyin.com" in challenge:
++            raise RuntimeError(
++                f"未读取到{source_label}：{source_label}接口当前被抖音风控护航"
++                "（请求被路由到挑战域 www-hj.douyin.com，200 空响应）：登录态有效、"
++                "收藏等其他接口正常，只是该账号的喜欢接口被临时限制。请稍后重试，"
++                "或先在抖音网页端手动打开一次「喜欢」页让风控放行。"
++            )
++        raise RuntimeError(f"未读取到{source_label}：{challenge}")
++    ordered: List[Dict[str, Any]] = []
++    for aweme_id in ids:
++        item = item_map.get(str(aweme_id))
++        if isinstance(item, dict):
++            ordered.append(item)
++    logger.warning(
++        "Library browser fallback for %s harvested items=%s ids=%s",
++        mode,
++        len(ordered),
++        len(ids),
++    )
++    return ordered
 +
 +
 +async def _fetch_source_order(
@@ -1241,7 +2543,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +        fetch_page = (
 +            api_client.get_user_collection
 +            if safe_mode == "collection"
-+            else api_client.get_user_like
++            else api_client.get_user_like_plain
 +        )
 +        while has_more and len(ordered_items) < limit:
 +            await deps.rate_limiter.acquire()
@@ -1258,6 +2560,11 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +            if has_more and cursor == request_cursor:
 +                break
 +
++        if not ordered_items:
++            ordered_items = await _browser_library_fallback(
++                api_client, deps, safe_mode, sec_uid, limit
++            )
++
 +    aweme_ids = _unique_aweme_ids(ordered_items, limit)
 +    if not aweme_ids:
 +        source_label = "收藏" if safe_mode == "collection" else "喜欢"
@@ -1265,33 +2572,86 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +    return await _persist_source_order(deps, safe_mode, aweme_ids)
 +
 +
++def _collection_retry_after(deps: "_SessionDeps") -> int:
++    return max(0, int(deps.collection_blocked_until - time.monotonic() + 0.999))
++
+ 
+-            cookie_file = str(Path(config.config_path).resolve().parent / ".cookies.json")
++def _open_collection_circuit(deps: "_SessionDeps") -> int:
++    deps.collection_failure_count = min(deps.collection_failure_count + 1, 8)
++    cooldown = min(
++        deps.collection_cooldown_cap_seconds,
++        deps.collection_cooldown_seconds * (2 ** (deps.collection_failure_count - 1)),
++    )
++    deps.collection_blocked_until = time.monotonic() + cooldown
++    return cooldown
++
++
++def _clear_collection_circuit(deps: "_SessionDeps") -> None:
++    deps.collection_failure_count = 0
++    deps.collection_blocked_until = 0.0
++
++
++def _collection_circuit_error(deps: "_SessionDeps") -> SourceSyncError:
++    retry_after = _collection_retry_after(deps)
++    minutes = max(1, (retry_after + 59) // 60)
++    return SourceSyncError(
++        f"抖音当前限制收藏列表读取，账号仍保持连接；约 {minutes} 分钟后可再试",
++        error_code="source_blocked",
++        source_mode="collection",
++        channel="circuit_breaker",
++        fallback_attempted=True,
++        retry_after_seconds=retry_after,
++    )
++
++
 +async def _fetch_library_metadata(
 +    deps: "_SessionDeps",
 +    mode: str,
 +    count: int,
 +    progress_callback: Optional[ProgressCallback] = None,
-+) -> Dict[str, int]:
-+    """读取用户选择范围内的元数据，不下载、缓存或持久化任何视频文件。"""
++    allow_browser_fallback: bool = False,
++) -> Dict[str, Any]:
++    """读取用户选择范围内的元数据，不下载、缓存或持久化任何视频文件。
++
++    ``allow_browser_fallback`` 默认关闭：手动同步和自动探测都不再自动打开
++    可见 Chrome。只有显式要求（例如前端明确点击“用浏览器兜底”）才放行。
++    """
 +    safe_mode = mode if mode in {"collection", "like", "post"} else "collection"
 +    limit = _bounded_sync_count(count)
 +    ordered_items: List[Dict[str, Any]] = []
++    challenge = "请确认抖音登录状态，或先在抖音网页端打开一次对应页面后重试"
++    last_http_status = 0
++    response_signal = ""
++    channel = "api"
++    fallback_attempted = False
 +    cursor = 0
 +    has_more = True
 +
-     async with DouyinAPIClient(
-         deps.cookie_manager.get_cookies(),
-         proxy=deps.config.get("proxy"),
-     ) as api_client:
++    async with DouyinAPIClient(
++        deps.cookie_manager.get_cookies(),
++        proxy=deps.config.get("proxy"),
++    ) as api_client:
 +        sec_uid = "self"
 +        if safe_mode in {"like", "post"}:
 +            sec_uid = await _resolve_self_sec_uid(api_client)
 +            if not sec_uid:
 +                raise RuntimeError("未能识别当前抖音账号，请重新扫码登录")
-+        fetch_page = {
-+            "collection": api_client.get_user_collection,
-+            "like": api_client.get_user_like,
-+            "post": api_client.get_user_post,
-+        }[safe_mode]
++        if safe_mode == "collection":
++            fetch_page = api_client.get_user_collection
++        elif safe_mode == "like":
++            fetch_page = api_client.get_user_like_plain
+         else:
+-            cookie_file = ".cookies.json"
+-        self.cookie_manager = CookieManager(cookie_file=cookie_file)
+-        # Load cookies from the config (env var / YAML cookie key) first, then
+-        # fall back to whatever is already on disk in the cookie file. This
+-        # ensures that cookies saved by a previous session are picked up on
+-        # restart even when the config doesn't embed them inline.
+-        initial_cookies = config.get_cookies()
+-        if initial_cookies:
+-            self.cookie_manager.set_cookies(initial_cookies)
++            fetch_page = api_client.get_user_post
 +        while has_more and len(ordered_items) < limit:
 +            await deps.rate_limiter.acquire()
 +            request_cursor = cursor
@@ -1312,6 +2672,51 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +            if has_more and cursor == request_cursor:
 +                break
 +
++        last_http_status = int(getattr(api_client, "last_http_status", 0) or 0)
++        response_signal = str(getattr(api_client, "last_response_signal", "") or "")
++
++        should_fallback = (
++            not ordered_items
++            and safe_mode in {"like", "collection"}
++            and allow_browser_fallback
++            and (
++                safe_mode == "like"
++                or response_signal in COLLECTION_BLOCK_SIGNALS
++                or last_http_status in {403, 429}
++            )
++        )
++        if should_fallback:
++            fallback_attempted = True
++            channel = "browser"
++            fallback_started = time.monotonic()
++            try:
++                ordered_items = await _browser_library_fallback(
++                    api_client, deps, safe_mode, sec_uid, limit
++                )
++            except Exception as exc:
++                safe_error = str(exc)
++                verification = bool(
++                    re.search(r"验证码|安全验证|重新登录|login", safe_error, re.I)
++                )
++                if safe_mode == "collection":
++                    raise SourceSyncError(
++                        "抖音收藏页面需要重新验证账号，请稍后在账号管理中完成验证",
++                        error_code=(
++                            "verification_required" if verification else "source_blocked"
++                        ),
++                        source_mode="collection",
++                        channel="browser",
++                        fallback_attempted=True,
++                        needs_action=verification,
++                    ) from exc
++                raise
++            logger.info(
++                "Library browser fallback for %s duration_ms=%s items=%s",
++                safe_mode,
++                int((time.monotonic() - fallback_started) * 1000),
++                len(ordered_items),
++            )
++
 +    unique_items: List[Dict[str, Any]] = []
 +    seen: set[str] = set()
 +    for item in ordered_items:
@@ -1328,15 +2733,54 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +            "like": "喜欢",
 +            "post": "作品",
 +        }[safe_mode]
++        if safe_mode == "collection" and (
++            response_signal in COLLECTION_BLOCK_SIGNALS
++            or last_http_status in {403, 429}
++        ):
++            raise SourceSyncError(
++                "抖音暂时限制了收藏列表读取。账号仍保持连接，已有资料不会丢失",
++                error_code="source_blocked",
++                source_mode="collection",
++                channel=channel,
++                fallback_attempted=fallback_attempted,
++            )
++        if last_http_status == 403:
++            challenge = (
++                "抖音接口返回 403，账号登录仍有效，但当前请求被平台风控拒绝；"
++                "请降低同步频率并稍后重试"
++            )
++        elif last_http_status == 429:
++            challenge = "抖音接口触发限频（429）；请稍后再试"
 +        catalog = await _read_library_catalog(deps.catalog_path)
 +        previous_snapshot = catalog["modes"].get(safe_mode) or {}
 +        previous_items = previous_snapshot.get("items")
 +        if isinstance(previous_items, list) and previous_items:
-+            raise RuntimeError(
-+                f"未读取到{source_label}，已保留上次同步结果；"
-+                "请确认抖音登录状态后重试"
-+            )
-+        return {"total": 0, "success": 0, "failed": 0, "skipped": 0}
++            reason = challenge
++            if (
++                safe_mode == "like"
++                and challenge
++                and "www-hj.douyin.com" in challenge
++            ):
++                reason = (
++                    f"{source_label}接口当前被抖音风控护航（请求被路由到挑战域 "
++                    "www-hj.douyin.com，200 空响应）：登录态有效、收藏等其他接口正常，"
++                    "但该账号的喜欢接口被临时限制。请稍后重试，或先在抖音网页端手动"
++                    "打开一次「喜欢」页让风控放行。"
++                )
++            raise RuntimeError(f"未读取到{source_label}，已保留上次同步结果；{reason}")
++        return {
++            "total": 0,
++            "success": 0,
++            "failed": 0,
++            "skipped": 0,
++            "error_code": "",
++            "source_mode": safe_mode,
++            "channel": channel,
++            "fallback_attempted": fallback_attempted,
++            "retry_after_seconds": 0,
++            "needs_action": False,
++        }
++    await _prewarm_media_stream_urls(deps, unique_items)
 +    result = await _persist_library_catalog(deps, safe_mode, unique_items)
 +    if safe_mode in {"collection", "like"} and unique_items:
 +        await _persist_source_order(
@@ -1345,204 +2789,346 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +            [str(item.get("aweme_id") or "") for item in unique_items],
 +        )
 +    saved = int(result["count"])
-+    return {"total": saved, "success": saved, "failed": 0, "skipped": 0}
-+
-+
-+def _creator_id_from_profile_url(profile_url: str) -> str:
-+    parsed = urlparse(str(profile_url or "").strip())
-+    if (
-+        parsed.scheme not in {"http", "https"}
-+        or (parsed.hostname or "").lower() not in {"www.douyin.com", "douyin.com"}
-+    ):
-+        return ""
-+    segments = [segment for segment in parsed.path.split("/") if segment]
-+    if len(segments) < 2 or segments[0] != "user":
-+        return ""
-+    creator_id = segments[1]
-+    if not re.fullmatch(r"[A-Za-z0-9_-]{12,192}", creator_id):
-+        return ""
-+    return creator_id
-+
-+
-+def _safe_creator_catalog_item(item: Dict[str, Any], order_index: int) -> Dict[str, Any]:
-+    """Project one aweme onto the sidecar's credential/media-safe contract."""
-+    aweme_id = str(item.get("aweme_id") or "").strip()[:192]
-+    author = item.get("author") if isinstance(item.get("author"), dict) else {}
-+    images = item.get("images") if isinstance(item.get("images"), list) else []
-+    if not images and isinstance(item.get("image_list"), list):
-+        images = item["image_list"]
-+    description = str(item.get("desc") or "").replace("\x00", "").strip()[:5000]
-+    title = description.splitlines()[0].strip()[:300] if description else ""
-+    video = item.get("video") if isinstance(item.get("video"), dict) else {}
-+    try:
-+        duration_ms = int(video.get("duration") or item.get("duration") or 0)
-+    except (TypeError, ValueError):
-+        duration_ms = 0
-+    try:
-+        publish_timestamp = int(item.get("create_time") or 0) or None
-+    except (TypeError, ValueError):
-+        publish_timestamp = None
 +    return {
-+        "aweme_id": aweme_id,
-+        "source_url": f"https://www.douyin.com/video/{aweme_id}",
-+        "title": title or f"抖音作品 {aweme_id}",
-+        "description": description,
-+        "author_name": str(author.get("nickname") or "").replace("\x00", "").strip()[:160],
-+        "publish_timestamp": publish_timestamp,
-+        "duration_ms": max(0, min(duration_ms, 7 * 24 * 60 * 60 * 1000)),
-+        "media_type": "gallery" if images else "video",
-+        "order_index": max(0, int(order_index)),
-+        # CDN covers are signed/ephemeral media URLs. Full-catalog responses
-+        # intentionally omit them rather than inviting durable persistence.
-+        "cover_url": "",
++        "total": saved,
++        "success": saved,
++        "failed": 0,
++        "skipped": 0,
++        "error_code": "",
++        "source_mode": safe_mode,
++        "channel": channel,
++        "fallback_attempted": fallback_attempted,
++        "retry_after_seconds": 0,
++        "needs_action": False,
 +    }
 +
 +
-+def _catalog_risk_detected(page: Dict[str, Any]) -> bool:
-+    flags = page.get("risk_flags")
-+    if isinstance(flags, dict) and any(bool(value) for value in flags.values()):
-+        return True
-+    status_code = page.get("status_code")
-+    return status_code not in {None, 0, "0"}
++def _probe_field_get(deps: "_SessionDeps", kind: str, name: str) -> Any:
++    """读取探测状态字段；like 用主命名空间、collection 用 _collection 后缀。"""
++    return getattr(deps, name if kind == "like" else name + "_collection")
 +
 +
-+async def _browser_creator_catalog(
++def _probe_field_set(deps: "_SessionDeps", kind: str, name: str, value: Any) -> None:
++    """写探测状态字段；like 用主命名空间、collection 用 _collection 后缀。"""
++    setattr(deps, name if kind == "like" else name + "_collection", value)
++
++
++async def _probe_plain_once(
 +    deps: "_SessionDeps",
-+    api_client: DouyinAPIClient,
-+    state: Dict[str, Any],
-+    expected_count: int,
-+) -> List[Dict[str, Any]]:
-+    if state.get("browser_items") is not None:
-+        return list(state["browser_items"])
-+    if state.get("cancelled"):
-+        raise asyncio.CancelledError()
-+    browser_cfg = deps.config.get("browser_fallback", {}) or {}
-+    if not browser_cfg.get("enabled", True):
-+        state["needs_action"] = "risk_control"
-+        state["browser_items"] = []
-+        return []
-+    ids = await api_client.collect_user_post_ids_via_browser(
-+        str(state["creator_id"]),
-+        expected_count=max(0, int(expected_count or 0)),
-+        # Headless returns immediately on a captcha instead of waiting forever
-+        # in the server's Xvfb. Zhicui then exposes a needs_action state.
-+        headless=True,
-+        max_scrolls=min(int(browser_cfg.get("max_scrolls", 240) or 240), 500),
-+        idle_rounds=min(int(browser_cfg.get("idle_rounds", 8) or 8), 30),
-+        wait_timeout_seconds=min(int(browser_cfg.get("wait_timeout_seconds", 180) or 180), 300),
-+    )
-+    captured = api_client.pop_browser_post_aweme_items()
-+    safe_items: List[Dict[str, Any]] = []
-+    for aweme_id in ids[:MAX_CATALOG_ITEMS]:
-+        if state.get("cancelled"):
-+            raise asyncio.CancelledError()
-+        raw = captured.get(str(aweme_id))
-+        if not raw:
++    kind: str,
++) -> Optional[bool]:
++    """对喜欢/收藏接口发一发最小探测（单页 count=18），绝不触碰下载流水线。
++
++    只在 ``DouyinAPIClient`` 内部发一次对应 GET：
++    返回 True=窗口打开；False=风控空响应/403（继续退避）；None=登录态失效
++    （身份解析不出 sec_uid，或接口直接返回登录失效）。
++    绝不调浏览器兜底——兜底会开可见 Chrome，不适合挂在低频后台任务里。
++
++    ``kind`` 是 "like" 或 "collection"，状态写进各自命名空间，互不干扰。
++    """
++    log_tag = "like" if kind == "like" else "collection"
++
++    sec_uid = await _secure_sec_uid_from_session(deps)
++    if not sec_uid:
++        _probe_field_set(deps, kind, "probe_last_result", "账号身份解析失败（可能登录态失效）")
++        _probe_field_set(deps, kind, "probe_last_check_at", _now_utc_iso())
++        _probe_field_set(deps, kind, "action", "等待重新登录")
++        _probe_field_set(deps, kind, "action_at", _now_utc_iso())
++        logger.warning("%s-probe: missing sec_uid scope=%s", log_tag, deps.scope)
++        return None
++
++    # 喜欢需要真 sec_uid；收藏是 cookie 作用域、self 语义。两者都复用同一套已验证浏览器模板。
++    if kind == "collection":
++        async def fetch(client):
++            return await client.get_user_collection_plain("self", 0, 18)
++    else:
++        async def fetch(client):
++            return await client.get_user_like_plain(sec_uid, 0, 18)
++
++    try:
++        async with DouyinAPIClient(
++            deps.cookie_manager.get_cookies(),
++            proxy=deps.config.get("proxy"),
++        ) as api_client:
 +            await deps.rate_limiter.acquire()
-+            raw = await api_client.get_video_detail(str(aweme_id), suppress_error=True)
-+        if not isinstance(raw, dict):
-+            continue
-+        safe = _safe_creator_catalog_item(raw, len(safe_items))
-+        if safe.get("aweme_id"):
-+            safe_items.append(safe)
-+    state["browser_items"] = safe_items
-+    if not safe_items or (expected_count > 0 and len(safe_items) < expected_count):
-+        state["needs_action"] = "verification"
-+    return list(safe_items)
++            page = await fetch(api_client)
++    except LoginRequiredError as exc:
++        _probe_field_set(deps, kind, "probe_last_result", f"登录态失效：{str(exc)[:160]}")
++        _probe_field_set(deps, kind, "probe_last_check_at", _now_utc_iso())
++        _probe_field_set(deps, kind, "action", "等待重新登录")
++        _probe_field_set(deps, kind, "action_at", _now_utc_iso())
++        logger.warning("%s-probe: login required scope=%s", log_tag, deps.scope)
++        return None
++    except Exception as exc:
++        _probe_field_set(deps, kind, "probe_last_result", f"{type(exc).__name__}: {str(exc)[:160]}")
++        _probe_field_set(deps, kind, "probe_last_check_at", _now_utc_iso())
++        logger.warning("%s-probe: attempt failed scope=%s: %s", log_tag, deps.scope, exc)
++        return False
++
++    if _probe_like_success(page):
++        _probe_field_set(deps, kind, "probe_last_open_at", _now_utc_iso())
++        _probe_field_set(deps, kind, "probe_last_success_count", len(page.get("items") or []))
++        return True
++    _probe_field_set(deps, kind, "probe_last_result", _probe_like_suspect_hint(page))
++    _probe_field_set(deps, kind, "probe_last_check_at", _now_utc_iso())
++    logger.warning(
++        "%s-probe: wind-controlled scope=%s hint=%s",
++        log_tag,
++        deps.scope,
++        _probe_field_get(deps, kind, "probe_last_result"),
++    )
++    return False
 +
 +
-+async def _creator_catalog_page(
-+    deps: "_SessionDeps",
-+    state: Dict[str, Any],
-+    cursor: str,
-+    page_size: int,
-+) -> Dict[str, Any]:
-+    if state.get("cancelled"):
-+        raise asyncio.CancelledError()
-+    state["task"] = asyncio.current_task()
-+    state["last_seen"] = time.monotonic()
-+    async with DouyinAPIClient(
-+        deps.cookie_manager.get_cookies(),
-+        proxy=deps.config.get("proxy"),
-+    ) as api_client:
-+        profile = state.get("profile")
-+        if not isinstance(profile, dict):
-+            profile = await api_client.get_user_info(str(state["creator_id"])) or {}
-+            state["profile"] = {
-+                "aweme_count": max(0, int(profile.get("aweme_count") or 0)),
-+                "nickname": str(profile.get("nickname") or "")[:160],
-+            }
-+        profile_count = int(state["profile"].get("aweme_count") or 0)
++async def _run_like_probe_once(deps: "_SessionDeps") -> Optional[bool]:
++    """喜欢接口最小探测薄包装（状态字段落到 like 命名空间）。"""
++    return await _probe_plain_once(deps, "like")
 +
-+        if cursor.startswith("browser:"):
-+            try:
-+                offset = max(0, int(cursor.split(":", 1)[1]))
-+            except ValueError as exc:
-+                raise HTTPException(status_code=400, detail="目录游标无效") from exc
-+            browser_items = await _browser_creator_catalog(deps, api_client, state, profile_count)
-+            selected = browser_items[offset : offset + page_size]
-+            next_offset = offset + len(selected)
-+            has_more = next_offset < len(browser_items)
-+            return {
-+                "items": selected,
-+                "next_cursor": f"browser:{next_offset}" if has_more else None,
-+                "has_more": has_more,
-+                "total_count": len(browser_items) if not state.get("needs_action") else None,
-+                "complete": not has_more and not state.get("needs_action"),
-+                "needs_action": state.get("needs_action"),
-+            }
 +
++async def _run_collection_probe_once(deps: "_SessionDeps") -> Optional[bool]:
++    """收藏接口最小探测薄包装（状态字段落到 collection 命名空间）。
++
++    收藏探测无需真 sec_uid（cookie 作用域、self 语义），但为了与喜欢
++    共用同一套探测判定，仍需要能解析出账号身份以确认登录态有效。
++    """
++    return await _probe_plain_once(deps, "collection")
++
++
++async def _auto_probe_loop(deps: "_SessionDeps", kind: str) -> None:
++    """低频后台自动探测单个来源，风控窗口打开后自动补一次全量同步。
++
++    铁律：不重新登录，不风暴请求。探测用单发最小请求，失败指数退避，
++    成功立即走一次正常全量同步（不带浏览器兜底）并恢复基础间隔。
++    登录态失效（None）则终止本循环；重新推 cookie 会重新拉起任务。
++    ``kind`` ∈ {like, collection}，状态写进各自命名空间。
++    """
++    log_tag = "like" if kind == "like" else "collection"
++    run_once = (
++        _run_like_probe_once if kind == "like" else _run_collection_probe_once
++    )
++
++    await asyncio.sleep(deps.probe_start_seconds)
++    interval = (
++        deps.probe_interval
++        if kind == "like"
++        else deps.probe_interval_collection
++    )
++
++    while True:
 +        try:
-+            api_cursor = max(0, int(cursor or 0))
-+        except ValueError as exc:
-+            raise HTTPException(status_code=400, detail="目录游标无效") from exc
-+        await deps.rate_limiter.acquire()
-+        page = await api_client.get_user_post(
-+            str(state["creator_id"]),
-+            api_cursor,
-+            min(page_size, 20),
++            got_items = await run_once(deps)
++        except asyncio.CancelledError:
++            raise
++        except Exception as exc:
++            logger.exception(
++                "%s-probe: unhandled loop error scope=%s: %s",
++                log_tag,
++                deps.scope,
++                exc,
++            )
++            got_items = False
++
++        if got_items is None:
++            _probe_field_set(deps, kind, "action", "等待重新登录")
++            _probe_field_set(deps, kind, "action_at", _now_utc_iso())
++            logger.warning(
++                "%s-probe: stopping without login scope=%s (等待重新推送 cookie)",
++                log_tag,
++                deps.scope,
++            )
++            return
++
++        now_iso = _now_utc_iso()
++
++        if got_items:
++            _probe_field_set(deps, kind, "action", "自动补一次全量同步")
++            _probe_field_set(deps, kind, "action_at", now_iso)
++            count = DEFAULT_AUTO_PROBE_SYNC_COUNT
++            logger.info(
++                "%s-probe: window open scope=%s items>=1 -> auto full sync count=%s",
++                log_tag,
++                deps.scope,
++                count,
++            )
++            try:
++                await deps.rate_limiter.acquire()
++                result = await _fetch_library_metadata(deps, kind, count)
++                _probe_field_set(
++                    deps,
++                    kind,
++                    "action",
++                    f"已自动同步{_probe_kind_label(kind)} "
++                    + str(int(result.get("total") or 0))
++                    + " 条，等待下一轮验证",
++                )
++                logger.info("%s-probe: auto full sync done scope=%s", log_tag, deps.scope)
++            except Exception as exc:
++                _probe_field_set(deps, kind, "action", "自动同步失败，稍后重试")
++                logger.warning(
++                    "%s-probe: auto full sync failed scope=%s: %s",
++                    log_tag,
++                    deps.scope,
++                    exc,
++                )
++            # 成功或失败都回到基础间隔（失败留待下一轮，不加速退避）。
++            interval = deps.probe_interval if kind == "like" else deps.probe_interval_collection
++        else:
++            _probe_field_set(deps, kind, "action", "等待风控窗口放行")
++            _probe_field_set(deps, kind, "action_at", now_iso)
++            interval = min(interval * 2, deps.probe_max_interval)
++            logger.warning(
++                "%s-probe: controlled scope=%s -> backoff next_in_s=%s",
++                log_tag,
++                deps.scope,
++                interval,
++            )
++
++        # 同步展示下一次等待值，并各自缓存退避节奏。
++        if kind == "like":
++            deps.probe_interval = interval
+         else:
+-            # Trigger a load from disk so get_cookies() returns the persisted
+-            # session without requiring a fresh login on every app restart.
+-            self.cookie_manager.get_cookies()
+-        self.file_manager = FileManager(config.get("path"))
+-        self.rate_limiter = RateLimiter(max_per_second=float(config.get("rate_limit", 2) or 2))
+-        self.retry_handler = RetryHandler(max_retries=int(config.get("retry_times", 3) or 3))
+-        self.queue_manager = QueueManager(max_workers=int(config.get("thread", 5) or 5))
++            deps.probe_interval_collection = interval
++        try:
++            await asyncio.sleep(interval)
++        except asyncio.CancelledError:
++            raise
++
++
++def _probe_kind_label(kind: str) -> str:
++    return "喜欢" if kind == "like" else "收藏"
++
++
++async def _auto_probe_like_loop(deps: "_SessionDeps") -> None:
++    """喜欢接口的薄包装，保持旧调用点兼容。"""
++    await _auto_probe_loop(deps, "like")
++
++
++async def _auto_probe_collection_loop(deps: "_SessionDeps") -> None:
++    """收藏接口的薄包装。"""
++    await _auto_probe_loop(deps, "collection")
++
+ 
++def _spawn_like_probe_for_scope(
++    deps: "_ServerDeps",
++    scope: str,
++) -> None:
++    """幂等启动一个 scope 的喜欢探测任务；已运行则跳过。"""
++    scoped = deps.session(scope)
++    if not scoped.probe_enabled:
++        return
++    if scoped.probe_task is None or scoped.probe_task.done():
++        scoped.probe_task = asyncio.create_task(
++            _auto_probe_like_loop(scoped),
++            name=f"like-probe-{scope[:12]}",
 +        )
-+        page_items = page.get("items") if isinstance(page, dict) else None
-+        if not isinstance(page_items, list):
-+            page_items = []
-+        safe_page = [
-+            _safe_creator_catalog_item(item, int(state.get("order_index") or 0) + index)
-+            for index, item in enumerate(page_items)
-+            if isinstance(item, dict) and item.get("aweme_id")
-+        ]
-+        seen_ids = state.setdefault("seen_ids", set())
-+        for item in safe_page:
-+            seen_ids.add(item["aweme_id"])
-+        state["order_index"] = len(seen_ids)
-+        has_more = bool(page.get("has_more")) if isinstance(page, dict) else False
-+        next_cursor = int(page.get("max_cursor") or 0) if isinstance(page, dict) else 0
-+        restricted = (
-+            _catalog_risk_detected(page if isinstance(page, dict) else {})
-+            or (has_more and next_cursor == api_cursor)
-+            or (not safe_page and (api_cursor > 0 or profile_count > len(seen_ids)))
-+            or (not has_more and profile_count > len(seen_ids) and len(page_items) >= min(page_size, 20))
++        logger.info(
++            "like-probe: started scope=%s interval_s=%s",
++            scope,
++            scoped.probe_interval,
 +        )
-+        if restricted:
-+            browser_items = await _browser_creator_catalog(deps, api_client, state, profile_count)
-+            selected = browser_items[:page_size]
-+            next_offset = len(selected)
-+            browser_has_more = next_offset < len(browser_items)
-+            return {
-+                "items": selected,
-+                "next_cursor": f"browser:{next_offset}" if browser_has_more else None,
-+                "has_more": browser_has_more,
-+                "total_count": len(browser_items) if not state.get("needs_action") else None,
-+                "complete": not browser_has_more and not state.get("needs_action"),
-+                "needs_action": state.get("needs_action"),
-+            }
-+        return {
-+            "items": safe_page,
-+            "next_cursor": str(next_cursor) if has_more else None,
-+            "has_more": has_more,
-+            "total_count": len(seen_ids) if not has_more else None,
-+            "complete": not has_more,
-+            "needs_action": None,
-+        }
++
++
++def _spawn_collection_probe_for_scope(
++    deps: "_ServerDeps",
++    scope: str,
++) -> None:
++    """幂等启动一个 scope 的收藏探测任务；已运行则跳过。"""
++    scoped = deps.session(scope)
++    if not scoped.probe_enabled:
++        return
++    task = scoped.probe_task_collection
++    if task is None or task.done():
++        scoped.probe_task_collection = asyncio.create_task(
++            _auto_probe_collection_loop(scoped),
++            name=f"collection-probe-{scope[:12]}",
++        )
++        logger.info(
++            "collection-probe: started scope=%s interval_s=%s",
++            scope,
++            scoped.probe_interval_collection,
++        )
+ 
+-async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
+-    """简化版 download_url：只负责执行并返回成功/失败计数。
+ 
+-    有意不复用 cli.main.download_url —— 后者绑定了 progress_display 的 rich 状态。
+-    API client 仍按请求创建（aiohttp session 不跨请求复用）；其余重量级依赖从
+-    _ServerDeps 共享。
++def _spawn_probe_tasks_for_scope(
++    deps: "_ServerDeps",
++    scope: str,
++) -> None:
++    """幂等启动一个 scope 的喜欢 + 收藏两个探测任务。"""
++    _spawn_like_probe_for_scope(deps, scope)
++    _spawn_collection_probe_for_scope(deps, scope)
++
++
++async def _prewarm_media_stream_urls(
++    scoped: "_SessionDeps",
++    items: List[Dict[str, Any]],
++) -> None:
++    """收藏完成后预解析去水印媒体 URL 写入流缓存。
++
++    批量转写阶段对每条视频请求 /api/v1/media 时会直接命中缓存，
++    完全跳过 get_video_detail 详情请求，把提取冷启动压到零。
++    签名是纯本地计算（X-Bogus/A-Bogus），不发任何网络请求。
+     """
+-    # proxy 与 cli.main.download_url 对齐:API 请求、短链解析和 CDN 媒体
+-    # 下载(downloader_base 读 api_client.proxy)统一走配置代理。
++    candidates: List[Dict[str, Any]] = []
++    for item in items:
++        aweme_id = str(item.get("aweme_id") or "").strip()
++        if not aweme_id or aweme_id in scoped.media_stream_cache:
++            continue
++        video = item.get("video") if isinstance(item.get("video"), dict) else {}
++        if not video.get("play_addr"):
++            continue
++        candidates.append(item)
++    if not candidates:
++        return
++    try:
++        async with DouyinAPIClient(
++            scoped.cookie_manager.get_cookies(),
++            proxy=scoped.config.get("proxy"),
++        ) as api_client:
++            downloader = DownloaderFactory.create(
++                "video",
++                scoped.config,
++                api_client,
++                scoped.file_manager,
++                scoped.cookie_manager,
++                None,
++                scoped.rate_limiter,
++                scoped.retry_handler,
++                scoped.queue_manager,
++                progress_reporter=None,
++            )
++            for item in candidates:
++                aweme_id = str(item.get("aweme_id") or "").strip()
++                try:
++                    media_info = (
++                        downloader._build_no_watermark_url(item)
++                        if downloader
++                        else None
++                    )
++                except Exception:
++                    media_info = None
++                if media_info:
++                    scoped.media_stream_cache[aweme_id] = (
++                        time.monotonic() + MEDIA_STREAM_CACHE_TTL_SECONDS,
++                        media_info[0],
++                        dict(media_info[1]),
++                    )
++    except Exception:
++        # 预解析失败不影响收藏本身；提取阶段会退回按需解析。
++        pass
 +
 +
 +async def _execute_download(
@@ -1572,10 +3158,11 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +                cnt = 0
 +            job_config.update(number={mode: cnt})
 +
-+    async with DouyinAPIClient(
-+        deps.cookie_manager.get_cookies(),
+     async with DouyinAPIClient(
+         deps.cookie_manager.get_cookies(),
+-        proxy=deps.config.get("proxy"),
 +        proxy=job_config.get("proxy"),
-+    ) as api_client:
+     ) as api_client:
 +        observed_collection_items: List[Dict[str, Any]] = []
 +        if mode == "collection":
 +            original_get_user_collection = api_client.get_user_collection
@@ -1594,10 +3181,10 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
          if is_short_url(url):
              resolved = await api_client.resolve_short_url(normalize_short_url(url))
              if not resolved:
-@@ -98,9 +1332,15 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
+@@ -98,9 +1908,15 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
          if not parsed:
              raise RuntimeError(f"Unsupported URL: {url}")
-
+ 
 +        # self 链接 + like/post：用 cookie 解出真 sec_uid（collect 保持 "self"）
 +        if parsed.get("sec_uid") == "self" and mode in ("like", "post"):
 +            real_sec = await _resolve_self_sec_uid(api_client)
@@ -1611,9 +3198,9 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
              api_client,
              deps.file_manager,
              deps.cookie_manager,
-@@ -114,6 +1354,16 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
+@@ -114,6 +1930,16 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
              raise RuntimeError(f"No downloader for url_type={parsed['type']}")
-
+ 
          result = await downloader.download(parsed)
 +        if observed_collection_items:
 +            try:
@@ -1628,10 +3215,10 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
          return {
              "total": result.total,
              "success": result.success,
-@@ -122,11 +1372,307 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
+@@ -122,11 +1948,329 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
          }
-
-
+ 
+ 
 +async def _fetch_cookie_auto_worker(
 +    deps: "_SessionDeps",
 +    browser: str = "chromium",
@@ -1920,25 +3507,95 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +
  def build_app(config: ConfigLoader) -> FastAPI:
      deps = _ServerDeps(config)
-
+ 
 -    async def executor(url: str) -> Dict[str, int]:
 -        return await _execute_download(url, deps)
-+    async def executor(url: str, **opts: Any) -> Dict[str, int]:
++    async def executor(url: str, **opts: Any) -> Dict[str, Any]:
 +        scope = str(opts.pop("scope", DEFAULT_SESSION_SCOPE))
 +        progress_callback = opts.pop("_progress_callback", None)
 +        scoped = deps.session(scope)
 +        if deps.metadata_only:
-+            return await _fetch_library_metadata(
-+                scoped,
-+                str(opts.get("mode") or "collection"),
-+                _bounded_sync_count(opts.get("count")),
-+                progress_callback=progress_callback,
-+            )
++            requested_mode = str(opts.get("mode") or "collection")
++            if requested_mode != "collection":
++                return await _fetch_library_metadata(
++                    scoped,
++                    requested_mode,
++                    _bounded_sync_count(opts.get("count")),
++                    progress_callback=progress_callback,
++                    allow_browser_fallback=False,
++                )
++            if _collection_retry_after(scoped) > 0:
++                raise _collection_circuit_error(scoped)
++            async with scoped.collection_sync_lock:
++                if _collection_retry_after(scoped) > 0:
++                    raise _collection_circuit_error(scoped)
++                try:
++                    result = await _fetch_library_metadata(
++                        scoped,
++                        requested_mode,
++                        _bounded_sync_count(opts.get("count")),
++                        progress_callback=progress_callback,
++                        allow_browser_fallback=scoped.collection_resilience_enabled,
++                    )
++                except SourceSyncError as exc:
++                    if exc.error_code in {"source_blocked", "verification_required"}:
++                        exc.retry_after_seconds = _open_collection_circuit(scoped)
++                    raise
++                _clear_collection_circuit(scoped)
++                return result
 +        return await _execute_download(url, scoped, **opts)
-
+ 
      server_cfg = config.get("server") or {}
      if not isinstance(server_cfg, dict):
-@@ -148,34 +1694,924 @@ def build_app(config: ConfigLoader) -> FastAPI:
+@@ -142,40 +2286,894 @@ def build_app(config: ConfigLoader) -> FastAPI:
+ 
+     @asynccontextmanager
+     async def lifespan(app: FastAPI):
++        # metadata_only 且显式开启 like_probe_enabled 时：
++        # 1) 为 default scope 立即拉起探测（app 侧按 default 提交的场景）；
++        # 2) 扫描 sessions_root 下已落盘的 scope，给已登录的真实账号
++        #    一并恢复探测任务（重启 sidecar 后无需重新推一次 cookie）。
++        if deps.auto_probe_enabled:
++            _spawn_probe_tasks_for_scope(deps, DEFAULT_SESSION_SCOPE)
++            try:
++                for scope_dir in sorted(deps.sessions_root.iterdir()):
++                    if not scope_dir.is_dir():
++                        continue
++                    scope = scope_dir.name
++                    if scope == DEFAULT_SESSION_SCOPE:
++                        continue
++                    if not (scope_dir / "cookies.json").is_file():
++                        continue
++                    scoped = deps.session(scope)
++                    if not _cookie_state_is_valid(scoped.cookie_manager):
++                        continue
++                    _spawn_probe_tasks_for_scope(deps, scope)
++            except OSError:
++                pass
++            logger.info(
++                "probe: lifespan scanned %s active scopes",
++                len(
++                    [
++                        s
++                        for s in deps._sessions.values()
++                        if s.probe_task or s.probe_task_collection
++                    ]
++                ),
++            )
+         yield
++        for scoped in list(deps._sessions.values()):
++            for task in (scoped.probe_task, scoped.probe_task_collection):
++                if task is not None and not task.done():
++                    task.cancel()
++        for scoped in list(deps._sessions.values()):
++            for task in (scoped.probe_task, scoped.probe_task_collection):
++                if task is not None:
++                    try:
++                        await task
++                    except (asyncio.CancelledError, Exception):
++                        pass
+         await manager.shutdown()
+ 
      app = FastAPI(
          title="Douyin Downloader API",
          version="1.0",
@@ -1948,7 +3605,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
      )
      app.state.job_manager = manager
      app.state.deps = deps
-
+ 
 +    # 生产元数据模式不暴露持久媒体目录；视频只通过下方即时流式端点读取。
 +    download_root = Path(str(config.get("path") or "./Downloaded")).resolve()
 +    download_root.mkdir(parents=True, exist_ok=True)
@@ -1971,16 +3628,63 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 -    async def health() -> Dict[str, str]:
 -        return {"status": "ok"}
 +    async def health() -> Dict[str, Any]:
++        probe_scopes: List[Dict[str, Any]] = []
++        for scope, scoped in deps._sessions.items():
++            if not scoped.probe_enabled:
++                continue
++            task = scoped.probe_task
++            collection_task = scoped.probe_task_collection
++            probe_scopes.append(
++                {
++                    "scope_prefix": scope[:8],
++                    "running": bool(task is not None and not task.done()),
++                    "action": scoped.action,
++                    "action_at": scoped.action_at,
++                    "interval_seconds": scoped.probe_interval,
++                    "last_check_at": scoped.probe_last_check_at,
++                    "last_result": scoped.probe_last_result[:200],
++                    "last_open_at": scoped.probe_last_open_at,
++                    "last_success_count": scoped.probe_last_success_count,
++                    "collection": {
++                        "running": bool(
++                            collection_task is not None
++                            and not collection_task.done()
++                        ),
++                        "action": scoped.action_collection,
++                        "action_at": scoped.action_at_collection,
++                        "interval_seconds": scoped.probe_interval_collection,
++                        "last_check_at": scoped.probe_last_check_at_collection,
++                        "last_result": scoped.probe_last_result_collection[:200],
++                        "last_open_at": scoped.probe_last_open_at_collection,
++                        "last_success_count": scoped.probe_last_success_count_collection,
++                    },
++                }
++            )
 +        return {
 +            "status": "ok",
 +            "storage_mode": "metadata_only" if deps.metadata_only else "local_media",
 +            "max_sync_count": MAX_SYNC_COUNT,
-+            "supports_creator_catalog": bool(deps.metadata_only),
-+            "capabilities": ["creator_catalog"] if deps.metadata_only else [],
 +            "login_browser_concurrency": deps.login_browser_concurrency,
 +            "login_browser_mode": _configured_login_browser_mode(),
++            "capabilities": ["creator_catalog", "collection_resilience"],
++            "collection_resilience": {
++                "enabled": deps.collection_resilience_enabled,
++                "api_first": True,
++                "browser_fallback": bool(
++                    (deps.config.get("browser_fallback") or {}).get("enabled", True)
++                ),
++                "browser_headless": bool(
++                    (deps.config.get("browser_fallback") or {}).get("headless", True)
++                ),
++                "cooldown_seconds": deps.collection_cooldown_seconds,
++                "cooldown_cap_seconds": deps.collection_cooldown_cap_seconds,
++            },
++            "like_probe": {
++                "enabled": deps.auto_probe_enabled,
++                "scopes": probe_scopes,
++            },
 +        }
-+
+ 
 +    # ---- cookie 管理 ----
 +    @app.get("/api/v1/cookies")
 +    async def get_cookies(
@@ -1996,7 +3700,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +                allow_legacy=scope == DEFAULT_SESSION_SCOPE,
 +            ),
 +        }
-
++
 +    @app.post("/api/v1/cookies")
 +    async def set_cookies(
 +        req: CookieRequest,
@@ -2008,6 +3712,24 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +            raise HTTPException(status_code=400, detail="cookie 为空或格式无法解析")
 +        scoped.cookie_manager.set_cookies(parsed)
 +        scoped.media_stream_cache.clear()
++        scoped.media_stream_locks.clear()
++        # 写了新 cookie 就重置两路探测节奏并从基础间隔重新开始（幂等）。
++        scoped.probe_interval = deps.auto_probe_interval
++        scoped.probe_last_result = ""
++        scoped.probe_last_check_at = ""
++        scoped.probe_last_open_at = ""
++        scoped.probe_last_success_count = 0
++        scoped.action = ""
++        scoped.action_at = ""
++        scoped.probe_interval_collection = deps.auto_probe_interval
++        scoped.probe_last_result_collection = ""
++        scoped.probe_last_check_at_collection = ""
++        scoped.probe_last_open_at_collection = ""
++        scoped.probe_last_success_count_collection = 0
++        scoped.action_collection = ""
++        scoped.action_at_collection = ""
++        if deps.auto_probe_enabled:
++            _spawn_probe_tasks_for_scope(deps, scope)
 +        cookies = scoped.cookie_manager.get_cookies()
 +        return {
 +            "cookie_names": sorted(cookies),
@@ -2041,6 +3763,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +            )
 +        scoped.cookie_manager.clear_cookies()
 +        scoped.media_stream_cache.clear()
++        scoped.media_stream_locks.clear()
 +        scoped.clear_qr()
 +        scoped.fetch_status.update(
 +            running=False,
@@ -2111,6 +3834,13 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +                        observed_cookie_count=len(cookies),
 +                        authenticated=_has_authenticated_session(cookies),
 +                    )
++                    # 扫码登录成功后重置两路探测节奏并拉起低频后台探测（幂等）。
++                    scoped.probe_interval = deps.auto_probe_interval
++                    scoped.probe_last_result = ""
++                    scoped.probe_interval_collection = deps.auto_probe_interval
++                    scoped.probe_last_result_collection = ""
++                    if deps.auto_probe_enabled:
++                        _spawn_probe_tasks_for_scope(deps, scope)
 +                else:
 +                    scoped.fetch_status.update(
 +                        running=False,
@@ -2300,8 +4030,9 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +    ) -> JobResponse:
 +        if deps.metadata_only:
 +            raise HTTPException(status_code=403, detail="生产元数据模式禁止下载持久视频")
-+        if not req.url:
-+            raise HTTPException(status_code=400, detail="url is required")
+         if not req.url:
+             raise HTTPException(status_code=400, detail="url is required")
+-        job = await manager.submit(req.url)
 +        job = await manager.submit(
 +            req.url,
 +            mode=req.mode,
@@ -2318,9 +4049,8 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +    ) -> JobResponse:
 +        if deps.metadata_only:
 +            raise HTTPException(status_code=403, detail="生产元数据模式禁止下载持久视频")
-         if not req.url:
-             raise HTTPException(status_code=400, detail="url is required")
--        job = await manager.submit(req.url)
++        if not req.url:
++            raise HTTPException(status_code=400, detail="url is required")
 +        if not req.mode:
 +            raise HTTPException(
 +                status_code=400,
@@ -2334,7 +4064,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +            scope=scope,
 +        )
          return JobResponse(job_id=job.job_id, status=job.status, url=job.url)
-
+ 
      @app.get("/api/v1/jobs/{job_id}")
 -    async def get_job(job_id: str) -> Dict[str, Any]:
 +    async def get_job(
@@ -2349,7 +4079,7 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +        ):
              raise HTTPException(status_code=404, detail="job not found")
          return job.to_dict()
-
+ 
      @app.get("/api/v1/jobs")
 -    async def list_jobs() -> Dict[str, List[Dict[str, Any]]]:
 +    async def list_jobs(
@@ -2433,164 +4163,6 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +        items.reverse()  # 最新在前
 +        return {"items": items, "count": len(items)}
 +
-+    # ---- 指定博主：安全资料解析、近期作品与 metadata-only 全量目录 ----
-+    @app.post("/api/v1/creators/resolve")
-+    async def resolve_creator(
-+        req: CreatorResolveRequest,
-+        scope: str = Depends(_session_scope),
-+    ) -> Dict[str, Any]:
-+        scoped = deps.session(scope)
-+        if not _cookie_state_is_valid(
-+            scoped.cookie_manager,
-+            allow_legacy=scope == DEFAULT_SESSION_SCOPE,
-+        ):
-+            raise HTTPException(status_code=401, detail="抖音登录已失效，请重新登录")
-+        creator_id = _creator_id_from_profile_url(req.profile_url)
-+        if not creator_id:
-+            raise HTTPException(status_code=400, detail="抖音博主主页格式无效")
-+        async with DouyinAPIClient(
-+            scoped.cookie_manager.get_cookies(),
-+            proxy=deps.config.get("proxy"),
-+        ) as api_client:
-+            profile = await api_client.get_user_info(creator_id)
-+        if not isinstance(profile, dict):
-+            raise HTTPException(status_code=404, detail="无法读取该抖音博主主页")
-+        return {
-+            "creator_id": creator_id,
-+            "display_name": str(profile.get("nickname") or "抖音博主")[:160],
-+            # Avatar CDN URLs are signed and expire; do not cross the sidecar
-+            # boundary until a stable authenticated image proxy is available.
-+            "avatar_url": "",
-+        }
-+
-+    @app.post("/api/v1/creators/works")
-+    async def creator_works(
-+        req: CreatorWorksRequest,
-+        scope: str = Depends(_session_scope),
-+    ) -> Dict[str, Any]:
-+        if not deps.metadata_only:
-+            raise HTTPException(status_code=409, detail="指定博主接口要求 metadata_only 模式")
-+        scoped = deps.session(scope)
-+        if not _cookie_state_is_valid(
-+            scoped.cookie_manager,
-+            allow_legacy=scope == DEFAULT_SESSION_SCOPE,
-+        ):
-+            raise HTTPException(status_code=401, detail="抖音登录已失效，请重新登录")
-+        state: Dict[str, Any] = {
-+            "creator_id": req.creator_id,
-+            "created_at": time.monotonic(),
-+            "last_seen": time.monotonic(),
-+            "cancelled": False,
-+            "order_index": 0,
-+            "seen_ids": set(),
-+        }
-+        cursor = ""
-+        items: List[Dict[str, Any]] = []
-+        while len(items) < req.limit:
-+            page = await _creator_catalog_page(
-+                scoped,
-+                state,
-+                cursor,
-+                min(MAX_CATALOG_PAGE_SIZE, req.limit - len(items)),
-+            )
-+            for item in page["items"]:
-+                if item["aweme_id"] not in {current["aweme_id"] for current in items}:
-+                    items.append(item)
-+            if page.get("needs_action"):
-+                raise HTTPException(status_code=409, detail="抖音要求完成验证码或风控验证")
-+            cursor = str(page.get("next_cursor") or "")
-+            if not page.get("has_more") or not cursor:
-+                break
-+        items = items[: req.limit]
-+        # Preserve the existing immediate-ASR manifest, but only with safe
-+        # display metadata. Media itself is still resolved just in time.
-+        persistable = [
-+            {
-+                "aweme_id": item["aweme_id"],
-+                "desc": item["description"],
-+                "author": {"nickname": item["author_name"]},
-+                "create_time": item["publish_timestamp"],
-+                "video": {"duration": item["duration_ms"]},
-+            }
-+            for item in items
-+            if item.get("media_type") == "video"
-+        ]
-+        await _persist_library_catalog(scoped, "post", persistable)
-+        return {"items": items, "count": len(items), "complete": len(items) < req.limit}
-+
-+    @app.post("/api/v1/creators/catalog")
-+    async def creator_catalog(
-+        req: CreatorCatalogRequest,
-+        scope: str = Depends(_session_scope),
-+    ) -> Dict[str, Any]:
-+        if not deps.metadata_only or req.metadata_only is not True:
-+            raise HTTPException(status_code=409, detail="全量目录只允许 metadata_only 模式")
-+        scoped = deps.session(scope)
-+        if not _cookie_state_is_valid(
-+            scoped.cookie_manager,
-+            allow_legacy=scope == DEFAULT_SESSION_SCOPE,
-+        ):
-+            raise HTTPException(status_code=401, detail="抖音登录已失效，请重新登录")
-+        now = time.monotonic()
-+        async with scoped.creator_catalog_lock:
-+            for stale_id, stale in list(scoped.creator_catalog_tasks.items()):
-+                if stale.get("task") is None and now - float(stale.get("last_seen") or now) > 7200:
-+                    scoped.creator_catalog_tasks.pop(stale_id, None)
-+            catalog_id = str(req.catalog_id or "")
-+            state = scoped.creator_catalog_tasks.get(catalog_id) if catalog_id else None
-+            if state is None:
-+                if len(scoped.creator_catalog_tasks) >= 8:
-+                    raise HTTPException(status_code=429, detail="全量目录任务过多，请稍后重试")
-+                if catalog_id and not re.fullmatch(r"[0-9a-f]{40}", catalog_id):
-+                    raise HTTPException(status_code=400, detail="全量目录任务标识无效")
-+                catalog_id = catalog_id or secrets.token_hex(20)
-+                state = {
-+                    "creator_id": req.creator_id,
-+                    "created_at": now,
-+                    "last_seen": now,
-+                    "cancelled": False,
-+                    "task": None,
-+                    "order_index": 0,
-+                    "seen_ids": set(),
-+                }
-+                scoped.creator_catalog_tasks[catalog_id] = state
-+            elif state.get("creator_id") != req.creator_id:
-+                raise HTTPException(status_code=409, detail="全量目录任务与博主不匹配")
-+            if state.get("task") is not None:
-+                raise HTTPException(status_code=409, detail="该全量目录任务仍在处理上一页")
-+        try:
-+            page = await _creator_catalog_page(
-+                scoped,
-+                state,
-+                str(req.cursor or ""),
-+                req.page_size,
-+            )
-+            return {"catalog_id": catalog_id, **page}
-+        except asyncio.CancelledError as exc:
-+            state["cancelled"] = True
-+            raise HTTPException(status_code=409, detail="全量目录同步已取消") from exc
-+        finally:
-+            state["task"] = None
-+            state["last_seen"] = time.monotonic()
-+
-+    @app.delete("/api/v1/creators/catalog/{catalog_id}")
-+    async def cancel_creator_catalog(
-+        catalog_id: str,
-+        scope: str = Depends(_session_scope),
-+    ) -> Dict[str, Any]:
-+        if not re.fullmatch(r"[0-9a-f]{40}", catalog_id):
-+            raise HTTPException(status_code=400, detail="全量目录任务标识无效")
-+        scoped = deps.session(scope)
-+        async with scoped.creator_catalog_lock:
-+            state = scoped.creator_catalog_tasks.get(catalog_id)
-+            if state is None:
-+                return {"cancelled": False}
-+            state["cancelled"] = True
-+            task = state.get("task")
-+            if task is not None and task is not asyncio.current_task() and not task.done():
-+                task.cancel()
-+        return {"cancelled": True}
-+
 +    @app.post("/api/v1/source-order/refresh")
 +    async def refresh_source_order(
 +        req: SourceOrderRequest,
@@ -2653,37 +4225,44 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +            cached = scoped.media_stream_cache.get(clean_id)
 +            if not force and cached and cached[0] > now:
 +                return cached[1], dict(cached[2])
-+            async with scoped.media_stream_lock:
++            # 只对同一作品串行；不同作品并行解析，避免全局锁拖慢批量转写。
++            async with scoped.media_stream_locks_guard:
++                lock = scoped.media_stream_locks.get(clean_id)
++                if lock is None:
++                    lock = asyncio.Lock()
++                    scoped.media_stream_locks[clean_id] = lock
++            async with lock:
 +                cached = scoped.media_stream_cache.get(clean_id)
 +                if not force and cached and cached[0] > time.monotonic():
 +                    return cached[1], dict(cached[2])
-+                async with DouyinAPIClient(
-+                    scoped.cookie_manager.get_cookies(),
-+                    proxy=deps.config.get("proxy"),
-+                ) as api_client:
-+                    detail = await api_client.get_video_detail(clean_id)
-+                    if not detail:
-+                        raise HTTPException(status_code=404, detail="未找到作品")
-+                    downloader = DownloaderFactory.create(
-+                        "video",
-+                        scoped.config,
-+                        api_client,
-+                        scoped.file_manager,
-+                        scoped.cookie_manager,
-+                        None,
-+                        scoped.rate_limiter,
-+                        scoped.retry_handler,
-+                        scoped.queue_manager,
-+                        progress_reporter=None,
-+                    )
-+                    media_info = (
-+                        downloader._build_no_watermark_url(detail)
-+                        if downloader
-+                        else None
-+                    )
-+                if not media_info:
-+                    raise HTTPException(status_code=422, detail="该作品没有可播放视频")
-+                target_url, target_headers = media_info
++                async with scoped.media_resolve_semaphore:
++                    async with DouyinAPIClient(
++                        scoped.cookie_manager.get_cookies(),
++                        proxy=deps.config.get("proxy"),
++                    ) as api_client:
++                        detail = await api_client.get_video_detail(clean_id)
++                        if not detail:
++                            raise HTTPException(status_code=404, detail="未找到作品")
++                        downloader = DownloaderFactory.create(
++                            "video",
++                            scoped.config,
++                            api_client,
++                            scoped.file_manager,
++                            scoped.cookie_manager,
++                            None,
++                            scoped.rate_limiter,
++                            scoped.retry_handler,
++                            scoped.queue_manager,
++                            progress_reporter=None,
++                        )
++                        media_info = (
++                            downloader._build_no_watermark_url(detail)
++                            if downloader
++                            else None
++                        )
++                    if not media_info:
++                        raise HTTPException(status_code=422, detail="该作品没有可播放视频")
++                    target_url, target_headers = media_info
 +                scoped.media_stream_cache[clean_id] = (
 +                    time.monotonic() + MEDIA_STREAM_CACHE_TTL_SECONDS,
 +                    target_url,
@@ -2869,17 +4448,17 @@ index 418f875d330a45d207dd52428636dedd197e27af..046b0fd1fedd25bbc83e4575b080c86f
 +            _remote_urls(images[image_index]),
 +            proxy=deps.config.get("proxy"),
 +        )
-
+ 
      return app
-
+ 
 diff --git a/server/jobs.py b/server/jobs.py
-index 2aed6adacfb3f49d5aa2af749add72ed090d87fe..bc2ecbfa85b8d96ad781a3c1fe572191c39db615 100644
+index 2aed6adacfb3f49d5aa2af749add72ed090d87fe..e1fbfa366d367a39df7c18ce2998bd3df6ed1d7e 100644
 --- a/server/jobs.py
 +++ b/server/jobs.py
 @@ -12,6 +12,9 @@ from datetime import datetime, timezone
  from typing import Any, Awaitable, Callable, Dict, List, Optional
-
-
+ 
+ 
 +ProgressCallback = Callable[[int, Optional[int]], None]
 +
 +
@@ -2887,8 +4466,8 @@ index 2aed6adacfb3f49d5aa2af749add72ed090d87fe..bc2ecbfa85b8d96ad781a3c1fe572191
      # 统一使用 timezone-aware UTC ISO-8601 字符串
      return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 @@ -27,9 +30,19 @@ class JobStatus:
-
-
+ 
+ 
  class DownloadJob:
 -    def __init__(self, job_id: str, url: str):
 +    def __init__(
@@ -2907,7 +4486,7 @@ index 2aed6adacfb3f49d5aa2af749add72ed090d87fe..bc2ecbfa85b8d96ad781a3c1fe572191
          self.status = JobStatus.PENDING
          self.created_at = _now_iso()
          self.started_at: Optional[str] = None
-@@ -40,8 +53,37 @@ class DownloadJob:
+@@ -40,8 +53,43 @@ class DownloadJob:
          self.success = 0
          self.failed = 0
          self.skipped = 0
@@ -2919,6 +4498,12 @@ index 2aed6adacfb3f49d5aa2af749add72ed090d87fe..bc2ecbfa85b8d96ad781a3c1fe572191
 +            self.target = 0
 +        self.processed = 0
          self.error: Optional[str] = None
++        self.error_code: str = ""
++        self.source_mode: str = str(self.opts.get("mode") or "")
++        self.channel: str = "api"
++        self.fallback_attempted: bool = False
++        self.retry_after_seconds: int = 0
++        self.needs_action: bool = False
          self._task: Optional[asyncio.Task] = None
 +        self._reports_progress = progress_target is not None
 +
@@ -2942,10 +4527,10 @@ index 2aed6adacfb3f49d5aa2af749add72ed090d87fe..bc2ecbfa85b8d96ad781a3c1fe572191
 +        if self.target > 0:
 +            next_processed = min(next_processed, self.target)
 +        self.processed = max(self.processed, next_processed)
-
+ 
      def to_dict(self) -> Dict[str, Any]:
          return {
-@@ -55,7 +97,10 @@ class DownloadJob:
+@@ -55,7 +103,16 @@ class DownloadJob:
              "success": self.success,
              "failed": self.failed,
              "skipped": self.skipped,
@@ -2953,11 +4538,17 @@ index 2aed6adacfb3f49d5aa2af749add72ed090d87fe..bc2ecbfa85b8d96ad781a3c1fe572191
 +            "processed": self.processed,
              "error": self.error,
 +            "mode": self.opts.get("mode"),
++            "error_code": self.error_code,
++            "source_mode": self.source_mode,
++            "channel": self.channel,
++            "fallback_attempted": self.fallback_attempted,
++            "retry_after_seconds": self.retry_after_seconds,
++            "needs_action": self.needs_action,
          }
-
-
-@@ -77,7 +122,7 @@ class JobManager:
-
+ 
+ 
+@@ -77,7 +134,7 @@ class JobManager:
+ 
      def __init__(
          self,
 -        executor: Callable[[str], Awaitable[Dict[str, int]]],
@@ -2965,10 +4556,10 @@ index 2aed6adacfb3f49d5aa2af749add72ed090d87fe..bc2ecbfa85b8d96ad781a3c1fe572191
          *,
          max_concurrency: int = 2,
          max_jobs: int = DEFAULT_MAX_JOBS,
-@@ -90,9 +135,20 @@ class JobManager:
+@@ -90,9 +147,20 @@ class JobManager:
          self.max_jobs = max(1, int(max_jobs))
          self.job_ttl_seconds = max(0.0, float(job_ttl_seconds))
-
+ 
 -    async def submit(self, url: str) -> DownloadJob:
 +    async def submit(
 +        self,
@@ -2988,7 +4579,7 @@ index 2aed6adacfb3f49d5aa2af749add72ed090d87fe..bc2ecbfa85b8d96ad781a3c1fe572191
          async with self._lock:
              self._prune_locked()
              self._jobs[job_id] = job
-@@ -134,7 +190,12 @@ class JobManager:
+@@ -134,16 +202,35 @@ class JobManager:
              job.status = JobStatus.RUNNING
              job.started_at = _now_iso()
              try:
@@ -3002,12 +4593,36 @@ index 2aed6adacfb3f49d5aa2af749add72ed090d87fe..bc2ecbfa85b8d96ad781a3c1fe572191
                  job.total = int(counts.get("total", 0))
                  job.success = int(counts.get("success", 0))
                  job.failed = int(counts.get("failed", 0))
+                 job.skipped = int(counts.get("skipped", 0))
++                job.error_code = str(counts.get("error_code") or "")
++                job.source_mode = str(counts.get("source_mode") or job.source_mode)
++                job.channel = str(counts.get("channel") or "api")
++                job.fallback_attempted = bool(counts.get("fallback_attempted", False))
++                job.retry_after_seconds = max(0, int(counts.get("retry_after_seconds") or 0))
++                job.needs_action = bool(counts.get("needs_action", False))
+                 # 只要跑完就是 success；具体成功/失败个数通过字段区分
+                 job.status = JobStatus.SUCCESS if job.failed == 0 else JobStatus.FAILED
+             except Exception as exc:
+                 job.status = JobStatus.FAILED
+-                job.error = f"{type(exc).__name__}: {exc}"
++                job.error = str(getattr(exc, "safe_message", "") or str(exc))
++                job.error_code = str(getattr(exc, "error_code", "") or "connector_error")
++                job.source_mode = str(getattr(exc, "source_mode", "") or job.source_mode)
++                job.channel = str(getattr(exc, "channel", "") or "api")
++                job.fallback_attempted = bool(getattr(exc, "fallback_attempted", False))
++                job.retry_after_seconds = max(
++                    0, int(getattr(exc, "retry_after_seconds", 0) or 0)
++                )
++                job.needs_action = bool(getattr(exc, "needs_action", False))
+             finally:
+                 job.finished_at = _now_iso()
+                 job.finished_monotonic = time.monotonic()
 diff --git a/server/static/index.html b/server/static/index.html
 new file mode 100644
-index 0000000000000000000000000000000000000000..bf5a3b94bb910804517219372f9f4fc8fd8ef2e0
+index 0000000000000000000000000000000000000000..50bb1f3c748311cf066fba83f12c702ee2ee9c43
 --- /dev/null
 +++ b/server/static/index.html
-@@ -0,0 +1,383 @@
+@@ -0,0 +1,483 @@
 +<!DOCTYPE html>
 +<html lang="zh-CN">
 +<head>
@@ -3132,6 +4747,28 @@ index 0000000000000000000000000000000000000000..bf5a3b94bb910804517219372f9f4fc8
 +  .pill.failed { background: rgba(239,68,68,.15); color: var(--danger); }
 +  .err { color: var(--danger); font-size: 12px; margin-top: 6px; word-break: break-all; }
 +  .hidden { display: none !important; }
++
++  /* 喜欢同步状态卡片 */
++  .probe-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
++  .probe-row {
++    border: 1px solid var(--card-border);
++    border-radius: 10px;
++    background: var(--bg-soft);
++    padding: 12px 14px;
++  }
++  .probe-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
++  .probe-status { font-weight: 600; }
++  .probe-status.open { color: var(--accent); }
++  .probe-status.half { color: var(--warn); }
++  .probe-status.stop { color: var(--muted); }
++  .probe-status.wait { color: var(--danger); }
++  .probe-action { font-size: 12px; color: var(--muted); margin-left: auto; }
++  .probe-title { font-size: 12px; color: var(--muted); }
++  .probe-lane { margin-top: 8px; font-size: 12px; color: var(--muted); line-height: 1.7; display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
++  .probe-lane b { color: var(--fg); font-weight: 600; }
++  .probe-key { color: var(--muted); }
++  .step-line { display:flex; gap:8px; align-items:flex-start; font-size:12px; color:var(--muted); line-height:1.6; margin-top:4px; }
++  .step-line .n { flex:0 0 18px; height:18px; border-radius:50%; background:var(--accent-soft); color:var(--accent); text-align:center; line-height:18px; font-size:11px; font-weight:700; }
 +</style>
 +</head>
 +<body>
@@ -3156,6 +4793,17 @@ index 0000000000000000000000000000000000000000..bf5a3b94bb910804517219372f9f4fc8
 +    </div>
 +    <div class="status" id="scanStatus"></div>
 +    <div class="hint">点「扫码登录」会启动安全登录任务；本机模式会弹出浏览器，服务器模式由知萃页面展示二维码。扫码成功后自动保存登录状态，<b>无需手动操作</b>。</div>
++  </section>
++
++  <!-- 喜欢自动同步状态 -->
++  <section class="card" id="probeCard">
++    <h2><span class="dot"></span> 喜欢同步状态 <span class="meta" id="probeMeta"></span></h2>
++    <div id="probeList"><div class="empty">正在读取探测状态…</div></div>
++    <div class="hint" style="margin-top:12px">
++      <div class="step-line"><span class="n">1</span> 后台每隔一小段时间静默探测一次「喜欢」接口，不重新登录、不打扰你。</div>
++      <div class="step-line"><span class="n">2</span> 若抖音风控仍在，自动退避：30 分 → 1 时 → 2 时 → 4 时 → 封顶 6 时。</div>
++      <div class="step-line"><span class="n">3</span> 一旦探到窗口放行，<b>立即自动同步全部喜欢</b>，并在下方显示结果。</div>
++    </div>
 +  </section>
 +
 +  <!-- 采集 + 作品列表 -->
@@ -3249,6 +4897,71 @@ index 0000000000000000000000000000000000000000..bf5a3b94bb910804517219372f9f4fc8
 +    const d = await json('/api/v1/cookies', { method: 'POST', body: JSON.stringify({ cookie }) });
 +    $('cookieStatus').innerHTML = d.valid ? `<span class="ok">✓ 已登录</span> · ${d.count} 条 cookie` : `<span class="bad">✗ 缺关键字段</span> · ${d.count} 条`;
 +  } catch (e) { alert('保存失败: ' + e.message); }
++}
++
++// ---- 喜欢/收藏同步状态 ----
++function probeStatus(sc) {
++  if (!sc.running) return { text: '已停止', cls: 'stop' };
++  if (sc.last_success_count > 0) return { text: '最近放行', cls: 'open' };
++  if (sc.action === '等待风控窗口放行') return { text: '风控中', cls: 'wait' };
++  if (sc.action === '自动补一次全量同步') return { text: '同步中', cls: 'open' };
++  if (sc.action && sc.action.indexOf('已自动同步') === 0) return { text: '已同步', cls: 'open' };
++  return { text: '运行中', cls: 'half' };
++}
++function fmtLocal(iso) { if (!iso) return '—'; const d = new Date(iso); return isNaN(d) ? iso : d.toLocaleString('zh-CN', { hour12: false }); }
++function fmtWait(sec) {
++  if (!sec) return '—';
++  if (sec < 60) return `${sec} 秒`;
++  if (sec < 3600) return `${Math.round(sec / 60)} 分钟`;
++  if (sec < 86400) return `${(sec / 3600).toFixed(1)} 小时`;
++  return `${(sec / 86400).toFixed(1)} 天`;
++}
++function probeRowBody(label, sc) {
++  if (!sc) return '';
++  const st = probeStatus(sc);
++  const intervalHtml = sc.running
++    ? `<span><span class="probe-key">${label}下次探测约</span> <b>${fmtWait(sc.interval_seconds)}</b> 后</span>` : '';
++  const lastHtml = sc.last_check_at
++    ? `<span><span class="probe-key">${label}最近探测</span> <b>${fmtLocal(sc.last_check_at)}</b></span>` : '';
++  const openHtml = sc.last_open_at
++    ? `<span><span class="probe-key">${label}最近放行</span> <b>${fmtLocal(sc.last_open_at)}</b>（${sc.last_success_count} 条）</span>` : '';
++  return `<span class="probe-status ${st.cls}">${label}${st.text}</span>
++    <span class="probe-action">${escapeHtml(sc.action || (sc.running ? '等待首次探测' : ''))}</span>
++    <span class="probe-meta">${intervalHtml}${lastHtml}${openHtml}</span>`;
++}
++function probeRowHtml(sc) {
++  const like = probeRowBody('喜欢·', sc);
++  const col = sc.collection ? probeRowBody('收藏·', sc.collection) : '';
++  return `<div class="probe-row">
++    <div class="probe-top">
++      <span class="pill">${sc.scope_prefix}…</span>
++      <span class="probe-title">${escapeHtml(sc.action || (sc.running ? '等待首次探测' : ''))}</span>
++    </div>
++    <div class="probe-lane">${like}</div>
++    ${col ? `<div class="probe-lane">${col}</div>` : ''}
++  </div>`;
++}
++async function loadProbe() {
++  const card = $('probeCard');
++  if (!card) return;
++  try {
++    const d = await json('/api/v1/health');
++    const lp = (d && d.like_probe) || {};
++    if (!lp.enabled) {
++      card.style.display = 'none';
++      return;
++    }
++    card.style.display = '';
++    const scopes = (lp.scopes || []).filter(s => s.running || s.collection && s.collection.running || s.last_check_at);
++    $('probeMeta').textContent = `${scopes.length} 个会话`;
++    if (!scopes.length) {
++      $('probeList').innerHTML = '<div class="empty">暂无已登录会话，登录后自动开始</div>';
++      return;
++    }
++    $('probeList').innerHTML = '<div class="probe-grid">' + scopes.map(probeRowHtml).join('') + '</div>';
++  } catch (e) {
++    $('probeList').innerHTML = `<div class="empty">状态读取失败: ${e.message}</div>`;
++  }
 +}
 +
 +// ---- 扫码 ----
@@ -3381,6 +5094,7 @@ index 0000000000000000000000000000000000000000..bf5a3b94bb910804517219372f9f4fc8
 +
 +// ---- init ----
 +(async () => {
++  loadProbe();
 +  await loadCookies();
 +  await loadItems();
 +  loadJobs();
@@ -3388,17 +5102,18 @@ index 0000000000000000000000000000000000000000..bf5a3b94bb910804517219372f9f4fc8
 +setInterval(loadJobs, 2500);
 +setInterval(loadItems, 4000);
 +setInterval(loadCookies, 20000);
++setInterval(loadProbe, 10000);
 +</script>
 +</body>
 +</html>
 diff --git a/tests/test_api_client.py b/tests/test_api_client.py
-index 1bba588a1fd38e70b1563e503bb576e2bfc606e2..3bcfe3f4676477edde0067aad62d29980d196435 100644
+index 8811da2871f51307698ef875d1a531fb823f4d11..1f9fd118a69eea7e978229b50ada7b0aecabfd68 100644
 --- a/tests/test_api_client.py
 +++ b/tests/test_api_client.py
-@@ -710,6 +710,52 @@ async def test_collect_endpoints_use_expected_paths_and_normalization(monkeypatc
+@@ -557,6 +557,52 @@ async def test_collect_endpoints_use_expected_paths_and_normalization(monkeypatc
      assert collect_mix_data["items"] == [{"mix_id": "mix-1"}]
-
-
+ 
+ 
 +@pytest.mark.asyncio
 +async def test_default_collection_uses_cookie_scoped_post_endpoint(monkeypatch):
 +    client = DouyinAPIClient({"msToken": "token-1"})
@@ -3454,7 +5169,7 @@ index aaf0b58b1314fef4207c9bf03e4e55009e7c175d..16194ce0193213670df4ad7a907fbe77
 +++ b/tests/test_download_proxy_passthrough.py
 @@ -73,7 +73,10 @@ def _run_execute_download(monkeypatch, tmp_path, config_updates: Dict[str, Any])
      )
-
+ 
      asyncio.run(
 -        _execute_download("https://www.douyin.com/video/7000000000000000001", deps)
 +        _execute_download(
@@ -3463,35 +5178,35 @@ index aaf0b58b1314fef4207c9bf03e4e55009e7c175d..16194ce0193213670df4ad7a907fbe77
 +        )
      )
      return _RecordingAPIClient.seen_proxies
-
+ 
 diff --git a/tests/test_server.py b/tests/test_server.py
-index ac06496f4cb2ac2e94327df6cdeaf4f5323adf6c..5482d8c97e4fa7583d12a91096dda9291148d609 100644
+index ac06496f4cb2ac2e94327df6cdeaf4f5323adf6c..65820479525ee5d120682ae53f5e24a4ab203c9b 100644
 --- a/tests/test_server.py
 +++ b/tests/test_server.py
 @@ -4,6 +4,8 @@
  """
-
+ 
  import asyncio
 +import json
 +import threading
  from typing import Dict
-
+ 
  import pytest
 @@ -15,8 +17,9 @@ except ImportError:  # pragma: no cover
-
-
+ 
+ 
  from config import ConfigLoader
 +import server.app as server_app
  from server.app import build_app
 -from server.jobs import JobManager
 +from server.jobs import DownloadJob, JobManager
-
-
+ 
+ 
  @pytest.mark.asyncio
 @@ -51,7 +54,57 @@ async def test_job_manager_marks_failure_on_executor_error(tmp_path):
      assert "bad url" in fetched.error
-
-
+ 
+ 
 -def test_health_endpoint(tmp_path):
 +@pytest.mark.asyncio
 +async def test_job_manager_reports_running_progress_without_changing_final_counts():
@@ -3547,214 +5262,19 @@ index ac06496f4cb2ac2e94327df6cdeaf4f5323adf6c..5482d8c97e4fa7583d12a91096dda929
      config = ConfigLoader(None)
      config.update(path=str(tmp_path))
      app = build_app(config)
-@@ -59,7 +112,360 @@ def test_health_endpoint(tmp_path):
+@@ -59,7 +112,165 @@ def test_health_endpoint(tmp_path):
      with TestClient(app) as client:
          resp = client.get("/api/v1/health")
          assert resp.status_code == 200
 -        assert resp.json() == {"status": "ok"}
-+        assert resp.json() == {
-+            "status": "ok",
-+            "storage_mode": "local_media",
-+            "max_sync_count": 100,
-+            "supports_creator_catalog": False,
-+            "capabilities": [],
-+            "login_browser_concurrency": 2,
-+            "login_browser_mode": "visible_chrome",
-+        }
-+
-+
-+def test_creator_catalog_is_paginated_metadata_only_and_never_downloads(
-+    tmp_path,
-+    monkeypatch,
-+):
-+    config = ConfigLoader(None)
-+    config.update(path=str(tmp_path), server={"metadata_only": True})
-+    calls = []
-+
-+    class FakeAPI:
-+        def __init__(self, *_args, **_kwargs):
-+            pass
-+
-+        async def __aenter__(self):
-+            return self
-+
-+        async def __aexit__(self, exc_type, exc, tb):
-+            return False
-+
-+        async def get_user_info(self, creator_id):
-+            calls.append(("profile", creator_id))
-+            return {"nickname": "测试博主", "aweme_count": 2}
-+
-+        async def get_user_post(self, creator_id, cursor, count):
-+            calls.append(("post", creator_id, cursor, count))
-+            if cursor == 0:
-+                return {
-+                    "items": [
-+                        {
-+                            "aweme_id": "10001",
-+                            "desc": "第一条",
-+                            "author": {"nickname": "测试博主"},
-+                            "create_time": 1700000000,
-+                            "video": {
-+                                "duration": 61000,
-+                                "play_addr": {"url_list": ["https://signed/video.mp4"]},
-+                            },
-+                        }
-+                    ],
-+                    "has_more": True,
-+                    "max_cursor": 123,
-+                    "status_code": 0,
-+                }
-+            return {
-+                "items": [
-+                    {
-+                        "aweme_id": "10002",
-+                        "desc": "第二条",
-+                        "author": {"nickname": "测试博主"},
-+                        "create_time": 1700000100,
-+                        "video": {"duration": 62000},
-+                    }
-+                ],
-+                "has_more": False,
-+                "max_cursor": 0,
-+                "status_code": 0,
-+            }
-+
-+    monkeypatch.setattr(server_app, "DouyinAPIClient", FakeAPI)
-+    monkeypatch.setattr(server_app, "_cookie_state_is_valid", lambda *_args, **_kwargs: True)
-+    app = build_app(config)
-+    scope = "catalog-scope-123456789012345678"
-+    headers = {"X-Zhicui-Scope": scope}
-+    creator_id = "MS4wLjABAAAAcatalog-test"
-+
-+    with TestClient(app) as client:
-+        health = client.get("/api/v1/health")
-+        first = client.post(
-+            "/api/v1/creators/catalog",
-+            headers=headers,
-+            json={"creator_id": creator_id, "page_size": 20, "metadata_only": True},
-+        )
-+        first_body = first.json()
-+        second = client.post(
-+            "/api/v1/creators/catalog",
-+            headers=headers,
-+            json={
-+                "creator_id": creator_id,
-+                "page_size": 20,
-+                "metadata_only": True,
-+                "catalog_id": first_body["catalog_id"],
-+                "cursor": first_body["next_cursor"],
-+            },
-+        )
-+
-+    assert health.json()["supports_creator_catalog"] is True
-+    assert health.json()["capabilities"] == ["creator_catalog"]
-+    assert first.status_code == 200
-+    assert first_body["has_more"] is True
-+    assert first_body["total_count"] is None
-+    assert second.status_code == 200
-+    assert second.json()["complete"] is True
-+    assert second.json()["total_count"] == 2
-+    serialized = json.dumps([first_body, second.json()])
-+    assert "play_addr" not in serialized
-+    assert "signed/video.mp4" not in serialized
-+    assert "file_path" not in serialized
-+    assert [call[0] for call in calls].count("post") == 2
-+    assert not any(call[0] == "download" for call in calls)
-+
-+
-+def test_creator_catalog_risk_returns_needs_action_without_loop(tmp_path, monkeypatch):
-+    config = ConfigLoader(None)
-+    config.update(
-+        path=str(tmp_path),
-+        server={"metadata_only": True},
-+        browser_fallback={"enabled": True},
-+    )
-+
-+    class RiskAPI:
-+        def __init__(self, *_args, **_kwargs):
-+            self.browser_calls = 0
-+
-+        async def __aenter__(self):
-+            return self
-+
-+        async def __aexit__(self, exc_type, exc, tb):
-+            return False
-+
-+        async def get_user_info(self, _creator_id):
-+            return {"nickname": "测试博主", "aweme_count": 99}
-+
-+        async def get_user_post(self, *_args):
-+            return {
-+                "items": [],
-+                "has_more": False,
-+                "max_cursor": 0,
-+                "status_code": 0,
-+                "risk_flags": {"captcha": True},
-+            }
-+
-+        async def collect_user_post_ids_via_browser(self, *_args, **_kwargs):
-+            self.browser_calls += 1
-+            return []
-+
-+        def pop_browser_post_aweme_items(self):
-+            return {}
-+
-+    monkeypatch.setattr(server_app, "DouyinAPIClient", RiskAPI)
-+    monkeypatch.setattr(server_app, "_cookie_state_is_valid", lambda *_args, **_kwargs: True)
-+    app = build_app(config)
-+    with TestClient(app) as client:
-+        response = client.post(
-+            "/api/v1/creators/catalog",
-+            headers={"X-Zhicui-Scope": "risk-scope-123456789012345678901"},
-+            json={
-+                "creator_id": "MS4wLjABAAAArisk-test",
-+                "page_size": 50,
-+                "metadata_only": True,
-+            },
-+        )
-+
-+    assert response.status_code == 200
-+    assert response.json()["needs_action"] == "verification"
-+    assert response.json()["complete"] is False
-+    assert response.json()["has_more"] is False
-+
-+
-+def test_creator_catalog_cancel_is_scoped_and_interrupts_active_task(tmp_path):
-+    config = ConfigLoader(None)
-+    config.update(path=str(tmp_path), server={"metadata_only": True})
-+    app = build_app(config)
-+    scope = "cancel-catalog-scope-123456789012"
-+    catalog_id = "d" * 40
-+
-+    class FakeTask:
-+        cancelled = False
-+
-+        def done(self):
-+            return False
-+
-+        def cancel(self):
-+            self.cancelled = True
-+
-+    task = FakeTask()
-+    app.state.deps.session(scope).creator_catalog_tasks[catalog_id] = {
-+        "task": task,
-+        "cancelled": False,
-+        "last_seen": 0,
-+    }
-+    with TestClient(app) as client:
-+        other = client.delete(
-+            f"/api/v1/creators/catalog/{catalog_id}",
-+            headers={"X-Zhicui-Scope": "other-catalog-scope-1234567890123"},
-+        )
-+        cancelled = client.delete(
-+            f"/api/v1/creators/catalog/{catalog_id}",
-+            headers={"X-Zhicui-Scope": scope},
-+        )
-+
-+    assert other.json() == {"cancelled": False}
-+    assert cancelled.json() == {"cancelled": True}
-+    assert task.cancelled is True
++        payload = resp.json()
++        assert payload["status"] == "ok"
++        assert payload["storage_mode"] == "local_media"
++        assert payload["max_sync_count"] == 100
++        assert payload["login_browser_concurrency"] == 2
++        assert payload["login_browser_mode"] == "visible_chrome"
++        assert "collection_resilience" in payload["capabilities"]
++        assert payload["collection_resilience"]["enabled"] is False
 +
 +
 +@pytest.mark.parametrize(
@@ -3906,13 +5426,13 @@ index ac06496f4cb2ac2e94327df6cdeaf4f5323adf6c..5482d8c97e4fa7583d12a91096dda929
 +        "mode": "like",
 +        "count": 50,
 +    }
-
-
+ 
+ 
  def test_download_endpoint_creates_job(tmp_path, monkeypatch):
-@@ -103,6 +509,358 @@ def test_download_endpoint_rejects_empty_url(tmp_path):
+@@ -103,6 +314,454 @@ def test_download_endpoint_rejects_empty_url(tmp_path):
          assert resp.status_code == 400
-
-
+ 
+ 
 +def test_auto_collect_defaults_to_all_collection_mode(tmp_path, monkeypatch):
 +    config = ConfigLoader(None)
 +    config.update(path=str(tmp_path))
@@ -4191,7 +5711,11 @@ index ac06496f4cb2ac2e94327df6cdeaf4f5323adf6c..5482d8c97e4fa7583d12a91096dda929
 +    )
 +
 +    assert snapshots == [(2, 5), (4, 5)]
-+    assert result == {"total": 4, "success": 4, "failed": 0, "skipped": 0}
++    assert result["total"] == 4
++    assert result["success"] == 4
++    assert result["source_mode"] == "collection"
++    assert result["channel"] == "api"
++    assert result["fallback_attempted"] is False
 +
 +
 +@pytest.mark.asyncio
@@ -4261,17 +5785,109 @@ index ac06496f4cb2ac2e94327df6cdeaf4f5323adf6c..5482d8c97e4fa7583d12a91096dda929
 +
 +    result = await server_app._fetch_library_metadata(deps, "collection", 50)
 +
-+    assert result == {"total": 0, "success": 0, "failed": 0, "skipped": 0}
++    assert result["total"] == 0
++    assert result["success"] == 0
++    assert result["source_mode"] == "collection"
++    assert result["fallback_attempted"] is False
 +    assert not deps.catalog_path.exists()
++
++
++@pytest.mark.asyncio
++async def test_collection_block_uses_one_browser_fallback(tmp_path, monkeypatch):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path), server={"metadata_only": True})
++    app = build_app(config)
++    deps = app.state.deps.session(server_app.DEFAULT_SESSION_SCOPE)
++
++    class BlockedAPIClient:
++        def __init__(self, *_args, **_kwargs):
++            self.last_http_status = 200
++            self.last_response_signal = "blocked"
++
++        async def __aenter__(self):
++            return self
++
++        async def __aexit__(self, *_args):
++            return None
++
++        async def get_user_collection(self, *_args, **_kwargs):
++            return {"items": [], "has_more": False, "max_cursor": 0}
++
++        get_user_like_plain = get_user_collection
++        get_user_post = get_user_collection
++
++    fallback_calls = 0
++
++    async def fake_fallback(*_args, **_kwargs):
++        nonlocal fallback_calls
++        fallback_calls += 1
++        return [{"aweme_id": "browser-item", "desc": "safe"}]
++
++    monkeypatch.setattr(server_app, "DouyinAPIClient", BlockedAPIClient)
++    monkeypatch.setattr(server_app, "_browser_library_fallback", fake_fallback)
++
++    result = await server_app._fetch_library_metadata(
++        deps, "collection", 50, allow_browser_fallback=True
++    )
++
++    assert fallback_calls == 1
++    assert result["success"] == 1
++    assert result["channel"] == "browser"
++    assert result["fallback_attempted"] is True
++
++
++@pytest.mark.asyncio
++async def test_structured_source_error_is_safe_in_job_contract():
++    async def blocked(_url: str, **_opts):
++        raise server_app.SourceSyncError(
++            "收藏暂不可读取",
++            error_code="source_blocked",
++            source_mode="collection",
++            channel="circuit_breaker",
++            fallback_attempted=True,
++            retry_after_seconds=900,
++        )
++
++    manager = JobManager(executor=blocked)
++    job = await manager.submit("https://example.test", mode="collection")
++    await asyncio.wait_for(job._task, timeout=1.0)
++    payload = job.to_dict()
++
++    assert payload["status"] == "failed"
++    assert payload["error"] == "收藏暂不可读取"
++    assert payload["error_code"] == "source_blocked"
++    assert payload["channel"] == "circuit_breaker"
++    assert payload["retry_after_seconds"] == 900
++    assert "cookie" not in json.dumps(payload).lower()
++
++
++def test_collection_circuit_is_scoped_and_bounded(tmp_path):
++    config = ConfigLoader(None)
++    config.update(
++        path=str(tmp_path),
++        server={
++            "metadata_only": True,
++            "collection_cooldown_seconds": 60,
++            "collection_cooldown_cap_seconds": 120,
++        },
++    )
++    app = build_app(config)
++    first = app.state.deps.session("first-scope-123456789012345678901")
++    second = app.state.deps.session("second-scope-12345678901234567890")
++
++    assert server_app._open_collection_circuit(first) == 60
++    assert server_app._open_collection_circuit(first) == 120
++    assert 1 <= server_app._collection_retry_after(first) <= 120
++    assert server_app._collection_retry_after(second) == 0
 +
 +
  def test_get_unknown_job_returns_404(tmp_path):
      config = ConfigLoader(None)
      config.update(path=str(tmp_path))
-@@ -118,17 +876,606 @@ def test_build_app_shares_deps_across_requests(tmp_path):
+@@ -118,17 +777,606 @@ def test_build_app_shares_deps_across_requests(tmp_path):
      config.update(path=str(tmp_path))
      app = build_app(config)
-
+ 
 -    deps = app.state.deps
 +    owner = app.state.deps
 +    deps = owner.session(server_app.DEFAULT_SESSION_SCOPE)
@@ -4283,7 +5899,7 @@ index ac06496f4cb2ac2e94327df6cdeaf4f5323adf6c..5482d8c97e4fa7583d12a91096dda929
 +    assert owner.retry_handler is not None
 +    assert owner.queue_manager is not None
      assert deps.cookie_manager is not None
-
+ 
      # 构建第二次 app 时应该是完全独立的 deps 实例，但同一 app 内是共享的
      app2 = build_app(config)
      assert app2.state.deps is not app.state.deps
@@ -4877,25 +6493,25 @@ index ac06496f4cb2ac2e94327df6cdeaf4f5323adf6c..5482d8c97e4fa7583d12a91096dda929
 +    )
 +    assert cropped_matrix.shape[0] < canvas.shape[0]
 +    assert cropped_matrix.shape[1] < canvas.shape[1]
-
-
+ 
+ 
  @pytest.mark.asyncio
 diff --git a/tests/test_user_downloader_modes.py b/tests/test_user_downloader_modes.py
-index 6ca81c8230c8ff875121b52b7319b8f017360fd7..d2ec7af0010f5943a113464a9c1abd4ba53ee769 100644
+index 4c379eae1ff5e21e42910e5be094022dfbcfecfd..bf09de0050d2c9e72df404f0c3bc9c7584ba8aea 100644
 --- a/tests/test_user_downloader_modes.py
 +++ b/tests/test_user_downloader_modes.py
-@@ -39,6 +39,7 @@ class _NoopRateLimiter:
+@@ -37,6 +37,7 @@ class _NoopRateLimiter:
  class _FakeAPIClient:
-     def __init__(self, self_info: Any = _UNSET):
+     def __init__(self):
          self.user_info_calls = []
 +        self.collection_calls = 0
          self.collect_calls = 0
          self.collect_mix_calls = 0
-         self.self_info_calls = 0
-@@ -101,6 +102,20 @@ class _FakeAPIClient:
+ 
+@@ -89,6 +90,20 @@ class _FakeAPIClient:
              "status_code": 0,
          }
-
+ 
 +    async def get_user_collection(
 +        self,
 +        _sec_uid: str,
@@ -4913,9 +6529,9 @@ index 6ca81c8230c8ff875121b52b7319b8f017360fd7..d2ec7af0010f5943a113464a9c1abd4b
      async def get_collect_aweme(self, collects_id: str, max_cursor: int = 0, count: int = 20):
          assert collects_id == "collect-1"
          return {
-@@ -113,8 +128,20 @@ class _FakeAPIClient:
-
- def _build_downloader(tmp_path, mode: List[str], api_client=None) -> UserDownloader:
+@@ -101,8 +116,20 @@ class _FakeAPIClient:
+ 
+ def _build_downloader(tmp_path, mode: List[str]) -> UserDownloader:
      config_data = {
 -        "number": {"post": 0, "like": 0, "mix": 0, "music": 0},
 -        "increase": {"post": False, "like": False, "mix": False, "music": False},
@@ -4936,10 +6552,10 @@ index 6ca81c8230c8ff875121b52b7319b8f017360fd7..d2ec7af0010f5943a113464a9c1abd4b
          "mode": mode,
          "thread": 2,
          "browser_fallback": {"enabled": False},
-@@ -267,6 +294,26 @@ def test_user_downloader_supports_self_collect_mode(tmp_path, monkeypatch):
+@@ -215,6 +242,26 @@ def test_user_downloader_supports_self_collect_mode(tmp_path, monkeypatch):
      assert downloader.api_client.user_info_calls == []
-
-
+ 
+ 
 +def test_user_downloader_supports_self_default_collection_mode(tmp_path, monkeypatch):
 +    downloader = _build_downloader(tmp_path, mode=["collection"])
 +
@@ -4962,7 +6578,7 @@ index 6ca81c8230c8ff875121b52b7319b8f017360fd7..d2ec7af0010f5943a113464a9c1abd4b
 +
  def test_user_downloader_rejects_non_self_collect_mode(tmp_path, monkeypatch):
      downloader = _build_downloader(tmp_path, mode=["collect"])
-
+ 
 diff --git a/tests/test_user_mode_registry.py b/tests/test_user_mode_registry.py
 index 7c969998071a27dcb7704002a674b19a5e507b3c..fabb95ca5cf4436c46b7971294a4c2a6975d1912 100644
 --- a/tests/test_user_mode_registry.py
@@ -4996,8 +6612,8 @@ index a2fb8c091b4220b734e6afdc7e69001ab149c0a3..f83e10c04b45cd984eda5e2e3eb55ac3
  from core.user_modes.music_strategy import MusicUserModeStrategy
 @@ -52,6 +53,41 @@ def test_like_strategy_collects_items_from_api():
      assert [item["aweme_id"] for item in items] == ["111"]
-
-
+ 
+ 
 +def test_collection_strategy_collects_default_collection_from_api():
 +    class _API:
 +        async def get_user_collection(self, _sec_uid, max_cursor=0, count=20):
@@ -5036,73 +6652,3 @@ index a2fb8c091b4220b734e6afdc7e69001ab149c0a3..f83e10c04b45cd984eda5e2e3eb55ac3
  def test_like_strategy_increment_stops_at_first_downloaded_aweme():
      class _API:
          def __init__(self):
-
-diff --git a/core/api_client.py b/core/api_client.py
-index eefc764..e0c401a 100644
---- a/core/api_client.py
-+++ b/core/api_client.py
-@@ -291,10 +291,15 @@ class DouyinAPIClient:
-         max_retries: int = 3,
-         base_url: Optional[str] = None,
-         request_headers: Optional[Dict[str, str]] = None,
-+        method: str = "GET",
-+        json_body: Optional[Dict[str, Any]] = None,
-     ) -> Dict[str, Any]:
-         await self._ensure_session()
-         delays = [1, 2, 5]
-         last_exc: Optional[Exception] = None
-+        request_method = str(method or "GET").strip().upper()
-+        if request_method not in {"GET", "POST"}:
-+            raise ValueError(f"Unsupported HTTP method: {request_method}")
-
-         for attempt in range(max_retries):
-             started = time.monotonic()
-@@ -315,11 +320,19 @@ class DouyinAPIClient:
-                 ",".join(sorted(str(key) for key in params)),
-             )
-             try:
--                async with self._session.get(
--                    signed_url,
--                    headers={**self.headers, **(request_headers or {}), "User-Agent": ua},
--                    proxy=self.proxy or None,
--                ) as response:
-+                request_kwargs = {
-+                    "headers": {**self.headers, **(request_headers or {}), "User-Agent": ua},
-+                    "proxy": self.proxy or None,
-+                }
-+                if request_method == "POST":
-+                    request_context = self._session.post(
-+                        signed_url,
-+                        json=json_body if json_body is not None else params,
-+                        **request_kwargs,
-+                    )
-+                else:
-+                    request_context = self._session.get(signed_url, **request_kwargs)
-+                async with request_context as response:
-                     if response.status == 200:
-                         body = await response.read()
-                         if not body:
-@@ -572,6 +585,23 @@ class DouyinAPIClient:
-         raw = await self._request_json("/aweme/v1/web/aweme/favorite/", params)
-         return self._normalize_paged_response(raw, item_keys=["aweme_list"])
-
-+    async def get_user_collection(
-+        self, sec_uid: str, max_cursor: int = 0, count: int = 20
-+    ) -> Dict[str, Any]:
-+        """Fetch the logged-in account's default collection."""
-+        if sec_uid and sec_uid != "self":
-+            logger.warning("Default collection requires self sec_uid, got=%s", sec_uid)
-+            return self._normalize_paged_response({}, item_keys=["aweme_list"], source="api")
-+
-+        params = await self._build_collect_page_params(max_cursor, count)
-+        raw = await self._request_json(
-+            "/aweme/v1/web/aweme/listcollection/",
-+            params,
-+            method="POST",
-+            json_body=params,
-+        )
-+        return self._normalize_paged_response(raw, item_keys=["aweme_list"])
-+
-     async def get_user_mix(
-         self, sec_uid: str, max_cursor: int = 0, count: int = 20
-     ) -> Dict[str, Any]:

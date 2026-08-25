@@ -93,7 +93,21 @@ def _owns_model(db: Session, user_id: str, model_id: str) -> UserCustomChatModel
 def uses_custom_provider(db: Session, user_id: str) -> bool:
     """BYOK 请求直接使用用户自己的余额，不消耗平台聊天萃点。"""
     selected = _selected_model(db, user_id)
-    return bool(selected and selected.enabled)
+    if selected and selected.enabled:
+        return True
+
+    # 启动迁移会把旧单行配置提升到 UserCustomChatModel，但兼容接口、
+    # 测试夹具或滚动发布期间仍可能短暂只存在旧行。此时也必须先识别
+    # BYOK，避免为用户自己的模型创建平台计费预留记录。
+    legacy = _row(db, user_id)
+    return bool(
+        legacy
+        and legacy.mode == "custom"
+        and legacy.enabled
+        and legacy.model
+        and legacy.api_base
+        and legacy.encrypted_api_key
+    )
 
 
 def _mask(value: str) -> str:
@@ -325,16 +339,39 @@ def effective_custom_config(db: Session, user_id: str, model_id: str | None = No
         row = _owns_model(db, user_id, model_id)
     else:
         row = _selected_model(db, user_id)
-    if row is None or not row.enabled:
+    if row is not None and row.enabled:
+        api_key = settings_service.decrypt_value(row.encrypted_api_key)
+        if row.model and row.api_base and api_key:
+            return {
+                "provider": "custom",
+                "model": row.model,
+                "runtime_model": settings_service.to_litellm_model("custom", row.model),
+                "api_base": row.api_base,
+                "api_key": api_key,
+            }
+
+    if model_id:
         return None
-    api_key = settings_service.decrypt_value(row.encrypted_api_key)
-    if not row.model or not row.api_base or not api_key:
+
+    # 兼容尚未被启动迁移提升的旧 UserAIProviderConfig(custom) 行。
+    legacy = _row(db, user_id)
+    if (
+        legacy is None
+        or legacy.mode != "custom"
+        or not legacy.enabled
+        or not legacy.model
+        or not legacy.api_base
+        or not legacy.encrypted_api_key
+    ):
+        return None
+    api_key = settings_service.decrypt_value(legacy.encrypted_api_key)
+    if not api_key:
         return None
     return {
         "provider": "custom",
-        "model": row.model,
-        "runtime_model": settings_service.to_litellm_model("custom", row.model),
-        "api_base": row.api_base,
+        "model": legacy.model,
+        "runtime_model": settings_service.to_litellm_model("custom", legacy.model),
+        "api_base": legacy.api_base,
         "api_key": api_key,
     }
 

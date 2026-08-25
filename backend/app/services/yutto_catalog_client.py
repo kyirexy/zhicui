@@ -59,12 +59,24 @@ class YuttoCatalogCancelled(YuttoCatalogError):
 
 
 def _enabled() -> bool:
-    return os.getenv("YUTTO_CATALOG_ENABLED", "false").strip().lower() in {
+    configured = os.getenv("YUTTO_CATALOG_ENABLED")
+    if configured is None and os.name == "nt":
+        return _token_file().is_file()
+    return str(configured or "false").strip().lower() in {
         "1",
         "true",
         "yes",
         "on",
     }
+
+
+def _token_file() -> Path:
+    configured = os.getenv("YUTTO_CATALOG_TOKEN_FILE")
+    if configured:
+        return Path(configured)
+    if os.name == "nt" and os.getenv("LOCALAPPDATA"):
+        return Path(os.environ["LOCALAPPDATA"]) / "Zhicui" / "yutto-sidecar" / "server.token"
+    return Path(_DEFAULT_TOKEN_FILE)
 
 
 def _server_url() -> str:
@@ -83,7 +95,7 @@ def _server_url() -> str:
 
 
 def _read_token() -> str:
-    token_path = Path(os.getenv("YUTTO_CATALOG_TOKEN_FILE", _DEFAULT_TOKEN_FILE))
+    token_path = _token_file()
     try:
         if token_path.is_symlink() or not token_path.is_file():
             raise YuttoCatalogError("connector_unavailable", "yutto token 文件不可用")

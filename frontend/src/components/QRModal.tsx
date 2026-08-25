@@ -34,7 +34,7 @@ export default function QRModal() {
             </h3>
             {url && (
               <QRCodeSVG
-                value={`${url}/download/zhicui.apk`}
+                value={`${url}/api/client-downloads/android`}
                 size={168}
                 level="M"
                 bgColor="#ffffff"
@@ -44,8 +44,7 @@ export default function QRModal() {
               />
             )}
             <a
-              href="/download/zhicui.apk"
-              download
+              href="/api/client-downloads/android"
               className="btn-primary mx-auto mt-3 inline-flex min-h-11 items-center gap-2 px-4 text-sm font-medium"
             >
               <Download size={14} />

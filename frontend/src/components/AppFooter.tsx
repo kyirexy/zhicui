@@ -5,10 +5,12 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ArrowUpRight, DownloadSimple, ShieldCheck } from '@phosphor-icons/react';
 import { isNativeAndroidApp } from '@/lib/douyinNative';
+import { useAuth } from '@/lib/hooks/AuthContext';
 import styles from './MarketingFooter.module.css';
 
 export default function AppFooter() {
   const pathname = usePathname();
+  const { user } = useAuth();
   const [nativeAndroid, setNativeAndroid] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -35,13 +37,15 @@ export default function AppFooter() {
               <DownloadSimple size={16} weight="light" />
               下载客户端
             </a>
-            <Link href="/admin">
-              <ShieldCheck size={16} weight="light" />
-              管理员入口
-              <ArrowUpRight size={15} weight="light" />
-            </Link>
+            {user?.is_admin && (
+              <Link href="/admin">
+                <ShieldCheck size={16} weight="light" />
+                管理员入口
+                <ArrowUpRight size={15} weight="light" />
+              </Link>
+            )}
           </nav>
-          <p>© 2026 知萃 · 视频资料由你选择，视频文件不在服务器永久保存</p>
+          <p>© 2026 知萃</p>
         </div>
       </footer>
     );

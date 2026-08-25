@@ -392,7 +392,7 @@ def serialize_item(note: Note) -> dict[str, Any]:
         "author_name": meta.get("author_name") or "",
         "cover_url": meta.get("cover_url") or "",
         "source_url": meta.get("source_url") or note.video_url,
-        "media_url": meta.get("media_url") or "",
+        "media_url": meta.get("media_url") or note.video_url or "",
         "media_type": meta.get("media_type") or "video",
         "tags": meta.get("tags") or [],
         "published_at": meta.get("published_at") or "",
@@ -413,7 +413,13 @@ def get_import(db: Session, *, user_id: str, note_id: str) -> Note | None:
     return note if note is not None and _source_meta(note).get("source_kind") == SOURCE_KIND else None
 
 
-def get_workspace(db: Session, *, user_id: str, note_id: str) -> dict[str, Any] | None:
+def get_workspace(
+    db: Session,
+    *,
+    user_id: str,
+    note_id: str,
+    refresh_media: bool = False,
+) -> dict[str, Any] | None:
     # The shared reader is also the canonical source view for knowledge pages.
     # Keep mutation endpoints import-only, but allow any owned Note to be read
     # here so older Douyin/library entries and direct extractions do not lead to
@@ -421,6 +427,36 @@ def get_workspace(db: Session, *, user_id: str, note_id: str) -> dict[str, Any] 
     note = note_service.get_note(db, note_id, user_id=user_id)
     if note is None:
         return None
+    if refresh_media and note.video_id:
+        current_meta = _source_meta(note)
+        platform = str(current_meta.get("platform") or "douyin").strip()
+        if platform == "douyin":
+            source_url = str(
+                current_meta.get("source_url")
+                or f"https://www.douyin.com/video/{note.video_id}"
+            ).strip()
+            info = video_extractor.parse_video_info(source_url)
+            refreshed_media = str(info.get("download_url") or info.get("url") or "").strip()
+            if refreshed_media:
+                note.video_url = refreshed_media
+                summary = json.loads(note.ai_summary or "{}")
+                source_meta = summary.get("source_meta")
+                if not isinstance(source_meta, dict):
+                    source_meta = {}
+                source_meta.update({
+                    "source_kind": source_meta.get("source_kind") or "single-link",
+                    "platform": "douyin",
+                    "source_url": source_url,
+                    "media_url": refreshed_media,
+                    "cover_url": str(info.get("cover_url") or info.get("thumbnail") or source_meta.get("cover_url") or ""),
+                    "author_name": str(info.get("author_name") or info.get("author") or source_meta.get("author_name") or ""),
+                    "media_type": "video",
+                    "source_mode": source_meta.get("source_mode") or "import",
+                })
+                summary["source_meta"] = source_meta
+                note.ai_summary = json.dumps(summary, ensure_ascii=False)
+                db.commit()
+                db.refresh(note)
     item = serialize_item(note)
     source_meta = _source_meta(note)
     source_kind = str(source_meta.get("source_kind") or "note").strip() or "note"

@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -37,6 +37,7 @@ _BROAD_TERMS = (
     "全部", "所有", "共同", "共性", "反复", "重复出现", "核心观点", "主题",
     "主线", "整体", "规律", "趋势", "归纳", "总结", "综合", "对比", "区别",
     "异同", "分歧", "行动建议", "方法论", "这些视频", "这批视频",
+    "完整列出", "具体包含", "分别说明",
 )
 _SENSITIVE_KEYS = (
     "cookie", "authorization", "token", "secret", "password", "api_key",
@@ -89,6 +90,19 @@ def _safe_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
         "truncated": True,
         "preview": encoded[: MAX_EVENT_JSON_CHARS - 100],
     }
+
+
+def _public_turn_error(exc: Exception, *, cancelled: bool) -> str:
+    if cancelled:
+        return "本次生成已停止"
+    raw = (str(exc) or type(exc).__name__).strip()
+    lowered = raw.lower()
+    if isinstance(exc, IntegrityError) or any(marker in lowered for marker in (
+        "sqlalchemy", "integrityerror", "constraint failed", "sql:",
+        "transaction has been rolled back", "traceback",
+    )):
+        return "研究状态同步时发生冲突，请重新尝试"
+    return raw[:500] or "视频 Agent 暂时没有完成回答"
 
 
 def resolve_research_mode(
@@ -186,12 +200,18 @@ def create_or_get_turn(
         turn=turn,
         event_type="turn.created",
         phase="queued",
-        message="问题已进入研究队列",
+        message=(
+            "计划调整已进入处理队列"
+            if thread.context_type == "plan"
+            else "问题已进入研究队列"
+        ),
         payload={
             "requested_mode": turn.requested_mode,
             "resolved_mode": turn.resolved_mode,
             "source_total_count": turn.source_total_count,
             "web_scope": turn.web_scope,
+            "context_type": thread.context_type or "video",
+            "context_id": thread.context_id,
         },
     )
     return turn, True
@@ -207,39 +227,58 @@ def append_event(
     payload: dict[str, Any] | None = None,
     lease_token: str | None = None,
 ) -> AgentEvent:
-    query = db.query(AgentTurn).filter(
-        AgentTurn.id == turn.id,
-        AgentTurn.user_id == turn.user_id,
-    )
-    if lease_token is not None:
-        query = query.filter(AgentTurn.lease_token == lease_token)
-    locked = query.with_for_update().first()
-    if locked is None:
-        db.rollback()
-        raise AgentTurnLeaseLost("Agent Turn 租约已转移")
-    if locked.cancellation_requested and event_type not in {
-        "turn.cancel_requested", "turn.cancelled", "turn.failed"
-    }:
-        db.rollback()
-        raise AgentTurnCancelled("Agent Turn 已取消")
-    event = AgentEvent(
-        turn_id=locked.id,
-        thread_id=locked.thread_id,
-        user_id=locked.user_id,
-        seq=locked.next_event_seq,
-        event_type=event_type[:64],
-        phase=phase[:32],
-        message=message[:500],
-        payload_json=json.dumps(_safe_payload(payload), ensure_ascii=False),
-    )
-    locked.next_event_seq += 1
-    locked.phase = phase[:32]
-    locked.updated_at = _utcnow()
-    db.add(event)
-    db.commit()
-    db.refresh(event)
-    db.refresh(turn)
-    return event
+    # PostgreSQL serialises this path through FOR UPDATE. SQLite ignores that
+    # clause, so a worker progress callback and a cancellation request can
+    # briefly choose the same sequence. The unique key remains the source of
+    # truth; repair a stale counter and retry instead of leaking an IntegrityError
+    # into the user's Turn.
+    for attempt in range(4):
+        query = db.query(AgentTurn).filter(
+            AgentTurn.id == turn.id,
+            AgentTurn.user_id == turn.user_id,
+        )
+        if lease_token is not None:
+            query = query.filter(AgentTurn.lease_token == lease_token)
+        locked = query.with_for_update().populate_existing().first()
+        if locked is None:
+            db.rollback()
+            raise AgentTurnLeaseLost("Agent Turn 租约已转移")
+        if locked.cancellation_requested and event_type not in {
+            "turn.cancel_requested", "turn.cancelled", "turn.failed"
+        }:
+            db.rollback()
+            raise AgentTurnCancelled("Agent Turn 已取消")
+
+        latest_seq = db.query(func.max(AgentEvent.seq)).filter(
+            AgentEvent.turn_id == locked.id
+        ).scalar()
+        event_seq = max(locked.next_event_seq, int(latest_seq or 0) + 1)
+        event = AgentEvent(
+            turn_id=locked.id,
+            thread_id=locked.thread_id,
+            user_id=locked.user_id,
+            seq=event_seq,
+            event_type=event_type[:64],
+            phase=phase[:32],
+            message=message[:500],
+            payload_json=json.dumps(_safe_payload(payload), ensure_ascii=False),
+        )
+        locked.next_event_seq = event_seq + 1
+        locked.phase = phase[:32]
+        locked.updated_at = _utcnow()
+        db.add(event)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            if attempt >= 3:
+                raise
+            continue
+        db.refresh(event)
+        db.refresh(turn)
+        return event
+
+    raise RuntimeError("Agent 事件序号分配失败")
 
 
 def get_turn(db: Session, turn_id: str, user_id: str) -> AgentTurn | None:
@@ -352,7 +391,7 @@ def request_cancel(db: Session, turn: AgentTurn) -> AgentTurn:
         turn.status = "cancelled"
         turn.phase = "cancelled"
         turn.error_code = "cancelled"
-        turn.error_message = "研究任务已取消"
+        turn.error_message = "本次生成已停止"
         turn.completed_at = _utcnow()
     db.commit()
     db.refresh(turn)
@@ -361,7 +400,7 @@ def request_cancel(db: Session, turn: AgentTurn) -> AgentTurn:
         turn=turn,
         event_type="turn.cancelled" if queued else "turn.cancel_requested",
         phase=turn.phase,
-        message="研究任务已取消" if queued else "正在停止研究任务",
+        message="本次生成已停止" if queued else "正在停止本次回答",
     )
     return turn
 
@@ -380,6 +419,17 @@ def retry_turn(db: Session, turn: AgentTurn) -> AgentTurn:
     turn.error_code = None
     turn.error_message = None
     turn.updated_at = _utcnow()
+    # A provider/event failure can happen after the conversation thread was
+    # claimed but before ask_thread restored it. Put the parent back into the
+    # retryable state before the worker claims this Turn again.
+    db.query(AgentThread).filter(
+        AgentThread.id == turn.thread_id,
+        AgentThread.user_id == turn.user_id,
+        AgentThread.status.in_(("running", "failed")),
+    ).update({
+        AgentThread.status: "failed",
+        AgentThread.updated_at: _utcnow(),
+    }, synchronize_session=False)
     db.commit()
     db.refresh(turn)
     append_event(db, turn=turn, event_type="turn.retried", phase="queued", message="任务已重新排队")
@@ -452,10 +502,18 @@ def fail_turn(turn_id: str, lease_token: str, exc: Exception) -> None:
         turn.status = "cancelled" if cancelled else "failed"
         turn.phase = turn.status
         turn.error_code = "cancelled" if cancelled else type(exc).__name__[:80]
-        turn.error_message = (str(exc) or type(exc).__name__)[:500]
+        turn.error_message = _public_turn_error(exc, cancelled=cancelled)
         turn.completed_at = _utcnow()
         turn.lease_token = None
         turn.lease_expires_at = None
+        db.query(AgentThread).filter(
+            AgentThread.id == turn.thread_id,
+            AgentThread.user_id == turn.user_id,
+            AgentThread.status == "running",
+        ).update({
+            AgentThread.status: "failed",
+            AgentThread.updated_at: _utcnow(),
+        }, synchronize_session=False)
         db.commit()
         db.refresh(turn)
         append_event(
@@ -463,7 +521,7 @@ def fail_turn(turn_id: str, lease_token: str, exc: Exception) -> None:
             turn=turn,
             event_type="turn.cancelled" if cancelled else "turn.failed",
             phase=turn.phase,
-            message="研究任务已取消" if cancelled else "视频 Agent 暂时没有完成回答",
+            message="本次生成已停止" if cancelled else "视频 Agent 暂时没有完成回答",
             payload={"error_code": turn.error_code},
         )
 

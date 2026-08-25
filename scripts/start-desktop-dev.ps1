@@ -24,6 +24,7 @@ $frontendHealthUrl = "$frontendUrl/harness"
 
 $backendProcess = $null
 $frontendProcess = $null
+$yuttoProcess = $null
 $exitCode = 0
 
 function Write-Step {
@@ -165,6 +166,14 @@ try {
             -Name '桌面端'
     }
 
+    $yuttoRuntime = Join-Path $env:LOCALAPPDATA 'Zhicui\yutto-sidecar\.venv\Scripts\yutto.exe'
+    if ($Install -or -not (Test-Path -LiteralPath $yuttoRuntime)) {
+        Write-Step '安装' '正在准备 B站全部作品连接器（首次安装需要几分钟）'
+        & (Join-Path $PSScriptRoot 'install-yutto-sidecar.ps1')
+    }
+    Write-Step '启动' 'B站全部作品连接器'
+    $yuttoProcess = & (Join-Path $PSScriptRoot 'start-yutto-sidecar.ps1') -PassThru
+
     if (Test-HttpEndpoint -Url $backendHealthUrl) {
         Write-Step '复用' "后端已经运行：$backendUrl"
     } else {
@@ -247,6 +256,7 @@ try {
     if (-not $KeepServices) {
         Stop-StartedProcessTree -Process $frontendProcess -Name '网页端'
         Stop-StartedProcessTree -Process $backendProcess -Name '后端'
+        Stop-StartedProcessTree -Process $yuttoProcess -Name 'B站目录连接器'
     } else {
         Write-Step '保留' '后端和网页端继续在后台运行'
     }

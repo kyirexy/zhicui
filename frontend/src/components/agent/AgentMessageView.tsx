@@ -1,6 +1,12 @@
 'use client';
 
-import { memo } from 'react';
+import {
+  forwardRef,
+  memo,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from 'react';
 import {
   ArrowClockwise,
   CaretRight,
@@ -16,7 +22,12 @@ import AgentMark from '@/components/agent/AgentMark';
 import AgentVideoAnalysisCard, {
   type AgentVideoAnalysisDecision,
 } from '@/components/agent/AgentVideoAnalysisCard';
+import AgentPlanChangeCard from '@/components/agent/AgentPlanChangeCard';
 import { MessageResponse } from '@/components/ai-elements/message';
+import {
+  hasVisibleAgentAnswer,
+  shouldShowAgentCitationCoverage,
+} from '@/lib/agentTurnUi';
 import type { AgentMessage } from '@/lib/types';
 
 export type AgentMessageDeliveryState = 'sending' | 'failed';
@@ -35,6 +46,16 @@ interface AgentMessageViewProps {
     action: AgentVideoAnalysisDecision,
     options?: { offeringId?: string; useByok?: boolean },
   ) => void;
+}
+
+export interface AgentStreamingMessageHandle {
+  append: (delta: string) => void;
+  hydrate: (message: AgentMessage) => void;
+}
+
+interface AgentStreamingMessageViewProps extends Omit<AgentMessageViewProps, 'message' | 'streaming'> {
+  initialMessage: AgentMessage;
+  onFirstContent?: () => void;
 }
 
 function readableAssistantContent(content: string): string {
@@ -87,11 +108,12 @@ function AgentMessageView({
   onVideoAnalysisDecision,
 }: AgentMessageViewProps) {
   const isAssistant = message.role === 'assistant';
+  const isPlanChange = message.result?.type === 'plan_change_preview';
   // DSH rows keep assistant output full-width all the way through streaming; a
   // markdown-only pass has no `[object Object]`-style noise to hide, so it
   // stays as the last visible source.
   const liveContent = typeof message.content === 'string' ? message.content : '';
-  const streamed = streaming && liveContent.trim() !== '';
+  const streamed = streaming && hasVisibleAgentAnswer(liveContent);
   const claims = message.result?.claims || [];
   const evidenceCount = message.evidence?.length || 0;
   const transcriptEvidenceCount = message.evidence?.filter(
@@ -121,13 +143,14 @@ function AgentMessageView({
       : grounded
         ? '基于视频资料'
         : '未形成直接引用',
-    citationCoverage && citationCoverage.requested > 0
+    citationCoverage
+      && shouldShowAgentCitationCoverage(evidenceCount, citationCoverage)
       ? `引用 ${citationCoverage.verified}/${citationCoverage.requested}`
       : null,
-    sourceContext
+    sourceContext && typeof sourceContext.note_count === 'number'
       ? `已读 ${sourceContext.note_count} 个视频`
       : null,
-    sourceContext
+    sourceContext && typeof sourceContext.transcript_chars === 'number'
       ? `${sourceContext.transcript_chars.toLocaleString('zh-CN')} 字文稿`
       : null,
     webSourceCount > 0
@@ -161,7 +184,7 @@ function AgentMessageView({
         deliveryState ? `is-${deliveryState}` : ''
       } ${streaming ? 'is-streaming' : ''}`}
     >
-      {isAssistant && (
+      {isAssistant && (!streaming || streamed) && (
         <div className="video-agent-message-author">
           <>
             <span className="video-agent-message-avatar">
@@ -169,7 +192,7 @@ function AgentMessageView({
             </span>
             <span className="video-agent-message-identity">
               <strong>知萃</strong>
-              <small>{streaming ? '正在生成' : '基于视频资料'}</small>
+              <small>{isPlanChange ? '基于当前计划' : streaming ? '基于所选视频' : '基于视频资料'}</small>
             </span>
           </>
         </div>
@@ -194,6 +217,10 @@ function AgentMessageView({
           disabled={disabled}
           onDecision={onVideoAnalysisDecision}
         />
+      )}
+
+      {isAssistant && !streaming && (
+        <AgentPlanChangeCard message={message} disabled={disabled} />
       )}
 
       {!isAssistant && deliveryState && (
@@ -231,7 +258,7 @@ function AgentMessageView({
         </div>
       )}
 
-      {isAssistant && !streaming && (
+      {isAssistant && !streaming && !isPlanChange && (
         <details
           className={`video-agent-grounding ${
             groundingStatus === 'grounded' ? 'is-grounded' : 'is-limited'
@@ -467,5 +494,45 @@ function AgentMessageView({
     </article>
   );
 }
+
+export const AgentStreamingMessageView = memo(forwardRef<
+  AgentStreamingMessageHandle,
+  AgentStreamingMessageViewProps
+>(function AgentStreamingMessageView({
+  initialMessage,
+  onFirstContent,
+  ...props
+}, ref) {
+  const [message, setMessage] = useState(initialMessage);
+  const visibleRef = useRef(hasVisibleAgentAnswer(initialMessage.content));
+  const onFirstContentRef = useRef(onFirstContent);
+  onFirstContentRef.current = onFirstContent;
+
+  useImperativeHandle(ref, () => ({
+    append(delta: string) {
+      if (!delta) return;
+      setMessage((current) => ({
+        ...current,
+        content: `${current.content}${delta}`,
+      }));
+      if (!visibleRef.current) {
+        visibleRef.current = true;
+        onFirstContentRef.current?.();
+      }
+    },
+    hydrate(nextMessage: AgentMessage) {
+      setMessage((current) => ({
+        ...nextMessage,
+        id: current.id,
+        content: current.content,
+      }));
+    },
+  }), []);
+
+  if (!visibleRef.current && !hasVisibleAgentAnswer(message.content)) return null;
+  return <AgentMessageView {...props} message={message} streaming />;
+}));
+
+AgentStreamingMessageView.displayName = 'AgentStreamingMessageView';
 
 export default memo(AgentMessageView);

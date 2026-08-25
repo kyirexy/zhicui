@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useImperativeHandle, useRef, useState, forwardRef, type FormEvent, type ReactNode } from 'react';
-import { Bot, Check, CircleDollarSign, Pencil, Plus, Trash2, X } from 'lucide-react';
+import { Check, CircleDollarSign, Pencil, Plus, Trash2, X } from 'lucide-react';
+import AIModelIcon from '@/components/AIModelIcon';
 import {
   createAdminChatModel,
   deleteAdminChatModel,
@@ -181,7 +182,10 @@ const AdminChatModelPanel = forwardRef<AdminChatModelPanelHandle, Props>(functio
                 <tr key={item.id} className="border-b border-card-border/60">
                   <td className="p-3">
                     <div className="flex items-center gap-2 font-semibold text-foreground">
-                      <Bot size={16} aria-hidden="true" />{item.name}
+                      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-[var(--admin-surface-2)]">
+                        <AIModelIcon code={item.code} modelId={item.model_id} name={item.name} provider={item.provider_mode} size={18} />
+                      </span>
+                      {item.name}
                       {item.is_default ? <span className="rounded-md bg-accent-brand/10 px-1.5 py-0.5 text-[11px] text-accent-brand">默认</span> : null}
                     </div>
                     <small className="mt-1 block text-foreground-muted">{item.code}</small>
@@ -217,7 +221,12 @@ const AdminChatModelPanel = forwardRef<AdminChatModelPanelHandle, Props>(functio
 
         <form ref={formRef} onSubmit={submit} className="admin-panel self-start p-4 sm:p-5">
           <div className="flex items-center justify-between gap-3">
-            <h2 className="text-balance text-base font-semibold text-foreground">{editingId ? '编辑模型' : '发布模型'}</h2>
+            <h2 className="flex items-center gap-2 text-balance text-base font-semibold text-foreground">
+              <span className="flex size-8 items-center justify-center rounded-lg bg-[var(--admin-surface-2)]">
+                <AIModelIcon code={form.code} modelId={form.model_id} name={form.name} provider={form.provider_mode} size={18} />
+              </span>
+              {editingId ? '编辑模型' : '发布模型'}
+            </h2>
             {editingId ? <button type="button" onClick={startCreate} className="inline-flex size-10 items-center justify-center rounded-lg text-foreground-muted hover:bg-[var(--admin-surface-2)]" aria-label="关闭编辑"><X size={17} /></button> : null}
           </div>
 

@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import {
-  BrainCircuit,
   CheckCircle2,
   KeyRound,
   Link2,
@@ -10,8 +9,8 @@ import {
   Route,
   ShieldCheck,
   Sparkles,
-  Zap,
 } from 'lucide-react';
+import AIModelIcon from '@/components/AIModelIcon';
 import {
   getAdminOmniRouteWorkspace,
   putLlmConfig,
@@ -28,13 +27,11 @@ const MODEL_OPTIONS = [
     value: 'deepseek-v4-flash',
     name: 'DeepSeek V4 Flash',
     description: '适合分类、摘要与高频问答，响应更快',
-    icon: Zap,
   },
   {
     value: 'deepseek-v4-pro',
     name: 'DeepSeek V4 Pro',
     description: '适合深度研究、跨视频综合与复杂计划',
-    icon: BrainCircuit,
   },
 ];
 
@@ -203,7 +200,7 @@ export default function AdminLlmConfigPanel({
             >
               <div className="flex items-center justify-between gap-3">
                 <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                  <Sparkles size={17} className="text-accent-brand" aria-hidden="true" />
+                  <AIModelIcon modelId="deepseek" name="DeepSeek 官方" size={18} />
                   DeepSeek 官方
                 </span>
                 {provider === 'deepseek' && <CheckCircle2 size={17} className="text-accent-brand" aria-hidden="true" />}
@@ -261,7 +258,6 @@ export default function AdminLlmConfigPanel({
               <label className="mb-2 block text-sm font-semibold text-foreground">选择模型</label>
               <div className="grid gap-2 md:grid-cols-2">
                 {MODEL_OPTIONS.map(option => {
-                  const Icon = option.icon;
                   const selected = model === option.value;
                   return (
                     <button
@@ -277,7 +273,7 @@ export default function AdminLlmConfigPanel({
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex items-center gap-2">
                           <span className="flex size-8 items-center justify-center rounded-lg bg-background">
-                            <Icon size={17} className={selected ? 'text-accent-brand' : 'text-foreground-muted'} aria-hidden="true" />
+                            <AIModelIcon modelId={option.value} name={option.name} size={18} />
                           </span>
                           <span>
                             <span className="block text-sm font-semibold text-foreground">{option.name}</span>
@@ -351,9 +347,14 @@ export default function AdminLlmConfigPanel({
                         }`}
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span className="min-w-0">
-                            <span className="block truncate text-sm font-semibold text-foreground">{item.name}</span>
-                            <code className="block truncate text-[11px] text-foreground-muted">{item.id}</code>
+                          <span className="flex min-w-0 items-center gap-2">
+                            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-background">
+                              <AIModelIcon modelId={item.id} name={item.name} provider={item.provider} size={18} />
+                            </span>
+                            <span className="min-w-0">
+                              <span className="block truncate text-sm font-semibold text-foreground">{item.name}</span>
+                              <code className="block truncate text-[11px] text-foreground-muted">{item.id}</code>
+                            </span>
                           </span>
                           {selected && <CheckCircle2 size={16} className="shrink-0 text-accent-brand" aria-hidden="true" />}
                         </div>

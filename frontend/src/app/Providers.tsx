@@ -6,7 +6,6 @@ import { ExtractionProvider } from '@/lib/hooks/ExtractionContext';
 import { VideoAnalysisProvider } from '@/lib/hooks/VideoAnalysisContext';
 import { CreatorSyncProvider } from '@/lib/hooks/CreatorSyncContext';
 import ClientErrorReporter from '@/components/ClientErrorReporter';
-import LibraryAutoSyncScheduler from '@/components/LibraryAutoSyncScheduler';
 
 export default function Providers({ children }: { children: React.ReactNode }) {
   return (
@@ -16,7 +15,6 @@ export default function Providers({ children }: { children: React.ReactNode }) {
         <VideoAnalysisProvider>
           <CreatorSyncProvider>
             <ExtractionProvider>
-              <LibraryAutoSyncScheduler />
               {children}
             </ExtractionProvider>
           </CreatorSyncProvider>

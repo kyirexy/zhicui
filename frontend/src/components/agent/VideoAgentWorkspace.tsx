@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  Fragment,
   type FormEvent,
   useCallback,
   useEffect,
@@ -8,6 +9,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import Link from 'next/link';
 import {
   ArrowsOut,
   ArrowClockwise,
@@ -39,7 +41,11 @@ import {
 import AgentMark from '@/components/agent/AgentMark';
 import AgentComposer from '@/components/agent/AgentComposer';
 import type { AgentComposerHandle } from '@/components/agent/AgentComposer';
-import AgentMessageView from '@/components/agent/AgentMessageView';
+import AgentActivityTimeline from '@/components/agent/AgentActivityTimeline';
+import AgentMessageView, {
+  AgentStreamingMessageView,
+  type AgentStreamingMessageHandle,
+} from '@/components/agent/AgentMessageView';
 import AgentSourceSyncSheet from '@/components/agent/AgentSourceSyncSheet';
 import VideoAnalysisBatchAction from '@/components/VideoAnalysisBatchAction';
 import type { AgentMessageDeliveryState } from '@/components/agent/AgentMessageView';
@@ -57,10 +63,16 @@ import {
 import {
   DEFAULT_AGENT_RESEARCH_MODE,
   DEFAULT_AGENT_WEB_SCOPE,
-  researchProgressDetail,
+  agentEventSequenceDecision,
+  agentTurnTerminalMessage,
+  hasVisibleAgentAnswer,
+  projectAgentActivity,
+  isVisibleAgentActivityProgress,
   shouldResumeAgentTurn,
   threadHasBackgroundWork,
+  type AgentActivityItem,
 } from '@/lib/agentTurnUi';
+import { AgentTextStreamPump } from '@/lib/agentTextStream';
 import {
   createAgentAutomation,
   createAgentThread,
@@ -75,6 +87,7 @@ import {
   getAgentEmailStatus,
   getUserAIProvider,
   getUserChatModels,
+  generateAgentStarterQuestions,
   listAgentAutomationRuns,
   listAgentAutomations,
   listAgentSources,
@@ -222,11 +235,16 @@ const SOURCE_SCOPES: Array<{
   },
 ];
 
-const STARTERS = [
-  '这些视频反复出现的核心观点是什么？',
-  '把能立刻执行的建议整理成清单',
-  '找出互相矛盾的观点，并说明各自依据',
-];
+const starterQuestionCache = new Map<string, string[]>();
+const STARTER_QUESTION_CACHE_LIMIT = 50;
+
+function cacheStarterQuestions(key: string, questions: string[]) {
+  if (starterQuestionCache.size >= STARTER_QUESTION_CACHE_LIMIT) {
+    const oldestKey = starterQuestionCache.keys().next().value;
+    if (oldestKey) starterQuestionCache.delete(oldestKey);
+  }
+  starterQuestionCache.set(key, questions);
+}
 
 const OUTPUT_LABELS: Record<LibraryOutputStyle, string> = {
   answer: '直接回答',
@@ -269,7 +287,18 @@ const STUDIO_SHORTCUTS: Array<{
 interface SubmitQuestionOptions {
   outputStyle?: LibraryOutputStyle;
   customInstruction?: string;
+  researchMode?: LibraryResearchMode;
+  webScope?: ResearchScope;
   revealStudioOnComplete?: boolean;
+}
+
+interface QueuedQuestion {
+  id: string;
+  content: string;
+  outputStyle: LibraryOutputStyle;
+  customInstruction: string;
+  researchMode: LibraryResearchMode;
+  webScope: ResearchScope;
 }
 
 const AUTOMATION_SOURCE_MODES: Array<{
@@ -532,7 +561,9 @@ export default function VideoAgentWorkspace({
     Record<string, string>
   >({});
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
-  const [streamProgress, setStreamProgress] = useState<AgentStreamProgress | null>(null);
+  const [streamingAnswerStarted, setStreamingAnswerStarted] = useState(false);
+  const [queuedQuestions, setQueuedQuestions] = useState<QueuedQuestion[]>([]);
+  const [streamActivities, setStreamActivities] = useState<AgentActivityItem[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(true);
   const [threadLoading, setThreadLoading] = useState(false);
   const [isCompact, setIsCompact] = useState(embedded);
@@ -557,8 +588,14 @@ export default function VideoAgentWorkspace({
   const [sourceScannedCount, setSourceScannedCount] = useState(0);
   const [sourceLoading, setSourceLoading] = useState(true);
   const [sourceError, setSourceError] = useState('');
+  const [requestedSourceCheckComplete, setRequestedSourceCheckComplete] = useState(false);
   const [selectedSourceIds, setSelectedSourceIds] = useState<Set<string>>(new Set());
   const [sourceRegistry, setSourceRegistry] = useState<Record<string, AgentSource>>({});
+  const [starterQuestions, setStarterQuestions] = useState<string[]>([]);
+  const [starterQuestionsLoading, setStarterQuestionsLoading] = useState(false);
+  const [starterQuestionsError, setStarterQuestionsError] = useState('');
+  const [starterQuestionsSourceCount, setStarterQuestionsSourceCount] = useState(0);
+  const [starterQuestionsRetry, setStarterQuestionsRetry] = useState(0);
 
   const [aiProviderConfig, setAiProviderConfig] = useState<
     UserAIProviderConfig | null
@@ -591,6 +628,7 @@ export default function VideoAgentWorkspace({
   const [deletingBatch, setDeletingBatch] = useState(false);
   const [removeSelectionMode, setRemoveSelectionMode] = useState(false);
   const [analysisDecisionMessageId, setAnalysisDecisionMessageId] = useState<string | null>(null);
+  const [planContextLoadError, setPlanContextLoadError] = useState('');
 
   useEffect(() => {
     if (!error && !notice) return;
@@ -629,8 +667,15 @@ export default function VideoAgentWorkspace({
 
   const abortRef = useRef<AbortController | null>(null);
   const resumeAbortRef = useRef<AbortController | null>(null);
+  const answerTextPumpRef = useRef<AgentTextStreamPump | null>(null);
+  const streamingMessageViewRef = useRef<AgentStreamingMessageHandle | null>(null);
+  const pendingStreamTextRef = useRef('');
+  const streamFollowFrameRef = useRef<number | null>(null);
   const durableTurnIdRef = useRef<string | null>(null);
+  const feedbackTurnIdRef = useRef<string | null>(null);
+  const lastStreamEventSeqRef = useRef(0);
   const sourceRequestRef = useRef<AbortController | null>(null);
+  const planContextRequestRef = useRef<string | null>(null);
   const initialSourceIdsRef = useRef(initialSourceIds);
   const initialSourceIdsProvidedRef = useRef(initialSourceIds !== undefined);
   const initialThreadIdRef = useRef(initialThreadId);
@@ -649,6 +694,7 @@ export default function VideoAgentWorkspace({
   // releases the pin, scrolling back down re-arms it. Content growth itself
   // never toggles the pin.
   const followingRef = useRef(true);
+  const observedScrollTopRef = useRef(0);
   const followingBeforeInactiveRef = useRef(true);
   const wasActiveRef = useRef(active);
   const questionRef = useRef<AgentComposerHandle | null>(null);
@@ -663,6 +709,94 @@ export default function VideoAgentWorkspace({
   const lastStudioTriggerRef = useRef<HTMLButtonElement | null>(null);
   const studioWasOpenRef = useRef(false);
   const notifiedThreadIdRef = useRef<string | null>(null);
+  const [routePlanId, setRoutePlanId] = useState('');
+
+  const scheduleStreamFollow = useCallback(() => {
+    if (
+      !activeRef.current
+      || !followingRef.current
+      || streamFollowFrameRef.current !== null
+    ) return;
+    streamFollowFrameRef.current = window.requestAnimationFrame(() => {
+      streamFollowFrameRef.current = null;
+      if (!activeRef.current || !followingRef.current) return;
+      const scroller = threadScrollRef.current;
+      if (scroller) {
+        scroller.scrollTop = scroller.scrollHeight;
+        observedScrollTopRef.current = scroller.scrollTop;
+      }
+    });
+  }, []);
+
+  const releaseStreamFollowToReader = useCallback(() => {
+    followingRef.current = false;
+    if (streamFollowFrameRef.current !== null) {
+      window.cancelAnimationFrame(streamFollowFrameRef.current);
+      streamFollowFrameRef.current = null;
+    }
+  }, []);
+
+  const createAnswerTextPump = useCallback(() => {
+    answerTextPumpRef.current?.discard();
+    pendingStreamTextRef.current = '';
+    setStreamingAnswerStarted(false);
+    const pump = new AgentTextStreamPump({
+      reducedMotion: window.matchMedia(
+        '(prefers-reduced-motion: reduce)',
+      ).matches,
+      onCommit: (delta) => {
+        const liveMessage = streamingMessageViewRef.current;
+        if (liveMessage) liveMessage.append(delta);
+        else pendingStreamTextRef.current += delta;
+        scheduleStreamFollow();
+      },
+    });
+    answerTextPumpRef.current = pump;
+    return pump;
+  }, [scheduleStreamFollow]);
+
+  const attachStreamingMessageView = useCallback((handle: AgentStreamingMessageHandle | null) => {
+    streamingMessageViewRef.current = handle;
+    if (!handle || !pendingStreamTextRef.current) return;
+    const pending = pendingStreamTextRef.current;
+    pendingStreamTextRef.current = '';
+    handle.append(pending);
+  }, []);
+
+  const releaseAnswerTextPump = useCallback((pump: AgentTextStreamPump) => {
+    pump.discard();
+    if (answerTextPumpRef.current === pump) answerTextPumpRef.current = null;
+    pendingStreamTextRef.current = '';
+  }, []);
+
+  const prepareStreamFeedback = useCallback((turnId: string) => {
+    if (feedbackTurnIdRef.current === turnId) return;
+    feedbackTurnIdRef.current = turnId;
+    lastStreamEventSeqRef.current = 0;
+    setStreamActivities([]);
+  }, []);
+
+  const resetStreamFeedback = useCallback(() => {
+    feedbackTurnIdRef.current = null;
+    lastStreamEventSeqRef.current = 0;
+    setStreamActivities([]);
+  }, []);
+
+  const acceptStreamEvent = useCallback((eventSeq?: number) => {
+    const decision = agentEventSequenceDecision(
+      lastStreamEventSeqRef.current,
+      eventSeq,
+    );
+    lastStreamEventSeqRef.current = decision.nextEventSeq;
+    return decision.accepted;
+  }, []);
+
+  const recordStreamProgress = useCallback((progress: AgentStreamProgress) => {
+    if (progress.turn_id) prepareStreamFeedback(progress.turn_id);
+    if (!acceptStreamEvent(progress.event_seq)) return;
+    if (!isVisibleAgentActivityProgress(progress)) return;
+    setStreamActivities((current) => projectAgentActivity(current, progress));
+  }, [acceptStreamEvent, prepareStreamFeedback]);
 
   const notifyThreadChange = useEventCallback((threadId: string | null) => {
     onThreadChange?.(threadId);
@@ -679,6 +813,28 @@ export default function VideoAgentWorkspace({
     notifiedThreadIdRef.current = threadId;
     notifyThreadChange(threadId);
   }, [activeThread?.id, notifyThreadChange]);
+
+  useEffect(() => {
+    if (embedded || !activeThread?.id) return;
+    const url = new URL(window.location.href);
+    const planId = activeThread.context_type === 'plan'
+      ? activeThread.context_id || ''
+      : '';
+    const alreadyCurrent = url.searchParams.get('thread') === activeThread.id
+      && (url.searchParams.get('plan_id') || '') === planId;
+    if (alreadyCurrent) return;
+    url.searchParams.set('thread', activeThread.id);
+    if (planId) url.searchParams.set('plan_id', planId);
+    else url.searchParams.delete('plan_id');
+    url.searchParams.delete('source_ids');
+    url.searchParams.delete('source_scope');
+    url.searchParams.delete('new');
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `${url.pathname}${url.search}${url.hash}`,
+    );
+  }, [activeThread?.context_id, activeThread?.context_type, activeThread?.id, embedded]);
 
   useEffect(() => {
     const activeTurn = activeThread?.active_turn;
@@ -703,12 +859,12 @@ export default function VideoAgentWorkspace({
     if (sourceIds === null) return false;
     requestedSourceIdsRef.current = sourceIds;
     sourceHandoffNoticeSettledRef.current = true;
+    setRequestedSourceCheckComplete(true);
     setActiveThread(null);
     setMessages([]);
     setMessageDeliveryStates({});
     setMessageDeliveryErrors({});
     setStreamingMessageId(null);
-    setStreamProgress(null);
     setBackgroundThreadId(null);
     setDraftSourceMode('selected');
     setSelectedSourceIds(new Set(sourceIds));
@@ -748,12 +904,15 @@ export default function VideoAgentWorkspace({
     setDraftSourceMode(sourceIds.length > 0 ? 'selected' : 'scope');
   }, [rememberSources]);
 
-  const loadThreads = useCallback(async (selectFirst = false) => {
+  const loadThreads = useCallback(async (
+    selectFirst = false,
+    reportError = selectFirst,
+  ) => {
     setThreadsLoading(true);
     const response = await listAgentThreads();
     setThreadsLoading(false);
     if (!response.success || !response.data) {
-      setError(response.error || '暂时无法读取知萃 Harness 会话');
+      if (reportError) setError(response.error || '暂时无法读取知萃 AI 会话');
       return;
     }
     const nextThreads = (response.data.items || []).filter(threadMatchesEmbeddedSources);
@@ -761,12 +920,16 @@ export default function VideoAgentWorkspace({
     if (selectFirst && !activeThread && nextThreads[0]) {
       const detailResponse = await getAgentThread(nextThreads[0].id);
       if (detailResponse.success && detailResponse.data) {
+        setRoutePlanId(
+          detailResponse.data.context_type === 'plan'
+            ? detailResponse.data.context_id || ''
+            : '',
+        );
         setActiveThread(detailResponse.data);
         setMessages(threadConversationMessages(detailResponse.data));
         setMessageDeliveryStates(restoredDeliveryStates(detailResponse.data));
         setMessageDeliveryErrors(restoredDeliveryErrors(detailResponse.data));
         setStreamingMessageId(null);
-        setStreamProgress(null);
         followingRef.current = true;
         restoreThreadSourceSelection(detailResponse.data);
         if (threadHasBackgroundWork(detailResponse.data)) {
@@ -780,20 +943,28 @@ export default function VideoAgentWorkspace({
     scope: BrowseSourceScope,
     includeIds: string[] = [],
   ) => {
+    const normalizedIncludeIds = normalizeSourceIds(includeIds);
+    const requestedIds = requestedSourceIdsRef.current;
+    const isHandoffRequest = requestedIds.length > 0
+      && requestedIds.every((noteId) => normalizedIncludeIds.includes(noteId));
     sourceRequestRef.current?.abort();
     const controller = new AbortController();
     sourceRequestRef.current = controller;
     setSourceLoading(true);
     setSourceError('');
+    if (isHandoffRequest && !sourceHandoffNoticeSettledRef.current) {
+      setRequestedSourceCheckComplete(false);
+    }
     const response = await listAgentSources(
       scope,
       '',
       controller.signal,
-      includeIds,
+      normalizedIncludeIds,
       settings.agentSourceDisplayLimit,
     );
     if (controller.signal.aborted) return;
     setSourceLoading(false);
+    if (isHandoffRequest) setRequestedSourceCheckComplete(true);
     sourceRequestRef.current = null;
     if (!response.success || !response.data) {
       setSources([]);
@@ -816,7 +987,10 @@ export default function VideoAgentWorkspace({
   }, [rememberSources, settings.agentSourceDisplayLimit]);
 
   useEffect(() => {
-    const refreshVisualStatuses = () => void loadSources(browseScope);
+    const refreshVisualStatuses = () => void loadSources(
+      browseScope,
+      requestedSourceIdsRef.current,
+    );
     window.addEventListener('vc:video-analysis-updated', refreshVisualStatuses);
     return () => window.removeEventListener('vc:video-analysis-updated', refreshVisualStatuses);
   }, [browseScope, loadSources]);
@@ -859,6 +1033,36 @@ export default function VideoAgentWorkspace({
       recipient_email: response.data!.account_email,
     }));
   }, []);
+
+  const openPlanContext = useEventCallback(async (planId: string) => {
+    if (!planId || threadLoading || planContextRequestRef.current) return;
+    const requestKey = `${planId}:${Date.now()}`;
+    planContextRequestRef.current = requestKey;
+    setThreadLoading(true);
+    setPlanContextLoadError('');
+    const response = await createAgentThread({
+      title: '',
+      source_scope: 'selected',
+      source_ids: [],
+      context_type: 'plan',
+      context_id: planId,
+    });
+    if (planContextRequestRef.current !== requestKey) return;
+    planContextRequestRef.current = null;
+    setThreadLoading(false);
+    if (!response.success || !response.data) {
+      setPlanContextLoadError(response.error || '暂时无法打开这个计划的 AI 会话');
+      return;
+    }
+    setError('');
+    setNotice('已带入当前计划。告诉我你想怎么调整，我会先生成预览。');
+    setRoutePlanId(response.data.context_id || planId);
+    setActiveThread(response.data);
+    setMessages(threadConversationMessages(response.data));
+    setSelectedSourceIds(new Set());
+    setDraftSourceMode('selected');
+    window.requestAnimationFrame(() => questionRef.current?.focus());
+  });
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -928,8 +1132,13 @@ export default function VideoAgentWorkspace({
       ? requestedScopeParam
       : null;
     const forceNewThread = useRouteDraft && searchParams.get('new') === '1';
+    const requestedPlanId = useRouteDraft
+      ? String(searchParams.get('plan_id') || '').trim()
+      : '';
+    setRoutePlanId(requestedPlanId);
     requestedSourceIdsRef.current = requestedSourceIds;
     sourceHandoffNoticeSettledRef.current = requestedSourceIds.length === 0;
+    setRequestedSourceCheckComplete(requestedSourceIds.length === 0);
 
     if (requestedScope) setBrowseScope(requestedScope);
 
@@ -937,6 +1146,7 @@ export default function VideoAgentWorkspace({
     // 初始化参数时，才读取当前路由里的 Harness 状态。
     if (requestedThreadId) {
       sourceHandoffNoticeSettledRef.current = true;
+      setRequestedSourceCheckComplete(true);
       void loadThreads(false);
       let active = true;
       setThreadLoading(true);
@@ -973,12 +1183,17 @@ export default function VideoAgentWorkspace({
         }
         requestedSourceIdsRef.current = [];
         sourceHandoffNoticeSettledRef.current = true;
+        setRequestedSourceCheckComplete(true);
+        setRoutePlanId(
+          response.data.context_type === 'plan'
+            ? response.data.context_id || ''
+            : '',
+        );
         setActiveThread(response.data);
         setMessages(threadConversationMessages(response.data));
         setMessageDeliveryStates(restoredDeliveryStates(response.data));
         setMessageDeliveryErrors(restoredDeliveryErrors(response.data));
         setStreamingMessageId(null);
-        setStreamProgress(null);
         restoreThreadSourceSelection(response.data);
         if (threadHasBackgroundWork(response.data)) {
           setBackgroundThreadId(response.data.id);
@@ -989,6 +1204,17 @@ export default function VideoAgentWorkspace({
       };
     }
 
+    if (requestedPlanId) {
+      void loadThreads(false);
+      setActiveThread(null);
+      setMessages([]);
+      setMessageDeliveryStates({});
+      setMessageDeliveryErrors({});
+      setStreamingMessageId(null);
+      void openPlanContext(requestedPlanId);
+      return;
+    }
+
     if (hasInitialSourceIds || requestedSourceIds.length > 0) {
       void loadThreads(false);
       setActiveThread(null);
@@ -996,7 +1222,6 @@ export default function VideoAgentWorkspace({
       setMessageDeliveryStates({});
       setMessageDeliveryErrors({});
       setStreamingMessageId(null);
-      setStreamProgress(null);
       setDraftSourceMode('selected');
       setSelectedSourceIds(new Set(requestedSourceIds));
       setNotice(requestedSourceIds.length > 0
@@ -1012,7 +1237,6 @@ export default function VideoAgentWorkspace({
       setMessageDeliveryStates({});
       setMessageDeliveryErrors({});
       setStreamingMessageId(null);
-      setStreamProgress(null);
       setDraftSourceMode('scope');
       setSelectedSourceIds(new Set());
       setNotice(`已开启新会话，将整体参考${sourceScopeLabel(requestedScope || 'all_ready')}。`);
@@ -1033,6 +1257,8 @@ export default function VideoAgentWorkspace({
     if (
       sourceHandoffNoticeSettledRef.current
       || sourceLoading
+      || !requestedSourceCheckComplete
+      || Boolean(sourceError)
       || requestedSourceIds.length === 0
     ) return;
 
@@ -1043,7 +1269,7 @@ export default function VideoAgentWorkspace({
     setNotice(resolvedCount === requestedSourceIds.length
       ? `已带入 ${resolvedCount} 条视频，可以直接开始提问。`
       : `已带入 ${requestedSourceIds.length} 条视频，其中 ${requestedSourceIds.length - resolvedCount} 条暂时不可用。`);
-  }, [sourceLoading, sourceRegistry]);
+  }, [requestedSourceCheckComplete, sourceError, sourceLoading, sourceRegistry]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -1200,19 +1426,13 @@ export default function VideoAgentWorkspace({
     followingRef.current = true;
     const frame = window.requestAnimationFrame(() => {
       const scroller = threadScrollRef.current;
-      if (scroller) scroller.scrollTop = scroller.scrollHeight;
+      if (scroller) {
+        scroller.scrollTop = scroller.scrollHeight;
+        observedScrollTopRef.current = scroller.scrollTop;
+      }
     });
     return () => window.cancelAnimationFrame(frame);
   }, [active]);
-
-  useEffect(() => {
-    if (!activeRef.current || !followingRef.current) return;
-    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    messageEndRef.current?.scrollIntoView({
-      block: 'nearest',
-      behavior: reduceMotion ? 'auto' : 'smooth',
-    });
-  }, [messages.length, sending]);
 
   // Back-to-bottom visibility — mirrors the DSH harness toBottomSlot button.
   // The scroll listener only reads scroll geometry; it never mutates the DOM.
@@ -1223,33 +1443,49 @@ export default function VideoAgentWorkspace({
     if (!el) return;
     const update = () => {
       if (!activeRef.current) return;
-      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-      // DSH-style pin: once a user scrolls away from the bottom, stop chasing
-      // it until they return; the button mirrors that state.
-      followingRef.current = distance <= 2;
+      const floor = Math.max(0, el.scrollHeight - el.clientHeight);
+      const deliveredTop = Math.min(observedScrollTopRef.current, floor);
+      const movedByReader = Math.abs(el.scrollTop - deliveredTop) > 0.5;
+      const distance = floor - el.scrollTop;
+      // Like DSH, only a real reader movement may take ownership away from
+      // bottom-follow. Programmatic stream alignment records its position
+      // before the browser emits scroll, so it never fights manual scrolling.
+      if (movedByReader) followingRef.current = distance <= 24;
+      observedScrollTopRef.current = el.scrollTop;
       setShowBackToBottom(distance > 56);
     };
     update();
     el.addEventListener('scroll', update, { passive: true });
+    el.addEventListener('wheel', releaseStreamFollowToReader, { passive: true });
+    el.addEventListener('touchstart', releaseStreamFollowToReader, { passive: true });
+    el.addEventListener('pointerdown', releaseStreamFollowToReader, { passive: true });
     const observer = new ResizeObserver(update);
     observer.observe(el);
     return () => {
       el.removeEventListener('scroll', update);
+      el.removeEventListener('wheel', releaseStreamFollowToReader);
+      el.removeEventListener('touchstart', releaseStreamFollowToReader);
+      el.removeEventListener('pointerdown', releaseStreamFollowToReader);
       observer.disconnect();
     };
-  }, [active, threadLoading]);
+  }, [active, releaseStreamFollowToReader, threadLoading]);
 
   const scrollThreadToBottom = useCallback(() => {
     followingRef.current = true;
     setShowBackToBottom(false);
-    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    threadScrollRef.current?.scrollTo({
-      top: threadScrollRef.current.scrollHeight,
-      behavior: reduceMotion ? 'auto' : 'smooth',
-    });
+    const scroller = threadScrollRef.current;
+    if (!scroller) return;
+    scroller.scrollTop = scroller.scrollHeight;
+    observedScrollTopRef.current = scroller.scrollTop;
   }, []);
 
   useEffect(() => () => {
+    answerTextPumpRef.current?.discard();
+    answerTextPumpRef.current = null;
+    if (streamFollowFrameRef.current !== null) {
+      window.cancelAnimationFrame(streamFollowFrameRef.current);
+      streamFollowFrameRef.current = null;
+    }
     abortRef.current?.abort();
     resumeAbortRef.current?.abort();
     sourceRequestRef.current?.abort();
@@ -1259,16 +1495,142 @@ export default function VideoAgentWorkspace({
     || (draftSourceMode === 'scope' ? browseScope : 'selected');
   const activeSourceCount = activeThread?.source_count
     ?? (draftSourceMode === 'scope' ? scopeReadyCount : selectedSourceIds.size);
-  const canStartDraft = draftSourceMode === 'scope'
+  const isPlanContext = activeThread?.context_type === 'plan' || Boolean(routePlanId);
+  const activePlan = activeThread?.context?.plan || null;
+  const canStartDraft = isPlanContext
+    ? !threadLoading && !planContextLoadError
+    : draftSourceMode === 'scope'
     ? !sourceLoading && scopeReadyCount > 0
     : selectedSourceIds.size > 0
       && Array.from(selectedSourceIds).every((noteId) => Boolean(sourceRegistry[noteId]));
-  const canGenerateStudioResult = activeThread
+  const sourceHandoffPending = requestedSourceIdsRef.current.length > 0
+    && !requestedSourceCheckComplete;
+  const canGenerateStudioResult = isPlanContext
+    ? false
+    : activeThread
     ? activeSourceCount > 0
     : canStartDraft;
   const studioActionsDisabled = !canGenerateStudioResult
     || sending
     || Boolean(backgroundThreadId);
+
+  const starterQuestionRequest = useMemo(() => {
+    const threadSourceIds = normalizeSourceIds(activeThread?.source_ids);
+    if (threadSourceIds.length > 0) {
+      const sourceIds = [...threadSourceIds].sort();
+      return {
+        sourceScope: 'selected' as const,
+        sourceIds,
+        key: `selected:${sourceIds.join(',')}`,
+      };
+    }
+    if (draftSourceMode === 'selected') {
+      const sourceIds = Array.from(selectedSourceIds).sort();
+      return {
+        sourceScope: 'selected' as const,
+        sourceIds,
+        key: `selected:${sourceIds.join(',')}`,
+      };
+    }
+    const scopeFingerprint = sources
+      .slice(0, MAX_SELECTED_SOURCES)
+      .map((source) => source.note_id)
+      .join(',');
+    const sourceScope = activeThread?.source_scope === 'selected'
+      ? browseScope
+      : activeThread?.source_scope || browseScope;
+    return {
+      sourceScope,
+      sourceIds: [] as string[],
+      key: `${sourceScope}:${scopeReadyCount}:${scopeFingerprint}`,
+    };
+  }, [
+    activeThread?.source_ids,
+    activeThread?.source_scope,
+    browseScope,
+    draftSourceMode,
+    scopeReadyCount,
+    selectedSourceIds,
+    sources,
+  ]);
+
+  useEffect(() => {
+    if (isPlanContext) {
+      setStarterQuestions([
+        '把这周的任务量降低，只保留最重要的三步',
+        '把已逾期任务重新安排到接下来可执行的日期',
+        '根据当前进度，给我一份每天不超过 30 分钟的版本',
+      ]);
+      setStarterQuestionsSourceCount(0);
+      setStarterQuestionsError('');
+      setStarterQuestionsLoading(false);
+      return;
+    }
+    if (
+      !active
+      || threadLoading
+      || messages.length > 0
+      || !canStartDraft
+      || !starterQuestionRequest.key
+    ) {
+      setStarterQuestionsLoading(false);
+      return;
+    }
+
+    const cached = starterQuestionCache.get(starterQuestionRequest.key);
+    if (cached?.length === 3) {
+      setStarterQuestions(cached);
+      setStarterQuestionsSourceCount(
+        starterQuestionRequest.sourceIds.length || activeSourceCount,
+      );
+      setStarterQuestionsError('');
+      setStarterQuestionsLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setStarterQuestions([]);
+    setStarterQuestionsSourceCount(
+      starterQuestionRequest.sourceIds.length || activeSourceCount,
+    );
+    setStarterQuestionsError('');
+    setStarterQuestionsLoading(true);
+    const timer = window.setTimeout(() => {
+      void generateAgentStarterQuestions({
+        sourceScope: starterQuestionRequest.sourceScope,
+        sourceIds: starterQuestionRequest.sourceIds,
+      }, controller.signal).then((response) => {
+        if (controller.signal.aborted) return;
+        setStarterQuestionsLoading(false);
+        if (!response.success || !response.data || response.data.questions.length !== 3) {
+          setStarterQuestionsError(
+            response.error || '暂时没有生成出合适的问题',
+          );
+          return;
+        }
+        cacheStarterQuestions(
+          starterQuestionRequest.key,
+          response.data.questions,
+        );
+        setStarterQuestions(response.data.questions);
+        setStarterQuestionsSourceCount(response.data.source_count);
+      });
+    }, 180);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [
+    active,
+    activeSourceCount,
+    canStartDraft,
+    messages.length,
+    starterQuestionRequest,
+    starterQuestionsRetry,
+    threadLoading,
+    isPlanContext,
+  ]);
 
   const availableChatModels = chatModelCatalog?.items || [];
 
@@ -1522,11 +1884,15 @@ export default function VideoAgentWorkspace({
       return;
     }
     setActiveThread(response.data);
+    setRoutePlanId(
+      response.data.context_type === 'plan'
+        ? response.data.context_id || ''
+        : '',
+    );
     setMessages(threadConversationMessages(response.data));
     setMessageDeliveryStates(restoredDeliveryStates(response.data));
     setMessageDeliveryErrors(restoredDeliveryErrors(response.data));
     setStreamingMessageId(null);
-    setStreamProgress(null);
     followingRef.current = true;
     restoreThreadSourceSelection(response.data);
     setBackgroundThreadId(
@@ -1547,16 +1913,17 @@ export default function VideoAgentWorkspace({
     abortRef.current?.abort();
     setSending(false);
     setActiveThread(null);
+    setRoutePlanId('');
     setMessages([]);
     setMessageDeliveryStates({});
     setMessageDeliveryErrors({});
     setStreamingMessageId(null);
-    setStreamProgress(null);
     questionRef.current?.clear();
     setError('');
     if (embeddedDefaultSourceIds) {
       requestedSourceIdsRef.current = embeddedDefaultSourceIds;
       sourceHandoffNoticeSettledRef.current = true;
+      setRequestedSourceCheckComplete(true);
       setDraftSourceMode('selected');
       setSelectedSourceIds(new Set(embeddedDefaultSourceIds));
       setNotice(embeddedDefaultSourceIds.length > 0
@@ -1750,6 +2117,13 @@ export default function VideoAgentWorkspace({
 
   useEffect(() => {
     if (!backgroundThreadId) return;
+    // Durable Agent turns are followed by their replayable SSE stream below.
+    // Polling the same thread would replace the provisional assistant while
+    // deltas are arriving. Polling remains for background video-analysis jobs.
+    if (
+      activeThread?.id === backgroundThreadId
+      && activeThread.active_turn?.id
+    ) return;
 
     const threadId = backgroundThreadId;
     let active = true;
@@ -1770,7 +2144,6 @@ export default function VideoAgentWorkspace({
         setMessageDeliveryStates(restoredDeliveryStates(response.data));
         setMessageDeliveryErrors(restoredDeliveryErrors(response.data));
         setStreamingMessageId(null);
-        if (!response.data.active_turn) setStreamProgress(null);
       }
 
       if (threadHasBackgroundWork(response.data)) {
@@ -1796,7 +2169,12 @@ export default function VideoAgentWorkspace({
       active = false;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [activeThread?.id, backgroundThreadId, refreshThreadList]);
+  }, [
+    activeThread?.active_turn?.id,
+    activeThread?.id,
+    backgroundThreadId,
+    refreshThreadList,
+  ]);
 
   useEffect(() => {
     const threadId = activeThread?.id;
@@ -1811,8 +2189,25 @@ export default function VideoAgentWorkspace({
     const controller = new AbortController();
     resumeAbortRef.current = controller;
     durableTurnIdRef.current = turnId;
+    prepareStreamFeedback(turnId);
     setBackgroundThreadId(threadId);
     setNotice('已恢复上一条研究任务，完成后会自动显示回答。');
+    const recoveredAssistantId = `streaming-${turnId}`;
+    setMessages((current) => {
+      if (current.some((message) => (
+        message.role === 'assistant' && message.turn_id === turnId
+      ))) return current;
+      return [
+        ...current,
+        {
+          ...createStreamingAssistantMessage(threadId),
+          id: recoveredAssistantId,
+          turn_id: turnId,
+        },
+      ];
+    });
+    setStreamingMessageId(recoveredAssistantId);
+    const answerTextPump = createAnswerTextPump();
 
     const followTurn = async () => {
       while (!controller.signal.aborted) {
@@ -1820,19 +2215,28 @@ export default function VideoAgentWorkspace({
           threadId,
           turnId,
           {
-            onProgress: (progress) => setStreamProgress(progress),
+            onProgress: recordStreamProgress,
+            onDelta: (delta, meta) => {
+              if (meta.turn_id) prepareStreamFeedback(meta.turn_id);
+              if (!acceptStreamEvent(meta.event_seq)) return;
+              answerTextPump.enqueue(delta);
+            },
           },
           controller.signal,
+          lastStreamEventSeqRef.current,
         );
         if (controller.signal.aborted) return;
         if (response.success && response.data) {
+          await answerTextPump.drain();
+          if (controller.signal.aborted) return;
+          releaseAnswerTextPump(answerTextPump);
           const nextThread = response.data.thread;
           setActiveThread(nextThread);
           setMessages(threadConversationMessages(nextThread));
           setMessageDeliveryStates({});
           setMessageDeliveryErrors({});
           setStreamingMessageId(null);
-          setStreamProgress(null);
+          resetStreamFeedback();
           setBackgroundThreadId(null);
           setTerminalTurn(null);
           durableTurnIdRef.current = null;
@@ -1847,10 +2251,11 @@ export default function VideoAgentWorkspace({
             getAgentTurn(threadId, turnId),
           ]);
           if (refreshed.success && refreshed.data && !threadHasBackgroundWork(refreshed.data)) {
+            releaseAnswerTextPump(answerTextPump);
             setActiveThread(refreshed.data);
             setMessages(threadConversationMessages(refreshed.data));
             setBackgroundThreadId(null);
-            setStreamProgress(null);
+            resetStreamFeedback();
             if (
               turnResponse.success
               && turnResponse.data
@@ -1874,15 +2279,25 @@ export default function VideoAgentWorkspace({
       }
     };
     void followTurn().finally(() => {
+      releaseAnswerTextPump(answerTextPump);
       if (resumeAbortRef.current === controller) resumeAbortRef.current = null;
     });
 
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      releaseAnswerTextPump(answerTextPump);
+    };
   }, [
     active,
     activeThread?.active_turn?.id,
     activeThread?.id,
+    acceptStreamEvent,
+    createAnswerTextPump,
+    prepareStreamFeedback,
+    recordStreamProgress,
     refreshThreadList,
+    releaseAnswerTextPump,
+    resetStreamFeedback,
     sending,
   ]);
 
@@ -1898,6 +2313,8 @@ export default function VideoAgentWorkspace({
     const requestedOutputStyle = options?.outputStyle ?? outputStyle;
     const requestedCustomInstruction = options?.customInstruction
       ?? customInstruction;
+    const requestedResearchMode = options?.researchMode ?? researchMode;
+    const requestedWebScope = options?.webScope ?? webScope;
     if (!content || sending || modelSaving) return;
     if (backgroundThreadId || threadBlocksNewQuestion(activeThread)) {
       if (!backgroundThreadId && threadHasBackgroundWork(activeThread) && activeThread?.id) {
@@ -1932,14 +2349,19 @@ export default function VideoAgentWorkspace({
         source_ids: draftSourceMode === 'selected'
           ? Array.from(selectedSourceIds).slice(0, MAX_SELECTED_SOURCES)
           : [],
+        context_type: routePlanId ? 'plan' : 'video',
+        context_id: routePlanId || undefined,
       });
       if (!created.success || !created.data) {
         setSending(false);
         questionRef.current?.setValue(content);
-        setError(created.error || '暂时无法创建知萃 Harness 会话');
+        setError(created.error || '暂时无法创建知萃 AI 会话');
         return;
       }
       thread = created.data;
+      setRoutePlanId(
+        thread.context_type === 'plan' ? thread.context_id || routePlanId : '',
+      );
       setActiveThread(thread);
       setMessages(thread.messages || []);
     }
@@ -1957,67 +2379,15 @@ export default function VideoAgentWorkspace({
       return next;
     });
     setStreamingMessageId(streamingAssistant.id);
-    setStreamProgress({
-      stage: 'queued',
-      message: '正在连接知萃 Harness',
-    });
+    resetStreamFeedback();
+    setStreamActivities([]);
     const controller = new AbortController();
     abortRef.current = controller;
     followingRef.current = true;
     setShowBackToBottom(false);
-    // Keep the first visible provider delta immediate, then publish the
-    // accumulated answer at most once per browser paint. SSE callbacks run in
-    // separate async turns, so relying on React to batch every delta still
-    // reparses the growing Markdown far more often than the display can show.
-    let pendingDelta = '';
-    let deltaFrame = 0;
-    let hasVisibleDelta = false;
-    let followFrame = 0;
-    const scheduleFollow = () => {
-      if (!activeRef.current || !followingRef.current || followFrame) return;
-      followFrame = window.requestAnimationFrame(() => {
-        followFrame = 0;
-        if (!activeRef.current || !followingRef.current) return;
-        const scroller = threadScrollRef.current;
-        if (scroller) scroller.scrollTop = scroller.scrollHeight;
-      });
-    };
-    const commitStreamingDelta = (delta: string) => {
-      if (!delta) return;
-      setMessages((current) => current.map((message) => (
-        message.id === streamingAssistant.id
-          ? { ...message, content: `${message.content}${delta}` }
-          : message
-      )));
-      scheduleFollow();
-    };
-    const commitPendingDelta = () => {
-      if (!pendingDelta) return;
-      const nextDelta = pendingDelta;
-      pendingDelta = '';
-      commitStreamingDelta(nextDelta);
-    };
-    const flushPendingDelta = () => {
-      if (deltaFrame) {
-        window.cancelAnimationFrame(deltaFrame);
-        deltaFrame = 0;
-      }
-      commitPendingDelta();
-    };
-    const enqueueStreamingDelta = (delta: string) => {
-      if (!delta) return;
-      if (!hasVisibleDelta) {
-        hasVisibleDelta = true;
-        commitStreamingDelta(delta);
-        return;
-      }
-      pendingDelta += delta;
-      if (deltaFrame) return;
-      deltaFrame = window.requestAnimationFrame(() => {
-        deltaFrame = 0;
-        commitPendingDelta();
-      });
-    };
+    // Codex 式两档队列：常态小步提交，持久事件成批到达时自动追赶。
+    // DSH 式帧合并：同一绘制帧内 React 最多只更新一次。
+    const answerTextPump = createAnswerTextPump();
     let response: Awaited<ReturnType<typeof streamAgentMessage>>;
     let durableTurnId = '';
     try {
@@ -2025,22 +2395,23 @@ export default function VideoAgentWorkspace({
         thread.id,
         {
           content,
-          research_mode: researchMode,
+          research_mode: requestedResearchMode,
           output_style: requestedOutputStyle,
           custom_instruction: requestedCustomInstruction,
-          web_scope: webScope,
+          web_scope: requestedWebScope,
         },
         {
           onTurn: (turnId) => {
             durableTurnId = turnId;
             durableTurnIdRef.current = turnId;
+            prepareStreamFeedback(turnId);
           },
           onProgress: (progress) => {
             if (progress.turn_id) {
               durableTurnId = progress.turn_id;
               durableTurnIdRef.current = progress.turn_id;
             }
-            setStreamProgress(progress);
+            recordStreamProgress(progress);
             setMessageDeliveryStates((current) => {
               const next = { ...current };
               delete next[optimistic.id];
@@ -2048,23 +2419,21 @@ export default function VideoAgentWorkspace({
             });
           },
           onAssistantStart: (assistantMessage) => {
-            setMessages((current) => current.map((message) => (
-              message.id === streamingAssistant.id
-                ? { ...assistantMessage, id: streamingAssistant.id, content: message.content }
-                : message
-            )));
+            streamingMessageViewRef.current?.hydrate(assistantMessage);
           },
-          onDelta: (delta) => {
-            enqueueStreamingDelta(delta);
+          onDelta: (delta, meta) => {
+            if (meta.turn_id) prepareStreamFeedback(meta.turn_id);
+            if (!acceptStreamEvent(meta.event_seq)) return;
+            answerTextPump.enqueue(delta);
           },
           onApprovalRequired: () => {
-            setStreamProgress({
+            recordStreamProgress({
               stage: 'finalizing',
               message: '需要确认后才能读取视频画面',
             });
           },
           onAnalysisStarted: () => {
-            setStreamProgress({
+            recordStreamProgress({
               stage: 'finalizing',
               message: '详细解析已进入后台',
             });
@@ -2072,12 +2441,18 @@ export default function VideoAgentWorkspace({
         },
         controller.signal,
       );
-    } finally {
-      flushPendingDelta();
-      if (followFrame) {
-        window.cancelAnimationFrame(followFrame);
-        followFrame = 0;
+      if (
+        !controller.signal.aborted
+        && response.success
+        && response.data
+      ) {
+        // SSE done 只表示 canonical 已持久化；先让已经收到的正文和证据
+        // 按帧播放完，再用 canonical 对账，避免后半段突然整块出现。
+        await answerTextPump.drain();
       }
+    } finally {
+      // drain 后 canonical message 收口；不允许迟到绘制帧再改写它。
+      releaseAnswerTextPump(answerTextPump);
       if (abortRef.current === controller) abortRef.current = null;
       setSending(false);
     }
@@ -2091,7 +2466,7 @@ export default function VideoAgentWorkspace({
         return next;
       });
       setStreamingMessageId(null);
-      setStreamProgress(null);
+      resetStreamFeedback();
       return;
     }
     if (!response.success || !response.data) {
@@ -2099,7 +2474,7 @@ export default function VideoAgentWorkspace({
         (message) => message.id !== streamingAssistant.id,
       ));
       setStreamingMessageId(null);
-      if (!durableTurnId) setStreamProgress(null);
+      if (!durableTurnId) resetStreamFeedback();
       if (durableTurnId && (response.status === 409 || response.status === 502)) {
         const [restored, turnResponse] = await Promise.all([
           getAgentThread(thread.id),
@@ -2125,7 +2500,7 @@ export default function VideoAgentWorkspace({
           setTerminalTurn(turnResponse.data);
           durableTurnIdRef.current = turnResponse.data.id;
           setBackgroundThreadId(null);
-          setStreamProgress(null);
+          resetStreamFeedback();
           setError(response.error || '本轮研究没有完成，可以重试。');
           return;
         }
@@ -2168,7 +2543,7 @@ export default function VideoAgentWorkspace({
       }));
       setMessageDeliveryErrors((current) => ({
         ...current,
-        [optimistic.id]: response.error || '知萃 Harness 暂时无法回答，请稍后重试',
+        [optimistic.id]: response.error || '知萃 AI 暂时无法回答，请稍后重试',
       }));
       return;
     }
@@ -2183,7 +2558,7 @@ export default function VideoAgentWorkspace({
     setMessageDeliveryStates({});
     setMessageDeliveryErrors({});
     setStreamingMessageId(null);
-    setStreamProgress(null);
+    resetStreamFeedback();
     setTerminalTurn(null);
     durableTurnIdRef.current = null;
     setMessages(
@@ -2194,7 +2569,7 @@ export default function VideoAgentWorkspace({
             response.data.assistant_message,
           ],
     );
-    followingRef.current = true;
+    if (followingRef.current) scheduleStreamFollow();
     if (threadHasBackgroundWork(nextThread)) {
       setBackgroundThreadId(nextThread.id);
       setNotice('详细解析已进入后台，完成后会自动继续回答。');
@@ -2324,12 +2699,13 @@ export default function VideoAgentWorkspace({
 
   const stopSending = () => {
     const threadId = activeThread?.id;
+    answerTextPumpRef.current?.discard();
+    answerTextPumpRef.current = null;
     abortRef.current?.abort();
     abortRef.current = null;
     setSending(false);
     setStudioGeneratingType(null);
     setStreamingMessageId(null);
-    setStreamProgress(null);
     if (threadId) {
       setBackgroundThreadId(threadId);
       setActiveThread((current) => (
@@ -2354,23 +2730,25 @@ export default function VideoAgentWorkspace({
     const response = await cancelAgentTurn(threadId, turnId);
     setTurnAction('');
     if (!response.success || !response.data) {
-      setError(response.error || '取消研究暂时没有完成');
+      setError(response.error || '停止生成暂时没有完成');
       return;
     }
 
     const turn = response.data;
     durableTurnIdRef.current = turn.id;
     if (turn.status === 'cancelled') {
+      answerTextPumpRef.current?.discard();
+      answerTextPumpRef.current = null;
       abortRef.current?.abort();
       resumeAbortRef.current?.abort();
       setSending(false);
       setBackgroundThreadId(null);
-      setStreamProgress(null);
+      resetStreamFeedback();
       setTerminalTurn(turn);
       setActiveThread((current) => (
         current?.id === threadId ? { ...current, active_turn: null } : current
       ));
-      setNotice('本轮研究已取消；需要时可以从原进度重新排队。');
+      setNotice('本次生成已停止；需要时可以重新生成回答。');
       return;
     }
 
@@ -2378,16 +2756,16 @@ export default function VideoAgentWorkspace({
       current?.id === threadId ? { ...current, active_turn: turn } : current
     ));
     setBackgroundThreadId(threadId);
-    setStreamProgress({
+    recordStreamProgress({
       stage: 'finalizing',
-      message: '正在安全停止研究任务',
+      message: '正在停止本次回答',
       turn_id: turn.id,
       source_total_count: turn.source_total_count,
       scanned_count: turn.scanned_count,
       mapped_count: turn.mapped_count,
       deep_read_count: turn.deep_read_count,
     });
-    setNotice('已发送取消请求；当前工具返回后会安全停止。');
+    setNotice('已发送停止请求；当前步骤结束后会安全停止生成。');
   };
 
   const retryTerminalTurn = async () => {
@@ -2408,25 +2786,74 @@ export default function VideoAgentWorkspace({
     }
     const turn = response.data;
     durableTurnIdRef.current = turn.id;
+    prepareStreamFeedback(turn.id);
     setTerminalTurn(null);
     setActiveThread((current) => (
       current?.id === threadId
         ? { ...current, status: 'running', active_turn: turn }
         : current
     ));
-    setStreamProgress({
+    recordStreamProgress({
       stage: 'queued',
       message: '研究已重新排队',
       turn_id: turn.id,
       source_total_count: turn.source_total_count,
     });
     setBackgroundThreadId(threadId);
-    setNotice('本轮研究已重新排队，会从保存的来源范围继续。');
+    setNotice('本次回答已重新排队，会继续使用保存的来源范围。');
   };
 
   const handleComposerSubmit = useEventCallback((content: string) => {
+    if (!content.trim()) return;
+    if (sending || backgroundThreadId || threadBlocksNewQuestion(activeThread)) {
+      if (queuedQuestions.length >= 3) {
+        setNotice('最多排队 3 个问题，请先等待前面的回答完成。');
+        return;
+      }
+      setQueuedQuestions((current) => [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          content,
+          outputStyle,
+          customInstruction,
+          researchMode,
+          webScope,
+        },
+      ]);
+      questionRef.current?.clear();
+      setNotice('已加入下一问；当前回答完成后会自动发送。');
+      return;
+    }
     void submitQuestion(undefined, content);
   });
+
+  const submitQueuedQuestion = useEventCallback((item: QueuedQuestion) => {
+    void submitQuestion(undefined, item.content, {
+      outputStyle: item.outputStyle,
+      customInstruction: item.customInstruction,
+      researchMode: item.researchMode,
+      webScope: item.webScope,
+    });
+  });
+
+  useEffect(() => {
+    if (
+      sending
+      || backgroundThreadId
+      || threadBlocksNewQuestion(activeThread)
+      || queuedQuestions.length === 0
+    ) return;
+    const next = queuedQuestions[0];
+    setQueuedQuestions((current) => current.slice(1));
+    submitQueuedQuestion(next);
+  }, [
+    activeThread,
+    backgroundThreadId,
+    queuedQuestions,
+    sending,
+    submitQueuedQuestion,
+  ]);
   const handleComposerModelChange = useEventCallback((modelId: string) => {
     void changeChatModel(modelId);
   });
@@ -2628,6 +3055,30 @@ export default function VideoAgentWorkspace({
   const ConversationContainer = embedded ? 'div' : 'main';
   const conversationBlocked = isCompact
     && (historyOpen || sourcesOpen || studioOpen || automationOpen);
+  const turnIsRunning = Boolean(sending || backgroundThreadId);
+  const streamingAssistant = streamingMessageId
+    ? messages.find((message) => message.id === streamingMessageId) || null
+    : null;
+  const currentStreamActivity = [...streamActivities].reverse().find(
+    (activity) => activity.status === 'running',
+  );
+  const streamStatusMessage = streamingAnswerStarted
+    ? '正在生成回答'
+    : currentStreamActivity?.label || '正在准备回答';
+  const activityTimeline = turnIsRunning ? (
+    <AgentActivityTimeline
+      activities={streamActivities}
+      answerStarted={streamingAnswerStarted}
+      cancellationRequested={Boolean(
+        activeThread?.active_turn?.cancellation_requested,
+      )}
+      cancelling={turnAction === 'cancel'}
+      canCancel={Boolean(
+        activeThread?.active_turn?.id || durableTurnIdRef.current,
+      )}
+      onCancel={() => void cancelCurrentTurn()}
+    />
+  ) : null;
 
   return (
     <div className={workspaceClassName} data-embedded={embedded || undefined}>
@@ -2649,7 +3100,7 @@ export default function VideoAgentWorkspace({
 
       <section
         className="video-agent-shell"
-        aria-label="知萃 Harness"
+        aria-label="知萃 AI"
       >
         <aside
           id="video-agent-history-panel"
@@ -2702,7 +3153,9 @@ export default function VideoAgentWorkspace({
                     <strong>{thread.title || '未命名任务'}</strong>
                     <span>{threadPreview(thread)}</span>
                     <small>
-                      {sourceScopeLabel(thread.source_scope)}
+                      {thread.context_type === 'plan'
+                        ? '行动计划'
+                        : sourceScopeLabel(thread.source_scope)}
                       {' · '}
                       {formatCompactTime(thread.updated_at)}
                     </small>
@@ -2729,7 +3182,7 @@ export default function VideoAgentWorkspace({
         <ConversationContainer
           className="video-agent-main"
           role={embedded ? 'region' : undefined}
-          aria-label={embedded ? '知萃 Harness 对话' : undefined}
+          aria-label={embedded ? '知萃 AI 对话' : undefined}
           aria-hidden={conversationBlocked}
           inert={conversationBlocked}
         >
@@ -2748,11 +3201,13 @@ export default function VideoAgentWorkspace({
                   aria-controls="video-agent-history-panel"
                   title="查看会话记录"
                 >
-                  <h1>{activeThread?.title || '知萃 Harness'}</h1>
+                  <h1>{activeThread?.title || '知萃 AI'}</h1>
                   <CaretRight size={14} aria-hidden="true" />
                 </button>
                 <p>
-                  {activeThread
+                  {isPlanContext
+                    ? `当前计划 · ${activeThread?.context?.title || activePlan?.title || (planContextLoadError ? '连接待恢复' : '正在读取')}`
+                    : activeThread
                     ? `${sourceScopeLabel(activeScope)} · ${activeSourceCount} 条视频`
                     : draftSourceMode === 'scope'
                       ? `使用${sourceScopeLabel(browseScope)}`
@@ -2761,7 +3216,7 @@ export default function VideoAgentWorkspace({
               </div>
             </div>
             <div className="video-agent-topbar-actions">
-              <button
+              {!isPlanContext && <button
                 type="button"
                 className="is-icon"
                 onClick={() => startNewTask()}
@@ -2770,8 +3225,8 @@ export default function VideoAgentWorkspace({
               >
                 <Plus size={17} weight="bold" />
                 <span className="sr-only">新建会话</span>
-              </button>
-              <button
+              </button>}
+              {!isPlanContext && <button
                 type="button"
                 className="is-icon"
                 onClick={() => setAutomationOpen(true)}
@@ -2780,8 +3235,18 @@ export default function VideoAgentWorkspace({
               >
                 <Clock size={16} />
                 <span className="sr-only">定时摘要</span>
-              </button>
-              <button
+              </button>}
+              {isPlanContext ? (
+                <Link
+                  href={`/plans?id=${encodeURIComponent(activeThread?.context_id || routePlanId)}`}
+                  className="is-source"
+                  aria-label="查看当前计划"
+                >
+                  <ListChecks size={16} />
+                  <span>当前计划</span>
+                  <CaretRight size={14} />
+                </Link>
+              ) : <button
                 type="button"
                 className="is-source"
                 onClick={(event) => {
@@ -2802,8 +3267,8 @@ export default function VideoAgentWorkspace({
                     : sourceScopeLabel(activeScope)}
                 </span>
                 <b>{activeSourceCount}</b>
-              </button>
-              <button
+              </button>}
+              {!isPlanContext && <button
                 type="button"
                 className="is-studio"
                 onClick={(event) => openStudioPanel(event.currentTarget)}
@@ -2814,11 +3279,11 @@ export default function VideoAgentWorkspace({
                 <Sparkle size={16} weight="fill" />
                 <span>成果</span>
                 <b>{artifactCount}</b>
-              </button>
+              </button>}
             </div>
           </header>
 
-          <nav className="video-agent-mobile-tabs" aria-label="知萃 Harness 功能">
+          {!isPlanContext && <nav className="video-agent-mobile-tabs" aria-label="知萃 AI 功能">
             <button
               type="button"
               onClick={(event) => openSourcesPanel(event.currentTarget)}
@@ -2847,7 +3312,7 @@ export default function VideoAgentWorkspace({
               <Clock size={16} />
               摘要
             </button>
-          </nav>
+          </nav>}
 
           {(notice || error) && (
             <div
@@ -2885,19 +3350,90 @@ export default function VideoAgentWorkspace({
                 <span className="video-agent-welcome-mark" aria-hidden="true">
                   <AgentMark variant="hero" />
                 </span>
-                <h2>选择视频，直接提问</h2>
-                {canStartDraft ? (
-                  <div className="video-agent-starters">
-                    {STARTERS.map((starter) => (
-                      <button
-                        key={starter}
-                        type="button"
-                        onClick={() => void submitQuestion(undefined, starter)}
-                      >
-                        <span>{starter}</span>
-                        <CaretRight size={15} />
-                      </button>
-                    ))}
+                <h2>
+                  {isPlanContext
+                    ? '这个计划，你想怎么调整？'
+                    : starterQuestionsSourceCount === 1
+                      ? '关于这条视频，你可以这样问'
+                      : '基于当前文案，直接提问'}
+                </h2>
+                {isPlanContext && planContextLoadError && !activeThread ? (
+                  <div className="video-agent-welcome-empty" role="alert">
+                    <span>{planContextLoadError}</span>
+                    <button
+                      type="button"
+                      onClick={() => void openPlanContext(routePlanId)}
+                      disabled={threadLoading}
+                    >
+                      重新连接计划
+                      <ArrowClockwise size={15} />
+                    </button>
+                  </div>
+                ) : canStartDraft ? (
+                  <>
+                    <p className="video-agent-starter-origin">
+                      {starterQuestionsLoading
+                        ? '正在阅读完整文案并生成问题'
+                        : isPlanContext
+                          ? '知萃 AI 会先生成变更预览，确认后才会修改计划'
+                          : starterQuestionsSourceCount === 1
+                            ? '以下问题由这条视频的完整文案生成'
+                            : `以下问题由当前 ${starterQuestionsSourceCount || activeSourceCount} 条文案归纳`}
+                    </p>
+                    <div className="video-agent-starters">
+                      {starterQuestionsLoading ? (
+                        <div
+                          className="video-agent-starter-loading"
+                          role="status"
+                          aria-label="正在从完整文案生成推荐问题"
+                        >
+                          <i /><i /><i />
+                        </div>
+                      ) : starterQuestionsError ? (
+                        <button
+                          type="button"
+                          className="is-retry"
+                          onClick={() => {
+                            starterQuestionCache.delete(starterQuestionRequest.key);
+                            setStarterQuestionsRetry((current) => current + 1);
+                          }}
+                        >
+                          <span>{starterQuestionsError}，点击重新生成</span>
+                          <ArrowClockwise size={15} />
+                        </button>
+                      ) : starterQuestions.map((starter) => (
+                        <button
+                          key={starter}
+                          type="button"
+                          onClick={() => void submitQuestion(undefined, starter)}
+                        >
+                          <span>{starter}</span>
+                          <CaretRight size={15} />
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                ) : sourceHandoffPending || sourceLoading ? (
+                  <div className="video-agent-welcome-empty" role="status">
+                    <span>
+                      {sourceHandoffPending
+                        ? "正在核对所选视频和完整文案…"
+                        : "正在读取可用视频文案…"}
+                    </span>
+                  </div>
+                ) : sourceError ? (
+                  <div className="video-agent-welcome-empty" role="alert">
+                    <span>{sourceError}</span>
+                    <button
+                      type="button"
+                      onClick={() => void loadSources(
+                        browseScope,
+                        requestedSourceIdsRef.current,
+                      )}
+                    >
+                      重新读取
+                      <ArrowClockwise size={15} />
+                    </button>
                   </div>
                 ) : (
                   <div className="video-agent-welcome-empty">
@@ -2910,71 +3446,61 @@ export default function VideoAgentWorkspace({
                 )}
               </div>
             ) : (
-              messages.map((message) => (
-                <AgentMessageView
-                  key={message.id}
-                  message={message}
-                  deliveryState={messageDeliveryStates[message.id]}
-                  deliveryError={messageDeliveryErrors[message.id]}
-                  streaming={message.id === streamingMessageId}
-                  disabled={
-                    sending
-                    || Boolean(backgroundThreadId)
-                    || analysisDecisionMessageId === message.id
-                  }
-                  onFollowUp={handleMessageFollowUp}
-                  onRetry={handleMessageRetry}
-                  onEdit={handleMessageEdit}
-                  onVideoAnalysisDecision={handleVideoAnalysisDecision}
-                />
-              ))
+              messages.map((message) => {
+                const isStreamingAssistant = message.id === streamingMessageId;
+                return (
+                  <Fragment key={message.id}>
+                    {isStreamingAssistant ? activityTimeline : null}
+                    {isStreamingAssistant ? (
+                      <AgentStreamingMessageView
+                        ref={attachStreamingMessageView}
+                        initialMessage={message}
+                        disabled
+                        onFirstContent={() => setStreamingAnswerStarted(true)}
+                        onFollowUp={handleMessageFollowUp}
+                        onVideoAnalysisDecision={handleVideoAnalysisDecision}
+                      />
+                    ) : (
+                      <AgentMessageView
+                        message={message}
+                        deliveryState={messageDeliveryStates[message.id]}
+                        deliveryError={messageDeliveryErrors[message.id]}
+                        disabled={
+                          sending
+                          || Boolean(backgroundThreadId)
+                          || analysisDecisionMessageId === message.id
+                        }
+                        onFollowUp={handleMessageFollowUp}
+                        onRetry={handleMessageRetry}
+                        onEdit={handleMessageEdit}
+                        onVideoAnalysisDecision={handleVideoAnalysisDecision}
+                      />
+                    )}
+                  </Fragment>
+                );
+              })
             )}
 
-            {sending && !streamingMessageId && (
-              <div className="video-agent-thinking" role="status">
-                <span><i /><i /><i /></span>
-                {researchMode === 'deep'
-                  ? '正在分批阅读资料并综合依据'
-                  : researchMode === 'fast'
-                    ? '正在检索完整文案并组织回答'
-                    : '正在判断问题范围并选择研究深度'}
-              </div>
-            )}
-            {!sending && backgroundThreadId && (
-              <div className="video-agent-thinking" role="status" aria-live="polite">
-                <span><i /><i /><i /></span>
-                <span className="video-agent-thinking-copy">
-                  <strong>
-                    {activeThread?.active_turn?.cancellation_requested
-                      ? '正在安全停止研究任务'
-                      : streamProgress?.message || '后台仍在处理上一条回答'}
-                  </strong>
-                  <small>
-                    {researchProgressDetail(streamProgress)
-                      || '完成后会自动更新，刷新或切换页面不会丢失'}
-                  </small>
+            {turnIsRunning && !streamingAssistant ? activityTimeline : null}
+            {queuedQuestions.map((item, index) => (
+              <article key={item.id} className="video-agent-queued-question">
+                <span>
+                  <Clock size={14} aria-hidden="true" />
+                  下一问 {index + 1}
                 </span>
-                {activeThread?.active_turn?.id && (
-                  <button
-                    type="button"
-                    className="video-agent-turn-action"
-                    disabled={
-                      turnAction === 'cancel'
-                      || activeThread.active_turn.cancellation_requested
-                    }
-                    onClick={() => void cancelCurrentTurn()}
-                    aria-label="取消研究"
-                  >
-                    <X size={14} aria-hidden="true" />
-                    {activeThread.active_turn.cancellation_requested
-                      ? '正在停止'
-                      : turnAction === 'cancel'
-                        ? '正在取消'
-                        : '取消研究'}
-                  </button>
-                )}
-              </div>
-            )}
+                <p>{item.content}</p>
+                <button
+                  type="button"
+                  onClick={() => setQueuedQuestions((current) => (
+                    current.filter((candidate) => candidate.id !== item.id)
+                  ))}
+                  aria-label={`取消排队：${item.content}`}
+                >
+                  <X size={14} aria-hidden="true" />
+                  取消
+                </button>
+              </article>
+            ))}
             {!sending
               && !backgroundThreadId
               && terminalTurn
@@ -2986,11 +3512,14 @@ export default function VideoAgentWorkspace({
                 <span className="video-agent-thinking-copy">
                   <strong>
                     {terminalTurn.status === 'cancelled'
-                      ? '本轮研究已取消'
-                      : '本轮研究没有完成'}
+                      ? '本次生成已停止'
+                      : '本次回答没有完成'}
                   </strong>
                   <small>
-                    {terminalTurn.error_message || '已保留来源范围和安全事件，可以重新排队'}
+                    {agentTurnTerminalMessage({
+                      status: terminalTurn.status,
+                      errorMessage: terminalTurn.error_message,
+                    })}
                   </small>
                 </span>
                 <button
@@ -2998,10 +3527,10 @@ export default function VideoAgentWorkspace({
                   className="video-agent-turn-action"
                   disabled={turnAction === 'retry'}
                   onClick={() => void retryTerminalTurn()}
-                  aria-label="重试研究"
+                  aria-label="重新生成回答"
                 >
                   <ArrowClockwise size={14} aria-hidden="true" />
-                  {turnAction === 'retry' ? '正在排队' : '重试研究'}
+                  {turnAction === 'retry' ? '正在排队' : '重新生成'}
                 </button>
               </div>
             )}
@@ -3023,6 +3552,8 @@ export default function VideoAgentWorkspace({
           <AgentComposer
             ref={questionRef}
             activeSourceCount={activeSourceCount}
+            contextTitle={activeThread?.context?.title || activePlan?.title || '当前计划'}
+            contextType={isPlanContext ? 'plan' : 'video'}
             accountPoints={chatModelCatalog?.account.available_points || 0}
             aiProviderConfig={aiProviderConfig}
             availableModels={availableChatModels}
@@ -3036,6 +3567,7 @@ export default function VideoAgentWorkspace({
             modelConfigSaving={modelConfigSaving}
             outputLabel={OUTPUT_LABELS[outputStyle]}
             outputStyle={outputStyle}
+            queuedCount={queuedQuestions.length}
             researchMode={researchMode}
             researchLabel={researchMode === 'deep' ? '深度' : researchMode === 'fast' ? '快速' : '自动'}
             selectedModel={selectedChatModel}
@@ -3047,8 +3579,10 @@ export default function VideoAgentWorkspace({
                 : modelSaving
                   ? '正在切换回答方式'
                   : sending
-                    ? streamProgress?.message || '正在准备回答'
-                    : `${researchMode === 'deep' ? '深度研究' : researchMode === 'fast' ? '快速回答' : '自动研究'} · ${activeSourceCount} 条视频`
+                    ? streamStatusMessage
+                    : isPlanContext
+                      ? '当前计划 · 先预览，确认后应用'
+                      : `${researchMode === 'deep' ? '深度研究' : researchMode === 'fast' ? '快速回答' : '自动研究'} · ${activeSourceCount} 条视频`
             }
             webLabel={webScope === 'auto' ? '按需查证' : '仅视频'}
             webScope={webScope}
@@ -3087,6 +3621,7 @@ export default function VideoAgentWorkspace({
                 title="同步视频"
               >
                 <ArrowClockwise size={18} aria-hidden="true" />
+                <span>同步视频</span>
               </button>
               <button
                 ref={sourcesCloseRef}

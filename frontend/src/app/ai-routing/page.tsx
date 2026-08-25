@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Check,
-  ChatCircleDots,
   CircleNotch,
   Coins,
   ImageSquare,
@@ -13,10 +12,10 @@ import {
   Key,
   MagnifyingGlass,
   Robot,
-  Sparkle,
   Wrench,
   WarningCircle,
 } from '@phosphor-icons/react';
+import AIModelIcon from '@/components/AIModelIcon';
 import {
   getUserChatModels,
   selectUserChatModel,
@@ -158,7 +157,7 @@ export default function AIModelsPage() {
               return (
                 <button key={model.id} type="button" className={selected ? styles.modelSelected : ''} onClick={() => void selectModel(model)} disabled={Boolean(savingId)} aria-pressed={selected}>
                   <span className={styles.modelMark}>
-                    {model.supports_images ? <ImageSquare size={20} weight="duotone" /> : model.supports_tools ? <Wrench size={20} weight="duotone" /> : model.is_free ? <ChatCircleDots size={20} weight="duotone" /> : <Sparkle size={20} weight="duotone" />}
+                    <AIModelIcon modelId={model.icon_key} name={model.name} size={20} />
                   </span>
                   <span className={styles.modelCopy}><strong>{model.name}</strong><small>{model.description || '适合日常问答与资料整理'}</small></span>
                   <span className={styles.modelTraits}>

@@ -79,8 +79,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: 'sync',
     label: '同步与问答',
-    description: '控制多渠道视频更新频率和问答列表数量',
-    keywords: '同步 定时 拉取 抖音 收藏 喜欢 作品 视频 数量 问答',
+    description: '手动更新多渠道视频并控制问答列表数量',
+    keywords: '同步 手动 风控 抖音 收藏 喜欢 作品 视频 数量 问答',
     icon: ArrowsClockwise,
   },
   {
@@ -242,9 +242,9 @@ function SettingsWorkspace() {
                   <div className={styles.summaryRow}>
                     <div>
                       <strong>账号内容</strong>
-                      <span>视频资料、知识和计划跟随账号</span>
+                      <span>视频资料、知识和计划跟随账号；平台采集只手动执行</span>
                     </div>
-                    <b className={styles.healthy}>自动同步</b>
+                    <b className={styles.healthy}>手动同步</b>
                   </div>
                   <div className={styles.summaryRow}>
                     <div>

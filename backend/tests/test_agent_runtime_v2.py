@@ -11,6 +11,11 @@ from app.models.agent_runtime import AgentEvent, AgentMemoryCheckpoint, AgentTur
 from app.models.note import Note  # noqa: F401
 from app.models.user import User  # noqa: F401
 from app.services import agent_runtime_service, agent_service, ai_juicer
+from app.services import agent_runtime_worker
+from app.api.agent_routes import (
+    _DURABLE_STREAM_POLL_SECONDS,
+    _project_durable_event,
+)
 from app.services.agent_repeat_tool_guard import RepeatToolGuard, canonical_arguments
 from app.services.agent_tool_runtime import (
     AgentTool,
@@ -33,11 +38,23 @@ class AgentRuntimeV2Tests(unittest.TestCase):
     def tearDown(self):
         self.engine.dispose()
 
+    def test_durable_stream_discovers_committed_events_within_fifty_ms(self):
+        self.assertLessEqual(_DURABLE_STREAM_POLL_SECONDS, 0.05)
+
     def test_exact_broad_question_resolves_deep(self):
         self.assertEqual(
             agent_runtime_service.resolve_research_mode(
                 "auto",
                 question="这些视频反复出现的核心观点是什么？",
+                source_count=37,
+                output_style="answer",
+            ),
+            "deep",
+        )
+        self.assertEqual(
+            agent_runtime_service.resolve_research_mode(
+                "auto",
+                question="请完整列出25个机制元，并分别说明作用",
                 source_count=37,
                 output_style="answer",
             ),
@@ -67,6 +84,31 @@ class AgentRuntimeV2Tests(unittest.TestCase):
             self.assertEqual(first.id, second.id)
             self.assertIsNone(agent_runtime_service.get_turn(db, first.id, "other-user"))
 
+    def test_append_event_repairs_a_stale_sequence_counter(self):
+        with self.Session() as db:
+            _, turn = self._new_turn(db, suffix="event-seq-repair")
+            existing = agent_runtime_service.list_events(db, turn=turn)
+            self.assertEqual([event.seq for event in existing], [1])
+
+            # Simulate the SQLite race seen when cancellation and worker
+            # progress both observed the same counter before one committed.
+            turn.next_event_seq = 1
+            db.commit()
+            repaired = agent_runtime_service.append_event(
+                db,
+                turn=turn,
+                event_type="turn.progress",
+                phase="researching",
+                message="继续研究",
+            )
+
+            self.assertEqual(repaired.seq, 2)
+            self.assertEqual(turn.next_event_seq, 3)
+            self.assertEqual(
+                [event.seq for event in agent_runtime_service.list_events(db, turn=turn)],
+                [1, 2],
+            )
+
     def test_thirty_seven_sources_are_all_available_to_deep_map(self):
         sources = [
             {
@@ -83,6 +125,24 @@ class AgentRuntimeV2Tests(unittest.TestCase):
         self.assertEqual(context["scanned_count"], 37)
         self.assertEqual(context["mapped_count"], 37)
         self.assertEqual(len(context["_map_sources"]), 37)
+
+        _, _, focused_context = ai_juicer._build_library_research_context(
+            sources, ["机制元"], coverage="focused", research_mode="deep"
+        )
+        self.assertEqual(focused_context["scanned_count"], 37)
+        self.assertEqual(focused_context["mapped_count"], 12)
+        self.assertEqual(len(focused_context["_map_sources"]), 12)
+
+    def test_exact_enumeration_plan_is_focused(self):
+        plan = ai_juicer._library_research_plan(
+            "请完整列出25个机制元，并分别说明作用",
+            ["游戏机制元素周期表"],
+            [],
+            "answer",
+            "",
+            use_model=False,
+        )
+        self.assertEqual(plan["coverage"], "focused")
 
     def test_recurring_claim_requires_two_verified_sources(self):
         supplied = {
@@ -138,6 +198,24 @@ class AgentRuntimeV2Tests(unittest.TestCase):
         )
         self.assertIn("已核验原文", answer)
         self.assertIn("《视频 A》：“观点原文A”", answer)
+
+    def test_validated_answer_replaces_placeholder_overview_without_model_call(self):
+        answer = ai_juicer._render_validated_claim_answer(
+            "视频",
+            [{
+                "claim_id": "C1",
+                "kind": "recurring",
+                "text": "把复杂问题拆成可验证步骤",
+                "explanation": "先建立结构，再逐项验证证据，最后组合成结论。",
+                "support_count": 2,
+                "evidence": [],
+            }],
+            source_total_count=37,
+        )
+
+        self.assertNotEqual(answer.splitlines()[0], "视频")
+        self.assertIn("37 条视频", answer)
+        self.assertIn("把复杂问题拆成可验证步骤", answer)
 
     def test_video_only_claim_drops_unsourced_named_theory(self):
         supplied = {
@@ -202,7 +280,9 @@ class AgentRuntimeV2Tests(unittest.TestCase):
 
     def test_queued_cancel_is_terminal_and_retry_reuses_same_turn(self):
         with self.Session() as db:
-            _, turn = self._new_turn(db, suffix="cancel")
+            thread, turn = self._new_turn(db, suffix="cancel")
+            thread.status = "running"
+            db.commit()
             cancelled = agent_runtime_service.request_cancel(db, turn)
             self.assertEqual(cancelled.status, "cancelled")
             self.assertIsNone(agent_runtime_service.claim_turn(db, turn.id))
@@ -210,6 +290,8 @@ class AgentRuntimeV2Tests(unittest.TestCase):
             self.assertEqual(retried.id, turn.id)
             self.assertEqual(retried.status, "queued")
             self.assertFalse(retried.cancellation_requested)
+            db.refresh(thread)
+            self.assertEqual(thread.status, "failed")
             event_types = [
                 item.event_type for item in agent_runtime_service.list_events(db, turn=retried)
             ]
@@ -257,6 +339,26 @@ class AgentRuntimeV2Tests(unittest.TestCase):
             projected = agent_service.serialize_thread(db, thread)
             self.assertEqual(projected["active_turn"]["id"], turn.id)
             self.assertEqual(projected["active_turn"]["status"], "queued")
+
+    def test_thread_projection_repairs_terminal_turn_ghost_running_state(self):
+        with self.Session() as db:
+            thread, turn = self._new_turn(db, suffix="ghost-running")
+            thread.status = "running"
+            thread.updated_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+            turn.status = "failed"
+            turn.phase = "failed"
+            turn.error_code = "AgentThreadConflictError"
+            turn.error_message = "这个任务正在回答上一条问题，请稍候"
+            turn.completed_at = datetime.now(timezone.utc)
+            turn.updated_at = datetime.now(timezone.utc)
+            db.commit()
+
+            projected = agent_service.serialize_thread(db, thread)
+
+            self.assertIsNone(projected["active_turn"])
+            self.assertEqual(projected["status"], "failed")
+            db.refresh(thread)
+            self.assertEqual(thread.status, "failed")
 
     def test_inline_source_numbers_are_removed(self):
         cleaned = ai_juicer._strip_inline_source_numbers(
@@ -460,6 +562,129 @@ class AgentRuntimeV2Tests(unittest.TestCase):
             ))
             with self.assertRaises(agent_runtime_service.AgentTurnLeaseLost):
                 executor.execute("video.stale")
+
+    def test_answer_deltas_are_coalesced_persisted_and_replayable(self):
+        with self.Session() as db:
+            _, turn = self._new_turn(db, suffix="answer-events")
+            claimed = agent_runtime_service.claim_turn(db, turn.id)
+            self.assertIsNotNone(claimed)
+            claimed_turn, lease_token = claimed
+            writer = agent_runtime_worker._DurableAnswerWriter(
+                db, claimed_turn, lease_token
+            )
+
+            visible_answer = "首段连续正文" * 30 + "后" * 420
+            writer(visible_answer)
+            writer.flush()
+
+            events = agent_runtime_service.list_events(db, turn=claimed_turn)
+            answer_events = [
+                event for event in events
+                if event.event_type.startswith("turn.answer.")
+            ]
+            self.assertEqual(answer_events[0].event_type, "turn.answer.started")
+            delta_events = [
+                event for event in answer_events
+                if event.event_type == "turn.answer.delta"
+            ]
+            self.assertGreaterEqual(len(delta_events), 3)
+            self.assertEqual(
+                "".join(str(event.payload.get("delta") or "") for event in delta_events),
+                visible_answer,
+            )
+            self.assertTrue(all(
+                len(str(event.payload.get("delta") or "")) <= 192
+                for event in delta_events
+            ))
+            self.assertLessEqual(
+                len(str(delta_events[0].payload.get("delta") or "")),
+                192,
+            )
+            projected = _project_durable_event(claimed_turn, delta_events[0])
+            self.assertEqual(projected["type"], "delta")
+            self.assertEqual(projected["event_seq"], delta_events[0].seq)
+            replay = agent_runtime_service.list_events(
+                db,
+                turn=claimed_turn,
+                after_seq=delta_events[0].seq,
+            )
+            self.assertTrue(all(event.seq > delta_events[0].seq for event in replay))
+
+            persisted = db.query(AgentTurn).filter(
+                AgentTurn.id == claimed_turn.id
+            ).one()
+            persisted.lease_token = "replacement-token"
+            db.commit()
+            with self.assertRaises(agent_runtime_service.AgentTurnLeaseLost):
+                writer("租约失效后不得继续输出")
+                writer.flush()
+
+    def test_answer_delta_honors_running_turn_cancellation(self):
+        with self.Session() as db:
+            _, turn = self._new_turn(db, suffix="answer-cancel")
+            claimed_turn, lease_token = agent_runtime_service.claim_turn(db, turn.id)
+            writer = agent_runtime_worker._DurableAnswerWriter(
+                db, claimed_turn, lease_token
+            )
+            agent_runtime_service.request_cancel(db, claimed_turn)
+            with self.assertRaises(agent_runtime_service.AgentTurnCancelled):
+                writer("取消后不得继续输出")
+
+    def test_answer_finish_streams_the_canonical_suffix_without_retracting_text(self):
+        with self.Session() as db:
+            _, turn = self._new_turn(db, suffix="answer-finish")
+            claimed_turn, lease_token = agent_runtime_service.claim_turn(db, turn.id)
+            writer = agent_runtime_worker._DurableAnswerWriter(
+                db, claimed_turn, lease_token
+            )
+
+            writer("稳定开头。")
+            writer.finish("稳定开头。\n\n经过校验的完整正文。")
+
+            events = agent_runtime_service.list_events(db, turn=claimed_turn)
+            visible = "".join(
+                str(event.payload.get("delta") or "")
+                for event in events
+                if event.event_type == "turn.answer.delta"
+            )
+            self.assertEqual(visible, "稳定开头。\n\n经过校验的完整正文。")
+
+    def test_answer_finish_streams_complete_validated_markdown_from_empty_draft(self):
+        with self.Session() as db:
+            _, turn = self._new_turn(db, suffix="answer-canonical")
+            claimed_turn, lease_token = agent_runtime_service.claim_turn(db, turn.id)
+            writer = agent_runtime_worker._DurableAnswerWriter(
+                db, claimed_turn, lease_token
+            )
+            canonical = (
+                "总览正文。\n\n"
+                "### 1. 天赋树提供基础升级\n\n"
+                "这是经过校验的解释。\n\n"
+                "**已核验证据：1 条视频（研究范围 1 条）**\n\n"
+                "**已核验原文：**\n\n"
+                "- 《测试视频》：\"50 个泥土可以升级。\"\n"
+            ) * 12
+
+            writer.finish(canonical)
+
+            events = agent_runtime_service.list_events(db, turn=claimed_turn)
+            delta_events = [
+                event for event in events
+                if event.event_type == "turn.answer.delta"
+            ]
+            self.assertGreater(len(delta_events), 3)
+            self.assertEqual(
+                "".join(str(event.payload.get("delta") or "") for event in delta_events),
+                canonical,
+            )
+            self.assertTrue(all(
+                later.seq > earlier.seq
+                for earlier, later in zip(delta_events, delta_events[1:])
+            ))
+            self.assertTrue(all(
+                len(str(event.payload.get("delta") or "")) <= 192
+                for event in delta_events
+            ))
 
 
 if __name__ == "__main__":

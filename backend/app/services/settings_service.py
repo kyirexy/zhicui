@@ -42,6 +42,10 @@ CREATOR_SYNC_HEALTH_KEYS = {
     "bilibili": "creator_sync_bilibili_healthy",
     "xiaohongshu": "creator_sync_xiaohongshu_healthy",
 }
+CREATOR_SYNC_CATALOG_HEALTH_KEYS = {
+    "douyin": "creator_sync_douyin_catalog_healthy",
+    "bilibili": "creator_sync_bilibili_catalog_healthy",
+}
 CREATOR_SYNC_TESTED_AT_KEYS = {
     platform: f"creator_sync_{platform}_tested_at"
     for platform in CREATOR_SYNC_HEALTH_KEYS
@@ -325,13 +329,25 @@ def get_creator_sync_config(db: Session, *, include_secret: bool = False) -> dic
     code explicitly requests it.
     """
     xhs_cookie = get_secret(db, CREATOR_SYNC_XHS_COOKIE_KEY) or getattr(settings, "XHS_COOKIE", "")
+    platform_health = {
+        platform: _as_bool(get_setting(db, health_key, "false"))
+        and (platform != "xiaohongshu" or bool(xhs_cookie))
+        for platform, health_key in CREATOR_SYNC_HEALTH_KEYS.items()
+    }
+    catalog_health = {
+        platform: _as_bool(
+            get_setting(
+                db,
+                health_key,
+                "true" if platform_health.get(platform) else "false",
+            )
+        )
+        for platform, health_key in CREATOR_SYNC_CATALOG_HEALTH_KEYS.items()
+    }
     result: dict[str, Any] = {
         "enabled": _as_bool(get_setting(db, CREATOR_SYNC_ENABLED_KEY, "false")),
-        "platforms": {
-            platform: _as_bool(get_setting(db, health_key, "false"))
-            and (platform != "xiaohongshu" or bool(xhs_cookie))
-            for platform, health_key in CREATOR_SYNC_HEALTH_KEYS.items()
-        },
+        "platforms": platform_health,
+        "catalog_platforms": catalog_health,
         "last_tested_at": {
             platform: get_setting(db, CREATOR_SYNC_TESTED_AT_KEYS[platform], "") or None
             for platform in CREATOR_SYNC_HEALTH_KEYS
@@ -445,10 +461,14 @@ def record_creator_connector_test(
     platform: str,
     healthy: bool,
     tested_at: str,
+    catalog_healthy: bool | None = None,
 ) -> dict[str, Any]:
     if platform not in CREATOR_SYNC_HEALTH_KEYS:
         raise ValueError("不支持的博主同步平台")
     set_setting(db, CREATOR_SYNC_HEALTH_KEYS[platform], "true" if healthy else "false")
+    catalog_health_key = CREATOR_SYNC_CATALOG_HEALTH_KEYS.get(platform)
+    if catalog_health_key and catalog_healthy is not None:
+        set_setting(db, catalog_health_key, "true" if catalog_healthy else "false")
     set_setting(db, CREATOR_SYNC_TESTED_AT_KEYS[platform], tested_at)
     return get_creator_sync_config(db)
 

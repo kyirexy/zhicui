@@ -1050,6 +1050,14 @@
 
 .sourceLink { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding: 0.7rem 0.85rem; border: 1px solid var(--plan-border); border-radius: 0.95rem; background: var(--plan-surface); color: var(--plan-ink-soft); font-size: 0.77rem; text-decoration: none; }
 
+.aiPlanEntry { display: grid; padding: 1rem; border: 1px solid color-mix(in srgb, var(--accent-brand) 20%, var(--plan-border)); border-radius: 1rem; grid-template-columns: auto minmax(0, 1fr); gap: 0.75rem; background: color-mix(in srgb, var(--accent-brand) 4%, var(--plan-surface)); }
+.aiPlanEntryIcon { display: grid; width: 40px; height: 40px; border-radius: 0.75rem; place-items: center; color: var(--accent-brand); background: color-mix(in srgb, var(--accent-brand) 10%, transparent); }
+.aiPlanEntry h2 { margin: 0; color: var(--plan-ink); font-size: 0.92rem; font-weight: 720; }
+.aiPlanEntry p { margin: 0.3rem 0 0; color: var(--plan-ink-soft); font-size: 0.74rem; line-height: 1.55; }
+.aiPlanEntryLink { display: inline-flex; min-height: 46px; margin-top: 0.2rem; padding: 0 0.85rem; border-radius: 0.75rem; grid-column: 1 / -1; align-items: center; justify-content: center; gap: 0.5rem; color: white; background: var(--accent-brand); font-size: 0.78rem; font-weight: 700; text-decoration: none; }
+.aiPlanEntryLink svg:last-child { margin-left: auto; }
+.aiPlanEntryLink:hover { filter: brightness(0.98); }
+
 .sheetForm { display: grid; gap: 0.9rem; }
 .sheetForm {
   --plan-surface: var(--card-bg, #fff);

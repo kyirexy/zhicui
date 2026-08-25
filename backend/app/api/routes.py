@@ -36,6 +36,7 @@ from app.services import (
     audit_service,
     chat_credit_billing_service,
     chat_model_catalog_service,
+    client_download_service,
     creator_connectors,
     creator_sync_service,
     creator_sync_worker,
@@ -65,6 +66,61 @@ from app.services.wechat_extractor import extract_wechat_article
 router = APIRouter()
 
 _COVER_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _safe_extraction_video_preview(
+    video_info: dict[str, Any],
+    *,
+    source_url: str,
+    platform: str,
+) -> dict[str, str]:
+    """Return only transient fields required by the in-progress preview UI."""
+    return {
+        "title": str(video_info.get("title") or "未知标题"),
+        "video_id": str(video_info.get("video_id") or ""),
+        "platform": platform,
+        "source_url": source_url,
+        "media_url": str(video_info.get("download_url") or video_info.get("url") or ""),
+        "cover_url": str(video_info.get("cover_url") or video_info.get("thumbnail") or ""),
+        "author_name": str(video_info.get("author_name") or video_info.get("author") or ""),
+    }
+
+
+def _transcript_progress_payload(
+    transcript: str,
+    *,
+    platform: str,
+) -> dict[str, Any]:
+    return {
+        "phase": "transcribe_done",
+        "platform": platform,
+        "transcript_chars": len(transcript),
+        "transcript": transcript,
+    }
+
+
+@router.get("/api/client-downloads/{platform}", include_in_schema=False)
+def client_download(
+    platform: Literal["android", "windows"],
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Count one official download start, then serve the allowlisted package."""
+    try:
+        client_download_service.record_download(db, platform)
+    except Exception as exc:
+        db.rollback()
+        error_log_service.record_error_safely(
+            source="client_download",
+            severity="warning",
+            error_type=type(exc).__name__,
+            message="客户端下载计数失败",
+            path=f"/api/client-downloads/{platform}",
+        )
+    return RedirectResponse(
+        url=client_download_service.DOWNLOAD_TARGETS[platform],
+        status_code=307,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 def _cover_placeholder_response() -> Response:
@@ -435,6 +491,23 @@ def _save_generated_note(
     user_id: str,
 ) -> tuple[dict[str, Any], bool]:
     """Persist one generated note and its optional plan in a single code path."""
+    ai_result = dict(ai_result)
+    existing_source_meta = ai_result.get("source_meta")
+    if not isinstance(existing_source_meta, dict):
+        existing_source_meta = {}
+    platform = str(video_info.get("platform") or "").strip()
+    media_url = str(video_info.get("download_url") or video_info.get("url") or "").strip()
+    ai_result["source_meta"] = {
+        "source_kind": "single-link",
+        "platform": platform,
+        "source_url": str(video_info.get("source_url") or "").strip(),
+        "media_url": media_url,
+        "media_type": "video",
+        "cover_url": str(video_info.get("cover_url") or video_info.get("thumbnail") or "").strip(),
+        "author_name": str(video_info.get("author_name") or video_info.get("author") or "").strip(),
+        "source_mode": "import",
+        **existing_source_meta,
+    }
     note = note_service.create_note(
         db,
         video_info,
@@ -869,6 +942,8 @@ def extract(
         # ── Video path (Douyin / Bilibili) ──────────────────────────────
         # 1. Parse video metadata
         video_info = video_extractor.parse_video_info(body.url)
+        video_info["source_url"] = body.url
+        video_info.setdefault("platform", platform)
 
         # 2. Extract transcript (with fallback)
         transcript = None
@@ -1060,11 +1135,21 @@ def extract_stream(
             )
             try:
                 video_info = video_extractor.parse_video_info(url)
+                video_info["source_url"] = url
+                video_info.setdefault("platform", platform)
                 yield _progress(
                     "parse",
                     f"解析完成：{video_info.get('title', '未知标题')}",
                     "done",
-                    {"phase": "parse_done", "platform": platform},
+                    {
+                        "phase": "parse_done",
+                        "platform": platform,
+                        "video": _safe_extraction_video_preview(
+                            video_info,
+                            source_url=url,
+                            platform=platform,
+                        ),
+                    },
                 )
             except NotImplementedError as exc:
                 yield _progress("parse", f"解析失败: {exc}", "error", {"phase": "parse_error", "platform": platform})
@@ -1249,7 +1334,7 @@ def extract_stream(
                     "transcribe",
                     f"文案提取完成，共 {char_count} 字",
                     "done",
-                    {"phase": "transcribe_done", "platform": platform, "transcript_chars": char_count},
+                    _transcript_progress_payload(transcript, platform=platform),
                 )
 
                 # Mini Agent 1: classify intent
@@ -1348,11 +1433,15 @@ def list_platform_library_items(
 @router.get("/api/library/imports/{note_id}")
 def get_platform_library_item(
     note_id: str,
+    refresh_media: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
     workspace = platform_library_service.get_workspace(
-        db, user_id=current_user.id, note_id=note_id,
+        db,
+        user_id=current_user.id,
+        note_id=note_id,
+        refresh_media=refresh_media,
     )
     if workspace is None:
         raise HTTPException(status_code=404, detail="视频资料不存在")
@@ -1786,11 +1875,15 @@ def get_douyin_library_job(
             detail={
                 "outcome": job_status,
                 "error_category": (
-                    "upstream_sync_failed"
+                    str(job.get("error_code") or "upstream_sync_failed")
                     if job_status == "failed"
                     else None
                 ),
                 "source_mode": job.get("mode"),
+                "channel": job.get("channel"),
+                "fallback_attempted": bool(job.get("fallback_attempted")),
+                "retry_after_seconds": job.get("retry_after_seconds"),
+                "needs_action": bool(job.get("needs_action")),
                 "job_id": job_id,
                 "total": job.get("total"),
                 "success": job.get("success"),
@@ -3977,6 +4070,7 @@ def admin_stats(
         "plans": db.query(Plan).count(),
         "recent_users": recent_users,
         "type_dist": type_dist,
+        "downloads": client_download_service.download_stats(db),
     })
 
 
@@ -4400,19 +4494,22 @@ def admin_test_creator_sync_connector(
             body.platform,
             binding.session_scope if binding else "",
         )
-        if (
-            body.platform in {"douyin", "bilibili"}
-            and not bool(catalog_state.get("supports_catalog_all"))
-        ):
-            settings_service.record_creator_connector_test(
-                db, platform=body.platform, healthy=False, tested_at=tested_at
-            )
-            return _err("近期连接器可用，但全部作品连接器尚未通过健康检查")
+        catalog_healthy = bool(catalog_state.get("supports_catalog_all"))
         settings_service.record_creator_connector_test(
-            db, platform=body.platform, healthy=True, tested_at=tested_at
+            db,
+            platform=body.platform,
+            healthy=True,
+            tested_at=tested_at,
+            catalog_healthy=catalog_healthy if body.platform in {"douyin", "bilibili"} else None,
         )
         return _ok({
             "healthy": True,
+            "catalog_healthy": catalog_healthy,
+            "message": (
+                "近期与全部作品连接器均可用"
+                if catalog_healthy or body.platform == "xiaohongshu"
+                else "近期作品可用；全部作品连接器尚未通过健康检查"
+            ),
             "preview": preview,
             "catalog_health": catalog_state,
         })
@@ -4420,30 +4517,49 @@ def admin_test_creator_sync_connector(
         binding = douyin_binding_service.get_or_create(db, current_user.id)
         state = douyin_library.connection_status(binding.session_scope)
         catalog_state = catalog_readiness("douyin", binding.session_scope)
-        healthy = bool(
-            state.get("connected")
-            and catalog_state.get("supports_catalog_all")
-        )
+        healthy = bool(state.get("connected"))
+        catalog_healthy = bool(catalog_state.get("supports_catalog_all"))
         settings_service.record_creator_connector_test(
-            db, platform=body.platform, healthy=healthy, tested_at=tested_at
+            db,
+            platform=body.platform,
+            healthy=healthy,
+            tested_at=tested_at,
+            catalog_healthy=catalog_healthy,
         )
         return _ok({
             "healthy": healthy,
             "platform": body.platform,
-            "message": "近期与全部作品连接器均可用" if healthy else "抖音连接器或全量能力不可用",
+            "catalog_healthy": catalog_healthy,
+            "message": (
+                "近期与全部作品连接器均可用"
+                if healthy and catalog_healthy
+                else "近期作品可用；全部作品连接器尚未通过健康检查"
+                if healthy
+                else "抖音连接器不可用"
+            ),
             "catalog_health": catalog_state,
         })
     if body.platform == "bilibili":
         recent_healthy = importlib.util.find_spec("yt_dlp") is not None
         catalog_state = catalog_readiness("bilibili")
-        healthy = bool(recent_healthy and catalog_state.get("supports_catalog_all"))
+        healthy = False
+        catalog_healthy = False
         settings_service.record_creator_connector_test(
-            db, platform=body.platform, healthy=healthy, tested_at=tested_at
+            db,
+            platform=body.platform,
+            healthy=healthy,
+            tested_at=tested_at,
+            catalog_healthy=catalog_healthy,
         )
         return _ok({
             "healthy": healthy,
             "platform": body.platform,
-            "message": "近期与全部作品连接器均可用" if healthy else "yt-dlp 或 yutto 全量连接器未就绪",
+            "catalog_healthy": catalog_healthy,
+            "message": (
+                "请填写一个公开的 B站博主主页进行真实连接测试"
+                if recent_healthy
+                else "B站近期作品连接器不可用"
+            ),
             "catalog_health": catalog_state,
         })
     settings_service.record_creator_connector_test(

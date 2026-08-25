@@ -176,6 +176,7 @@ def _feature_config(db: Session, *, include_secret: bool = False) -> dict[str, A
 
 def catalog(db: Session) -> dict[str, Any]:
     config = _feature_config(db)
+    catalog_platforms = config.get("catalog_platforms") or config["platforms"]
     catalog_operations = {
         "recent_transcript": dict(config["platforms"]),
         "selected_transcript": {
@@ -183,7 +184,11 @@ def catalog(db: Session) -> dict[str, Any]:
             for platform, enabled in config["platforms"].items()
         },
         "catalog_all": {
-            platform: bool(enabled and platform in CATALOG_PLATFORMS)
+            platform: bool(
+                enabled
+                and platform in CATALOG_PLATFORMS
+                and catalog_platforms.get(platform, False)
+            )
             for platform, enabled in config["platforms"].items()
         },
     }
@@ -405,8 +410,14 @@ def _normalize_operation(
 
 
 def _require_catalog_health(
-    source: CreatorSource, credentials: dict[str, str],
+    db: Session, source: CreatorSource, credentials: dict[str, str],
 ) -> None:
+    config = _feature_config(db)
+    catalog_platforms = config.get("catalog_platforms") or config["platforms"]
+    if not bool(catalog_platforms.get(source.platform, False)):
+        raise CreatorSyncError(
+            "catalog_connector_unhealthy", "全部作品连接器尚未通过健康检查", 503,
+        )
     health_check = getattr(creator_connectors, "catalog_health", None)
     if not callable(health_check):
         return
@@ -438,7 +449,7 @@ def create_run(
     if normalized == "catalog_all":
         if source.platform not in CATALOG_PLATFORMS:
             raise CreatorSyncError("catalog_unsupported", "该平台暂不支持全部作品目录", 422)
-        _require_catalog_health(source, credentials)
+        _require_catalog_health(db, source, credentials)
     active_for_user = db.query(CreatorSyncRun).filter(
         CreatorSyncRun.user_id == user_id,
         CreatorSyncRun.status.in_(ACTIVE_CREATOR_RUN_STATUSES),

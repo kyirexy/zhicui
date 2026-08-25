@@ -5,6 +5,11 @@ export interface CollectionSyncMessageInput {
   target?: number;
   processed?: number;
   error?: string | null;
+  error_code?: string | null;
+  channel?: string | null;
+  fallback_attempted?: boolean;
+  retry_after_seconds?: number;
+  needs_action?: boolean;
   sourceLabel: string;
   requestedCount: number;
 }
@@ -17,13 +22,25 @@ function boundedCount(value: number | undefined): number {
 export function formatDouyinSyncError(
   error: string | null | undefined,
   sourceLabel = '视频',
+  diagnostics: Pick<CollectionSyncMessageInput,
+    'error_code' | 'retry_after_seconds' | 'needs_action'> = {},
 ): string {
   const cleaned = (error || '')
     .trim()
     .replace(/^(?:RuntimeError|Error|Exception):\s*/i, '');
 
-  if (/403|风控|www-hj\.douyin\.com|挑战域|平台风控拒绝/i.test(cleaned)) {
-    return `抖音暂时限制了${sourceLabel}列表读取。账号仍保持绑定，已有资料不会丢失；请稍后再试，暂时不要连续同步。`;
+  const retrySeconds = boundedCount(diagnostics.retry_after_seconds);
+  const retryHint = retrySeconds > 0
+    ? `约 ${Math.max(1, Math.ceil(retrySeconds / 60))} 分钟后可再试。`
+    : '请稍后再试。';
+  if (diagnostics.error_code === 'verification_required' || diagnostics.needs_action) {
+    return `抖音要求重新验证账号后才能读取${sourceLabel}。已有资料不会丢失，请在账号管理中完成验证。`;
+  }
+  if (
+    diagnostics.error_code === 'source_blocked'
+    || /403|风控|www-hj\.douyin\.com|挑战域|平台风控拒绝/i.test(cleaned)
+  ) {
+    return `抖音暂时限制了${sourceLabel}列表读取。账号仍保持绑定，已有资料不会丢失；${retryHint}暂时不要连续同步。`;
   }
   if (/429|限频|请求过于频繁/i.test(cleaned)) {
     return `${sourceLabel}同步得太频繁了。已有资料不会丢失，请稍后再试。`;
@@ -44,6 +61,9 @@ export function formatCollectionSyncMessage({
   target,
   processed,
   error,
+  error_code,
+  retry_after_seconds,
+  needs_action,
   sourceLabel,
   requestedCount,
 }: CollectionSyncMessageInput): string {
@@ -67,7 +87,11 @@ export function formatCollectionSyncMessage({
   }
 
   if (status === 'failed') {
-    return formatDouyinSyncError(error, sourceLabel);
+    return formatDouyinSyncError(error, sourceLabel, {
+      error_code,
+      retry_after_seconds,
+      needs_action,
+    });
   }
 
   if (status === 'success') {

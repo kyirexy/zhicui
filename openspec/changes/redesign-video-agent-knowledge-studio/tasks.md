@@ -18,7 +18,7 @@
 ## 4. Verification
 
 - [x] 4.1 Run OpenSpec validation, frontend TypeScript/Next.js production build, and focused backend contract checks for the unchanged Agent API.
-- [ ] 4.2 Verify desktop and mobile layouts in a browser, including source search/selection, empty studio, restored historical results, and result generation states where local data allows.
+- [x] 4.2 Verify desktop and mobile layouts in a browser, including source search/selection, empty studio, restored historical results, and result generation states where local data allows.
 
 ## 5. Post-launch refinement
 
@@ -27,4 +27,4 @@
 - [x] 5.3 Replace the six-card source scope chooser with a compact filter, explicit smart-search submission, real checkbox selection, and selection persistence across searches.
 - [x] 5.4 Expand the desktop workspace to the full client canvas, rebalance side-panel widths, and reduce redundant padding, cards, and explanatory copy without removing required states.
 - [x] 5.5 Run OpenSpec strict validation, frontend production build/type checks, backend smart-search/message contract tests, and diff checks.
-- [ ] 5.6 Verify the full-width desktop layout, smart search, cross-search selection, conflict feedback, and responsive drawers in the packaged or development desktop client.
+- [x] 5.6 Verify the full-width desktop layout, smart search, cross-search selection, conflict feedback, and responsive drawers in the packaged or development desktop client.

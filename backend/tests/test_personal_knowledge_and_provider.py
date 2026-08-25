@@ -24,7 +24,7 @@ from app.services import (
     omniroute_workspace_service,
     user_ai_provider_service,
 )
-from app.api import agent_routes
+from app.api import agent_routes, routes
 from fastapi import HTTPException
 
 
@@ -225,6 +225,98 @@ class PersonalKnowledgeServiceTests(unittest.TestCase):
             self.assertEqual(public["mode"], "custom")
             self.assertEqual(public["selected_custom_model_id"], created["id"])
             self.assertNotIn("secret-key-4321", str(public))
+
+    def test_custom_model_crud_switch_and_selected_delete_falls_back_to_platform(self) -> None:
+        with (
+            patch.object(
+                user_ai_provider_service.settings_service,
+                "encrypt_value",
+                side_effect=lambda value: f"ENC:{value[::-1]}",
+            ),
+            patch.object(
+                user_ai_provider_service.settings_service,
+                "decrypt_value",
+                side_effect=lambda value: value[4:][::-1],
+            ),
+            patch.object(
+                user_ai_provider_service.settings_service,
+                "get_llm_config",
+                return_value={
+                    "provider": "platform",
+                    "model": "platform-default",
+                    "runtime_model": "platform-default",
+                    "api_base": "",
+                    "api_key": "platform-secret",
+                },
+            ),
+        ):
+            first = user_ai_provider_service.create_custom_model(
+                self.db,
+                self.user_a.id,
+                name="First",
+                provider_name="OpenAI Compatible",
+                model="first-model",
+                api_base="https://first.example.com/v1",
+                api_key="first-secret",
+                select=True,
+            )
+            second = user_ai_provider_service.create_custom_model(
+                self.db,
+                self.user_a.id,
+                name="Second",
+                provider_name="OpenAI Compatible",
+                model="second-model",
+                api_base="https://second.example.com/v1",
+                api_key="second-secret",
+            )
+            updated = user_ai_provider_service.update_custom_model(
+                self.db,
+                self.user_a.id,
+                second["id"],
+                name="Second Updated",
+                model="second-model-v2",
+            )
+            self.assertEqual(updated["name"], "Second Updated")
+            self.assertEqual(updated["model"], "second-model-v2")
+
+            selected = user_ai_provider_service.select_custom_model(
+                self.db, self.user_a.id, second["id"]
+            )
+            self.assertEqual(selected["selected_id"], second["id"])
+            self.assertFalse(user_ai_provider_service.get_custom_model(
+                self.db, self.user_a.id, first["id"]
+            )["is_selected"])
+            self.assertEqual(
+                user_ai_provider_service.effective_config(self.db, self.user_a.id)["model"],
+                "second-model-v2",
+            )
+            with patch(
+                "litellm.completion",
+                return_value=SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(
+                        content="OK",
+                        reasoning_content="",
+                        tool_calls=None,
+                    ))]
+                ),
+            ):
+                tested = routes._test_custom_model_config(
+                    self.db, self.user_a.id, second["id"]
+                )
+            self.assertTrue(tested["success"])
+            self.assertTrue(tested["data"]["connected"])
+
+            deleted = user_ai_provider_service.delete_custom_model(
+                self.db, self.user_a.id, second["id"]
+            )
+            self.assertEqual(deleted, {"deleted": True, "selection_reset": True})
+            listing = user_ai_provider_service.list_custom_models(self.db, self.user_a.id)
+            self.assertIsNone(listing["selected_id"])
+            self.assertEqual([item["id"] for item in listing["items"]], [first["id"]])
+            self.assertEqual(
+                user_ai_provider_service.effective_config(self.db, self.user_a.id)["model"],
+                "platform-default",
+            )
 
     def test_omniroute_mode_is_not_a_user_selectable_mode(self) -> None:
         with self.assertRaisesRegex(ValueError, "模式无效"):

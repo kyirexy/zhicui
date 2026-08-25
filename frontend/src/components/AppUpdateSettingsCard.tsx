@@ -296,14 +296,14 @@ export default function AppUpdateSettingsCard() {
         {mode === 'web' && (
           <>
             <a
-              href="/download/zhicui.apk"
+              href="/api/client-downloads/android"
               className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent-brand px-4 text-sm font-semibold text-white transition-opacity duration-150 hover:opacity-90"
             >
               <Smartphone size={17} aria-hidden="true" />
               下载 Android App
             </a>
             <a
-              href={DESKTOP_DOWNLOAD_URL}
+              href="/api/client-downloads/windows"
               className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-card-border px-4 text-sm font-semibold text-foreground transition-colors duration-150 hover:bg-foreground/5"
             >
               <MonitorDown size={17} aria-hidden="true" />

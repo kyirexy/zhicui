@@ -11,6 +11,8 @@ import json
 import re
 import time
 import uuid
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextvars import copy_context
 from datetime import datetime
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
@@ -827,9 +829,11 @@ _WEB_RESEARCH_REQUEST_PATTERNS = (
     r"(?:github|gitlab|gitee|仓库|repo|repository).{0,12}(?:链接|地址|网址|项目|主页)?",
     r"(?:链接|地址|网址|官网|主页|出处|来源).{0,12}(?:给我|是什么|在哪|多少|查|找)?",
     r"(?:最新|现在|目前|今天|今年|实时|现价|当前版本|是否还在|有没有更新)",
+    r"(?:同类|类似|相似|同类型|这一类|这种).{0,16}(?:游戏|产品|作品|项目|工具|软件|应用|服务|有哪些|推荐|举例)",
+    r"(?:还有哪些|都有哪些|推荐几个|推荐一些|再推荐|类似的|同类的)",
 )
 _NOTE_WEB_PLAN_PROMPT = """\
-你是知萃 Agent 的检索规划器。只在用户问题需要视频之外的当前信息、链接、实体身份或外部核实时规划联网搜索。
+你是知萃 Agent 的检索规划器。只在用户问题需要视频之外的当前信息、链接、实体身份、同类作品/产品清单、推荐或外部核实时规划联网搜索。
 根据标题、问题和视频上下文，输出严格 JSON：
 {
   "needs_web": true,
@@ -840,7 +844,8 @@ _NOTE_WEB_PLAN_PROMPT = """\
 1. 用户要 GitHub 项目时，查询必须包含从视频中识别到的项目特征、star 数、关键词和 GitHub。
 2. 不要把“视频里没有链接”当作停止理由；这正是需要外部查证的情况。
 3. 查询不得包含用户隐私、Cookie、令牌或完整对话。
-4. 如果视频来源足以回答，needs_web=false，queries=[]。
+4. 用户询问“同类、类似、还有哪些、推荐哪些”时，视频通常只负责确定类别和特征；需要搜索外部候选，needs_web=true。
+5. 如果视频来源足以完整回答，needs_web=false，queries=[]。
 """
 
 
@@ -1621,6 +1626,169 @@ def _note_follow_up_questions(raw_questions: Any) -> list[str]:
     return questions
 
 
+_STARTER_QUESTION_CONTEXT_CHARS = 96_000
+_STARTER_QUESTION_MAX_SOURCES = 12
+
+
+def _starter_question_fallback(sources: list[dict[str, Any]]) -> list[str]:
+    """Return source-specific questions when the lightweight LLM call fails."""
+    first = sources[0] if sources else {}
+    title = str(first.get("title") or "这条视频").strip()[:48] or "这条视频"
+    combined = "\n".join(
+        str(source.get("transcript") or "")[:6000]
+        for source in sources[:3]
+    )
+    if re.search(r"游戏|玩家|关卡|升级|道具|通关|玩法", f"{title}\n{combined}"):
+        return [
+            f"《{title}》里，玩家的主要目标和完整推进过程是什么？",
+            "视频中哪些升级、道具或机制最明显地改变了游戏效率？",
+            "达成最终目标前出现了哪些关键转折，最后结果如何？",
+        ]
+    if re.search(r"AI|模型|智能|算法|提示词|Agent", f"{title}\n{combined}", re.I):
+        return [
+            f"《{title}》提出的核心技术观点和结论是什么？",
+            "视频如何解释这些技术的工作机制、优势和限制？",
+            "文案中有哪些具体案例或实践方法可以进一步验证？",
+        ]
+    if re.search(r"教程|步骤|方法|怎么|如何|技巧|攻略", f"{title}\n{combined}"):
+        return [
+            f"《{title}》给出的完整操作步骤是什么？",
+            "执行这些步骤时最关键的条件和容易忽略的细节有哪些？",
+            "作者用什么结果或案例证明这套方法有效？",
+        ]
+    return [
+        f"《{title}》完整讲述了哪些关键事实和结论？",
+        "文案中最值得继续追问的原因、过程和结果分别是什么？",
+        "作者用了哪些具体细节或例子来支持主要观点？",
+    ]
+
+
+def _starter_question_source_context(
+    sources: list[dict[str, Any]],
+) -> str:
+    usable = [
+        source
+        for source in sources[:_STARTER_QUESTION_MAX_SOURCES]
+        if str(source.get("transcript") or "").strip()
+    ]
+    if not usable:
+        return ""
+
+    remaining_chars = _STARTER_QUESTION_CONTEXT_CHARS
+    blocks: list[str] = []
+    for index, source in enumerate(usable, start=1):
+        remaining_sources = len(usable) - index + 1
+        transcript = str(source.get("transcript") or "").strip()
+        allocation = max(1200, remaining_chars // max(1, remaining_sources))
+        allocation = min(allocation, remaining_chars)
+        if len(transcript) <= allocation:
+            excerpt = transcript
+        else:
+            head_chars = max(1, allocation * 2 // 3)
+            tail_chars = max(1, allocation - head_chars)
+            excerpt = (
+                transcript[:head_chars]
+                + "\n……（超长文案中段已压缩）……\n"
+                + transcript[-tail_chars:]
+            )
+        blocks.append(
+            f"【视频 {index}】\n"
+            f"标题：{str(source.get('title') or '未命名视频').strip()[:160]}\n"
+            f"完整文案：\n{excerpt}"
+        )
+        remaining_chars -= len(excerpt)
+        if remaining_chars <= 0:
+            break
+    return "\n\n".join(blocks)
+
+
+def suggest_library_questions(
+    sources: list[dict[str, Any]],
+) -> list[str]:
+    """Generate exactly three concrete, transcript-answerable starter questions."""
+    usable = [
+        source
+        for source in sources
+        if str(source.get("transcript") or "").strip()
+    ]
+    if not usable:
+        return []
+    fallback = _starter_question_fallback(usable)
+    context = _starter_question_source_context(usable)
+    if not context:
+        return fallback
+
+    try:
+        source_chars = sum(
+            len(str(source.get("transcript") or "").strip())
+            for source in usable
+        )
+        context_is_complete = (
+            len(usable) <= _STARTER_QUESTION_MAX_SOURCES
+            and source_chars <= _STARTER_QUESTION_CONTEXT_CHARS
+        )
+        raw = _call_llm(
+            system="""你是视频知识产品的问题推荐器。你的任务不是回答视频，而是阅读给定视频文案，生成用户最可能继续询问的 3 个问题。
+
+规则：
+1. 每个问题必须能直接从给定文案中回答，不得补充文案外事实。
+2. 问题必须具体，优先使用文案里的专有名词、人物、游戏机制、步骤、数字、冲突或结论。
+3. 三个问题应分别覆盖：内容理解、原因或机制、结果或策略；不得只是同义改写。
+4. 不要机械套用“核心观点、建议清单、矛盾观点”这组三个通用模板。
+5. 只返回严格 JSON：{"questions":["问题1？","问题2？","问题3？"]}。""",
+            user=(
+                f"以下共有 {len(usable)} 条视频资料。"
+                + (
+                    "本轮文案已完整提供。"
+                    if context_is_complete
+                    else "超长文案已保留开头与结尾，请只依据提供的内容生成问题。"
+                )
+                + "\n\n"
+                + context
+            ),
+            max_tokens=500,
+            temperature=0.25,
+            timeout=45,
+            operation="library_starter_questions",
+        )
+        parsed: dict[str, Any] = {}
+        if isinstance(raw, dict):
+            parsed = raw
+        else:
+            for candidate in _agent_json_candidates(str(raw or "")):
+                decoded = _decode_agent_json_value(candidate)
+                if isinstance(decoded, dict):
+                    parsed = decoded
+                    break
+        generated = _note_follow_up_questions(parsed.get("questions"))
+    except Exception as exc:
+        error_log_service.record_exception_safely(
+            exc,
+            source="llm",
+            status_code=502,
+            metadata={"operation": "library_starter_questions"},
+        )
+        generated = []
+
+    questions: list[str] = []
+    for raw_question in [*generated, *fallback]:
+        question = re.sub(
+            r"^\s*(?:[-*•]|\d+[.)、])\s*",
+            "",
+            str(raw_question or "").strip(),
+        )[:120]
+        if not question:
+            continue
+        if not question.endswith(("？", "?")):
+            question += "？"
+        if question in questions:
+            continue
+        questions.append(question)
+        if len(questions) >= 3:
+            break
+    return questions
+
+
 _HISTORY_MAX_TURNS = 6
 _HISTORY_MAX_CHARS = 1000
 _ASSISTANT_RETRIEVAL_CHARS = 400
@@ -1631,6 +1799,12 @@ _HISTORY_REFINEMENT_PATTERNS = (
     r"(?:其中|它们|他们|两者|三者)(?:之间|各自|为什么|如何|有何)?",
     r"\b(?:previous|above|continue|elaborate|expand on|that point|those)\b",
 )
+_CROSS_SOURCE_CLAIM_PATTERNS = (
+    r"(?:这些|这批|所选|全部|所有)(?:视频|作品|资料)",
+    r"(?:共同|共性|反复|重复出现|跨视频|跨作品|整体趋势|总体趋势)",
+    r"(?:核心观点|主要观点).{0,8}(?:共同|反复|整体|所有|哪些)",
+    r"(?:对比|区别|异同|分歧|共识).{0,12}(?:视频|作品|观点|作者)",
+)
 
 
 def _question_needs_history_refinement(question: str) -> bool:
@@ -1639,6 +1813,15 @@ def _question_needs_history_refinement(question: str) -> bool:
     return any(
         re.search(pattern, normalized, flags=re.IGNORECASE)
         for pattern in _HISTORY_REFINEMENT_PATTERNS
+    )
+
+
+def _question_requires_cross_source_claims(question: str) -> bool:
+    """Only require multi-source claim support for genuinely comparative asks."""
+    normalized = re.sub(r"\s+", "", question).strip().lower()
+    return any(
+        re.search(pattern, normalized, flags=re.IGNORECASE)
+        for pattern in _CROSS_SOURCE_CLAIM_PATTERNS
     )
 
 
@@ -1881,7 +2064,7 @@ _LIBRARY_CHAT_SYSTEM_PROMPT = """\
 你是知萃的多视频内容研究助手。你依据本次提供的多个视频标题、AI 结构化理解、从完整视频文稿中检索出的原文、明确标为 AI 画面观察的详细解析，以及服务端明确标注的外部网页证据回答。
 
 回答规则：
-1. 先形成可验证 claims，再写 100–180 字 overview。单一事实回答通常 300–800 字；跨六条以上视频的整体研究通常 1200–2000 字，并在证据允许时给出 4–8 个 claims；每个 claim 的 explanation 应有 120–260 字，解释观点含义、适用边界、与其他主题的关系或实际影响，禁止一句带过或只给标题式要点。
+1. answer 是唯一的完整用户回答，必须直接回答当前问题，不得只写摘要占位，也不得把关键结论留到 claims。聚焦单个事实或单条视频时通常写 500–1000 字；单条视频的整体总结通常写 700–1200 字；询问同类作品、外部候选或推荐时通常写 600–1100 字，必须列出真实候选及其与视频中对象的相似点、差异和选择建议；跨六条以上视频的整体研究通常写 1200–2000 字。
 2. 不得补造来源中没有出现的数字、人物、产品参数、结论或因果关系。
 3. 如果来源不足，先结合【最近对话】判断这是否是对上一轮结论的追问；确属来源无法支持时才明确说“所选视频没有提供足够信息”，并说明还缺什么。
 4. 可以跨视频综合，但必须区分“原文事实”和“基于所选内容的归纳”。
@@ -1896,10 +2079,11 @@ _LIBRARY_CHAT_SYSTEM_PROMPT = """\
 13. kind 为 recurring/common/trend 的 claim 必须至少提供两个不同 note_id 的逐字依据；没有足够支持就改为 uncertain 或删除。
 14. recurring/common/trend 应尽量提供 3–6 个不同视频的代表性逐字依据；evidence 数只是“已核验样本数”，不得把未逐条核验的视频算进支持范围。
 15. 仅视频模式不得自行套用“某某理论、某某疗法、研究表明、科学证明”等外部归因；除非对应名称逐字出现在提供的视频资料中，否则只描述视频本身表达的机制与现象。
+16. 为支持流式展示，严格保持 JSON 字段顺序：先 answer，再 claims；必须先一次写完整 answer。claims 只是紧凑的已核验证据索引，不得重复 answer 的长篇解释。普通单视频回答输出 2–3 个 claims，跨来源深度研究输出 4–6 个 claims；每个 explanation 用 40–100 字说明依据对应的结论或边界，每个 quote 只截取能直接支持结论的必要原文。每个 claim 依次输出 claim_id、kind、text、explanation、evidence，不得把 text 或 explanation 放到 evidence 之后。
 
 只输出下面结构的 JSON，不要输出 Markdown 代码围栏或额外解释：
 {
-  "answer": "不包含临时来源编号的简短全局结论",
+  "answer": "直接、完整、可独立阅读且不包含临时来源编号的回答；长度服从上述问题类型要求",
   "claims": [
     {
       "claim_id": "C1",
@@ -2003,6 +2187,63 @@ def _validated_library_evidence(
         if len(validated) >= max(1, min(50, limit)):
             break
     return validated
+
+
+def _server_selected_library_evidence(
+    question: str,
+    supplied_sources: dict[str, dict[str, Any]],
+    *,
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    """Select exact source excerpts without asking the model to repeat them.
+
+    Fast single-video chat already retrieves the most relevant transcript
+    chunks before synthesis. Reusing those exact chunks avoids a long hidden
+    ``claims`` JSON tail after the user-visible answer has finished streaming.
+    """
+    signals = _note_query_signals(question)
+    candidates: list[tuple[int, int, str, str, str]] = []
+    for note_id, source_data in supplied_sources.items():
+        transcript_context = str(source_data.get("transcript_context") or "")
+        summary_context = str(source_data.get("summary_context") or "")
+        for source_name, context in (
+            ("transcript", transcript_context),
+            ("summary", summary_context),
+        ):
+            for line in context.splitlines():
+                clean_line = line.strip()
+                if not clean_line or clean_line.startswith("[原文约"):
+                    continue
+                # Keep each candidate as an exact substring of the supplied
+                # context so the normal evidence validator remains authoritative.
+                for match in re.finditer(r"[^。！？!?]{18,280}[。！？!?]?", clean_line):
+                    quote = match.group(0).strip()
+                    if len(quote) < 18:
+                        continue
+                    score = _library_signal_score(quote, signals)
+                    candidates.append((
+                        score,
+                        min(len(quote), 180),
+                        note_id,
+                        quote,
+                        source_name,
+                    ))
+
+    candidates.sort(key=lambda item: (-item[0], -item[1], item[2], item[3]))
+    selected: list[dict[str, str]] = []
+    seen_quotes: list[str] = []
+    for _, _, note_id, quote, source_name in candidates:
+        if any(quote in seen or seen in quote for seen in seen_quotes):
+            continue
+        selected.append({
+            "note_id": note_id,
+            "quote": quote,
+            "source": source_name,
+        })
+        seen_quotes.append(quote)
+        if len(selected) >= max(1, min(6, limit)):
+            break
+    return _validated_library_evidence(selected, supplied_sources, limit=limit)
 
 
 _INLINE_SOURCE_REFERENCE_RE = re.compile(
@@ -2130,6 +2371,27 @@ def _render_validated_claim_answer(
     source_total_count: int,
 ) -> str:
     safe_overview = _strip_inline_source_numbers(overview)
+    if len(safe_overview) < 40 and claims:
+        claim_topics = [
+            str(claim.get("text") or "").strip()
+            for claim in claims[:4]
+            if str(claim.get("text") or "").strip()
+        ]
+        explanation_leads: list[str] = []
+        for claim in claims[:2]:
+            explanation = str(claim.get("explanation") or "").strip()
+            if not explanation:
+                continue
+            lead = re.split(r"(?<=[。！？；])", explanation, maxsplit=1)[0]
+            if lead:
+                explanation_leads.append(lead[:100])
+        topic_summary = "、".join(f"“{topic}”" for topic in claim_topics)
+        safe_overview = (
+            f"基于本轮纳入研究的 {source_total_count} 条视频，反复出现的核心主题包括"
+            f"{topic_summary or '以下经过引用核验的观点'}。"
+        )
+        if explanation_leads:
+            safe_overview += "整体来看，" + "；".join(explanation_leads)
     parts = [safe_overview] if safe_overview else [
         f"基于本轮纳入研究的 {source_total_count} 条视频，可以归纳出以下结论："
     ]
@@ -2683,12 +2945,20 @@ def _build_library_research_context(
     for candidate in selected:
         grouped_chunks.setdefault(candidate["note_id"], []).append(candidate)
 
-    # Deep research maps every source in the bounded snapshot.  The synthesis
-    # context remains smaller, but map findings carry quote-verified evidence
-    # from sources that would otherwise be silently omitted from the final 28.
+    # Broad research maps every source in the bounded snapshot. Focused deep
+    # research still scans everything, then maps only the strongest sources;
+    # an exact enumeration should not pay the cost of cross-video consensus.
     map_blocks: list[str] = []
     map_sources: dict[str, dict[str, Any]] = {}
-    for map_index, note_id in enumerate(source_ranking, start=1):
+    map_source_limit = (
+        len(source_ranking)
+        if coverage == "broad"
+        else min(12, len(source_ranking))
+    )
+    for map_index, note_id in enumerate(
+        source_ranking[:map_source_limit],
+        start=1,
+    ):
         record = records[note_id]
         candidate = best_by_source.get(note_id)
         transcript_context = str(candidate.get("text") or "") if candidate else ""
@@ -2872,26 +3142,71 @@ def _deep_library_map(
     supplied_sources: dict[str, dict[str, Any]],
     question: str,
     subquestions: list[str],
-) -> tuple[list[str], int, int]:
+    progress_callback: AgentProgressCallback | None = None,
+    *,
+    return_stats: bool = False,
+) -> tuple[list[str], int, int] | tuple[list[str], int, int, dict[str, Any]]:
     """Map source batches and pass only quote-verified findings to synthesis."""
     if not source_blocks:
+        empty_stats = {
+            "batch_count": 0,
+            "completed_batch_count": 0,
+            "failed_batch_count": 0,
+            "mapped_source_count": 0,
+            "failed_source_count": 0,
+            "budget_exhausted": False,
+        }
+        if return_stats:
+            return [], 0, 0, empty_stats
         return [], 0, 0
+
     group_size = 5
-    findings: list[str] = []
+    max_workers = 4
+    stage_budget_seconds = 135.0
+    bounded_blocks = source_blocks[:100]
+    source_ids = list(supplied_sources)[:len(bounded_blocks)]
+    batches = [
+        {
+            "index": start // group_size,
+            "blocks": bounded_blocks[start:start + group_size],
+            "source_ids": source_ids[start:start + group_size],
+        }
+        for start in range(0, len(bounded_blocks), group_size)
+    ]
+    batch_total = len(batches)
+    findings_by_batch: dict[int, str] = {}
     map_calls = 0
     validated_finding_count = 0
-    source_ids = list(supplied_sources)
-    for start in range(0, min(len(source_blocks), 100), group_size):
-        group = source_blocks[start:start + group_size]
-        allowed_note_ids = set(source_ids[start:start + len(group)])
-        try:
-            mapped = _call_llm(
-                system="""\
+    completed_batch_count = 0
+    failed_batch_count = 0
+    mapped_source_count = 0
+    failed_source_count = 0
+    budget_exhausted = False
+    started_at = time.perf_counter()
+
+    def emit_batch_event(event_type: str, message: str, **payload: Any) -> None:
+        if progress_callback is None:
+            return
+        # Runtime callbacks perform lease and cancellation checks. Unlike
+        # decorative UI progress, those exceptions must stop new Map work.
+        progress_callback({
+            "event_type": event_type,
+            "stage": "researching",
+            "message": message,
+            "batch_total": batch_total,
+            **payload,
+        })
+
+    def map_batch(batch: dict[str, Any]) -> tuple[list[dict[str, str]], int]:
+        group = list(batch["blocks"])
+        allowed_note_ids = set(batch["source_ids"])
+        mapped = _call_llm(
+            system="""\
 你是多视频研究 Agent 的证据整理阶段。只依据当前批次来源，找出与问题有关的事实、共同点、差异和缺口。
 每条发现必须保留真实 note_id 和逐字原文 quote；不能根据标题猜测。输出简洁 JSON：
 {"findings":[{"claim":"发现","note_id":"真实ID","quote":"逐字原文"}],"gaps":["仍缺少的信息"]}
 """,
-                user=f"""\
+            user=f"""\
 【研究问题】
 {question}
 
@@ -2901,131 +3216,416 @@ def _deep_library_map(
 【当前来源批次】
 {chr(10).join(group)}
 """,
-                max_tokens=1100,
-                temperature=0.1,
-                timeout=60,
-                operation="library_research_map",
-            )
-            map_calls += 1
-            validated = _validated_deep_map_findings(
+            max_tokens=1100,
+            temperature=0.1,
+            timeout=60,
+            operation="library_research_map",
+        )
+        return (
+            _validated_deep_map_findings(
                 mapped,
                 allowed_note_ids=allowed_note_ids,
                 supplied_sources=supplied_sources,
+            ),
+            len(group),
+        )
+
+    pending_index = 0
+    futures: dict[Future[tuple[list[dict[str, str]], int]], dict[str, Any]] = {}
+    executor = ThreadPoolExecutor(
+        max_workers=min(max_workers, batch_total),
+        thread_name_prefix="video-map",
+    )
+    try:
+        while pending_index < batch_total or futures:
+            while (
+                pending_index < batch_total
+                and len(futures) < max_workers
+                and time.perf_counter() - started_at < stage_budget_seconds
+            ):
+                batch = batches[pending_index]
+                pending_index += 1
+                batch_index = int(batch["index"])
+                source_count = len(batch["blocks"])
+                emit_batch_event(
+                    "turn.map.batch.started",
+                    f"正在核对第 {batch_index + 1}/{batch_total} 批视频",
+                    batch_index=batch_index,
+                    batch_source_count=source_count,
+                    mapped_count=mapped_source_count,
+                    source_total_count=len(bounded_blocks),
+                )
+                context = copy_context()
+                future = executor.submit(context.run, map_batch, batch)
+                futures[future] = {
+                    **batch,
+                    "started_at": time.perf_counter(),
+                }
+
+            if not futures:
+                budget_exhausted = pending_index < batch_total
+                break
+
+            remaining = max(
+                0.05,
+                stage_budget_seconds - (time.perf_counter() - started_at),
             )
-            if not validated:
-                continue
-            validated_finding_count += len(validated)
-            findings.append(json.dumps(
-                {"findings": validated},
-                ensure_ascii=False,
-            ))
-        except Exception:
-            # Optional batch analysis is recoverable. The exception is already
-            # recorded by `_call_llm`; neither its text nor an invented gap is
-            # allowed to influence the final answer.
-            continue
+            done, _ = wait(
+                tuple(futures),
+                timeout=remaining,
+                return_when=FIRST_COMPLETED,
+            )
+            if not done:
+                budget_exhausted = pending_index < batch_total
+                # Already-running provider calls cannot be interrupted safely;
+                # stop scheduling more work and collect their bounded result.
+                done, _ = wait(tuple(futures), return_when=FIRST_COMPLETED)
+
+            for future in done:
+                batch = futures.pop(future)
+                batch_index = int(batch["index"])
+                source_count = len(batch["blocks"])
+                duration_ms = max(
+                    0,
+                    round((time.perf_counter() - batch["started_at"]) * 1000),
+                )
+                map_calls += 1
+                try:
+                    validated, mapped_batch_sources = future.result()
+                    completed_batch_count += 1
+                    mapped_source_count += mapped_batch_sources
+                    validated_finding_count += len(validated)
+                    if validated:
+                        findings_by_batch[batch_index] = json.dumps(
+                            {"findings": validated},
+                            ensure_ascii=False,
+                        )
+                    emit_batch_event(
+                        "turn.map.batch.completed",
+                        f"已核对第 {batch_index + 1}/{batch_total} 批视频",
+                        batch_index=batch_index,
+                        batch_source_count=source_count,
+                        mapped_count=mapped_source_count,
+                        source_total_count=len(bounded_blocks),
+                        finding_count=len(validated),
+                        duration_ms=duration_ms,
+                    )
+                except Exception as exc:
+                    # A failed batch is recoverable and never contributes
+                    # invented text to synthesis. Other batches keep running.
+                    failed_batch_count += 1
+                    failed_source_count += source_count
+                    emit_batch_event(
+                        "turn.map.batch.failed",
+                        f"第 {batch_index + 1}/{batch_total} 批暂未完成，继续处理其他视频",
+                        batch_index=batch_index,
+                        batch_source_count=source_count,
+                        mapped_count=mapped_source_count,
+                        source_total_count=len(bounded_blocks),
+                        error_type=type(exc).__name__,
+                        duration_ms=duration_ms,
+                    )
+
+            if time.perf_counter() - started_at >= stage_budget_seconds:
+                budget_exhausted = pending_index < batch_total
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+
+    if pending_index < batch_total:
+        unscheduled_source_count = sum(
+            len(batch["blocks"]) for batch in batches[pending_index:]
+        )
+        failed_source_count += unscheduled_source_count
+        failed_batch_count += batch_total - pending_index
+
+    findings = [
+        findings_by_batch[index]
+        for index in sorted(findings_by_batch)
+    ]
+    stats = {
+        "batch_count": batch_total,
+        "completed_batch_count": completed_batch_count,
+        "failed_batch_count": failed_batch_count,
+        "mapped_source_count": mapped_source_count,
+        "failed_source_count": failed_source_count,
+        "budget_exhausted": budget_exhausted,
+    }
+    if return_stats:
+        return findings, map_calls, validated_finding_count, stats
     return findings, map_calls, validated_finding_count
+
+
+def _bounded_synthesis_items(
+    items: list[str],
+    *,
+    max_items: int,
+    max_chars: int,
+    per_item_chars: int,
+) -> list[str]:
+    """Keep final Reduce prompts bounded without changing validation sources."""
+    selected: list[str] = []
+    consumed = 0
+    for item in items[:max_items]:
+        remaining = max_chars - consumed
+        if remaining <= 0:
+            break
+        bounded = str(item)[:min(per_item_chars, remaining)]
+        if not bounded:
+            continue
+        selected.append(bounded)
+        consumed += len(bounded)
+    return selected
 
 
 def _run_library_synthesis(
     synthesis_kwargs: dict[str, Any],
     answer_delta: Callable[[str], None] | None,
 ) -> str:
-    """Run synthesis while exposing only the JSON answer string to fast SSE."""
+    """Project safe JSON narrative fields into a continuous Markdown draft."""
     if answer_delta is None:
         return _call_llm(**synthesis_kwargs)
 
-    answer_prefix_seen = [False]
-    answer_value_started = [False]
-    answer_closed = [False]
+    state = "search_answer"
     probe_buffer = ""
     pending_escape = ""
 
-    def stream_answer_text(text: str) -> None:
+    markers = {
+        "search_answer": '"answer"',
+    }
+
+    def decode_escape(value: str) -> str:
+        try:
+            decoded = json.loads(f'"{value}"')
+        except (json.JSONDecodeError, TypeError):
+            return value
+        return decoded if isinstance(decoded, str) else value
+
+    def start_string_value(next_state: str) -> None:
+        nonlocal state, pending_escape
+        state = next_state
+        pending_escape = ""
+
+    def emit_visible(value: str) -> None:
+        if not value:
+            return
+        answer_delta(value)
+
+    def finish_string_value() -> None:
+        nonlocal state, pending_escape
+        pending_escape = ""
+        if state == "stream_answer":
+            # Claims are drafts until the server has verified their exact
+            # quotes and source identities.  Streaming them here made the UI
+            # visibly shrink when invalid claims were removed at finalization.
+            # The worker appends the validated canonical suffix afterwards.
+            state = "done"
+
+    def stream_string_value(text: str) -> str:
         nonlocal pending_escape
         visible_parts: list[str] = []
-        for char in text:
-            if answer_closed[0]:
-                break
+        for index, char in enumerate(text):
             if pending_escape:
-                pair = pending_escape + char
+                pending_escape += char
+                if pending_escape.startswith("\\u"):
+                    if len(pending_escape) < 6:
+                        continue
+                elif len(pending_escape) < 2:
+                    continue
+                visible_parts.append(decode_escape(pending_escape))
                 pending_escape = ""
-                if pair == "\\n":
-                    visible_parts.append("\n")
-                elif pair == "\\t":
-                    visible_parts.append("\t")
-                elif pair == "\\r":
-                    visible_parts.append("\r")
-                elif pair == '\\"':
-                    visible_parts.append('"')
-                elif pair == "\\\\":
-                    visible_parts.append("\\")
-                elif pair == "\\/":
-                    visible_parts.append("/")
-                else:
-                    visible_parts.append(pair)
                 continue
             if char == '"':
-                answer_closed[0] = True
-                break
+                if visible_parts:
+                    emit_visible("".join(visible_parts))
+                finish_string_value()
+                return text[index + 1:]
             if char == "\\":
                 pending_escape = "\\"
                 continue
             visible_parts.append(char)
         if visible_parts:
-            answer_delta("".join(visible_parts))
+            emit_visible("".join(visible_parts))
+        return ""
 
-    def flush_answer_stream() -> None:
+    def flush_visible_stream() -> None:
         nonlocal pending_escape
-        if pending_escape and not answer_closed[0]:
+        if pending_escape and state.startswith("stream_"):
             answer_delta(pending_escape)
             pending_escape = ""
 
-    def consume_value_lead(text: str, start: int = 0) -> int:
-        index = start
-        while index < len(text):
-            char = text[index]
-            if char == '"':
-                answer_value_started[0] = True
-                return index + 1
-            if char in " \t\r\n:":
-                index += 1
-                continue
-            index += 1
-        return index
-
     def json_text_delta(delta_text: str) -> None:
-        nonlocal probe_buffer
-        if answer_closed[0]:
+        nonlocal probe_buffer, state
+        pending = delta_text
+        while pending:
+            if state.startswith("search_"):
+                probe_buffer += pending
+                marker = markers[state]
+                marker_index = probe_buffer.find(marker)
+                if marker_index < 0:
+                    probe_buffer = probe_buffer[-256:]
+                    return
+                remainder = probe_buffer[marker_index + len(marker):]
+                probe_buffer = ""
+                state = {
+                    "search_answer": "await_answer",
+                }[state]
+                pending = remainder
+                continue
+
+            if state.startswith("await_"):
+                quote_index = pending.find('"')
+                if quote_index < 0:
+                    return
+                start_string_value(state.replace("await_", "stream_"))
+                pending = pending[quote_index + 1:]
+                continue
+
+            if state.startswith("stream_"):
+                pending = stream_string_value(pending)
+                continue
+
             return
-        if not answer_prefix_seen[0]:
-            probe_buffer += delta_text
-            marker = '"answer"'
-            marker_index = probe_buffer.find(marker)
-            if marker_index < 0:
-                if len(probe_buffer) > 160 and not probe_buffer.rstrip().endswith("\\"):
-                    probe_buffer = probe_buffer[-120:]
-                return
-            answer_prefix_seen[0] = True
-            remainder = probe_buffer[marker_index + len(marker):]
-            probe_buffer = ""
-            index = consume_value_lead(remainder)
-            if index < len(remainder):
-                stream_answer_text(remainder[index:])
-            return
-        if not answer_value_started[0]:
-            index = consume_value_lead(delta_text)
-            if index < len(delta_text):
-                stream_answer_text(delta_text[index:])
-            return
-        stream_answer_text(delta_text)
 
     raw_answer = _call_llm_stream(
         **synthesis_kwargs,
         on_token=json_text_delta,
     )
-    flush_answer_stream()
+    flush_visible_stream()
     return raw_answer
+
+
+_FULL_TRANSCRIPT_REQUEST_PATTERN = re.compile(
+    r"(?:完整|全部|全文|原始|逐字).{0,5}(?:文案|文稿|字幕|转录|原文)"
+    r"|(?:文案|文稿|字幕|转录|原文).{0,5}(?:完整|全部|全文|逐字)"
+)
+
+
+def _is_full_transcript_request(question: str) -> bool:
+    normalized = re.sub(r"\s+", "", str(question or ""))
+    return bool(_FULL_TRANSCRIPT_REQUEST_PATTERN.search(normalized))
+
+
+def _single_transcript_result(
+    source: dict[str, Any],
+    *,
+    progress_callback: AgentProgressCallback | None,
+) -> dict[str, Any]:
+    """Return one persisted transcript verbatim without a generative rewrite."""
+    transcript = str(source.get("transcript") or "").strip()
+    if not transcript:
+        raise ValueError("这条视频暂时没有可读取的完整文案")
+    note_id = str(source.get("note_id") or "").strip()
+    title = str(source.get("title") or "未命名视频").strip()
+    chunk_count = max(1, (len(transcript) + 1_799) // 1_800)
+    answer = f"### {title}\n\n{transcript}"
+    quote = transcript[:180]
+
+    _emit_agent_progress(
+        progress_callback,
+        "planning",
+        "已识别为完整文案读取",
+        source_count=1,
+    )
+    _emit_agent_progress(
+        progress_callback,
+        "scanning",
+        "正在读取视频的完整文案",
+        source_count=1,
+        transcript_chars=len(transcript),
+    )
+    _emit_agent_progress(
+        progress_callback,
+        "finalizing",
+        "完整文案已准备",
+        scanned_count=1,
+        mapped_count=1,
+        deep_read_count=1,
+        evidence_count=1,
+    )
+
+    source_context = {
+        "note_count": 1,
+        "transcript_chars": len(transcript),
+        "scanned_chunks": chunk_count,
+        "selected_chunks": chunk_count,
+        "ai_summary_count": 0,
+        "visual_source_count": 0,
+        "matched_note_count": 1,
+        "context_note_count": 1,
+        "researched_note_ids": [note_id] if note_id else [],
+        "sources": [{"note_id": note_id, "title": title}],
+        "scan_duration_ms": 0,
+        "rank_duration_ms": 0,
+        "scanned_count": 1,
+        "mapped_count": 1,
+        "deep_read_count": 1,
+        "research_mode": "direct",
+        "output_style": "answer",
+        "coverage": "full_transcript",
+        "map_calls": 0,
+        "validated_map_finding_count": 0,
+        "map_batch_count": 0,
+        "completed_map_batch_count": 0,
+        "failed_map_batch_count": 0,
+        "failed_source_count": 0,
+        "map_budget_exhausted": False,
+        "synthesis_context_chars": 0,
+        "claim_count": 0,
+        "rejected_claim_count": 0,
+        "claim_repair_attempts": 0,
+        "map_duration_ms": 0,
+        "web_scope": "video_only",
+        "web_search_used": False,
+        "web_search_attempted": False,
+        "web_search_succeeded": False,
+        "web_query_count": 0,
+        "web_source_count": 0,
+        "web_verified_source_count": 0,
+        "agent_trace": [
+            {
+                "stage": "scan",
+                "label": "读取已保存的完整视频文案",
+                "status": "completed",
+                "duration_ms": 0,
+                "counts": {
+                    "video_count": 1,
+                    "transcript_chars": len(transcript),
+                    "chunk_count": chunk_count,
+                },
+                "detail": f"逐字读取 {len(transcript)} 字原文，未调用模型改写",
+            },
+        ],
+    }
+    evidence = [{
+        "note_id": note_id,
+        "title": title,
+        "quote": quote,
+        "source": "transcript",
+        "position_percent": 0,
+    }]
+    return {
+        "answer": answer,
+        "claims": [],
+        "evidence": evidence,
+        "grounded": True,
+        "grounding_status": "grounded",
+        "citation_coverage": {
+            "requested": 1,
+            "matched": 1,
+            "verified": 1,
+            "ratio": 1.0,
+        },
+        "limitations": [],
+        "follow_up_questions": [
+            "请按原文顺序整理成一份详细提纲。",
+            "这段文案的核心论证链是什么？",
+        ],
+        "note_ids": [note_id] if note_id else [],
+        "source_context": source_context,
+        "web_sources": [],
+        "web_source_ids": [],
+        "web_scope": "video_only",
+    }
 
 
 def answer_library_question(
@@ -3039,6 +3639,7 @@ def answer_library_question(
     progress_callback: AgentProgressCallback | None = None,
     answer_delta: Callable[[str], None] | None = None,
     tool_executor: AgentToolExecutor | None = None,
+    validated_stream_only: bool = False,
 ) -> dict[str, Any]:
     """Research up to 100 videos through planning, retrieval and synthesis."""
     clean_question = question.strip()
@@ -3051,7 +3652,7 @@ def answer_library_question(
         "全部", "所有", "共同", "共性", "反复", "重复出现", "核心观点",
         "主题", "主线", "整体", "规律", "趋势", "总结", "归纳", "综合",
         "对比", "区别", "异同", "分歧", "行动", "方法论", "这些视频",
-        "这批视频",
+        "这批视频", "完整列出", "具体包含", "分别说明",
     )
     if research_mode in {"fast", "deep"}:
         safe_mode = research_mode
@@ -3074,6 +3675,15 @@ def answer_library_question(
     # 单个任务快照最多包含 100 条视频。检索会扫描全部来源，而
     # `_build_library_research_context` 只让全局相关且多样的摘录进入模型提示词。
     bounded_sources = sources[:100]
+    if (
+        safe_style == "answer"
+        and len(bounded_sources) == 1
+        and _is_full_transcript_request(clean_question)
+    ):
+        return _single_transcript_result(
+            bounded_sources[0],
+            progress_callback=progress_callback,
+        )
     history_lines, retrieval_history = _derived_conversation_context(history)
     tool_runtime = tool_executor or AgentToolExecutor(
         turn_id=f"local-{uuid.uuid4()}",
@@ -3108,6 +3718,16 @@ def answer_library_question(
         clean_custom,
         use_model=use_assisted_plan,
     )
+    exact_enumeration = any(
+        signal in clean_question
+        for signal in ("完整列出", "具体包含", "分别说明")
+    )
+    if (
+        safe_mode == "deep"
+        and exact_enumeration
+        and not _question_requires_cross_source_claims(clean_question)
+    ):
+        plan["coverage"] = "focused"
     planning_duration_ms = max(
         0,
         round((time.perf_counter() - planning_started_at) * 1000),
@@ -3161,6 +3781,14 @@ def answer_library_question(
     map_calls = 0
     validated_map_finding_count = 0
     map_duration_ms = 0
+    map_stats: dict[str, Any] = {
+        "batch_count": 0,
+        "completed_batch_count": 0,
+        "failed_batch_count": 0,
+        "mapped_source_count": 0,
+        "failed_source_count": 0,
+        "budget_exhausted": False,
+    }
     if safe_mode == "deep" and len(map_sources) >= 6:
         _emit_agent_progress(
             progress_callback,
@@ -3180,12 +3808,15 @@ def answer_library_question(
                 map_sources,
                 str(arguments.get("question") or ""),
                 list(arguments.get("subquestions") or []),
+                progress_callback,
+                return_stats=True,
             ),
         ))
         (
             mapped_findings,
             map_calls,
             validated_map_finding_count,
+            map_stats,
         ) = tool_runtime.execute(
             "video.transcript_map",
             {
@@ -3198,14 +3829,32 @@ def answer_library_question(
             0,
             round((time.perf_counter() - map_started_at) * 1000),
         )
-        source_context["mapped_count"] = len(map_sources)
+        source_context["mapped_count"] = int(
+            map_stats.get("mapped_source_count") or 0
+        )
+        source_context["failed_source_count"] = int(
+            map_stats.get("failed_source_count") or 0
+        )
         _emit_agent_progress(
             progress_callback,
             "researching",
-            f"已完成 {len(map_sources)} 条视频的分批观点映射",
-            mapped_count=len(map_sources),
+            (
+                f"已完成 {source_context['mapped_count']} 条视频的分批观点映射"
+                if not map_stats.get("failed_source_count")
+                else (
+                    f"已核对 {source_context['mapped_count']} 条视频，"
+                    f"{map_stats['failed_source_count']} 条暂未完成"
+                )
+            ),
+            mapped_count=source_context["mapped_count"],
             source_total_count=len(map_sources),
             map_call_count=map_calls,
+            completed_batch_count=int(
+                map_stats.get("completed_batch_count") or 0
+            ),
+            failed_batch_count=int(map_stats.get("failed_batch_count") or 0),
+            failed_source_count=int(map_stats.get("failed_source_count") or 0),
+            budget_exhausted=bool(map_stats.get("budget_exhausted")),
         )
 
     safe_web_scope = (
@@ -3280,8 +3929,47 @@ def answer_library_question(
     )
     style_instruction = _LIBRARY_OUTPUT_STYLE_PROMPTS[safe_style]
     synthesis_started_at = time.perf_counter()
+    synthesis_findings = (
+        _bounded_synthesis_items(
+            mapped_findings,
+            max_items=12,
+            max_chars=18_000,
+            per_item_chars=4_000,
+        )
+        if safe_mode == "deep"
+        else mapped_findings
+    )
+    synthesis_source_blocks = (
+        _bounded_synthesis_items(
+            source_blocks,
+            max_items=12,
+            max_chars=18_000,
+            per_item_chars=3_000,
+        )
+        if safe_mode == "deep"
+        else source_blocks
+    )
+    server_evidence_mode = (
+        safe_mode == "fast"
+        and len(bounded_sources) == 1
+        and not web_attempted
+        and answer_delta is not None
+        and not validated_stream_only
+    )
 
     def make_synthesis_user_prompt() -> str:
+        single_source_instruction = (
+            "本轮是快速单视频问答：answer 必须先完整回答；服务端会从已检索原文直接附加依据，"
+            "因此 claims 和 evidence 必须返回空数组，禁止重复生成观点或引用；"
+            "web_source_ids 也返回空数组。answer 后只需给出 grounded 和最多 3 个自然的 follow_up_questions。"
+            if server_evidence_mode
+            else
+            "本轮只有 1 条视频：不要使用 recurring/common/trend；"
+            "answer 必须先完整回答；核心观点、主题或总结类问题在证据允许时输出 2–3 个紧凑的 fact/action claims，"
+            "每个 claim 至少复制一段该视频中的逐字 quote，不得只返回 overview。"
+            if len(bounded_sources) == 1
+            else "按来源数量选择合适的 claim 类型与独立支持数。"
+        )
         return f"""\
 【研究计划】
 覆盖方式：{plan["coverage"]}
@@ -3289,11 +3977,14 @@ def answer_library_question(
 输出要求：{style_instruction}
 用户定制：{clean_custom or '无'}
 
+【本轮结构约束】
+{single_source_instruction}
+
 【深度研究阶段发现】
-{chr(10).join(mapped_findings) if mapped_findings else '快速模式：无分批阶段'}
+{chr(10).join(synthesis_findings) if synthesis_findings else '快速模式：无分批阶段'}
 
 【所选视频来源】
-{chr(10).join(source_blocks)}
+{chr(10).join(synthesis_source_blocks)}
 
 【外部网页证据】
 {_web_prompt_context(web_sources)}
@@ -3308,21 +3999,41 @@ def answer_library_question(
     synthesis_kwargs: dict = {
         "system": _LIBRARY_CHAT_SYSTEM_PROMPT,
         "user": make_synthesis_user_prompt(),
-        "max_tokens": 6000 if safe_mode == "deep" else 3200,
+        "max_tokens": 4800 if safe_mode == "deep" else 2400,
         "temperature": 0.2,
         "timeout": 90,
         "operation": "library_qa",
     }
-    # A deep answer may be repaired after quote validation.  Never stream a
-    # draft that can differ from the persisted, validated final response.
-    effective_answer_delta = None if safe_mode == "deep" else answer_delta
+    claim_required = (
+        safe_mode == "deep"
+        and plan.get("coverage") == "broad"
+        and int(source_context.get("note_count") or 0) >= 6
+        and _question_requires_cross_source_claims(clean_question)
+    )
+    streamed_answer_parts: list[str] = []
+
+    def stream_answer_narrative(delta: str) -> None:
+        if not delta or answer_delta is None:
+            return
+        streamed_answer_parts.append(delta)
+        answer_delta(delta)
+
+    narrative_delta = (
+        stream_answer_narrative
+        if answer_delta is not None
+        and not claim_required
+        and not validated_stream_only
+        else None
+    )
     tool_runtime.register(AgentTool(
         name="video.answer_synthesize",
         description="综合候选依据并生成回答",
         max_result_chars=200_000,
         handler=lambda _arguments: _run_library_synthesis(
             synthesis_kwargs,
-            effective_answer_delta,
+            # 只开放 JSON answer 叙述字段；claims、引用与来源标识仍由
+            # _run_library_synthesis 保持私有，校验后再作为 canonical 后缀追加。
+            narrative_delta,
         ),
     ))
     raw_answer = tool_runtime.execute(
@@ -3347,11 +4058,26 @@ def answer_library_question(
     )
     verification_started_at = time.perf_counter()
     parsed = _parse_agent_response_payload(raw_answer)
+    streamed_answer = "".join(streamed_answer_parts).strip()
+    parsed_answer = _agent_answer_text(parsed, "")
+    if streamed_answer and len(streamed_answer) > len(parsed_answer):
+        # A provider may stop at its token boundary before closing the outer
+        # JSON object even though the complete user-facing answer string has
+        # already streamed. Never replace that visible prefix with a fallback.
+        parsed["answer"] = streamed_answer
     evidence_sources = map_sources if safe_mode == "deep" else supplied_sources
-    claim_required = (
-        safe_mode == "deep"
-        and plan.get("coverage") == "broad"
-        and int(source_context.get("note_count") or 0) >= 6
+    minimum_claim_count = (
+        4
+        if claim_required
+        else 3
+        if (
+            not server_evidence_mode
+            and
+            len(bounded_sources) == 1
+            and safe_style == "answer"
+            and plan.get("coverage") == "broad"
+        )
+        else 0
     )
     tool_runtime.register(AgentTool(
         name="video.claim_validate",
@@ -3367,16 +4093,27 @@ def answer_library_question(
             reject_partial_evidence=bool(arguments.get("strict")),
         ),
     ))
-    claims, rejected_claim_count = tool_runtime.execute(
-        "video.claim_validate",
-        {
-            "claims": parsed.get("claims"),
-            "strict": claim_required,
-            "attempt": 0,
-        },
-    )
+    if server_evidence_mode:
+        claims, rejected_claim_count = [], 0
+    else:
+        claims, rejected_claim_count = tool_runtime.execute(
+            "video.claim_validate",
+            {
+                "claims": parsed.get("claims"),
+                "strict": claim_required,
+                "attempt": 0,
+            },
+        )
     repair_attempts = 0
-    if claim_required:
+    if minimum_claim_count > 0 and len(claims) < minimum_claim_count:
+        repair_guidance = (
+            "recurring/common/trend 尽量引用 3–6 个不同 note_id，最低不得少于两个；"
+            if claim_required
+            else (
+                "本轮只有一个来源，必须使用 fact/action/uncertain，禁止使用 recurring/common/trend；"
+                "在证据允许时给出 2–3 个紧凑 claims，每个 claim 至少包含一段从该视频文稿逐字复制的 quote；"
+            )
+        )
         tool_runtime.register(AgentTool(
             name="video.claim_repair",
             description="按校验反馈修复观点和引用",
@@ -3387,19 +4124,35 @@ def answer_library_question(
                     make_synthesis_user_prompt()
                     + "\n\n【服务端引用校验反馈】\n"
                     + f"上一稿有 {int(arguments.get('rejected_count') or 0)} 项未通过内容完整性、逐字引用或独立来源校验。"
-                    + "请重新输出完整 JSON；overview 写 100–180 字；在证据允许时给出 4–8 个 claims；"
-                    + "每个 explanation 写 120–260 字，说明含义、边界、关系或影响；"
-                    + "recurring/common/trend 尽量引用 3–6 个不同 note_id，最低不得少于两个；"
+                    + f"请重新输出完整 JSON；answer 必须完整回答问题；至少给出 {minimum_claim_count} 个通过校验的 claims；"
+                    + "每个 explanation 写 40–100 字，说明对应结论、边界或影响，避免重复 answer；"
+                    + repair_guidance
                     + "不要套用文稿中未逐字出现的理论、疗法、研究结论或科学归因；"
                     + "所有 quote 必须逐字复制，不要在 answer 中写来源数字。"
                 ),
-                max_tokens=6000,
+                max_tokens=4800 if claim_required else 2400,
                 temperature=0.1,
                 timeout=90,
                 operation="library_claim_repair",
             ),
         ))
-        while (not claims or rejected_claim_count > 0) and repair_attempts < 2:
+        # 已经得到四条以上通过逐字引用校验的观点时，直接丢弃不合格项。
+        # 为少数坏引用重写整份长回答会额外阻塞近一分钟，也会让已经流出的
+        # 内容突然变化；只有研究结果不足时才请求模型整体修复。
+        # 普通问题已经把 answer 叙述实时展示给用户时，不再为了凑足证据
+        # 数量启动第二次完整模型重写。保留首稿并追加已通过的 claims；只有
+        # 必须证明跨视频共同性的 deep 问题才允许阻塞式修复。
+        max_repair_attempts = (
+            0
+            if streamed_answer_parts and not claim_required
+            else 2
+            if claim_required
+            else 1
+        )
+        while (
+            len(claims) < minimum_claim_count
+            and repair_attempts < max_repair_attempts
+        ):
             repair_attempts += 1
             try:
                 repaired_raw = tool_runtime.execute(
@@ -3410,6 +4163,10 @@ def answer_library_question(
                     },
                 )
                 repaired = _parse_agent_response_payload(repaired_raw)
+                if streamed_answer_parts:
+                    # 引用修复只重建 claims；已显示的叙述前缀保持不变，
+                    # 避免完成时整块改写用户正在阅读的正文。
+                    repaired["answer"] = "".join(streamed_answer_parts)
                 repaired_claims, repaired_rejected = tool_runtime.execute(
                     "video.claim_validate",
                     {
@@ -3421,12 +4178,15 @@ def answer_library_question(
                 parsed = repaired
                 claims = repaired_claims
                 rejected_claim_count = repaired_rejected
-                if claims and rejected_claim_count == 0:
+                if (
+                    len(claims) >= minimum_claim_count
+                    and (not claim_required or rejected_claim_count == 0)
+                ):
                     break
             except Exception:
                 break
 
-    raw_claim_evidence = [
+    raw_claim_evidence = [] if server_evidence_mode else [
         evidence_item
         for claim in (
             parsed.get("claims") if isinstance(parsed.get("claims"), list) else []
@@ -3437,7 +4197,24 @@ def answer_library_question(
         )
     ]
     raw_top_evidence = (
-        parsed.get("evidence") if isinstance(parsed.get("evidence"), list) else []
+        [
+            {
+                "note_id": item.get("note_id"),
+                "quote": item.get("quote"),
+                "source": item.get("source"),
+            }
+            for item in _server_selected_library_evidence(
+                clean_question,
+                supplied_sources,
+                limit=3,
+            )
+        ]
+        if server_evidence_mode
+        else (
+            parsed.get("evidence")
+            if isinstance(parsed.get("evidence"), list)
+            else []
+        )
     )
     evidence = _validated_library_evidence(
         [*raw_claim_evidence, *raw_top_evidence],
@@ -3545,6 +4322,12 @@ def answer_library_question(
                 "selected_chunk_count": int(source_context["selected_chunks"]),
                 "map_call_count": map_calls,
                 "validated_map_finding_count": validated_map_finding_count,
+                "completed_map_batch_count": int(
+                    map_stats.get("completed_batch_count") or 0
+                ),
+                "failed_map_batch_count": int(
+                    map_stats.get("failed_batch_count") or 0
+                ),
             },
             "detail": (
                 f"选取 {source_context['selected_chunks']} 个相关片段 · "
@@ -3596,9 +4379,22 @@ def answer_library_question(
         "coverage": plan["coverage"],
         "map_calls": map_calls,
         "validated_map_finding_count": validated_map_finding_count,
+        "map_batch_count": int(map_stats.get("batch_count") or 0),
+        "completed_map_batch_count": int(
+            map_stats.get("completed_batch_count") or 0
+        ),
+        "failed_map_batch_count": int(map_stats.get("failed_batch_count") or 0),
+        "failed_source_count": int(map_stats.get("failed_source_count") or 0),
+        "map_budget_exhausted": bool(map_stats.get("budget_exhausted")),
+        "synthesis_context_chars": sum(
+            len(item) for item in [*synthesis_findings, *synthesis_source_blocks]
+        ),
         "claim_count": len(claims),
         "rejected_claim_count": rejected_claim_count,
         "claim_repair_attempts": repair_attempts,
+        "evidence_mode": (
+            "server_selected" if server_evidence_mode else "model_validated"
+        ),
         "map_duration_ms": map_duration_ms,
         "agent_trace": agent_trace,
         "web_scope": safe_web_scope,

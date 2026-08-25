@@ -626,6 +626,15 @@ export interface DouyinLibraryStatus {
   storage_mode?: 'metadata_only' | 'local_media' | 'unknown';
   login_browser_mode?: 'visible_chrome' | 'remote_capture' | 'headless' | 'unavailable' | string;
   max_sync_count?: number;
+  capabilities?: string[];
+  collection_resilience?: {
+    enabled: boolean;
+    api_first: boolean;
+    browser_fallback: boolean;
+    browser_headless: boolean;
+    cooldown_seconds: number;
+    cooldown_cap_seconds: number;
+  };
   error?: string | null;
 }
 
@@ -670,6 +679,12 @@ export interface DouyinCollectionJob {
   processed?: number;
   error?: string | null;
   mode?: DouyinSourceMode | null;
+  error_code?: '' | 'source_blocked' | 'verification_required' | 'session_expired' | 'network_error' | 'connector_error';
+  source_mode?: DouyinSourceMode;
+  channel?: 'api' | 'browser' | 'circuit_breaker';
+  fallback_attempted?: boolean;
+  retry_after_seconds?: number;
+  needs_action?: boolean;
   temporary_restored?: number;
 }
 
@@ -1206,6 +1221,15 @@ export interface AgentSourceList {
   as_of?: string | null;
 }
 
+export interface AgentStarterQuestions {
+  questions: string[];
+  source_count: number;
+  available_count: number;
+  source_scope: AgentSourceScope;
+  scope_label: string;
+  truncated: boolean;
+}
+
 export interface AgentSourceSearchResult extends AgentSourceList {
   query: string;
   search_mode: 'smart' | 'keyword_fallback';
@@ -1243,6 +1267,11 @@ export interface AgentMessage {
       items?: VideoAnalysisItem[];
       requires_confirmation?: boolean;
       can_start?: boolean;
+    };
+    plan_change?: PlanCoachPreview & {
+      state: 'pending' | 'applied';
+      applied_at?: string;
+      applied_plan_updated_at?: string;
     };
   };
 }
@@ -1296,6 +1325,15 @@ export interface AgentThread {
   messages?: AgentMessage[];
   sources?: AgentSource[];
   active_turn?: AgentTurn | null;
+  context_type?: 'video' | 'plan';
+  context_id?: string | null;
+  context?: {
+    type: 'plan';
+    id: string;
+    title: string;
+    available: boolean;
+    plan?: PlanData | null;
+  } | null;
   created_at: string;
   updated_at: string;
 }
@@ -1309,6 +1347,13 @@ export interface AgentThreadCreate {
   title?: string;
   source_scope: AgentSourceScope;
   source_ids?: string[];
+  context_type?: 'video' | 'plan';
+  context_id?: string;
+}
+
+export interface AgentPlanChangeApplyResult {
+  plan: PlanData;
+  message: AgentMessage;
 }
 
 export interface AgentThreadUpdate {
@@ -1349,6 +1394,7 @@ export type AgentStreamStage =
 export interface AgentStreamProgress {
   stage: AgentStreamStage;
   message: string;
+  event_type?: string;
   source_count?: number;
   matched_source_count?: number;
   selected_chunk_count?: number;
@@ -1363,6 +1409,17 @@ export interface AgentStreamProgress {
   mapped_count?: number;
   deep_read_count?: number;
   claim_count?: number;
+  batch_index?: number;
+  batch_total?: number;
+  batch_source_count?: number;
+  completed_batch_count?: number;
+  failed_batch_count?: number;
+  failed_source_count?: number;
+  finding_count?: number;
+  duration_ms?: number;
+  tool_name?: string;
+  call_index?: number;
+  streaming?: boolean;
 }
 
 export interface AgentAutomation {

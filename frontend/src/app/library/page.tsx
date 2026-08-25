@@ -140,6 +140,11 @@ interface CollectionProgressSnapshot {
   percent: number;
 }
 
+interface SourceReadabilityState {
+  blockedUntil: number;
+  needsAction: boolean;
+}
+
 interface ExtractionRunResult {
   success: number;
   status: 'skipped' | DouyinBatchExtractionJob['status'];
@@ -322,6 +327,9 @@ export default function VideoLibraryPage() {
   const [sourceManagerModes, setSourceManagerModes] = useState<DouyinSourceMode[]>(
     () => readLibraryQuickSyncPreferences().modes,
   );
+  const [sourceReadability, setSourceReadability] = useState<Partial<
+    Record<DouyinSourceMode, SourceReadabilityState>
+  >>({});
   const [sourceSorts, setSourceSorts] = useLocalStorage(
     'zhicui-library-source-sorts-v1',
     DEFAULT_SOURCE_SORTS,
@@ -342,6 +350,22 @@ export default function VideoLibraryPage() {
     loading: true,
     error: '',
   });
+
+  useEffect(() => {
+    const syncPlatformFromLocation = () => {
+      const platform = new URL(window.location.href).searchParams.get('platform');
+      const nextFilter: LibraryPlatformFilter = platform === 'douyin' || platform === 'bilibili'
+        ? platform
+        : 'all';
+      setPlatformFilter(nextFilter);
+      setPlatformActionErrors({});
+      setPreviewTarget(null);
+    };
+
+    syncPlatformFromLocation();
+    window.addEventListener('popstate', syncPlatformFromLocation);
+    return () => window.removeEventListener('popstate', syncPlatformFromLocation);
+  }, []);
   const [platformPanelVersion, setPlatformPanelVersion] = useState(0);
   const [sourceManagerOpen, setSourceManagerOpen] = useState(false);
   const [sourceManagerView, setSourceManagerView] = useState<SourceManagerView>('douyin');
@@ -692,6 +716,10 @@ export default function VideoLibraryPage() {
         .map((value) => SOURCE_MODES.find((mode) => mode.value === value)?.label || '')
         .filter(Boolean)
         .join(' + ');
+  const collectionReadability = sourceReadability.collect;
+  const collectionRetryMinutes = collectionReadability
+    ? Math.max(0, Math.ceil((collectionReadability.blockedUntil - Date.now()) / 60_000))
+    : 0;
   const collectionProgress = getCollectionProgress(collectionJob, syncCount);
   const showDouyinItems = platformFilter === 'all' || platformFilter === 'douyin';
   const showPlatformItems = platformFilter !== 'douyin';
@@ -742,6 +770,10 @@ export default function VideoLibraryPage() {
     setPlatformFilter(nextFilter);
     setPlatformActionErrors({});
     setPreviewTarget(null);
+    const currentUrl = new URL(window.location.href);
+    if (nextFilter === 'all') currentUrl.searchParams.delete('platform');
+    else currentUrl.searchParams.set('platform', nextFilter);
+    window.history.pushState({}, '', `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
   };
 
   const initializePlatformSummary = async (item: PlatformLibraryItem) => {
@@ -780,7 +812,7 @@ export default function VideoLibraryPage() {
         return next;
       }
       if (next.size + selectedPlatform.size >= MAX_SELECTION) {
-        setNotice(`知萃 Harness 一次最多使用 ${MAX_SELECTION} 条视频`);
+        setNotice(`知萃 AI 一次最多使用 ${MAX_SELECTION} 条视频`);
         return current;
       }
       next.add(awemeId);
@@ -1088,7 +1120,7 @@ export default function VideoLibraryPage() {
     });
 
     if (missingTranscript.length > 0) {
-      setNotice(`正在为 ${missingTranscript.length} 条视频准备文稿，完成后将自动进入知萃 Harness`);
+      setNotice(`正在为 ${missingTranscript.length} 条视频准备文稿，完成后将自动进入知萃 AI`);
       const result = await extractItems(missingTranscript, 'transcript');
       result.job?.items.forEach((item) => {
         if (item.state === 'done' && item.note_id && item.transcript_chars > 0) {
@@ -1795,6 +1827,19 @@ export default function VideoLibraryPage() {
       };
     }
     if (!finalJob || finalJob.status === 'failed') {
+      if (
+        requestedMode === 'collect'
+        && finalJob
+        && (finalJob.error_code === 'source_blocked' || finalJob.error_code === 'verification_required')
+      ) {
+        setSourceReadability((current) => ({
+          ...current,
+          collect: {
+            blockedUntil: Date.now() + nonNegativeInteger(finalJob.retry_after_seconds) * 1000,
+            needsAction: Boolean(finalJob.needs_action),
+          },
+        }));
+      }
       return {
         requestedMode,
         refreshed: null,
@@ -1809,6 +1854,14 @@ export default function VideoLibraryPage() {
             })
           : '同步没有完成，请稍后重试',
       };
+    }
+
+    if (requestedMode === 'collect') {
+      setSourceReadability((current) => {
+        const next = { ...current };
+        delete next.collect;
+        return next;
+      });
     }
 
     publishSourceManagerNotice(formatCollectionSyncMessage({
@@ -1882,7 +1935,7 @@ export default function VideoLibraryPage() {
         publishSourceManagerNotice(
           `${SOURCE_MODES.find((mode) => mode.value === requestedMode)?.label || '该来源'}：${result.error}`,
         );
-        break;
+        continue;
       }
       const refreshed = result.refreshed || [];
       const overview = result.overview;
@@ -2565,7 +2618,7 @@ export default function VideoLibraryPage() {
                 <li>下载并安装“知萃 Windows 桌面端”</li>
                 <li>登录与当前页面完全相同的知萃账号</li>
                 <li>进入视频资料并点击“扫码登录抖音”</li>
-                <li>在本机 Chrome 扫码确认，绑定结果会自动同步</li>
+                <li>在本机 Chrome 扫码确认；绑定状态会自动更新，但不会自动抓取视频</li>
               </ol>
               <div className="library-qr-actions">
                 <button
@@ -2624,7 +2677,7 @@ export default function VideoLibraryPage() {
           <header className={styles.sourceDialogHeader}>
             <div>
               <h2 id="library-source-heading">同步视频</h2>
-              <span id="library-source-description">选择一个或多个来源开始同步</span>
+              <span id="library-source-description">仅在点击同步按钮后读取所选来源</span>
             </div>
             <button
               type="button"
@@ -2764,11 +2817,15 @@ export default function VideoLibraryPage() {
               <div className="library-source-modes" role="group" aria-label="选择要同步的抖音来源，可多选">
                 {SOURCE_MODES.map(({ value, label, Icon }) => {
                   const active = sourceManagerModes.includes(value);
+                  const collectionUnavailable = value === 'collect'
+                    && Boolean(collectionReadability)
+                    && (collectionRetryMinutes > 0 || Boolean(collectionReadability?.needsAction));
                   return (
                     <button
                       type="button"
                       key={value}
                       className={active ? 'is-active' : ''}
+                      data-unavailable={collectionUnavailable || undefined}
                       aria-pressed={active}
                       disabled={refreshing || batchExtracting}
                       onClick={() => {
@@ -2783,7 +2840,13 @@ export default function VideoLibraryPage() {
                     >
                       <Icon size={17} />
                       <strong>{label}</strong>
-                      <small>{active ? '已选' : '未选'}</small>
+                      <small>
+                        {collectionUnavailable
+                          ? collectionReadability?.needsAction
+                            ? '需要验证账号'
+                            : `约 ${collectionRetryMinutes} 分钟后重试`
+                          : active ? '已选' : '未选'}
+                      </small>
                     </button>
                   );
                 })}
@@ -2960,8 +3023,8 @@ export default function VideoLibraryPage() {
                   type="button"
                   className={styles.headerAiAction}
                   aria-label={selectedCount > 0
-                    ? `带已选的 ${selectedCount} 条视频进入知萃 Harness`
-                    : '用全部视频进入知萃 Harness'}
+                    ? `带已选的 ${selectedCount} 条视频进入知萃 AI`
+                    : '用全部视频进入知萃 AI'}
                   onClick={openLibraryInAgent}
                 >
                   <MessageSquareText size={18} aria-hidden="true" />
@@ -2977,9 +3040,9 @@ export default function VideoLibraryPage() {
                     <UserRound size={16} aria-hidden="true" />
                     博主作品
                   </Link>
-                  <Link href="/harness" aria-label="打开知萃 Harness">
+                  <Link href="/harness" aria-label="打开知萃 AI">
                     <Bot size={16} aria-hidden="true" />
-                    知萃 Harness
+                    知萃 AI
                   </Link>
                   {libraryOverview.permanentHidden > 0 && (
                     <button type="button" onClick={openHiddenManager}>

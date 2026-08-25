@@ -17,17 +17,21 @@ export interface ClientReleaseCatalog {
   windows: ClientRelease;
 }
 
+export function countedClientDownloadUrl(platform: ClientPlatform): string {
+  return `/api/client-downloads/${platform}`;
+}
+
 const ANDROID_MANIFEST_URL = '/download/latest.json';
 const WINDOWS_MANIFEST_URL = '/download/desktop-latest.json';
 
 export const CLIENT_RELEASE_FALLBACKS: ClientReleaseCatalog = {
   android: {
     platform: 'android',
-    version: '1.2.5',
-    build: 17,
+    version: '1.2.6',
+    build: 18,
     downloadUrl: 'https://luxai.cn/download/zhicui.apk',
-    sizeBytes: 9_401_616,
-    publishedAt: '2026-08-09T11:28:53.403Z',
+    sizeBytes: 9_859_270,
+    publishedAt: '2026-08-25T13:23:59.3545909Z',
     releaseStatus: 'public_download',
   },
   windows: {

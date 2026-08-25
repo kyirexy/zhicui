@@ -20,6 +20,7 @@ import {
   type AgentSourceDisplayLimit,
   DEFAULT_USER_SETTINGS,
 } from '@/lib/types';
+import { normalizeDisabledAutoSyncInterval } from '@/lib/manualSyncPolicy';
 
 interface SettingsContextValue {
   settings: UserSettings;
@@ -46,21 +47,7 @@ const DESKTOP_DENSITY_OPTIONS = new Set<DesktopLayoutDensity>([
   'comfortable',
   'compact',
 ]);
-const MIN_LIBRARY_AUTO_SYNC_MINUTES = 15;
-const MAX_LIBRARY_AUTO_SYNC_MINUTES = 7 * 24 * 60;
 const AGENT_SOURCE_DISPLAY_LIMITS = new Set<AgentSourceDisplayLimit>([100, 200, 500, 1000]);
-
-function normalizeLibraryAutoSyncInterval(value: unknown): LibraryAutoSyncIntervalMinutes {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return DEFAULT_USER_SETTINGS.libraryAutoSyncIntervalMinutes;
-  const minutes = Math.trunc(parsed);
-  if (minutes === 0) return 0;
-  if (minutes < 0) return DEFAULT_USER_SETTINGS.libraryAutoSyncIntervalMinutes;
-  return Math.max(
-    MIN_LIBRARY_AUTO_SYNC_MINUTES,
-    Math.min(MAX_LIBRARY_AUTO_SYNC_MINUTES, minutes),
-  );
-}
 
 function resolveLegacyTheme(value: Partial<UserSettings>): AppTheme {
   if (THEME_OPTIONS.has(value.theme as AppTheme)) {
@@ -94,7 +81,7 @@ function normalizeSettings(value: UserSettings): UserSettings {
     desktopDensity: DESKTOP_DENSITY_OPTIONS.has(value?.desktopDensity)
       ? value.desktopDensity
       : DEFAULT_USER_SETTINGS.desktopDensity,
-    libraryAutoSyncIntervalMinutes: normalizeLibraryAutoSyncInterval(
+    libraryAutoSyncIntervalMinutes: normalizeDisabledAutoSyncInterval(
       value?.libraryAutoSyncIntervalMinutes,
     ),
     agentSourceDisplayLimit: AGENT_SOURCE_DISPLAY_LIMITS.has(value?.agentSourceDisplayLimit)
@@ -194,7 +181,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     (libraryAutoSyncIntervalMinutes: LibraryAutoSyncIntervalMinutes) => (
       setSettings((prev) => ({
         ...normalizeSettings(prev),
-        libraryAutoSyncIntervalMinutes: normalizeLibraryAutoSyncInterval(
+        libraryAutoSyncIntervalMinutes: normalizeDisabledAutoSyncInterval(
           libraryAutoSyncIntervalMinutes,
         ),
       }))

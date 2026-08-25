@@ -47,6 +47,35 @@ def _today():
     return datetime.now(ZoneInfo("Asia/Shanghai")).date()
 
 
+def _icon_key(row: ChatModelOffering) -> str:
+    """只下发品牌标识，不向用户暴露网关内部的真实模型 ID。"""
+    value = f"{row.model_id} {row.code} {row.name}".lower()
+    aliases = (
+        ("deepseek", ("deepseek", "深度求索")),
+        ("mimo", ("mimo", "xiaomi", "小米大模型")),
+        ("hunyuan", ("hy3", "hunyuan", "混元")),
+        ("felo", ("felo",)),
+        ("openai", ("openai", "gpt-", "chatgpt")),
+        ("claude", ("claude", "anthropic")),
+        ("gemini", ("gemini", "google ai")),
+        ("qwen", ("qwen", "千问", "通义")),
+        ("doubao", ("doubao", "豆包")),
+        ("kimi", ("kimi", "moonshot", "月之暗面")),
+        ("minimax", ("minimax", "海螺")),
+        ("mistral", ("mistral",)),
+        ("meta", ("llama", "meta-ai", "meta ai")),
+        ("grok", ("grok", "xai")),
+        ("groq", ("groq",)),
+        ("nvidia", ("nvidia", "nemotron")),
+        ("siliconcloud", ("siliconflow", "silicon cloud", "硅基流动")),
+        ("openrouter", ("openrouter",)),
+        ("cohere", ("cohere", "command-r")),
+        ("perplexity", ("perplexity",)),
+        ("zhipu", ("zhipu", "glm", "智谱")),
+    )
+    return next((brand for brand, names in aliases if any(name in value for name in names)), "unknown")
+
+
 def _usage(db: Session, user_id: str, offering_id: str) -> ChatModelFreeUsage | None:
     return db.query(ChatModelFreeUsage).filter(
         ChatModelFreeUsage.user_id == user_id,
@@ -91,6 +120,7 @@ def serialize_user(db: Session, row: ChatModelOffering, user_id: str) -> dict[st
         "id": row.id,
         "name": row.name,
         "description": row.description,
+        "icon_key": _icon_key(row),
         "is_default": bool(row.is_default),
         "is_free": bool(row.is_free),
         "free_daily_limit": limit,

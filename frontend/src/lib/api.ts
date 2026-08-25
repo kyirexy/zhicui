@@ -11,9 +11,11 @@ import type {
   AgentMessage,
   AgentMessageCreate,
   AgentMessageResult,
+  AgentPlanChangeApplyResult,
   AgentSourceList,
   AgentSourceSearchResult,
   AgentSourceScope,
+  AgentStarterQuestions,
   AgentStreamProgress,
   AgentThread,
   AgentTurn,
@@ -234,6 +236,16 @@ export async function listMyFeedback(
 }
 
 /** Metadata carried by intermediate SSE progress events. */
+export interface ExtractionVideoPreview {
+  title: string;
+  video_id: string;
+  platform: string;
+  source_url: string;
+  media_url: string;
+  cover_url: string;
+  author_name: string;
+}
+
 export interface ProgressEventData {
   phase?: string;
   platform?: string;
@@ -244,6 +256,8 @@ export interface ProgressEventData {
   transcript_chars?: number;
   fallback?: boolean;
   level?: 'info' | 'warning';
+  video?: ExtractionVideoPreview;
+  transcript?: string;
   [key: string]: unknown;
 }
 
@@ -575,9 +589,10 @@ export async function listPlatformLibraryItems(
 
 export async function getPlatformLibraryItem(
   noteId: string,
+  refreshMedia = false,
 ): Promise<ApiResponse<DouyinVideoWorkspace>> {
   return request<DouyinVideoWorkspace>(
-    `/api/library/imports/${encodeURIComponent(noteId)}`,
+    `/api/library/imports/${encodeURIComponent(noteId)}${refreshMedia ? '?refresh_media=true' : ''}`,
   );
 }
 
@@ -962,6 +977,25 @@ export async function listAgentSources(
   });
 }
 
+export async function generateAgentStarterQuestions(
+  body: {
+    sourceScope: AgentSourceScope;
+    sourceIds?: string[];
+  },
+  signal?: AbortSignal,
+): Promise<ApiResponse<AgentStarterQuestions>> {
+  return request<AgentStarterQuestions>('/api/agent/starter-questions', {
+    method: 'POST',
+    body: JSON.stringify({
+      source_scope: body.sourceScope,
+      source_ids: Array.from(new Set(
+        (body.sourceIds || []).map((value) => value.trim()).filter(Boolean),
+      )).slice(0, 100),
+    }),
+    signal,
+  });
+}
+
 export async function deleteAgentSource(
   noteId: string,
 ): Promise<ApiResponse<{ deleted: boolean; note_id: string; permanent: boolean }>> {
@@ -1322,6 +1356,15 @@ export async function deleteAgentThread(
   );
 }
 
+export async function applyAgentPlanChange(
+  messageId: string,
+): Promise<ApiResponse<AgentPlanChangeApplyResult>> {
+  return request<AgentPlanChangeApplyResult>(
+    `/api/agent/messages/${encodeURIComponent(messageId)}/plan-change/apply`,
+    { method: 'POST' },
+  );
+}
+
 export async function sendAgentMessage(
   threadId: string,
   body: AgentMessageCreate,
@@ -1354,7 +1397,10 @@ export interface AgentMessageStreamCallbacks {
   onTurn?: (turnId: string) => void;
   onProgress?: (progress: AgentStreamProgress) => void;
   onAssistantStart?: (message: AgentMessage) => void;
-  onDelta?: (delta: string) => void;
+  onDelta?: (
+    delta: string,
+    meta: { event_seq?: number; turn_id?: string; chunk_index?: number },
+  ) => void;
   onApprovalRequired?: (data: AgentMessageResult) => void;
   onAnalysisStarted?: (data: AgentMessageResult) => void;
 }
@@ -1411,7 +1457,11 @@ async function consumeAgentMessageStream(
       return;
     }
     if (raw.type === 'delta' && typeof raw.delta === 'string') {
-      callbacks.onDelta?.(raw.delta);
+      callbacks.onDelta?.(raw.delta, {
+        event_seq: typeof raw.event_seq === 'number' ? raw.event_seq : undefined,
+        turn_id: typeof raw.turn_id === 'string' ? raw.turn_id : undefined,
+        chunk_index: typeof raw.chunk_index === 'number' ? raw.chunk_index : undefined,
+      });
       return;
     }
     if (raw.type === 'done' && isRecord(raw.data)) {
@@ -1502,10 +1552,14 @@ export async function resumeAgentTurnStream(
   turnId: string,
   callbacks: AgentMessageStreamCallbacks = {},
   signal?: AbortSignal,
+  afterEventSeq = 0,
 ): Promise<ApiResponse<AgentMessageResult>> {
   try {
+    const query = afterEventSeq > 0
+      ? `?after_seq=${encodeURIComponent(String(afterEventSeq))}`
+      : '';
     const response = await fetch(
-      `${API_BASE}/api/agent/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/stream`,
+      `${API_BASE}/api/agent/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/stream${query}`,
       {
         method: 'GET',
         headers: authHeaders({ Accept: 'text/event-stream' }),
@@ -1807,6 +1861,13 @@ export interface AdminStats {
   plans: number;
   recent_users: { username: string; email: string; created_at: string }[];
   type_dist: Record<string, number>;
+  downloads: {
+    total: number;
+    today: number;
+    last_7_days: number;
+    by_platform: { android: number; windows: number };
+    daily: { date: string; count: number }[];
+  };
 }
 
 export interface AdminNoteItem {
@@ -2241,7 +2302,12 @@ export async function putCreatorSyncAdminConfig(body: {
 export async function testCreatorSyncConnector(
   platform: 'douyin' | 'bilibili' | 'xiaohongshu',
   profileRef?: string,
-): Promise<ApiResponse<{ healthy: boolean; message?: string; preview?: CreatorSourcePreview }>> {
+): Promise<ApiResponse<{
+  healthy: boolean;
+  catalog_healthy?: boolean;
+  message?: string;
+  preview?: CreatorSourcePreview;
+}>> {
   return request('/api/admin/creator-sync-config/test', {
     method: 'POST',
     body: JSON.stringify({ platform, profile_ref: profileRef?.trim() || null }),
@@ -2775,6 +2841,7 @@ export interface UserChatModel {
   id: string;
   name: string;
   description: string;
+  icon_key: string;
   is_default: boolean;
   is_free: boolean;
   free_daily_limit: number;

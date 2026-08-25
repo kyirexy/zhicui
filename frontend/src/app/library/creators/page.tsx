@@ -392,7 +392,7 @@ function CreatorLibraryWorkspace() {
     }
     if (firstPage.data.total > HARNESS_MAX_SOURCES) {
       setPendingAction('');
-      setError(`这个博主已有 ${firstPage.data.total} 条可提问视频，知萃 Harness 单次最多选择 ${HARNESS_MAX_SOURCES} 条。`);
+      setError(`这个博主已有 ${firstPage.data.total} 条可提问视频，知萃 AI 单次最多选择 ${HARNESS_MAX_SOURCES} 条。`);
       return;
     }
 
@@ -674,7 +674,7 @@ function CreatorLibraryWorkspace() {
             <h1>博主作品</h1>
           </span>
         </div>
-        <p>近期作品直接准备普通文稿；全部作品先同步清单，勾选后再转写。</p>
+        <p>仅在点击按钮后同步；近期作品直接准备普通文稿，全部作品先同步清单再按需转写。</p>
       </header>
 
       {catalog && !catalog.enabled && !loadingSources && (
@@ -699,12 +699,17 @@ function CreatorLibraryWorkspace() {
             </div>
             <div className={styles.platformSwitch} role="radiogroup" aria-label="博主平台">
               {(['douyin', 'bilibili'] as const).map((platform) => (
-                <button key={platform} type="button" role="radio" aria-checked={addPlatform === platform} disabled={catalog?.platforms[platform] === false} onClick={() => { setAddPlatform(platform); setPreview(null); }}>
+                <button key={platform} type="button" role="radio" aria-checked={addPlatform === platform} onClick={() => { setAddPlatform(platform); setPreview(null); setError(''); }}>
                   <PlatformBrandIcon platform={platform} size={15} />
                   {platformLabel(platform)}
                 </button>
               ))}
             </div>
+            {!addPlatformEnabled && catalog?.enabled ? (
+              <p className={styles.addSourceStatus} role="status">
+                {platformLabel(addPlatform)}连接器还未通过真实博主主页测试。管理员验证后即可添加，已有资料不受影响。
+              </p>
+            ) : null}
             <label>
               <span className="sr-only">博主主页链接</span>
               <input value={profileRef} onChange={(event) => { setProfileRef(event.target.value); setPreview(null); }} placeholder="粘贴博主主页链接" disabled={!addPlatformEnabled || Boolean(pendingAction)} />

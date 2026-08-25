@@ -1183,6 +1183,16 @@
   color: color-mix(in srgb, var(--accent-brand) 78%, var(--foreground-muted));
 }
 
+.sourceRail :global(.library-source-modes button[data-unavailable="true"]) {
+  border-color: color-mix(in srgb, #d97706 40%, var(--card-border));
+  background: color-mix(in srgb, #f59e0b 7%, var(--card-bg));
+}
+
+.sourceRail :global(.library-source-modes button[data-unavailable="true"] small) {
+  color: #b45309;
+  white-space: normal;
+}
+
 .sourceRail :global(.library-pipeline-action) {
   width: auto;
 }
@@ -1519,9 +1529,41 @@
   padding: 10px;
 }
 
+.workspace .listToolbar {
+  padding-inline: 14px;
+}
+
 .listToolbar :global(.library-search) {
   min-width: 180px;
+  padding-left: 14px;
   flex: 1 1 260px;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.listToolbar :global(.library-search > svg) {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+}
+
+.listToolbar :global(.library-search input) {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+.listToolbar :global(.library-search input:focus),
+.listToolbar :global(.library-search input:focus-visible) {
+  border: 0;
+  outline: none;
+  box-shadow: none;
 }
 
 .listToolbar :global(.library-search button) {

@@ -27,6 +27,7 @@ import {
 } from 'react';
 import ContentChat from '@/components/ContentChat';
 import DesktopMediaVideoPlayer from '@/components/DesktopMediaVideoPlayer';
+import { buildBilibiliEmbedUrl } from '@/lib/singleLinkImport';
 import DouyinGalleryViewer from '@/components/DouyinGalleryViewer';
 import TranscriptViewer from '@/components/TranscriptViewer';
 import VideoAnalysisEntry from '@/components/VideoAnalysisEntry';
@@ -51,7 +52,7 @@ const TABS: Array<{
   label: string;
   Icon: typeof Sparkles;
 }> = [
-  { id: 'assistant', label: '知萃 Harness', Icon: Sparkles },
+  { id: 'assistant', label: 'AI 问答', Icon: Sparkles },
   { id: 'transcript', label: '完整文案', Icon: FileText },
   { id: 'summary', label: '摘要笔记', Icon: BookOpenText },
   { id: 'plan', label: '行动计划', Icon: CalendarCheck2 },
@@ -143,7 +144,7 @@ export default function VideoKnowledgeWorkspace() {
     }));
   }, [routeAgentThreadId]);
 
-  const loadWorkspace = useCallback(async () => {
+  const loadWorkspace = useCallback(async (refreshMedia = false) => {
     const requestId = workspaceRequestRef.current + 1;
     workspaceRequestRef.current = requestId;
     if (!awemeId && !importedNoteId) {
@@ -155,7 +156,7 @@ export default function VideoKnowledgeWorkspace() {
     setLoading(true);
     setError('');
     const response = importedNoteId
-      ? await getPlatformLibraryItem(importedNoteId)
+      ? await getPlatformLibraryItem(importedNoteId, refreshMedia)
       : await getDouyinLibraryItem(awemeId);
     if (requestId !== workspaceRequestRef.current) return;
     if (response.success && response.data) {
@@ -178,6 +179,9 @@ export default function VideoKnowledgeWorkspace() {
   const note = workspace?.note ?? null;
   const plan = workspace?.plan ?? null;
   const hasTranscript = Boolean(note?.transcript_raw?.trim());
+  const bilibiliEmbedUrl = workspace?.item.platform === 'bilibili'
+    ? buildBilibiliEmbedUrl(workspace.item.aweme_id)
+    : null;
   const visualSource = workspace && (
     workspace.item.media_type === 'gallery'
       ? (workspace.item.gallery_images?.length || 0) > 0
@@ -343,8 +347,17 @@ export default function VideoKnowledgeWorkspace() {
 
       <section className="video-knowledge-shell">
         <div className="video-knowledge-media">
-          <div className="video-knowledge-stage">
-            {item.media_type === 'gallery' ? (
+          <div className={`video-knowledge-stage ${bilibiliEmbedUrl ? 'is-bilibili' : ''}`}>
+            {bilibiliEmbedUrl ? (
+              <iframe
+                className="video-knowledge-bilibili-player"
+                src={bilibiliEmbedUrl}
+                title={`播放视频：${item.title}`}
+                allow="autoplay; fullscreen; picture-in-picture"
+                allowFullScreen
+                referrerPolicy="strict-origin-when-cross-origin"
+              />
+            ) : item.media_type === 'gallery' ? (
               <DouyinGalleryViewer
                 images={item.gallery_images || []}
                 fallbackImage={item.cover_proxy_url || item.cover_url}
@@ -358,7 +371,7 @@ export default function VideoKnowledgeWorkspace() {
                 coverUrl={item.cover_proxy_url || item.cover_url}
                 title={item.title}
                 sourceUrl={item.source_url}
-                onRefreshMedia={loadWorkspace}
+                onRefreshMedia={() => loadWorkspace(true)}
               />
             ) : item.cover_proxy_url || item.cover_url ? (
               <div className="video-knowledge-no-media">
@@ -474,7 +487,7 @@ export default function VideoKnowledgeWorkspace() {
                 className="video-knowledge-assistant video-knowledge-assistant--harness"
                 hidden={activeTab !== 'assistant'}
                 inert={activeTab !== 'assistant'}
-                aria-label={`基于《${note.title}》的知萃 Harness 对话`}
+                aria-label={`基于《${note.title}》的知萃 AI 对话`}
               >
                 <VideoAgentWorkspace
                   key={`${note.id}:${agentBootstrap.revision}`}

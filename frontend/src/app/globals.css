@@ -17866,3 +17866,24 @@ html[data-desktop-app="true"][data-desktop-workspace="agent"] .video-agent-shell
     animation-duration: 0.01ms !important;
   }
 }
+.video-knowledge-bilibili-player {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  background: #090b0f;
+}
+
+.video-knowledge-stage.is-bilibili {
+  width: 100%;
+  min-height: 0;
+  max-height: none;
+  aspect-ratio: 16 / 9;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 760px) {
+  .video-knowledge-bilibili-player {
+    min-height: 0;
+  }
+}

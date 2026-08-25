@@ -16,6 +16,7 @@ import {
 import { QRCodeSVG } from 'qrcode.react';
 import {
   CLIENT_RELEASE_FALLBACKS,
+  countedClientDownloadUrl,
   detectPreferredClient,
   formatReleaseSize,
   loadClientReleaseCatalog,
@@ -103,11 +104,9 @@ export default function WebLandingPage() {
     return () => window.clearTimeout(timeoutId);
   }, []);
 
-  const androidUrl = toAbsoluteDownloadUrl(releases.android.downloadUrl, origin);
-  const androidDownloadHref = releases.android.downloadUrl
-    === CLIENT_RELEASE_FALLBACKS.android.downloadUrl
-    ? '/download/zhicui.apk'
-    : releases.android.downloadUrl;
+  const androidDownloadHref = countedClientDownloadUrl('android');
+  const androidUrl = toAbsoluteDownloadUrl(androidDownloadHref, origin);
+  const windowsDownloadHref = countedClientDownloadUrl('windows');
   const androidSize = formatReleaseSize(releases.android.sizeBytes);
   const windowsSize = formatReleaseSize(releases.windows.sizeBytes);
 
@@ -129,7 +128,7 @@ export default function WebLandingPage() {
             <a
               className={preferredClient === 'android' ? styles.secondaryAction : styles.primaryAction}
               data-platform="windows"
-              href={releases.windows.downloadUrl}
+              href={windowsDownloadHref}
               aria-label={`下载 Windows 桌面端 v${releases.windows.version}`}
             >
               <Monitor size={20} weight="light" aria-hidden="true" />
@@ -210,7 +209,7 @@ export default function WebLandingPage() {
               <span>Windows 10/11 {releases.windows.architecture || 'x64'}</span>
             </div>
             <div className={styles.platformFooter}>
-              <a href={releases.windows.downloadUrl}>
+              <a href={windowsDownloadHref}>
                 <DownloadSimple size={19} weight="light" />
                 <strong>下载 Windows 安装包</strong>
                 <ArrowDown size={16} weight="bold" aria-hidden="true" />

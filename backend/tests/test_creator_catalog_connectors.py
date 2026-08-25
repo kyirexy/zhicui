@@ -181,6 +181,137 @@ class YuttoCatalogContractTests(unittest.TestCase):
                 yutto_catalog_client._read_token()
         self.assertEqual(raised.exception.code, "unsafe_token_permissions")
 
+    def test_empty_yutto_result_falls_back_to_metadata_only_ytdlp(self) -> None:
+        source = SimpleNamespace(
+            platform="bilibili",
+            profile_url="https://space.bilibili.com/123/video",
+            display_name="测试 UP",
+        )
+        fallback_result = {
+            "items": [{"external_id": "BV1Fallback1"}],
+            "complete": True,
+            "total_count": 1,
+            "failures": [],
+            "connector": "yt-dlp-metadata-fallback",
+        }
+        with (
+            patch.object(
+                yutto_catalog_client,
+                "discover_bilibili_catalog",
+                return_value={
+                    "items": [],
+                    "complete": True,
+                    "total_count": 0,
+                    "failures": [],
+                },
+            ),
+            patch.object(
+                creator_connectors,
+                "_discover_bilibili_catalog_fallback",
+                return_value=fallback_result,
+            ) as fallback,
+        ):
+            result = creator_connectors.discover_catalog(source)
+
+        fallback.assert_called_once()
+        self.assertEqual(result["connector"], "yt-dlp-metadata-fallback")
+        self.assertEqual(result["total_count"], 1)
+
+    def test_ytdlp_fallback_is_flat_metadata_only_and_allowlisted(self) -> None:
+        captured_command: list[str] = []
+
+        class FakeProcess:
+            returncode = 0
+
+            def poll(self):
+                return self.returncode
+
+            def communicate(self, timeout=None):
+                del timeout
+                return "BV1Fallback1\nBV1Fallback1\nnot-a-video\nBV1Fallback2\n", "secret stderr"
+
+            def terminate(self):
+                self.returncode = -1
+
+        def popen(command, **_kwargs):
+            captured_command.extend(command)
+            return FakeProcess()
+
+        source = SimpleNamespace(
+            platform="bilibili",
+            profile_url="https://space.bilibili.com/123/video",
+            display_name="测试 UP",
+        )
+        with patch.object(creator_connectors.subprocess, "Popen", side_effect=popen):
+            result = creator_connectors._discover_bilibili_catalog_fallback(
+                source,
+                on_item=None,
+                should_cancel=None,
+                run_id="fallback-test",
+            )
+
+        self.assertIn("--flat-playlist", captured_command)
+        self.assertIn("--skip-download", captured_command)
+        self.assertNotIn("download.start", captured_command)
+        self.assertEqual(
+            [item["external_id"] for item in result["items"]],
+            ["BV1Fallback1", "BV1Fallback2"],
+        )
+        serialized = json.dumps(result)
+        for forbidden in ("secret stderr", "cookie", "local_path", "media_url"):
+            self.assertNotIn(forbidden, serialized)
+
+    def test_unverified_empty_catalog_is_not_reported_as_complete(self) -> None:
+        class EmptyProcess:
+            returncode = 0
+
+            def poll(self):
+                return self.returncode
+
+            def communicate(self, timeout=None):
+                del timeout
+                return "", "upstream raw detail"
+
+            def terminate(self):
+                self.returncode = -1
+
+        source = SimpleNamespace(
+            platform="bilibili",
+            profile_url="https://space.bilibili.com/123/video",
+            display_name="测试 UP",
+        )
+        with (
+            patch.object(
+                yutto_catalog_client,
+                "discover_bilibili_catalog",
+                return_value={
+                    "items": [],
+                    "complete": True,
+                    "total_count": 0,
+                    "failures": [],
+                },
+            ),
+            patch.object(
+                creator_connectors.subprocess,
+                "Popen",
+                return_value=EmptyProcess(),
+            ),
+            self.assertRaises(creator_connectors.CreatorConnectorError) as raised,
+        ):
+            creator_connectors.discover_catalog(source)
+
+        self.assertEqual(raised.exception.code, "empty_catalog_unverified")
+        self.assertNotIn("raw detail", str(raised.exception))
+
+    def test_bilibili_risk_control_is_user_friendly_and_sanitized(self) -> None:
+        error = creator_connectors._bilibili_command_error(
+            "ERROR: private upstream detail; Request is rejected by server (352)",
+            catalog=True,
+        )
+        self.assertEqual(error.code, "bilibili_risk_control")
+        self.assertIn("暂时限制", str(error))
+        self.assertNotIn("private upstream detail", str(error))
+
 
 class DouyinCatalogContractTests(unittest.TestCase):
     source = SimpleNamespace(

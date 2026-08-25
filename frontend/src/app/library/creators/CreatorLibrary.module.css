@@ -59,6 +59,7 @@
 .platformSwitch button { display: flex; min-height: 36px; border: 0; border-radius: 7px; align-items: center; justify-content: center; gap: 6px; color: var(--foreground-muted); background: transparent; font-size: .75rem; font-weight: 700; }
 .platformSwitch button[aria-checked='true'] { color: var(--foreground); background: var(--card-bg); box-shadow: 0 1px 4px rgb(0 0 0 / 8%); }
 .platformSwitch button:disabled { cursor: not-allowed; opacity: .35; }
+.addSourceStatus { margin: 0; color: var(--foreground-muted); font-size: .68rem; line-height: 1.55; }
 .addSource > label { display: grid; min-height: 42px; padding: 3px; border: 1px solid var(--input-border); border-radius: 9px; grid-template-columns: minmax(0, 1fr) auto; background: var(--input-bg); }
 .addSource input { min-width: 0; padding: 0 9px; border: 0; outline: 0; color: var(--foreground); background: transparent; font: inherit; font-size: .76rem; }
 .addSource label button, .previewCard > button { display: inline-flex; min-height: 36px; padding: 0 9px; border: 0; border-radius: 7px; align-items: center; gap: 5px; color: #fff; background: var(--accent-brand); font-size: .72rem; font-weight: 750; }

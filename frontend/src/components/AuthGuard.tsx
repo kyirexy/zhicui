@@ -13,6 +13,7 @@ const ALWAYS_PUBLIC = ['/login'];
 const IS_DEV = process.env.NODE_ENV === 'development';
 const CLIENT_ONLY_PATHS = [
   '/harness',
+  '/extract',
   '/library',
   '/notes',
   '/plans',

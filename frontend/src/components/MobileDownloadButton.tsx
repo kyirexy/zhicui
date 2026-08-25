@@ -41,7 +41,7 @@ export default function MobileDownloadButton() {
             </p>
             {url && (
               <QRCodeSVG
-                value={`${url}/download/zhicui.apk`}
+                value={`${url}/api/client-downloads/android`}
                 size={200}
                 level="M"
                 bgColor="#ffffff"
@@ -49,7 +49,7 @@ export default function MobileDownloadButton() {
                 imageSettings={{ src: '/icons/icon-192.png', height: 40, width: 40, excavate: true }}
               />
             )}
-            <a href="/download/zhicui.apk" download className="btn-primary btn-magnetic mx-auto mt-4 inline-flex w-full items-center justify-center gap-2 px-6 py-3 text-sm font-semibold">
+            <a href="/api/client-downloads/android" className="btn-primary btn-magnetic mx-auto mt-4 inline-flex w-full items-center justify-center gap-2 px-6 py-3 text-sm font-semibold">
               <Download size={15} />
               直接下载 APK
             </a>

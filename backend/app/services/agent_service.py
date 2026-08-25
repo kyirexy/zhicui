@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -15,13 +16,18 @@ from sqlalchemy.orm import Session
 from app.models.agent_runtime import AgentTurn
 from app.models.agent_thread import AgentMessage, AgentThread
 from app.models.note import Note
+from app.models.plan import Plan
 from app.models.user import User
 from app.services import (
     agent_video_analysis_service,
     ai_juicer,
+    plan_service,
     video_source_ledger_service,
 )
 from app.services.agent_tool_runtime import AgentToolExecutor
+
+
+logger = logging.getLogger(__name__)
 
 
 SOURCE_LIMIT = 100
@@ -635,6 +641,42 @@ def resolve_source_snapshot(
     )
 
 
+def suggest_starter_questions(
+    db: Session,
+    *,
+    user_id: str,
+    scope: str,
+    source_ids: list[str] | None = None,
+    timezone_name: str = "Asia/Shanghai",
+) -> dict[str, Any]:
+    """Generate starter questions from the caller's frozen transcript scope."""
+    notes, available_count, truncated, scope_label = resolve_source_snapshot(
+        db,
+        user_id=user_id,
+        scope=scope,
+        source_ids=source_ids,
+        timezone_name=timezone_name,
+    )
+    if not notes:
+        raise ValueError(f"{scope_label}里还没有文案就绪的视频")
+    questions = ai_juicer.suggest_library_questions([
+        {
+            "note_id": note.id,
+            "title": note.video_title or "未命名视频",
+            "transcript": str(note.transcript_raw or ""),
+        }
+        for note in notes
+    ])
+    return {
+        "questions": questions,
+        "source_count": len(notes),
+        "available_count": available_count,
+        "source_scope": scope if scope in SOURCE_SCOPES else "all_ready",
+        "scope_label": scope_label,
+        "truncated": truncated,
+    }
+
+
 def create_thread(
     db: Session,
     *,
@@ -643,7 +685,37 @@ def create_thread(
     source_ids: list[str] | None = None,
     title: str = "",
     timezone_name: str = "Asia/Shanghai",
+    context_type: str = "video",
+    context_id: str | None = None,
 ) -> AgentThread:
+    normalized_context = "plan" if context_type == "plan" else "video"
+    if normalized_context == "plan":
+        clean_context_id = str(context_id or "").strip()
+        plan = db.query(Plan).filter(
+            Plan.id == clean_context_id,
+            Plan.user_id == user_id,
+        ).first()
+        if plan is None:
+            raise ValueError("计划不存在")
+        clean_title = title.strip()[:256] or f"调整计划：{plan.title}"
+        thread = AgentThread(
+            user_id=user_id,
+            title=clean_title,
+            scope_type="selected",
+            scope_label="当前计划",
+            source_ids_json="[]",
+            source_available_count=0,
+            source_selected_count=0,
+            source_truncated=False,
+            context_type="plan",
+            context_id=plan.id,
+            status="ready",
+        )
+        db.add(thread)
+        db.commit()
+        db.refresh(thread)
+        return thread
+
     notes, available_count, truncated, scope_label = resolve_source_snapshot(
         db,
         user_id=user_id,
@@ -664,6 +736,8 @@ def create_thread(
         source_available_count=available_count,
         source_selected_count=len(notes),
         source_truncated=truncated,
+        context_type="video",
+        context_id=None,
         status="ready",
     )
     db.add(thread)
@@ -725,6 +799,57 @@ def _message_count(db: Session, thread_id: str, user_id: str) -> int:
     )
 
 
+def _reconcile_terminal_durable_turn(
+    db: Session,
+    thread: AgentThread,
+    *,
+    active_turn: AgentTurn | None,
+) -> bool:
+    """Repair a thread left running after its durable Turn became terminal.
+
+    A legacy, non-durable request may legitimately have ``thread.status`` set
+    to ``running`` without an AgentTurn. We only repair when the latest durable
+    Turn is terminal and is at least as new as the thread row. That timestamp
+    ordering proves the terminal Turn superseded the visible running state.
+    """
+    if thread.status != "running" or active_turn is not None:
+        return False
+    latest_turn = (
+        db.query(AgentTurn)
+        .filter(
+            AgentTurn.thread_id == thread.id,
+            AgentTurn.user_id == thread.user_id,
+        )
+        .order_by(AgentTurn.updated_at.desc(), AgentTurn.created_at.desc())
+        .first()
+    )
+    if latest_turn is None or latest_turn.status not in {
+        "completed", "failed", "cancelled"
+    }:
+        return False
+    latest_updated = _aware_utc(latest_turn.updated_at)
+    thread_updated = _aware_utc(thread.updated_at)
+    if (
+        latest_updated is None
+        or thread_updated is None
+        or latest_updated < thread_updated
+    ):
+        return False
+
+    repaired_status = "ready" if latest_turn.status == "completed" else "failed"
+    logger.warning(
+        "修复 Agent 幽灵运行状态: thread_id=%s turn_id=%s turn_status=%s",
+        thread.id,
+        latest_turn.id,
+        latest_turn.status,
+    )
+    thread.status = repaired_status
+    thread.updated_at = _utcnow()
+    db.commit()
+    db.refresh(thread)
+    return True
+
+
 def serialize_thread(
     db: Session,
     thread: AgentThread,
@@ -732,7 +857,30 @@ def serialize_thread(
     include_messages: bool = False,
     include_sources: bool = False,
 ) -> dict[str, Any]:
+    active_turn = (
+        db.query(AgentTurn)
+        .filter(
+            AgentTurn.thread_id == thread.id,
+            AgentTurn.user_id == thread.user_id,
+            AgentTurn.status.in_(("queued", "running", "retry_wait")),
+        )
+        .order_by(AgentTurn.created_at.desc())
+        .first()
+    )
+    _reconcile_terminal_durable_turn(db, thread, active_turn=active_turn)
     data = thread.to_dict()
+    if thread.context_type == "plan" and thread.context_id:
+        plan = db.query(Plan).filter(
+            Plan.id == thread.context_id,
+            Plan.user_id == thread.user_id,
+        ).first()
+        data["context"] = {
+            "type": "plan",
+            "id": thread.context_id,
+            "title": plan.title if plan is not None else "计划已删除",
+            "available": plan is not None,
+            "plan": plan.to_dict() if plan is not None else None,
+        }
     data["source_scope"] = thread.scope_type
     data["source_count"] = thread.source_selected_count
     data["message_count"] = _message_count(db, thread.id, thread.user_id)
@@ -756,16 +904,6 @@ def serialize_thread(
         ).isoformat().replace("+00:00", "Z")
         if last_message is not None and last_message.created_at
         else None
-    )
-    active_turn = (
-        db.query(AgentTurn)
-        .filter(
-            AgentTurn.thread_id == thread.id,
-            AgentTurn.user_id == thread.user_id,
-            AgentTurn.status.in_(("queued", "running", "retry_wait")),
-        )
-        .order_by(AgentTurn.created_at.desc())
-        .first()
     )
     data["active_turn"] = active_turn.to_dict() if active_turn is not None else None
     if include_messages:
@@ -1026,6 +1164,209 @@ def _persist_answer_result(
     return assistant_message
 
 
+def _plan_preview_answer(preview: dict[str, Any]) -> str:
+    diff = preview.get("diff") if isinstance(preview.get("diff"), dict) else {}
+    additions = len(diff.get("additions") or [])
+    modifications = len(diff.get("modifications") or [])
+    removals = len(diff.get("removals") or [])
+    preserved = int(diff.get("completed_tasks_preserved") or 0)
+    summary = str(preview.get("change_summary") or "已生成计划调整预览").strip()
+    return (
+        f"{summary}\n\n"
+        f"这份预览包含：新增 {additions} 项、调整 {modifications} 项、"
+        f"移除 {removals} 项；保留 {preserved} 条已完成记录。\n\n"
+        "我还没有修改计划。请检查下方变更，确认后才会应用。"
+    )
+
+
+def _ask_plan_thread(
+    db: Session,
+    *,
+    thread: AgentThread,
+    content: str,
+    progress_callback: AgentProgressCallback | None,
+    answer_delta: Callable[[str], None] | None,
+    turn_id_override: str | None,
+) -> tuple[AgentMessage, AgentMessage]:
+    plan = plan_service.get_plan(
+        db,
+        str(thread.context_id or ""),
+        user_id=thread.user_id,
+    )
+    if plan is None:
+        thread.status = "failed"
+        thread.updated_at = _utcnow()
+        db.commit()
+        raise ValueError("当前计划已删除或无权访问")
+
+    turn_id = turn_id_override or str(uuid.uuid4())
+    user_message = AgentMessage(
+        thread_id=thread.id,
+        user_id=thread.user_id,
+        turn_id=turn_id,
+        role="user",
+        content=content[:600],
+    )
+    db.add(user_message)
+    db.commit()
+    db.refresh(user_message)
+    _emit_progress(
+        progress_callback,
+        "reading",
+        f"正在读取计划《{plan.title}》",
+        context_type="plan",
+        plan_id=plan.id,
+    )
+
+    note = (
+        db.query(Note).filter(
+            Note.id == plan.note_id,
+            Note.user_id == thread.user_id,
+        ).first()
+        if plan.note_id
+        else None
+    )
+    try:
+        generated = ai_juicer.generate_or_revise_plan(
+            title=note.video_title if note else plan.title,
+            transcript=note.transcript_raw if note else None,
+            ai_summary=note.ai_summary if note else None,
+            instruction=content,
+            existing_plan=plan.to_dict(),
+        )
+        proposed = generated["plan"]
+        fields, tasks, total_days = ai_juicer.plan_to_storage(proposed)
+        preview = plan_service.build_coaching_preview(
+            plan,
+            proposed_title=str(proposed.get("goal") or plan.title),
+            proposed_fields=fields,
+            proposed_tasks=tasks,
+            proposed_days=(
+                proposed.get("days")
+                if isinstance(proposed.get("days"), list)
+                else []
+            ),
+            proposed_total_days=total_days,
+            change_summary=generated["change_summary"],
+        )
+        preview["source_context"] = generated.get("source_context") or {}
+        answer = _plan_preview_answer(preview)
+        if answer_delta is not None:
+            for index in range(0, len(answer), 96):
+                answer_delta(answer[index:index + 96])
+        result = {
+            "answer": answer,
+            "type": "plan_change_preview",
+            "plan_change": {
+                **preview,
+                "state": "pending",
+            },
+            "source_context": {
+                "context_type": "plan",
+                "plan_id": plan.id,
+                "plan_title": plan.title,
+            },
+        }
+        assistant_message = _persist_answer_result(
+            db,
+            thread=thread,
+            user_message=user_message,
+            notes=[],
+            result=result,
+        )
+    except Exception:
+        db.rollback()
+        persisted = db.query(AgentMessage).filter(
+            AgentMessage.id == user_message.id,
+            AgentMessage.user_id == thread.user_id,
+        ).first()
+        if persisted is not None:
+            db.delete(persisted)
+        persisted_thread = db.query(AgentThread).filter(
+            AgentThread.id == thread.id,
+            AgentThread.user_id == thread.user_id,
+        ).first()
+        if persisted_thread is not None:
+            persisted_thread.status = "failed"
+            persisted_thread.updated_at = _utcnow()
+        db.commit()
+        raise
+
+    if thread.title.startswith("调整计划："):
+        thread.title = content[:40]
+        db.commit()
+        db.refresh(thread)
+    _emit_progress(
+        progress_callback,
+        "completed",
+        "计划调整预览已保存，等待你确认",
+        assistant_message_id=assistant_message.id,
+        context_type="plan",
+        plan_id=plan.id,
+    )
+    return user_message, assistant_message
+
+
+def apply_plan_change_message(
+    db: Session,
+    *,
+    message_id: str,
+    user_id: str,
+) -> tuple[Plan, AgentMessage]:
+    message = db.query(AgentMessage).filter(
+        AgentMessage.id == message_id,
+        AgentMessage.user_id == user_id,
+        AgentMessage.role == "assistant",
+    ).with_for_update().first()
+    if message is None:
+        raise ValueError("计划变更预览不存在")
+    thread = db.query(AgentThread).filter(
+        AgentThread.id == message.thread_id,
+        AgentThread.user_id == user_id,
+        AgentThread.context_type == "plan",
+    ).first()
+    if thread is None:
+        raise ValueError("这条消息不属于计划会话")
+
+    result = _safe_json_dict(message.result_json)
+    change = result.get("plan_change")
+    if (
+        str(result.get("type") or "") != "plan_change_preview"
+        or not isinstance(change, dict)
+    ):
+        raise ValueError("这条消息不包含可应用的计划预览")
+    plan_id = str(change.get("plan_id") or "")
+    if plan_id != str(thread.context_id or ""):
+        raise ValueError("计划预览与当前会话不匹配")
+    plan = plan_service.get_plan(db, plan_id, user_id=user_id)
+    if plan is None:
+        raise ValueError("计划不存在")
+    if str(change.get("state") or "pending") == "applied":
+        return plan, message
+
+    operations = change.get("operations")
+    if not isinstance(operations, list):
+        raise ValueError("计划预览内容无效")
+    applied = plan_service.apply_coaching_preview(
+        db,
+        plan_id=plan_id,
+        user_id=user_id,
+        base_updated_at=str(change.get("base_updated_at") or ""),
+        operations=operations,
+    )
+    if applied is None:
+        raise ValueError("计划不存在")
+    change["state"] = "applied"
+    change["applied_at"] = _utcnow().isoformat().replace("+00:00", "Z")
+    change["applied_plan_updated_at"] = applied.to_dict().get("updated_at")
+    result["plan_change"] = change
+    message.result_json = json.dumps(result, ensure_ascii=False)
+    db.commit()
+    db.refresh(message)
+    db.refresh(applied)
+    return applied, message
+
+
 def _video_analysis_terminal_payload(
     db: Session,
     *,
@@ -1277,6 +1618,7 @@ def ask_thread(
     turn_id_override: str | None = None,
     history_override: list[dict[str, str]] | None = None,
     tool_executor: AgentToolExecutor | None = None,
+    validated_stream_only: bool = False,
 ) -> tuple[AgentMessage, AgentMessage]:
     clean_content = content.strip()
     if not clean_content:
@@ -1357,6 +1699,15 @@ def ask_thread(
     db.refresh(thread)
 
     notes = _thread_notes(db, thread)
+    if thread.context_type == "plan":
+        return _ask_plan_thread(
+            db,
+            thread=thread,
+            content=clean_content,
+            progress_callback=progress_callback,
+            answer_delta=answer_delta,
+            turn_id_override=turn_id_override,
+        )
     if not notes:
         thread.status = "failed"
         thread.updated_at = _utcnow()
@@ -1491,13 +1842,33 @@ def ask_thread(
             progress_callback=progress_callback,
             answer_delta=answer_delta,
             tool_executor=tool_executor,
+            validated_stream_only=validated_stream_only,
         )
     except Exception:
         # The browser presents this turn as retryable. Do not leave behind a
         # persisted user-only turn that would be duplicated on retry/refresh.
-        db.delete(user_message)
-        thread.status = "failed"
-        thread.updated_at = _utcnow()
+        # A durable event write may be the failing operation. Roll it back
+        # before cleanup so SQLAlchemy does not turn the useful error into a
+        # PendingRollbackError and strand the thread in `running`.
+        db.rollback()
+        persisted_user_message = (
+            db.query(AgentMessage)
+            .filter(
+                AgentMessage.id == user_message.id,
+                AgentMessage.thread_id == thread.id,
+                AgentMessage.user_id == thread.user_id,
+            )
+            .first()
+        )
+        if persisted_user_message is not None:
+            db.delete(persisted_user_message)
+        persisted_thread = db.query(AgentThread).filter(
+            AgentThread.id == thread.id,
+            AgentThread.user_id == thread.user_id,
+        ).first()
+        if persisted_thread is not None:
+            persisted_thread.status = "failed"
+            persisted_thread.updated_at = _utcnow()
         db.commit()
         raise
 

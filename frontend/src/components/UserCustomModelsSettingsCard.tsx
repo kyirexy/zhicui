@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Bot,
   Check,
   CircleDashed,
   Cloud,
@@ -16,6 +15,7 @@ import {
   TestTube2,
   Trash,
 } from 'lucide-react';
+import AIModelIcon from '@/components/AIModelIcon';
 import {
   createUserCustomChatModel,
   deleteUserCustomChatModel,
@@ -239,7 +239,9 @@ export default function UserCustomModelsSettingsCard() {
                     onClick={() => activatePlatform(item.id)}
                     disabled={busy === 'platform'}
                   >
-                    <span className={styles.itemIcon} aria-hidden="true"><Bot size={17} /></span>
+                    <span className={styles.itemIcon} aria-hidden="true">
+                      <AIModelIcon modelId={item.icon_key} name={item.name} size={18} />
+                    </span>
                     <span className={styles.itemCopy}>
                       <span className={styles.itemTitle}>
                         <strong>{item.name}</strong>
@@ -330,7 +332,9 @@ export default function UserCustomModelsSettingsCard() {
                   const selected = item.is_selected;
                   return (
                     <div key={item.id} className={`${styles.customItem} ${selected ? styles.itemSelected : ''}`}>
-                      <span className={styles.itemIcon} aria-hidden="true"><Cloud size={17} /></span>
+                      <span className={styles.itemIcon} aria-hidden="true">
+                        <AIModelIcon code={`custom:${item.id}`} modelId={item.model} name={item.name} provider={item.provider_name} size={18} />
+                      </span>
                       <span className={styles.itemCopy}>
                         <span className={styles.itemTitle}>
                           <strong>{item.name || item.provider_name}</strong>

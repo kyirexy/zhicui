@@ -94,10 +94,23 @@ class ChatModelCatalogAndBillingTests(unittest.TestCase):
         self.assertEqual(offering.name, "免费模型")
         self.assertEqual(offering.model_id, "platform-model-v1")
         payload = catalog.serialize_user(self.db, offering, self.user.id)
+        self.assertEqual(payload["icon_key"], "unknown")
         self.assertNotIn("model_id", payload)
         self.assertNotIn("provider_mode", payload)
         self.assertNotIn("api_key", str(payload))
         self.assertEqual(payload["free_remaining_today"], 30)
+
+    def test_icon_key_recognizes_published_model_brands(self) -> None:
+        cases = {
+            "deepseek-ai/DeepSeek-V3": "deepseek",
+            "oc/mimo-v2.5-free": "mimo",
+            "oc/hy3-free": "hunyuan",
+            "felo/felo-chat": "felo",
+        }
+        for model_id, expected in cases.items():
+            with self.subTest(model_id=model_id):
+                row = ChatModelOffering(code="brand-test", name="免费模型", model_id=model_id)
+                self.assertEqual(catalog._icon_key(row), expected)
 
     def test_admin_rejects_automatic_model_ids(self) -> None:
         for model_id in ("auto", "auto/best-free"):

@@ -138,7 +138,7 @@ def _source_meta(item: dict[str, Any]) -> dict[str, Any]:
         or str(item.get("recorded_at") or "").strip()
         or _iso_now()
     )
-    return {
+    metadata = {
         "source_kind": "douyin-library",
         "platform": "douyin",
         "source_url": item["source_url"],
@@ -153,6 +153,13 @@ def _source_meta(item: dict[str, Any]) -> dict[str, Any]:
         # This is the first reliable time the item entered Zhicui's text store.
         "first_seen_at": source_synced_at,
     }
+    transcript_source = str(item.get("transcript_source") or "").strip()
+    transcript_notice = str(item.get("transcript_notice") or "").strip()
+    if transcript_source:
+        metadata["transcript_source"] = transcript_source
+    if transcript_notice:
+        metadata["transcript_notice"] = transcript_notice
+    return metadata
 
 
 def _video_info(item: dict[str, Any]) -> dict[str, Any]:
@@ -162,6 +169,17 @@ def _video_info(item: dict[str, Any]) -> dict[str, Any]:
         "download_url": item["source_url"],
         "platform": "douyin",
     }
+
+
+def _metadata_transcript_fallback(item: dict[str, Any]) -> str:
+    """Build a truthful text fallback for silent, caption-led Douyin works."""
+    title = str(item.get("title") or "").strip()
+    caption = str(item.get("caption") or "").strip()
+    if len(caption) < 12:
+        return ""
+    if title and title not in caption:
+        return f"【作品标题】\n{title}\n\n【作品发布文案】\n{caption}"
+    return f"【作品发布文案】\n{caption}"
 
 
 def _generate_ai_result(
@@ -268,15 +286,33 @@ def extract_library_item(
             with gate:
                 if progress:
                     progress("transcribing")
-                transcript = video_extractor.extract_media_url_transcript(
-                    douyin_library.companion_media_url(item["aweme_id"]),
-                    asr_config["api_key"],
-                    asr_config["api_base_url"],
-                    asr_config["model"],
-                    request_headers=douyin_library.companion_headers(
-                        session_scope,
-                    ),
-                )
+                try:
+                    transcript = video_extractor.extract_media_url_transcript(
+                        douyin_library.companion_media_url(item["aweme_id"]),
+                        asr_config["api_key"],
+                        asr_config["api_base_url"],
+                        asr_config["model"],
+                        request_headers=douyin_library.companion_headers(
+                            session_scope,
+                        ),
+                    )
+                except RuntimeError as exc:
+                    # Short Douyin works are often silent and communicate through
+                    # on-screen copy plus their publishing caption. In that case
+                    # cloud ASR truthfully returns no speech. Preserve the creator's
+                    # own text as a searchable document instead of marking the item
+                    # as a generic extraction failure. Media/network failures still
+                    # raise normally and remain retryable.
+                    fallback = (
+                        _metadata_transcript_fallback(item)
+                        if "云端 ASR 返回空文案" in str(exc)
+                        else ""
+                    )
+                    if not fallback:
+                        raise
+                    transcript = fallback
+                    item["transcript_source"] = "creator-caption"
+                    item["transcript_notice"] = "视频未识别到有效语音，文稿来自作品发布文案"
         if not transcript.strip():
             raise RuntimeError("语音识别没有返回文案")
 

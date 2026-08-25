@@ -40,7 +40,11 @@ from app.services import (
     library_hidden_service,
     user_ai_provider_service,
     settings_service,
+    plan_service,
 )
+
+
+_DURABLE_STREAM_POLL_SECONDS = 0.05
 
 
 router = APIRouter(prefix="/api/agent", tags=["video-agent"])
@@ -112,11 +116,46 @@ def _answer_stream_chunks(content: str) -> list[str]:
     return chunks
 
 
-def _durable_turn_stream(turn_id: str, user_id: str):
+def _project_durable_event(turn, event) -> dict[str, Any] | None:
+    """Map one persisted runtime event onto the public SSE contract."""
+    payload = event.payload
+    if event.event_type == "turn.answer.delta":
+        delta = str(payload.get("delta") or "")
+        if not delta:
+            return None
+        return {
+            "type": "delta",
+            "turn_id": turn.id,
+            "event_seq": event.seq,
+            "delta": delta,
+            "chunk_index": payload.get("chunk_index"),
+        }
+    return {
+        "type": "progress",
+        "turn_id": turn.id,
+        "event_seq": event.seq,
+        "event_type": event.event_type,
+        "stage": event.phase,
+        "message": event.message,
+        "resolved_mode": turn.resolved_mode,
+        **payload,
+    }
+
+
+def _durable_turn_stream(
+    turn_id: str,
+    user_id: str,
+    *,
+    initial_after_seq: int = 0,
+):
     """Replay committed Agent V2 events, then follow until terminal."""
-    after_seq = 0
+    after_seq = max(0, initial_after_seq)
     last_keepalive = time.monotonic()
-    yield _sse_data({"type": "turn", "turn_id": turn_id, "event_seq": 0})
+    yield _sse_data({
+        "type": "turn",
+        "turn_id": turn_id,
+        "event_seq": after_seq,
+    })
     while True:
         with SessionLocal() as stream_db:
             turn = agent_runtime_service.get_turn(stream_db, turn_id, user_id)
@@ -127,16 +166,9 @@ def _durable_turn_stream(turn_id: str, user_id: str):
                 stream_db, turn=turn, after_seq=after_seq
             ):
                 after_seq = event.seq
-                payload = event.payload
-                yield _sse_data({
-                    "type": "progress",
-                    "turn_id": turn.id,
-                    "event_seq": event.seq,
-                    "stage": event.phase,
-                    "message": event.message,
-                    "resolved_mode": turn.resolved_mode,
-                    **payload,
-                })
+                projected = _project_durable_event(turn, event)
+                if projected is not None:
+                    yield _sse_data(projected)
             if turn.status == "completed":
                 thread = agent_service.get_thread(stream_db, turn.thread_id, user_id)
                 user_message = stream_db.query(AgentMessage).filter(
@@ -168,13 +200,16 @@ def _durable_turn_stream(turn_id: str, user_id: str):
                     "turn_id": turn.id,
                     "event_seq": after_seq,
                     "status": 409 if turn.status == "cancelled" else 502,
-                    "message": turn.error_message or ("研究任务已取消" if turn.status == "cancelled" else "视频 Agent 暂时没有完成回答"),
+                    "message": turn.error_message or ("本次生成已停止" if turn.status == "cancelled" else "视频 Agent 暂时没有完成回答"),
                 })
                 return
         if time.monotonic() - last_keepalive >= 15:
             yield ": keep-alive\n\n"
             last_keepalive = time.monotonic()
-        time.sleep(0.5)
+        # Persist first, then follow at low latency. The browser still applies
+        # frame-level backpressure, so faster discovery does not create one
+        # React render per database event.
+        time.sleep(_DURABLE_STREAM_POLL_SECONDS)
 
 
 class ThreadCreateRequest(BaseModel):
@@ -185,6 +220,8 @@ class ThreadCreateRequest(BaseModel):
     ] = "all_ready"
     source_ids: list[str] = Field(default_factory=list, max_length=100)
     timezone: str = Field(default="Asia/Shanghai", max_length=64)
+    context_type: Literal["video", "plan"] = "video"
+    context_id: str | None = Field(default=None, max_length=36)
 
 
 class ThreadUpdateRequest(BaseModel):
@@ -261,6 +298,15 @@ class SourceBatchDeleteRequest(BaseModel):
     note_ids: list[str] = Field(..., min_length=1, max_length=50)
 
 
+class StarterQuestionsRequest(BaseModel):
+    source_scope: Literal[
+        "all", "all_ready", "yesterday", "yesterday_new",
+        "collect", "like", "post", "selected",
+    ] = "all_ready"
+    source_ids: list[str] = Field(default_factory=list, max_length=100)
+    timezone: str = Field(default="Asia/Shanghai", max_length=64)
+
+
 @router.get("/sources")
 def list_agent_sources(
     scope: Literal[
@@ -296,6 +342,25 @@ def list_agent_sources(
             timezone_name=timezone,
             limit=limit,
             include_ids=clean_include_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _ok(result)
+
+
+@router.post("/starter-questions")
+def generate_agent_starter_questions(
+    body: StarterQuestionsRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    try:
+        result = agent_service.suggest_starter_questions(
+            db,
+            user_id=current_user.id,
+            scope=body.source_scope,
+            source_ids=body.source_ids,
+            timezone_name=body.timezone,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -418,6 +483,8 @@ def create_agent_thread(
             source_ids=body.source_ids,
             title=body.title,
             timezone_name=body.timezone,
+            context_type=body.context_type,
+            context_id=body.context_id,
         )
     except ValueError as exc:
         message = str(exc)
@@ -479,6 +546,27 @@ def delete_agent_thread(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _ok({"deleted": True})
+
+
+@router.post("/messages/{message_id}/plan-change/apply")
+def apply_agent_plan_change(
+    message_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    try:
+        plan, message = agent_service.apply_plan_change_message(
+            db,
+            message_id=message_id,
+            user_id=current_user.id,
+        )
+    except plan_service.PlanConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        detail = str(exc)
+        status = 404 if "不存在" in detail else 422
+        raise HTTPException(status_code=status, detail=detail) from exc
+    return _ok({"plan": plan.to_dict(), "message": message.to_dict()})
 
 
 @router.post("/threads/{thread_id}/messages")
@@ -785,6 +873,7 @@ def list_agent_turn_events(
 def resume_agent_turn_stream(
     thread_id: str,
     turn_id: str,
+    after_seq: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
@@ -792,7 +881,11 @@ def resume_agent_turn_stream(
     if turn is None or turn.thread_id != thread_id:
         raise HTTPException(status_code=404, detail="Agent Turn 不存在")
     return StreamingResponse(
-        _durable_turn_stream(turn.id, str(current_user.id)),
+        _durable_turn_stream(
+            turn.id,
+            str(current_user.id),
+            initial_after_seq=after_seq,
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
     )

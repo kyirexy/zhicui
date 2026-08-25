@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   Users,
 } from 'lucide-react';
+import AIModelIcon from '@/components/AIModelIcon';
 import {
   getApplicationErrors,
   getLlmUsage,
@@ -355,9 +356,14 @@ function UsageView({
           <div className="divide-y divide-card-border">
             {report?.by_model.map(item => (
               <div key={`${item.provider}-${item.model}`} className="flex items-center justify-between gap-4 px-5 py-4">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-foreground">{item.model}</div>
-                  <div className="mt-1 text-xs text-foreground-muted">{item.calls} 次 · {item.provider}</div>
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-[var(--admin-surface-2)]">
+                    <AIModelIcon modelId={item.model} provider={item.provider} size={20} />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-foreground">{item.model}</div>
+                    <div className="mt-1 text-xs text-foreground-muted">{item.calls} 次 · {item.provider}</div>
+                  </div>
                 </div>
                 <div className="shrink-0 text-right">
                   <div className="text-sm font-bold text-foreground">{formatNumber(item.total_tokens)}</div>
@@ -395,7 +401,12 @@ function UsageView({
                   <td className="whitespace-nowrap p-3 text-xs text-foreground-muted">{formatDateTime(item.created_at)}</td>
                   <td className="p-3 font-medium text-foreground">{item.username}</td>
                   <td className="p-3 text-foreground-muted">{OPERATION_LABELS[item.operation] || item.operation}</td>
-                  <td className="p-3"><code className="text-xs text-foreground">{item.model}</code></td>
+                  <td className="p-3">
+                    <span className="inline-flex items-center gap-2">
+                      <AIModelIcon modelId={item.model} provider={item.provider} size={16} />
+                      <code className="text-xs text-foreground">{item.model}</code>
+                    </span>
+                  </td>
                   <td className="p-3 text-right text-foreground-muted">{formatNumber(item.prompt_tokens)}</td>
                   <td className="p-3 text-right text-foreground-muted">{formatNumber(item.completion_tokens)}</td>
                   <td className="p-3 text-right font-semibold text-foreground">{formatNumber(item.total_tokens)}</td>

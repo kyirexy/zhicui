@@ -128,7 +128,7 @@ function DesktopNavigation() {
 
         <nav className="desktop-sidebar__utility" aria-label="应用与支持">
           <a
-            href="/download/zhicui.apk"
+            href="/api/client-downloads/android"
             download
             className="desktop-sidebar__mobile-download"
             aria-label="下载知萃 Android 移动端安装包"
@@ -266,6 +266,8 @@ export default function DesktopAppFrame({ children }: { children: ReactNode }) {
     }
     if (pathname.startsWith('/harness')) {
       root.setAttribute('data-desktop-workspace', 'agent');
+    } else if (pathname.startsWith('/extract')) {
+      root.setAttribute('data-desktop-workspace', 'extract');
     } else if (pathname.startsWith('/settings')) {
       root.setAttribute('data-desktop-workspace', 'settings');
     } else if (pathname === '/library') {

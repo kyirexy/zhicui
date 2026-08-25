@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import json
+import re
+import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.services import ai_juicer
+from app.core.request_context import (
+    get_current_user_id,
+    reset_request_context,
+    set_request_context,
+)
 
 
 class AgentResponseParserTests(unittest.TestCase):
@@ -156,6 +164,100 @@ class LibraryAnswerContractTests(unittest.TestCase):
 
 
 class AgentPipelineBoundaryTests(unittest.TestCase):
+    def test_single_video_full_transcript_request_returns_verbatim_without_llm(self) -> None:
+        transcript = "第一段逐字原文。\n第二段逐字原文，标点和换行都要保留。"
+        progress: list[dict] = []
+
+        with (
+            patch.object(ai_juicer, "_call_llm") as llm,
+            patch.object(ai_juicer, "_call_llm_stream") as llm_stream,
+        ):
+            result = ai_juicer.answer_library_question(
+                sources=[{
+                    "note_id": "note-full",
+                    "title": "完整文案测试",
+                    "transcript": transcript,
+                    "ai_summary": None,
+                }],
+                question="完整的文案是什么？",
+                research_mode="fast",
+                web_scope="video_only",
+                progress_callback=progress.append,
+            )
+
+        llm.assert_not_called()
+        llm_stream.assert_not_called()
+        self.assertTrue(result["answer"].endswith(transcript))
+        self.assertEqual(result["source_context"]["transcript_chars"], len(transcript))
+        self.assertEqual(result["source_context"]["research_mode"], "direct")
+        self.assertEqual(result["citation_coverage"]["verified"], 1)
+        self.assertEqual(progress[-1]["stage"], "finalizing")
+
+    def test_single_video_broad_summary_repairs_rejected_claims_once(self) -> None:
+        quotes = [
+            "持续学习是通向超级智能的下一个台阶。",
+            "个人偏好应该保存在上下文记忆中。",
+            "具体事实应该交给工具层来处理。",
+        ]
+        transcript = "".join(quotes)
+        rejected = json.dumps({
+            "answer": "这是一段过短的总览。",
+            "claims": [{
+                "claim_id": f"C{index}",
+                "kind": "recurring",
+                "text": f"无效观点 {index}",
+                "explanation": "把单一视频错误地当成跨视频共识。",
+                "evidence": [{
+                    "note_id": "note-one",
+                    "quote": f"不存在的改写 {index}",
+                    "source": "transcript",
+                }],
+            } for index in range(1, 4)],
+            "evidence": [],
+            "web_source_ids": [],
+            "follow_up_questions": [],
+        }, ensure_ascii=False)
+        repaired = json.dumps({
+            "answer": "视频从能力、记忆和工具三个层面解释持续学习。",
+            "claims": [{
+                "claim_id": f"C{index}",
+                "kind": "fact",
+                "text": f"核心观点 {index}",
+                "explanation": f"这是第 {index} 个经过逐字依据支持的具体观点。",
+                "evidence": [{
+                    "note_id": "note-one",
+                    "quote": quote,
+                    "source": "transcript",
+                }],
+            } for index, quote in enumerate(quotes, start=1)],
+            "evidence": [],
+            "web_source_ids": [],
+            "follow_up_questions": [],
+        }, ensure_ascii=False)
+
+        with patch.object(
+            ai_juicer,
+            "_call_llm",
+            side_effect=[rejected, repaired],
+        ) as llm:
+            result = ai_juicer.answer_library_question(
+                sources=[{
+                    "note_id": "note-one",
+                    "title": "持续学习",
+                    "transcript": transcript,
+                    "ai_summary": None,
+                }],
+                question="这些视频反复出现的核心观点是什么？",
+                research_mode="fast",
+                web_scope="video_only",
+            )
+
+        self.assertEqual(llm.call_count, 2)
+        self.assertEqual(len(result["claims"]), 3)
+        self.assertEqual(len(result["evidence"]), 3)
+        self.assertIn("### 3. 核心观点 3", result["answer"])
+        self.assertIn("本轮只有 1 条视频", llm.call_args_list[0].kwargs["user"])
+
     def test_fast_independent_answer_skips_model_research_planner(self) -> None:
         answer = "快速模式直接使用本地检索计划组织回答。"
         synthesis = json.dumps(
@@ -204,6 +306,18 @@ class AgentPipelineBoundaryTests(unittest.TestCase):
             )
         )
 
+    def test_exact_enumeration_does_not_require_cross_source_claims(self) -> None:
+        self.assertFalse(
+            ai_juicer._question_requires_cross_source_claims(
+                "请完整列出25个机制元，并分别说明作用。"
+            )
+        )
+        self.assertTrue(
+            ai_juicer._question_requires_cross_source_claims(
+                "这些视频反复出现的核心观点是什么？"
+            )
+        )
+
     def test_streaming_answer_emits_one_delta_per_provider_chunk(self) -> None:
         provider_chunks = [
             '{"answer":"第一',
@@ -234,6 +348,333 @@ class AgentPipelineBoundaryTests(unittest.TestCase):
 
         self.assertEqual(streamed, ["第一", "段\n第二", "段"])
         self.assertEqual("".join(streamed), result["answer"])
+
+    def test_durable_stream_holds_raw_draft_until_canonical_validation(self) -> None:
+        provider_chunks = [
+            '{"answer":"总览正文。","evidence":[],',
+            '"web_source_ids":[],"grounded":false,',
+            '"follow_up_questions":[]}',
+        ]
+        streamed: list[str] = []
+
+        def fake_stream(**kwargs):
+            for chunk in provider_chunks:
+                kwargs["on_token"](chunk)
+            return "".join(provider_chunks)
+
+        with patch.object(ai_juicer, "_call_llm_stream", side_effect=fake_stream):
+            result = ai_juicer.answer_library_question(
+                sources=[{
+                    "note_id": "note-validated-stream",
+                    "title": "完整流测试",
+                    "transcript": "这是一条足够支持总览正文的视频文稿。",
+                    "ai_summary": None,
+                }],
+                question="请总结正文",
+                research_mode="fast",
+                web_scope="video_only",
+                answer_delta=streamed.append,
+                validated_stream_only=True,
+            )
+
+        self.assertEqual(streamed, [])
+        self.assertTrue(str(result["answer"]).strip())
+
+    def test_streamed_single_source_answer_does_not_block_on_claim_repair(self) -> None:
+        plan = {
+            "search_queries": ["升级路线"],
+            "subquestions": [],
+            "coverage": "broad",
+            "answer_plan": "完整说明升级路线",
+            "refined_question": "请完整说明升级路线",
+            "planner_mode": "test",
+        }
+        payload = json.dumps({
+            "answer": "这是已经随模型实时流出的完整叙述，不应为了补足观点数量再次重写。",
+            "claims": [],
+            "evidence": [],
+            "web_source_ids": [],
+            "grounded": False,
+            "follow_up_questions": [],
+        }, ensure_ascii=False)
+        streamed: list[str] = []
+
+        def fake_synthesis(_kwargs, answer_delta):
+            self.assertIsNotNone(answer_delta)
+            self.assertIn(
+                "claims 和 evidence 必须返回空数组",
+                str(_kwargs.get("user") or ""),
+            )
+            answer_delta("这是已经随模型实时流出的完整叙述，")
+            answer_delta("不应为了补足观点数量再次重写。")
+            return payload
+
+        with (
+            patch.object(ai_juicer, "_library_research_plan", return_value=plan),
+            patch.object(ai_juicer, "_run_library_synthesis", side_effect=fake_synthesis),
+            patch.object(ai_juicer, "_call_llm") as repair_call,
+        ):
+            result = ai_juicer.answer_library_question(
+                sources=[{
+                    "note_id": "note-stream-no-repair",
+                    "title": "单视频流式测试",
+                    "transcript": "视频完整说明了从工具到工人的升级路线。",
+                    "ai_summary": None,
+                }],
+                question="请完整说明升级路线",
+                research_mode="fast",
+                output_style="answer",
+                web_scope="video_only",
+                answer_delta=streamed.append,
+            )
+
+        repair_call.assert_not_called()
+        self.assertEqual("".join(streamed), result["answer"])
+        self.assertTrue(result["grounded"])
+        self.assertGreaterEqual(len(result["evidence"]), 1)
+        self.assertEqual(
+            result["source_context"]["evidence_mode"],
+            "server_selected",
+        )
+
+    def test_streamed_answer_survives_an_unclosed_provider_json_tail(self) -> None:
+        plan = {
+            "search_queries": ["通关策略"],
+            "subquestions": [],
+            "coverage": "focused",
+            "answer_plan": "说明通关策略",
+            "refined_question": "请说明通关策略",
+            "planner_mode": "test",
+        }
+        visible_answer = "这是已经完整显示给用户的通关策略，终态不得把它替换成资料不足。"
+        streamed: list[str] = []
+
+        def fake_synthesis(_kwargs, answer_delta):
+            self.assertIsNotNone(answer_delta)
+            answer_delta(visible_answer)
+            return '{"answer":"这是一个没有闭合的 JSON 尾部'
+
+        with (
+            patch.object(ai_juicer, "_library_research_plan", return_value=plan),
+            patch.object(ai_juicer, "_run_library_synthesis", side_effect=fake_synthesis),
+        ):
+            result = ai_juicer.answer_library_question(
+                sources=[{
+                    "note_id": "note-stream-prefix",
+                    "title": "终态前缀测试",
+                    "transcript": "这段视频文稿逐步说明了完整通关策略与升级原因。",
+                    "ai_summary": None,
+                }],
+                question="请说明通关策略",
+                research_mode="fast",
+                output_style="answer",
+                web_scope="video_only",
+                answer_delta=streamed.append,
+            )
+
+        self.assertEqual("".join(streamed), visible_answer)
+        self.assertEqual(result["answer"], visible_answer)
+
+    def test_streaming_projection_waits_for_claim_validation(self) -> None:
+        payload = {
+            "answer": "先给出总览。",
+            "claims": [
+                {
+                    "claim_id": "C1",
+                    "kind": "fact",
+                    "text": "机制元分为五类",
+                    "explanation": "每一类都描述一种可组合的基础操作。",
+                    "evidence": [{
+                        "note_id": "note-secret-1",
+                        "quote": "不应进入流式正文的逐字证据",
+                    }],
+                },
+                {
+                    "claim_id": "C2",
+                    "kind": "action",
+                    "text": "组合会形成复杂玩法",
+                    "explanation": "例如位移与修改组合后形成“移动”机制。",
+                    "evidence": [{
+                        "note_id": "note-secret-2",
+                        "quote": "另一条不应展示的证据",
+                    }],
+                },
+            ],
+            "follow_up_questions": [],
+        }
+        raw_payload = json.dumps(payload, ensure_ascii=True)
+        provider_chunks = [
+            raw_payload[:19],
+            raw_payload[19:47],
+            raw_payload[47:103],
+            raw_payload[103:181],
+            raw_payload[181:267],
+            raw_payload[267:],
+        ]
+        streamed: list[str] = []
+
+        def fake_stream(**kwargs):
+            for chunk in provider_chunks:
+                kwargs["on_token"](chunk)
+            return raw_payload
+
+        with patch.object(ai_juicer, "_call_llm_stream", side_effect=fake_stream):
+            returned = ai_juicer._run_library_synthesis(
+                {
+                    "system": "system",
+                    "user": "question",
+                    "operation": "boundary_test",
+                },
+                streamed.append,
+            )
+
+        visible = "".join(streamed)
+        self.assertEqual(returned, raw_payload)
+        self.assertEqual(visible, "先给出总览。")
+        self.assertNotIn("note-secret", visible)
+        self.assertNotIn("逐字证据", visible)
+        self.assertNotIn("follow_up_questions", visible)
+
+    def test_streaming_projection_never_emits_an_empty_claim_heading(self) -> None:
+        provider_chunks = [
+            '{"answer":"总览","claims":[{"claim_id":"C1","text":"',
+            '核心观点',
+            '","explanation":"',
+            '具体解释',
+            '","evidence":[]}],"follow_up_questions":[]}',
+        ]
+        streamed: list[str] = []
+
+        def fake_stream(**kwargs):
+            for chunk in provider_chunks:
+                kwargs["on_token"](chunk)
+            return "".join(provider_chunks)
+
+        with patch.object(ai_juicer, "_call_llm_stream", side_effect=fake_stream):
+            ai_juicer._run_library_synthesis(
+                {
+                    "system": "system",
+                    "user": "question",
+                    "operation": "empty_heading_boundary_test",
+                },
+                streamed.append,
+            )
+
+        self.assertEqual("".join(streamed), "总览")
+
+    def test_cross_source_answer_waits_for_validation_before_streaming(self) -> None:
+        sources = [
+            {
+                "note_id": f"note-{index}",
+                "title": f"第 {index} 条视频",
+                "transcript": f"第 {index} 条视频围绕同一个主题提供了一段可检索文稿。",
+                "ai_summary": None,
+            }
+            for index in range(1, 7)
+        ]
+        plan = {
+            "search_queries": ["共同主题"],
+            "subquestions": [],
+            "coverage": "broad",
+            "answer_plan": "归纳跨视频共同观点",
+            "refined_question": "这些视频反复出现的核心观点是什么？",
+            "planner_mode": "test",
+        }
+        synthesis = json.dumps({
+            "answer": "这是一段尚未完成引用校验的模型草稿。",
+            "claims": [],
+            "follow_up_questions": [],
+        }, ensure_ascii=False)
+        streamed: list[str] = []
+
+        with (
+            patch.object(ai_juicer, "_library_research_plan", return_value=plan),
+            patch.object(
+                ai_juicer,
+                "_deep_library_map",
+                return_value=([], 0, 0, {
+                    "batch_count": 0,
+                    "completed_batch_count": 0,
+                    "failed_batch_count": 0,
+                    "mapped_source_count": 6,
+                    "failed_source_count": 0,
+                    "budget_exhausted": False,
+                }),
+            ),
+            patch.object(
+                ai_juicer,
+                "_plan_web_research",
+                return_value={"needs_web": False, "queries": [], "reason": ""},
+            ),
+            patch.object(
+                ai_juicer,
+                "_run_library_synthesis",
+                return_value=synthesis,
+            ) as run_synthesis,
+            patch.object(ai_juicer, "_call_llm", side_effect=RuntimeError("no repair")),
+        ):
+            ai_juicer.answer_library_question(
+                sources=sources,
+                question="这些视频反复出现的核心观点是什么？",
+                research_mode="deep",
+                web_scope="video_only",
+                answer_delta=streamed.append,
+            )
+
+        self.assertIsNone(run_synthesis.call_args.args[1])
+        self.assertEqual(streamed, [])
+
+    def test_similar_game_question_requests_web_research(self) -> None:
+        self.assertTrue(ai_juicer._question_requests_web("同类的游戏都有什么呢？"))
+        self.assertTrue(ai_juicer._question_requests_web("还有哪些类似作品值得推荐？"))
+
+    def test_starter_questions_are_generated_from_the_complete_transcript(self) -> None:
+        transcript = (
+            "玩家先用勺子挖土，然后升级铲子并雇佣蘑菇工人。"
+            "解开颜色宝箱后获得兔耳朵，最终效率达到十五万泥土每秒。"
+        )
+        captured: dict = {}
+
+        def fake_call(**kwargs):
+            captured.update(kwargs)
+            return json.dumps({
+                "questions": [
+                    "玩家如何从勺子逐步升级到更高效率的工具？",
+                    "颜色宝箱和兔耳朵分别影响了哪些游戏机制？",
+                    "达到十五万泥土每秒前，资源分配策略经历了哪些变化？",
+                ],
+            }, ensure_ascii=False)
+
+        with patch.object(ai_juicer, "_call_llm", side_effect=fake_call):
+            questions = ai_juicer.suggest_library_questions([{
+                "note_id": "note-game",
+                "title": "我挖到了一亿斤土",
+                "transcript": transcript,
+            }])
+
+        self.assertEqual(len(questions), 3)
+        self.assertIn(transcript, captured["user"])
+        self.assertIn("颜色宝箱", questions[1])
+        self.assertNotEqual(questions[0], "这些视频反复出现的核心观点是什么？")
+
+    def test_starter_questions_use_a_source_specific_fallback(self) -> None:
+        with (
+            patch.object(ai_juicer, "_call_llm", side_effect=RuntimeError("offline")),
+            patch.object(
+                ai_juicer.error_log_service,
+                "record_exception_safely",
+                return_value=None,
+            ),
+        ):
+            questions = ai_juicer.suggest_library_questions([{
+                "note_id": "note-game",
+                "title": "深渊挖土挑战",
+                "transcript": "玩家升级道具、雇佣工人并最终通关游戏。",
+            }])
+
+        self.assertEqual(len(questions), 3)
+        self.assertIn("深渊挖土挑战", questions[0])
+        self.assertTrue(all(question.endswith("？") for question in questions))
 
     def test_reasoning_content_is_never_used_as_visible_output(self) -> None:
         response = SimpleNamespace(
@@ -370,6 +811,96 @@ class AgentPipelineBoundaryTests(unittest.TestCase):
         self.assertEqual(payload["findings"][0]["quote"], exact_quote)
         self.assertNotIn("gaps", payload)
         self.assertNotIn("note-404", findings[0])
+
+    def test_deep_map_runs_concurrently_keeps_order_and_reports_partial_failure(self) -> None:
+        supplied_sources = {
+            f"note-{index}": {
+                "title": f"来源 {index}",
+                "raw_transcript": f"逐字观点 {index}",
+                "transcript_context": f"逐字观点 {index}",
+                "summary_context": "",
+            }
+            for index in range(20)
+        }
+        source_blocks = [
+            f"note_id：note-{index}\n文稿片段：逐字观点 {index}"
+            for index in range(20)
+        ]
+        active = 0
+        maximum_active = 0
+        lock = threading.Lock()
+        observed_users: list[str | None] = []
+        progress: list[dict] = []
+
+        def fake_map_call(**kwargs):
+            nonlocal active, maximum_active
+            user = str(kwargs.get("user") or "")
+            note_ids = re.findall(r"note_id：(note-\d+)", user)
+            first_index = int(note_ids[0].split("-")[1])
+            with lock:
+                active += 1
+                maximum_active = max(maximum_active, active)
+                observed_users.append(get_current_user_id())
+            try:
+                time.sleep(0.04 if first_index == 0 else 0.01)
+                if first_index == 10:
+                    raise RuntimeError("provider batch failed")
+                return json.dumps({
+                    "findings": [{
+                        "claim": f"发现 {first_index}",
+                        "note_id": note_ids[0],
+                        "quote": f"逐字观点 {first_index}",
+                    }],
+                }, ensure_ascii=False)
+            finally:
+                with lock:
+                    active -= 1
+
+        tokens = set_request_context("concurrent-user", "/test/map")
+        try:
+            with patch.object(ai_juicer, "_call_llm", side_effect=fake_map_call):
+                findings, map_calls, validated_count, stats = (
+                    ai_juicer._deep_library_map(
+                        source_blocks,
+                        supplied_sources,
+                        "共同观点？",
+                        [],
+                        progress.append,
+                        return_stats=True,
+                    )
+                )
+        finally:
+            reset_request_context(tokens)
+
+        self.assertGreaterEqual(maximum_active, 2)
+        self.assertEqual(set(observed_users), {"concurrent-user"})
+        self.assertEqual(map_calls, 4)
+        self.assertEqual(validated_count, 3)
+        self.assertEqual(stats["completed_batch_count"], 3)
+        self.assertEqual(stats["failed_batch_count"], 1)
+        self.assertEqual(stats["mapped_source_count"], 15)
+        self.assertEqual(stats["failed_source_count"], 5)
+        ordered_note_ids = [
+            json.loads(item)["findings"][0]["note_id"]
+            for item in findings
+        ]
+        self.assertEqual(ordered_note_ids, ["note-0", "note-5", "note-15"])
+        event_types = [item.get("event_type") for item in progress]
+        self.assertEqual(event_types.count("turn.map.batch.started"), 4)
+        self.assertEqual(event_types.count("turn.map.batch.completed"), 3)
+        self.assertEqual(event_types.count("turn.map.batch.failed"), 1)
+
+    def test_deep_reduce_context_is_bounded(self) -> None:
+        items = [str(index) * 5_000 for index in range(30)]
+        selected = ai_juicer._bounded_synthesis_items(
+            items,
+            max_items=12,
+            max_chars=18_000,
+            per_item_chars=3_000,
+        )
+        self.assertLessEqual(len(selected), 12)
+        self.assertLessEqual(sum(len(item) for item in selected), 18_000)
+        self.assertTrue(all(len(item) <= 3_000 for item in selected))
 
     def test_invalid_citation_downgrades_grounding_and_trace_is_public(self) -> None:
         quote = "这是能够在候选文稿中逐字匹配的依据。"

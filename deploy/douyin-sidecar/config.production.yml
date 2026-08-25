@@ -18,14 +18,17 @@ progress:
   quiet_logs: true
 
 browser_fallback:
-  enabled: false
-  headless: false
+  enabled: true
+  headless: true
   max_scrolls: 240
   idle_rounds: 8
   wait_timeout_seconds: 600
 
 server:
   metadata_only: true
+  collection_resilience_enabled: true
+  collection_cooldown_seconds: 900
+  collection_cooldown_cap_seconds: 21600
   login_browser_concurrency: 2
   max_jobs: 500
   job_ttl_seconds: 86400

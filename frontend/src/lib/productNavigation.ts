@@ -1,6 +1,7 @@
 export type ProductDestinationId =
   | 'home'
   | 'library'
+  | 'extract'
   | 'creators'
   | 'harness'
   | 'knowledge'
@@ -35,9 +36,9 @@ export const PRODUCT_DESTINATIONS: ProductDestination[] = [
   {
     id: 'harness',
     href: '/harness',
-    label: '知萃 Harness',
-    mobileLabel: 'Harness',
-    description: '基于视频提问和研究',
+    label: '知萃 AI',
+    mobileLabel: 'AI 问答',
+    description: '基于视频资料提问和研究',
     group: 'knowledge-flow',
   },
   {
@@ -67,11 +68,20 @@ const CREATOR_DESTINATION: ProductDestination = {
   group: 'knowledge-flow',
 };
 
-/** 桌面端左侧导航可容纳独立博主入口；移动端继续保持五个主 Tab。 */
+const SINGLE_LINK_EXTRACT_DESTINATION: ProductDestination = {
+  id: 'extract',
+  href: '/extract',
+  label: '单条解析',
+  mobileLabel: '解析',
+  description: '粘贴一条链接并提取完整内容',
+  group: 'knowledge-flow',
+};
+
+/** 桌面端左侧导航容纳独立解析和博主入口；移动端继续保持五个主 Tab。 */
 export const DESKTOP_PRODUCT_DESTINATIONS: ProductDestination[] = PRODUCT_DESTINATIONS.flatMap(
   (destination) => (
     destination.id === 'library'
-      ? [destination, CREATOR_DESTINATION]
+      ? [destination, SINGLE_LINK_EXTRACT_DESTINATION, CREATOR_DESTINATION]
       : [destination]
   ),
 );
@@ -82,6 +92,7 @@ export function isProductDestinationActive(
 ): boolean {
   if (destination === 'home') return pathname === '/';
   if (destination === 'plans') return pathname.startsWith('/plans');
+  if (destination === 'extract') return pathname.startsWith('/extract');
   if (destination === 'creators') return pathname.startsWith('/library/creators');
   if (destination === 'library') return pathname.startsWith('/library');
   if (destination === 'harness') return pathname.startsWith('/harness');

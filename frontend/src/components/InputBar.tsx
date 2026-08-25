@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Link2, Loader2, AlertCircle, X, LogIn } from 'lucide-react';
 
@@ -9,6 +9,10 @@ interface InputBarProps {
   isLoading?: boolean;
   error?: string | null;
   showPlatformHint?: boolean;
+  variant?: 'default' | 'workspace';
+  placeholder?: string;
+  submitLabel?: string;
+  loadingLabel?: string;
   /** External URL to fill into the input (e.g. from sample links). Cleared after fill. */
   fillUrl?: string | null;
   onFillComplete?: () => void;
@@ -19,6 +23,10 @@ export default function InputBar({
   isLoading = false,
   error,
   showPlatformHint = true,
+  variant = 'default',
+  placeholder = '粘贴视频链接，提取知识卡片...',
+  submitLabel = '提取',
+  loadingLabel = '提取中',
   fillUrl,
   onFillComplete,
 }: InputBarProps) {
@@ -49,19 +57,6 @@ export default function InputBar({
     }
   }, [fillUrl, onFillComplete]);
 
-  // Paste detection
-  const handlePaste = useCallback(
-    (e: React.ClipboardEvent) => {
-      const pasted = e.clipboardData.getData('text');
-      if (pasted && isValidUrl(pasted)) {
-        setUrl(pasted);
-        e.preventDefault();
-        onSubmit(pasted);
-      }
-    },
-    [onSubmit],
-  );
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = url.trim();
@@ -83,7 +78,10 @@ export default function InputBar({
   };
 
   return (
-    <div className="w-full max-w-2xl mx-auto px-2 md:px-0">
+    <div
+      className="w-full max-w-2xl mx-auto px-2 md:px-0"
+      data-input-bar-variant={variant}
+    >
       <form onSubmit={handleSubmit} className="relative">
         {/* Mobile: stacked layout (input row + button row).
             Desktop (md+): original inline layout (input + button on one row).
@@ -93,7 +91,9 @@ export default function InputBar({
           {/* Input row */}
           <div className="flex items-center gap-2.5 md:gap-3 px-4 py-3.5 md:px-5 md:py-4">
             {/* Inner emerald glow on focus — spans full input area */}
-            <div className="absolute inset-0 bg-gradient-to-r from-accent-brand/[0.02] via-transparent to-accent-brand/[0.02] opacity-0 group-focus-within:opacity-100 transition-opacity duration-500 pointer-events-none" />
+            {variant === 'default' ? (
+              <div className="absolute inset-0 bg-gradient-to-r from-accent-brand/[0.02] via-transparent to-accent-brand/[0.02] opacity-0 group-focus-within:opacity-100 transition-opacity duration-500 pointer-events-none" />
+            ) : null}
 
             <Link2
               size={18}
@@ -104,9 +104,8 @@ export default function InputBar({
               type="text"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              onPaste={handlePaste}
               onKeyDown={handleKeyDown}
-              placeholder="粘贴视频链接，提取知识卡片..."
+              placeholder={placeholder}
               className="relative flex-1 bg-transparent outline-none text-foreground placeholder:text-foreground-muted text-base min-w-0"
               style={{ fontSize: '16px' }}
               disabled={isLoading}
@@ -130,10 +129,10 @@ export default function InputBar({
               {isLoading ? (
                 <>
                   <Loader2 size={16} className="animate-spin" />
-                  <span className="hidden sm:inline">提取中</span>
+                  <span className="hidden sm:inline">{loadingLabel}</span>
                 </>
               ) : (
-                <span>提取</span>
+                <span>{submitLabel}</span>
               )}
             </button>
           </div>
@@ -148,10 +147,10 @@ export default function InputBar({
               {isLoading ? (
                 <>
                   <Loader2 size={16} className="animate-spin" />
-                  <span>提取中...</span>
+                  <span>{loadingLabel}...</span>
                 </>
               ) : (
-                <span>提取知识卡片</span>
+                <span>{submitLabel}</span>
               )}
             </button>
           </div>
@@ -195,13 +194,4 @@ export default function InputBar({
       )}
     </div>
   );
-}
-
-function isValidUrl(str: string): boolean {
-  try {
-    const url = new URL(str);
-    return url.protocol === 'http:' || url.protocol === 'https:';
-  } catch {
-    return false;
-  }
 }

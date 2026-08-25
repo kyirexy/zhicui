@@ -14,6 +14,7 @@ import {
   PencilSimple,
   Plus,
   SpinnerGap,
+  Sparkle,
   Target,
   Trash,
 } from '@phosphor-icons/react';
@@ -34,7 +35,6 @@ import {
   getPlanTasks,
 } from '@/lib/types';
 import BottomSheet from '@/components/BottomSheet';
-import PlanCoachPanel from '@/components/plans/PlanCoachPanel';
 import PlanQuickCapture from '@/components/plans/PlanQuickCapture';
 import PlanTaskBoard from '@/components/plans/PlanTaskBoard';
 import PlanTodayView from '@/components/plans/PlanTodayView';
@@ -492,7 +492,23 @@ function PlanDetail({ id }: { id: string }) {
           <PlanTaskBoard plan={plan} onMutate={updateLocal} />
         </div>
         <aside className={`${styles.detailAside} ${styles.sticky}`}>
-          <PlanCoachPanel plan={plan} onMutate={updateLocal} />
+          <section className={styles.aiPlanEntry}>
+            <span className={styles.aiPlanEntryIcon} aria-hidden="true">
+              <Sparkle size={20} weight="duotone" />
+            </span>
+            <div>
+              <h2>需要重新安排？</h2>
+              <p>用一句话告诉知萃 AI 你的时间和优先级，确认后才会修改计划。</p>
+            </div>
+            <Link
+              href={`/harness?plan_id=${encodeURIComponent(plan.id)}&new=1`}
+              className={styles.aiPlanEntryLink}
+            >
+              <Sparkle size={17} weight="fill" />
+              让知萃 AI 帮我调整
+              <CaretRight size={16} />
+            </Link>
+          </section>
 
           {plan.fields.length > 0 && (
             <details className={styles.fieldsDisclosure}>

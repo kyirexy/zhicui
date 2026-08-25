@@ -16,6 +16,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import urljoin, urlparse
@@ -47,6 +48,8 @@ _DOUYIN_ID = re.compile(r"^[A-Za-z0-9_-]{12,192}$")
 _XHS_ID = re.compile(r"^[A-Za-z0-9_-]{8,192}$")
 _ACTIVE_CATALOG_CANCELS: dict[str, Callable[[], bool]] = {}
 _ACTIVE_CATALOG_CANCELS_LOCK = threading.Lock()
+_BILIBILI_CATALOG_LIMIT = 50_000
+_BILIBILI_VIDEO_ID = re.compile(r"^BV[0-9A-Za-z]{8,16}$", re.IGNORECASE)
 
 
 def _register_catalog_cancel(run_id: str, cancel: Callable[[], bool]) -> None:
@@ -204,7 +207,7 @@ def _bilibili_playlist(profile_url: str, limit: int) -> dict[str, Any]:
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise CreatorConnectorError("connector_unavailable", "B站博主连接器暂不可用") from exc
     if completed.returncode != 0:
-        raise CreatorConnectorError("creator_unavailable", "无法读取该 B站博主主页")
+        raise _bilibili_command_error(completed.stderr, catalog=False)
     try:
         data = json.loads(completed.stdout)
     except (TypeError, json.JSONDecodeError) as exc:
@@ -212,6 +215,142 @@ def _bilibili_playlist(profile_url: str, limit: int) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise CreatorConnectorError("invalid_upstream_response", "B站博主连接器返回格式异常")
     return data
+
+
+def _bilibili_command_error(stderr: str, *, catalog: bool) -> CreatorConnectorError:
+    lowered = str(stderr or "").lower()
+    if any(token in lowered for token in (
+        "request is rejected",
+        "request is blocked",
+        "too frequent",
+        "-799",
+        "(352)",
+        "(412)",
+    )):
+        return CreatorConnectorError(
+            "bilibili_risk_control",
+            "B站暂时限制了博主列表读取。账号资料不会丢失，请稍后再试，暂时不要连续刷新。",
+        )
+    return CreatorConnectorError(
+        "creator_unavailable",
+        "无法读取该 B站博主的全部作品" if catalog else "无法读取该 B站博主主页",
+    )
+
+
+def _discover_bilibili_catalog_fallback(
+    source: Any,
+    *,
+    on_item: Callable[[dict[str, Any], int, int | None], None] | None,
+    should_cancel: Callable[[], bool] | None,
+    run_id: str,
+) -> dict[str, Any]:
+    """Enumerate stable BVIDs with yt-dlp without resolving media streams."""
+    command = [
+        sys.executable,
+        "-m",
+        "yt_dlp",
+        "--flat-playlist",
+        "--lazy-playlist",
+        "--skip-download",
+        "--playlist-end",
+        str(_BILIBILI_CATALOG_LIMIT),
+        "--print",
+        "%(id)s",
+        "--no-warnings",
+        source.profile_url,
+    ]
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError as exc:
+        raise CreatorConnectorError(
+            "connector_unavailable", "B站全部作品连接器暂不可用"
+        ) from exc
+
+    def cancel_process() -> bool:
+        if process.poll() is not None:
+            return False
+        try:
+            process.terminate()
+            return True
+        except OSError:
+            return False
+
+    _register_catalog_cancel(run_id, cancel_process)
+    deadline = time.monotonic() + 10 * 60
+    stdout = ""
+    try:
+        while True:
+            if should_cancel is not None and should_cancel():
+                cancel_process()
+                raise CreatorConnectorError("cancelled", "博主目录同步已取消")
+            if time.monotonic() >= deadline:
+                cancel_process()
+                raise CreatorConnectorError(
+                    "connector_timeout", "B站全部作品读取超时"
+                )
+            try:
+                stdout, stderr = process.communicate(timeout=0.25)
+                break
+            except subprocess.TimeoutExpired:
+                continue
+    finally:
+        if process.poll() is None:
+            cancel_process()
+            try:
+                process.wait(timeout=3)
+            except (subprocess.TimeoutExpired, OSError):
+                process.kill()
+        _clear_catalog_cancel(run_id)
+
+    if process.returncode != 0:
+        raise _bilibili_command_error(stderr, catalog=True)
+
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_line in stdout.splitlines():
+        external_id = _safe_catalog_text(raw_line, 32)
+        if not _BILIBILI_VIDEO_ID.fullmatch(external_id):
+            continue
+        external_id = "BV" + external_id[2:]
+        if external_id in seen:
+            continue
+        seen.add(external_id)
+        item = {
+            "external_id": external_id,
+            "source_url": f"https://www.bilibili.com/video/{external_id}",
+            "title": f"B站作品 {external_id}",
+            "cover_url": "",
+            "description": "",
+            "author_name": _safe_catalog_text(
+                getattr(source, "display_name", ""), 160
+            ),
+            "published_at": None,
+            "duration_seconds": 0,
+            "order_index": len(items),
+            "parts": [],
+        }
+        items.append(item)
+        if on_item is not None:
+            on_item(item, len(items), None)
+
+    if not items:
+        raise CreatorConnectorError(
+            "empty_catalog_unverified", "B站没有返回可验证的公开作品"
+        )
+    return {
+        "items": items,
+        "complete": True,
+        "total_count": len(items),
+        "failures": [],
+        "connector": "yt-dlp-metadata-fallback",
+    }
 
 
 def resolve_creator(
@@ -556,17 +695,35 @@ def discover_catalog(
                 lambda: yutto_catalog_client.cancel_task(task_id_holder["value"]),
             )
 
+        yutto_error: yutto_catalog_client.YuttoCatalogError | None = None
         try:
-            return yutto_catalog_client.discover_bilibili_catalog(
+            result = yutto_catalog_client.discover_bilibili_catalog(
                 source.profile_url,
                 on_item=on_item,
                 should_cancel=should_cancel,
                 task_started=task_started,
             )
+            if result.get("items") or not result.get("complete"):
+                return result
         except yutto_catalog_client.YuttoCatalogError as exc:
-            raise CreatorConnectorError(exc.code, str(exc)) from exc
+            if exc.code == "cancelled":
+                raise CreatorConnectorError(exc.code, str(exc)) from exc
+            yutto_error = exc
         finally:
             _clear_catalog_cancel(run_id)
+        try:
+            return _discover_bilibili_catalog_fallback(
+                source,
+                on_item=on_item,
+                should_cancel=should_cancel,
+                run_id=run_id,
+            )
+        except CreatorConnectorError as fallback_error:
+            if yutto_error is not None:
+                raise CreatorConnectorError(
+                    yutto_error.code, "B站全部作品连接器暂时无法完成读取"
+                ) from fallback_error
+            raise
     raise CreatorConnectorError(
         "catalog_not_supported",
         "该平台首版暂不支持全量作品目录",

@@ -173,8 +173,91 @@ def connection_status(session_scope: str) -> dict[str, Any]:
             int(health.get("max_sync_count") or _MAX_SYNC_COUNT),
             _MAX_SYNC_COUNT,
         ),
+        "capabilities": [
+            str(value)[:64]
+            for value in (health.get("capabilities") or [])
+            if str(value) in {"creator_catalog", "collection_resilience"}
+        ],
+        "collection_resilience": _safe_collection_resilience(
+            health.get("collection_resilience")
+        ),
         "error": cookie_error,
     }
+
+
+def _safe_collection_resilience(value: Any) -> dict[str, Any]:
+    raw = value if isinstance(value, dict) else {}
+    return {
+        "enabled": bool(raw.get("enabled", False)),
+        "api_first": bool(raw.get("api_first", True)),
+        "browser_fallback": bool(raw.get("browser_fallback", False)),
+        "browser_headless": bool(raw.get("browser_headless", True)),
+        "cooldown_seconds": max(0, min(int(raw.get("cooldown_seconds") or 0), 21600)),
+        "cooldown_cap_seconds": max(
+            0, min(int(raw.get("cooldown_cap_seconds") or 0), 21600)
+        ),
+    }
+
+
+_SAFE_SYNC_ERROR_CODES = {
+    "",
+    "source_blocked",
+    "verification_required",
+    "session_expired",
+    "network_error",
+    "connector_error",
+}
+_SAFE_SYNC_CHANNELS = {"api", "browser", "circuit_breaker"}
+
+
+def _safe_job_diagnostics(job: dict[str, Any]) -> dict[str, Any]:
+    error_code = str(job.get("error_code") or "")
+    if error_code not in _SAFE_SYNC_ERROR_CODES:
+        error_code = "connector_error" if error_code else ""
+    raw_mode = str(job.get("source_mode") or job.get("mode") or "")
+    source_mode = "collect" if raw_mode == "collection" else raw_mode
+    if source_mode not in {"collect", "like", "post"}:
+        source_mode = "collect"
+    channel = str(job.get("channel") or "api")
+    if channel not in _SAFE_SYNC_CHANNELS:
+        channel = "api"
+    try:
+        retry_after = max(0, min(int(job.get("retry_after_seconds") or 0), 21600))
+    except (TypeError, ValueError):
+        retry_after = 0
+    return {
+        "error_code": error_code,
+        "source_mode": source_mode,
+        "channel": channel,
+        "fallback_attempted": bool(job.get("fallback_attempted", False)),
+        "retry_after_seconds": retry_after,
+        "needs_action": bool(job.get("needs_action", False)),
+    }
+
+
+_SAFE_JOB_FIELDS = {
+    "job_id",
+    "url",
+    "status",
+    "created_at",
+    "started_at",
+    "finished_at",
+    "total",
+    "success",
+    "failed",
+    "skipped",
+    "target",
+    "processed",
+    "error",
+    "mode",
+}
+
+
+def _safe_job_payload(job: dict[str, Any]) -> dict[str, Any]:
+    payload = {key: job.get(key) for key in _SAFE_JOB_FIELDS if key in job}
+    payload.update(_safe_job_diagnostics(job))
+    payload["mode"] = payload["source_mode"]
+    return payload
 
 
 def _local_media_url(path: str) -> str:
@@ -687,7 +770,7 @@ def trigger_collect(
     job.setdefault("failed", 0)
     job.setdefault("skipped", 0)
     job.setdefault("mode", safe_mode)
-    return job
+    return _safe_job_payload(job)
 
 
 def resolve_creator(session_scope: str, profile_url: str) -> dict[str, Any]:
@@ -884,4 +967,4 @@ def get_job(session_scope: str, job_id: str) -> dict[str, Any]:
     )
     if not isinstance(job, dict):
         raise DouyinLibraryError("下载器返回了无法识别的采集任务")
-    return job
+    return _safe_job_payload(job)

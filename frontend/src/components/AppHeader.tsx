@@ -7,6 +7,7 @@ import {
   DownloadSimple,
   GearSix,
   SignIn,
+  SignOut,
   UserCircle,
 } from '@phosphor-icons/react';
 import { useAuth } from '@/lib/hooks/AuthContext';
@@ -67,12 +68,30 @@ export default function AppHeader() {
           </div>
 
           <div className={styles.actions}>
-            {user?.is_admin && (
-              <Link href="/admin" className={styles.adminLink}>
-                <GearSix size={16} weight="light" aria-hidden="true" />
-                <span>管理端</span>
+            {!authLoading && user ? (
+              <div className={styles.accountGroup}>
+                <span className={styles.accountIdentity} title={user.email}>
+                  <UserCircle size={17} weight="fill" aria-hidden="true" />
+                  <span>{user.username || user.email}</span>
+                  {user.is_admin && <small>管理员</small>}
+                </span>
+                {user.is_admin && (
+                  <Link href="/admin" className={styles.adminLink}>
+                    <GearSix size={16} weight="light" aria-hidden="true" />
+                    <span>进入管理端</span>
+                  </Link>
+                )}
+                <button type="button" className={styles.logoutButton} onClick={logout}>
+                  <SignOut size={15} weight="light" aria-hidden="true" />
+                  <span>退出</span>
+                </button>
+              </div>
+            ) : !authLoading ? (
+              <Link href="/login" className={styles.loginLink}>
+                <SignIn size={16} weight="light" aria-hidden="true" />
+                <span>登录</span>
               </Link>
-            )}
+            ) : null}
             <a href="/#download" className={styles.downloadLink}>
               <DownloadSimple size={17} weight="light" />
               下载客户端

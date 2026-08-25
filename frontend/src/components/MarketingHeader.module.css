@@ -22,6 +22,7 @@
 .brand,
 .downloadLink,
 .adminLink,
+.loginLink,
 .links a {
   text-decoration: none;
 }
@@ -79,6 +80,44 @@
   gap: 0.3rem;
 }
 
+.accountGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.accountIdentity {
+  display: inline-flex;
+  min-height: 2.5rem;
+  max-width: 13rem;
+  padding: 0.5rem 0.72rem;
+  align-items: center;
+  gap: 0.4rem;
+  overflow: hidden;
+  border: 1px solid #e7e7e5;
+  border-radius: 0.72rem;
+  color: #4f4f56;
+  background: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.accountIdentity > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountIdentity small {
+  flex: none;
+  padding: 0.16rem 0.36rem;
+  border-radius: 999px;
+  color: var(--accent-brand);
+  background: color-mix(in srgb, var(--accent-brand) 10%, white);
+  font-size: 0.61rem;
+  font-weight: 720;
+}
+
 .adminLink {
   display: inline-flex;
   min-height: 2.5rem;
@@ -95,6 +134,32 @@
 }
 
 .adminLink:hover {
+  color: var(--foreground);
+  background: rgba(16, 24, 40, 0.045);
+}
+
+.loginLink,
+.logoutButton {
+  display: inline-flex;
+  min-height: 2.5rem;
+  padding: 0.56rem 0.72rem;
+  align-items: center;
+  gap: 0.38rem;
+  border: 0;
+  border-radius: 0.65rem;
+  color: #5f5f66;
+  background: transparent;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 620;
+  cursor: pointer;
+  transition:
+    color 180ms ease,
+    background-color 180ms ease;
+}
+
+.loginLink:hover,
+.logoutButton:hover {
   color: var(--foreground);
   background: rgba(16, 24, 40, 0.045);
 }
@@ -121,12 +186,16 @@
 
 .downloadLink:active,
 .adminLink:active,
+.loginLink:active,
+.logoutButton:active,
 .links a:active {
   transform: translateY(1px);
 }
 
 .downloadLink:focus-visible,
 .adminLink:focus-visible,
+.loginLink:focus-visible,
+.logoutButton:focus-visible,
 .links a:focus-visible,
 .brand:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--accent-brand) 28%, transparent);
@@ -165,6 +234,11 @@
     min-height: 2.5rem;
     padding: 0.58rem 0.72rem;
     font-size: 0.68rem;
+  }
+
+  .accountIdentity,
+  .logoutButton {
+    display: none;
   }
 }
 

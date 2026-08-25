@@ -111,7 +111,12 @@ trap on_exit EXIT
 log "拉取最新代码..."
 git pull --ff-only origin master
 git submodule sync --recursive
-git submodule update --init --recursive
+if ! timeout 120s git \
+  -c http.lowSpeedLimit=1024 \
+  -c http.lowSpeedTime=30 \
+  submodule update --init --recursive; then
+  warn "可选集成子模块未能在 120 秒内更新；继续发布主应用，相关 sidecar 保持现有版本"
+fi
 
 log "更新后端依赖..."
 "$VENV/bin/pip" install -r "$APP_DIR/deploy/requirements-server.txt" -q

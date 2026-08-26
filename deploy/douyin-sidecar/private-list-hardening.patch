@@ -270,6 +270,321 @@ index 04a0682..5a72cc2 100644
 @@ -797 +947 @@ class DouyinAPIClient:
 -        return self._normalize_paged_response(raw, item_keys=["aweme_list"])
 +        return self._normalize_private_list_response(raw, source="api")
+diff --git a/core/private_list_websign.py b/core/private_list_websign.py
+new file mode 100644
+index 0000000..5590d63
+--- /dev/null
++++ b/core/private_list_websign.py
+@@ -0,0 +1,143 @@
++"""Hash-pinned SecSDK signing for the scoped Douyin likes request.
++
++This module is adapted from the MIT-licensed ``douyin-mcp-server`` reference
++implementation.  It never logs or returns Cookie values, full URLs, or the
++generated signature material.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import json
++import os
++from pathlib import Path
++import shutil
++import subprocess
++from typing import Dict, Tuple
++from urllib.parse import parse_qs, urlsplit
++from urllib.error import HTTPError, URLError
++from urllib.request import Request, urlopen
++
++
++_RUNTIME_URL = "https://lf-security.bytegoofy.com/obj/security-secsdk/runtime_bundler_34.js"
++_RUNTIME_SHA256 = "6922fc6f30ff67918c2c6d9493292ae4266635a9d8f7ec030f80e2bed3d36272"
++_RUNTIME_MAX_BYTES = 512 * 1024
++_CACHE_ROOT = Path(
++    os.environ.get("XDG_CACHE_HOME")
++    or (Path.home() / ".cache")
++) / "zhicui-douyin"
++_RUNTIME_PATH = _CACHE_ROOT / "websign" / "runtime_bundler_34.js"
++_RUNNER_PATH = Path(__file__).with_name("private_list_websign_runner.js")
++_MARKER = "__DOUYIN_WEBSIGN__"
++
++
++class PrivateListWebSignError(RuntimeError):
++    """Safe signing failure without identity or signature material."""
++
++
++def _valid_runtime(path: Path) -> bool:
++    try:
++        payload = path.read_bytes()
++    except OSError:
++        return False
++    return (
++        len(payload) <= _RUNTIME_MAX_BYTES
++        and hashlib.sha256(payload).hexdigest() == _RUNTIME_SHA256
++    )
++
++
++def ensure_runtime() -> Path:
++    """Return the verified runtime, downloading the pinned asset when absent."""
++    if _valid_runtime(_RUNTIME_PATH):
++        return _RUNTIME_PATH
++    try:
++        request = Request(_RUNTIME_URL, headers={"User-Agent": "Zhicui-Sidecar/1"})
++        with urlopen(request, timeout=15) as response:
++            payload = response.read(_RUNTIME_MAX_BYTES + 1)
++    except (HTTPError, URLError, OSError) as exc:
++        raise PrivateListWebSignError("SecSDK 签名运行时下载失败") from exc
++    if (
++        len(payload) > _RUNTIME_MAX_BYTES
++        or hashlib.sha256(payload).hexdigest() != _RUNTIME_SHA256
++    ):
++        raise PrivateListWebSignError("SecSDK 签名运行时完整性校验失败")
++    _RUNTIME_PATH.parent.mkdir(parents=True, exist_ok=True)
++    temporary = _RUNTIME_PATH.with_suffix(".tmp")
++    temporary.write_bytes(payload)
++    temporary.replace(_RUNTIME_PATH)
++    return _RUNTIME_PATH
++
++
++def _cookie_header(cookies: Dict[str, str]) -> str:
++    pairs = []
++    for raw_name, raw_value in cookies.items():
++        name = str(raw_name or "").strip()
++        value = str(raw_value or "").strip()
++        if name and value and not any(char in name + value for char in "\r\n;"):
++            pairs.append("{}={}".format(name, value))
++    return "; ".join(pairs)
++
++
++def sign_url(
++    url: str,
++    cookies: Dict[str, str],
++    user_agent: str,
++) -> Tuple[str, Dict[str, str]]:
++    """Append fresh SecSDK parameters using the local hash-pinned runtime."""
++    runtime = ensure_runtime()
++    node_executable = shutil.which("node")
++    if not node_executable:
++        raise PrivateListWebSignError("SecSDK 签名运行时缺少 Node.js")
++    input_payload = json.dumps(
++        {
++            "url": url,
++            "cookie": _cookie_header(cookies),
++            "user_agent": user_agent,
++            "runtime_path": str(runtime),
++            "page_url": "https://www.douyin.com/user/self?showTab=like",
++        }
++    )
++    try:
++        completed = subprocess.run(
++            [node_executable, str(_RUNNER_PATH)],
++            input=input_payload,
++            capture_output=True,
++            text=True,
++            timeout=12,
++        )
++    except (OSError, subprocess.TimeoutExpired) as exc:
++        raise PrivateListWebSignError("SecSDK 签名运行时执行失败") from exc
++
++    marker_at = completed.stdout.rfind(_MARKER)
++    if marker_at < 0:
++        raise PrivateListWebSignError("SecSDK 签名运行时返回无效结果")
++    try:
++        result = json.loads(completed.stdout[marker_at + len(_MARKER) :])
++    except (TypeError, json.JSONDecodeError) as exc:
++        raise PrivateListWebSignError("SecSDK 签名运行时返回无效结果") from exc
++    signed_url = result.get("url") if isinstance(result, dict) else None
++    if completed.returncode != 0 or not isinstance(signed_url, str):
++        raise PrivateListWebSignError("SecSDK 签名生成失败")
++
++    before = urlsplit(url)
++    after = urlsplit(signed_url)
++    if (before.scheme, before.netloc, before.path) != (
++        after.scheme,
++        after.netloc,
++        after.path,
++    ):
++        raise PrivateListWebSignError("SecSDK 签名结果目标不匹配")
++    query = parse_qs(after.query, keep_blank_values=True)
++    signature = query.get("x-secsdk-web-signature", [""])[0]
++    if not (query.get("uifid") and query.get("timestamp") and len(signature) == 32):
++        raise PrivateListWebSignError("SecSDK 签名结果缺少必需参数")
++
++    headers = result.get("headers") if isinstance(result.get("headers"), dict) else {}
++    safe_headers = {
++        str(key): str(value)
++        for key, value in headers.items()
++        if key in {"uifid", "x-secsdk-web-signature", "x-secsdk-web-expire"}
++        and isinstance(value, str)
++        and len(value) <= 512
++    }
++    return signed_url, safe_headers
+diff --git a/core/private_list_websign_runner.js b/core/private_list_websign_runner.js
+new file mode 100644
+index 0000000..9e8e4e0
+--- /dev/null
++++ b/core/private_list_websign_runner.js
+@@ -0,0 +1,160 @@
++"use strict";
++
++const fs = require("fs");
++const nodeCrypto = require("crypto");
++
++function makeStorage(initial) {
++  const store = { ...(initial || {}) };
++  return {
++    getItem(key) { return Object.prototype.hasOwnProperty.call(store, key) ? store[key] : null; },
++    setItem(key, value) { store[key] = String(value); },
++    removeItem(key) { delete store[key]; },
++    clear() { for (const key of Object.keys(store)) delete store[key]; },
++    key(index) { return Object.keys(store)[index] || null; },
++    get length() { return Object.keys(store).length; },
++  };
++}
++
++function makeElement(tag) {
++  return {
++    tagName: String(tag || "div").toUpperCase(),
++    nodeName: String(tag || "div").toUpperCase(),
++    style: {}, dataset: {}, attributes: {}, childNodes: [], children: [],
++    setAttribute(key, value) { this.attributes[key] = String(value); },
++    getAttribute(key) { return this.attributes[key]; },
++    removeAttribute(key) { delete this.attributes[key]; },
++    appendChild(child) { this.childNodes.push(child); return child; },
++    removeChild(child) { return child; },
++    insertBefore(child) { this.childNodes.push(child); return child; },
++    addEventListener() {}, removeEventListener() {},
++    dispatchEvent() { return true; },
++    contains() { return false; },
++    querySelector() { return null; }, querySelectorAll() { return []; },
++    getElementsByTagName() { return []; },
++    cloneNode() { return makeElement(this.tagName); },
++    getContext() { return null; },
++  };
++}
++
++function installEnvironment(input) {
++  const savedProcess = global.process;
++  global._process = savedProcess;
++  const targetUrl = new URL(input.page_url || "https://www.douyin.com/");
++  const localStorage = makeStorage({});
++  const sessionStorage = makeStorage({});
++  let cookie = String(input.cookie || "");
++  const location = {
++    href: targetUrl.href, protocol: targetUrl.protocol, host: targetUrl.host,
++    hostname: targetUrl.hostname, port: targetUrl.port, pathname: targetUrl.pathname,
++    search: targetUrl.search, hash: targetUrl.hash, origin: targetUrl.origin,
++    replace() {}, assign() {}, reload() {}, toString() { return targetUrl.href; },
++  };
++  const head = makeElement("head");
++  const body = makeElement("body");
++  const html = makeElement("html");
++  const currentScript = makeElement("script");
++  currentScript.src = "https://lf-security.bytegoofy.com/obj/security-secsdk/runtime_bundler_34.js";
++  currentScript.setAttribute("src", currentScript.src);
++  currentScript.setAttribute("project-id", "34");
++  currentScript.setAttribute("x-nonce", "DOUYIN_MCP_RUNTIME");
++  currentScript.setAttribute("crossorigin", "anonymous");
++  const document = {
++    nodeType: 9, readyState: "complete", documentElement: html, head, body,
++    currentScript, referrer: "https://www.douyin.com/", title: "抖音",
++    location, URL: location.href, domain: location.hostname, characterSet: "UTF-8",
++    createElement: makeElement,
++    createElementNS(_namespace, tag) { return makeElement(tag); },
++    createTextNode(text) { return { nodeType: 3, textContent: text }; },
++    getElementById() { return null; },
++    getElementsByTagName(tag) { return tag === "head" ? [head] : (tag === "body" ? [body] : []); },
++    getElementsByClassName() { return []; }, querySelector() { return null; },
++    querySelectorAll() { return []; }, addEventListener() {}, removeEventListener() {},
++    dispatchEvent() { return true; }, createEvent() { return { initEvent() {} }; },
++  };
++  Object.defineProperty(document, "cookie", {
++    get() { return cookie; },
++    set(value) {
++      const pair = String(value).split(";")[0];
++      const name = pair.split("=")[0];
++      const kept = cookie ? cookie.split("; ").filter((item) => item.split("=")[0] !== name) : [];
++      kept.push(pair);
++      cookie = kept.join("; ");
++    },
++    configurable: true,
++  });
++  const navigator = {
++    userAgent: String(input.user_agent || ""), platform: "Win32", language: "zh-CN",
++    languages: ["zh-CN", "zh"], appVersion: "5.0 (Windows NT 10.0; Win64; x64)",
++    appName: "Netscape", product: "Gecko", productSub: "20030107", vendor: "Google Inc.",
++    hardwareConcurrency: 16, deviceMemory: 8, webdriver: false, onLine: true,
++    cookieEnabled: true, maxTouchPoints: 0, sendBeacon() { return true; },
++  };
++  const screen = { width: 1920, height: 1080, availWidth: 1920, availHeight: 1040, colorDepth: 24, pixelDepth: 24 };
++  const performance = { now: () => 12345.678, timing: {}, navigation: {}, getEntriesByType: () => [] };
++  const window = global;
++  const fakeXhr = function FakeXMLHttpRequest() {
++    return {
++      open() {}, send() {}, setRequestHeader() {}, addEventListener() {},
++      getResponseHeader() { return null; }, readyState: 4, status: 204,
++      responseText: "", response: "",
++    };
++  };
++  const globals = {
++    window, self: window, top: window, parent: window, frames: window,
++    document, navigator, location, screen, localStorage, sessionStorage, performance,
++    history: { length: 1, pushState() {}, replaceState() {}, back() {}, go() {} },
++    addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; },
++    requestAnimationFrame(callback) { return setTimeout(() => callback(Date.now()), 16); },
++    cancelAnimationFrame: clearTimeout,
++    atob(value) { return Buffer.from(value, "base64").toString("binary"); },
++    btoa(value) { return Buffer.from(value, "binary").toString("base64"); },
++    fetch() { return Promise.resolve({ ok: true, status: 204, json: async () => ({}), text: async () => "" }); },
++    matchMedia() { return { matches: false, addListener() {}, removeListener() {} }; },
++    getComputedStyle() { return {}; }, Image: function Image() { return makeElement("img"); },
++    XMLHttpRequest: fakeXhr,
++    SSR_RENDER_DATA: { app: { odin: {} } },
++  };
++  for (const [key, value] of Object.entries(globals)) {
++    try {
++      Object.defineProperty(window, key, { value, writable: true, configurable: true, enumerable: true });
++    } catch (_error) {
++      try { window[key] = value; } catch (_ignored) {}
++    }
++  }
++  if (!window.crypto || !window.crypto.subtle) window.crypto = nodeCrypto.webcrypto;
++  try { delete global.process; } catch (_error) {}
++  return { window, document, navigator, location, localStorage, sessionStorage, screen, performance, savedProcess };
++}
++
++function main() {
++  const input = JSON.parse(fs.readFileSync(0, "utf8"));
++  const env = installEnvironment(input);
++  const code = fs.readFileSync(input.runtime_path, "utf8");
++  const runner = new Function(
++    "window", "document", "navigator", "location", "localStorage", "sessionStorage",
++    "screen", "performance", "self", "globalThis", `${code}\n//# sourceURL=runtime_bundler_34.js`,
++  );
++  runner.call(env.window, env.window, env.document, env.navigator, env.location,
++    env.localStorage, env.sessionStorage, env.screen, env.performance, env.window, env.window);
++  global.process = env.savedProcess;
++  const signer = env.window.use && env.window.use("webSignUrl");
++  if (typeof signer !== "function") throw new Error("websign_not_registered");
++  const result = signer(String(input.url));
++  const signedUrl = typeof result === "string" ? result : result && result.url;
++  if (typeof signedUrl !== "string" || signedUrl === input.url) throw new Error("websign_not_generated");
++  const headers = result && typeof result.headers === "object" ? result.headers : {};
++  const allowedHeaders = {};
++  for (const key of ["uifid", "x-secsdk-web-signature", "x-secsdk-web-expire"]) {
++    if (typeof headers[key] === "string" && headers[key].length <= 512) allowedHeaders[key] = headers[key];
++  }
++  fs.writeSync(1, `__DOUYIN_WEBSIGN__${JSON.stringify({ url: signedUrl, headers: allowedHeaders })}`);
++  process.exit(0);
++}
++
++try { main(); } catch (error) {
++  if (global._process) global.process = global._process;
++  const name = error && error.name ? error.name : "Error";
++  const message = String(error && error.message ? error.message : "websign_error").slice(0, 120);
++  fs.writeSync(1, `__DOUYIN_WEBSIGN__${JSON.stringify({ error: name, message })}`);
++  process.exit(1);
++}
 diff --git a/server/app.py b/server/app.py
 index 5ccb0e8..d0f08bf 100644
 --- a/server/app.py

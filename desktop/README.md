@@ -34,16 +34,22 @@ cd D:\6month
 .\start-desktop.bat -KeepServices
 ```
 
-也可以手动启动：
+也可以在桌面端目录直接启动；该命令同样会自动准备并等待本地网页端：
 
 ```powershell
 cd desktop
 npm install
-$env:ZHICUI_DESKTOP_URL='http://localhost:3003'
 npm run dev
 ```
 
-不设置 `ZHICUI_DESKTOP_URL` 时加载 `https://luxai.cn`。
+如果网页端已经手动运行，可以只启动 Electron：
+
+```powershell
+$env:ZHICUI_DESKTOP_URL='http://localhost:3003'
+npm run dev:electron
+```
+
+正式安装包始终默认加载 `https://luxai.cn`。
 
 ## 本地视频
 

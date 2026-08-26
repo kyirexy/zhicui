@@ -239,7 +239,7 @@ try {
     $env:ZHICUI_DESKTOP_URL = $frontendUrl
     Push-Location $desktopRoot
     try {
-        & $npmPath run dev
+        & $npmPath run 'dev:electron'
         if ($LASTEXITCODE -ne 0) {
             throw "Electron 桌面端退出，错误码：$LASTEXITCODE"
         }

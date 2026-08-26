@@ -31,6 +31,7 @@ import {
   detectDesktopRuntime,
   type DesktopRuntimeInfo,
 } from '@/lib/desktopRuntime';
+import DesktopSidebarUpdate from '@/components/DesktopSidebarUpdate';
 
 interface DesktopRuntimeState {
   isDesktop: boolean;
@@ -143,6 +144,8 @@ function DesktopNavigation() {
             <Download size={17} aria-hidden="true" />
           </a>
         </nav>
+
+        <DesktopSidebarUpdate />
 
         <div className="desktop-sidebar__account-shell" ref={accountMenuRef}>
           {accountMenuOpen && (

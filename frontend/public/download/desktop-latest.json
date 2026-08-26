@@ -2,17 +2,15 @@
   "schema_version": 1,
   "platform": "windows",
   "architecture": "x64",
-  "version": "1.0.3",
-  "download_url": "https://luxai.cn/download/Zhicui-Setup-1.0.3-x64.exe",
-  "url": "https://luxai.cn/download/Zhicui-Setup-1.0.3-x64.exe",
-  "size_bytes": 101973732,
-  "published_at": "2026-07-31T09:30:00.000Z",
+  "version": "1.0.4",
+  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.0.4-x64.exe",
+  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.0.4-x64.exe",
+  "size_bytes": 102020573,
+  "published_at": "2026-08-26T03:04:12.5011719Z",
   "notes": [
-    "全新 Windows 工作台：统一导航、资料上下文与真实数据首页",
-    "视频库、视频 Agent、知识库、行动计划和设置采用一致的桌面体验",
-    "修复加载、空状态、局部失败与错误恢复体验",
-    "使用本机 Chrome 或 Edge 扫码登录抖音",
-    "支持自动检查新版本和一键安装更新"
+    "支持后台下载桌面端更新，并在左下角显示实时进度。",
+    "下载完成后可一键重启并安装，新版会自动回到知萃。",
+    "网页功能更新与原生客户端更新采用独立、安全的发布通道。"
   ],
   "code_signed": false,
   "release_status": "public_download"

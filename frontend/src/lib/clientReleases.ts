@@ -38,7 +38,7 @@ export const CLIENT_RELEASE_FALLBACKS: ClientReleaseCatalog = {
     platform: 'windows',
     version: '1.0.3',
     architecture: 'x64',
-    downloadUrl: 'https://luxai.cn/download/Zhicui-Setup-1.0.3-x64.exe',
+    downloadUrl: 'https://luxai.cn/download/windows/Zhicui-Setup-latest-x64.exe',
     sizeBytes: 101_973_732,
     publishedAt: '2026-07-31T09:30:00.000Z',
     codeSigned: false,

@@ -1,6 +1,7 @@
-import { app } from 'electron';
+import { app, type BrowserWindow } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import type { DesktopUpdateResult } from './contract';
+import { nativeUpdateCheckDisposition } from './update-policy';
 
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
@@ -9,6 +10,7 @@ type UpdatePublisher = (state: DesktopUpdateResult) => void;
 
 let publishUpdate: UpdatePublisher = () => {};
 let updaterReady = false;
+let updateCheckInFlight: Promise<DesktopUpdateResult> | null = null;
 let updateState: DesktopUpdateResult = {
   status: 'idle',
   installedVersion: app.getVersion(),
@@ -85,23 +87,31 @@ export function initializeDesktopUpdater(publisher: UpdatePublisher): void {
 }
 
 export async function checkForDesktopUpdates(): Promise<DesktopUpdateResult> {
-  if (!app.isPackaged) return getDesktopUpdateState();
-  if (
-    updateState.status === 'downloading'
-    || updateState.status === 'downloaded'
-  ) {
-    return updateState;
-  }
-  try {
-    setUpdateState({ status: 'checking' });
-    await autoUpdater.checkForUpdates();
-    return updateState;
-  } catch (error) {
-    return setUpdateState({
-      status: 'error',
-      error: cleanUpdateError(error),
-    });
-  }
+  const disposition = nativeUpdateCheckDisposition({
+    packaged: app.isPackaged,
+    hasInFlightCheck: Boolean(updateCheckInFlight),
+    status: updateState.status,
+  });
+  if (disposition === 'unsupported') return getDesktopUpdateState();
+  if (disposition === 'reuse') return updateCheckInFlight!;
+  if (disposition === 'hold') return updateState;
+  let operation!: Promise<DesktopUpdateResult>;
+  operation = (async () => {
+    try {
+      setUpdateState({ status: 'checking' });
+      await autoUpdater.checkForUpdates();
+      return updateState;
+    } catch (error) {
+      return setUpdateState({
+        status: 'error',
+        error: cleanUpdateError(error),
+      });
+    } finally {
+      if (updateCheckInFlight === operation) updateCheckInFlight = null;
+    }
+  })();
+  updateCheckInFlight = operation;
+  return operation;
 }
 
 export function installDesktopUpdate(): DesktopUpdateResult {
@@ -118,9 +128,35 @@ export function installDesktopUpdate(): DesktopUpdateResult {
   return readyState;
 }
 
-export function scheduleDesktopUpdateCheck(): void {
-  if (!app.isPackaged) return;
-  setTimeout(() => {
+const STARTUP_CHECK_DELAY_MS = 12_000;
+const PERIODIC_CHECK_INTERVAL_MS = 60 * 60_000;
+const FOCUS_CHECK_THROTTLE_MS = 5 * 60_000;
+
+export function scheduleDesktopUpdateChecks(window: BrowserWindow): () => void {
+  if (!app.isPackaged) return () => {};
+  let disposed = false;
+  let lastAutomaticCheckAt = 0;
+
+  const run = (force = false) => {
+    if (disposed) return;
+    const now = Date.now();
+    if (!force && now - lastAutomaticCheckAt < FOCUS_CHECK_THROTTLE_MS) return;
+    lastAutomaticCheckAt = now;
     void checkForDesktopUpdates();
-  }, 12_000);
+  };
+
+  const startupTimer = setTimeout(() => run(true), STARTUP_CHECK_DELAY_MS);
+  const intervalTimer = setInterval(
+    () => run(true),
+    PERIODIC_CHECK_INTERVAL_MS,
+  );
+  const handleFocus = () => run();
+  window.on('focus', handleFocus);
+
+  return () => {
+    disposed = true;
+    clearTimeout(startupTimer);
+    clearInterval(intervalTimer);
+    if (!window.isDestroyed()) window.removeListener('focus', handleFocus);
+  };
 }

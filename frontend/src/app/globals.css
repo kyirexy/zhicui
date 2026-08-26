@@ -5652,6 +5652,65 @@ html[data-desktop-app="true"] .desktop-sidebar {
   padding: 10px 14px 16px;
 }
 
+.desktop-sidebar__update-shell {
+  position: relative;
+  margin: 0 12px 10px;
+  overflow: hidden;
+  border: 1px solid var(--card-border);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--card-bg) 88%, transparent);
+}
+
+.desktop-sidebar__update {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  background: transparent;
+  padding: 8px 10px;
+  text-align: left;
+  color: var(--foreground);
+}
+
+.desktop-sidebar__update:not(:disabled) { cursor: pointer; }
+.desktop-sidebar__update:not(:disabled):hover { background: var(--hover-bg); }
+.desktop-sidebar__update:disabled { cursor: default; opacity: 1; }
+.desktop-sidebar__update.is-ready {
+  background: linear-gradient(135deg, #4d68f6, #3855ec);
+  color: #fff;
+}
+.desktop-sidebar__update.is-ready:hover { background: linear-gradient(135deg, #5872ff, #405ded); }
+.desktop-sidebar__update-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 9px;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+.desktop-sidebar__update-icon .is-spinning { animation: spin 900ms linear infinite; }
+.desktop-sidebar__update-copy { min-width: 0; flex: 1; }
+.desktop-sidebar__update-copy strong,
+.desktop-sidebar__update-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.desktop-sidebar__update-copy strong { font-size: 13px; font-weight: 700; }
+.desktop-sidebar__update-copy small { margin-top: 1px; font-size: 10px; opacity: 0.68; }
+.desktop-sidebar__update-progress {
+  position: absolute;
+  inset: auto 0 0;
+  height: 2px;
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+.desktop-sidebar__update-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #4d68f6;
+  transition: width 180ms ease-out;
+}
+
 .desktop-sidebar__section-label {
   margin: 0 12px 10px;
   color: #71837a;

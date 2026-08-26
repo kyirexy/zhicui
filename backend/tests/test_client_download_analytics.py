@@ -56,7 +56,10 @@ class ClientDownloadAnalyticsTests(unittest.TestCase):
         with patch.object(client_download_service, "record_download", side_effect=RuntimeError("db unavailable")):
             response = client_download("windows", self.db)
         self.assertEqual(response.status_code, 307)
-        self.assertEqual(response.headers["location"], "/download/Zhicui-Setup-1.0.3-x64.exe")
+        self.assertEqual(
+            response.headers["location"],
+            "/download/windows/Zhicui-Setup-latest-x64.exe",
+        )
 
     def test_unknown_platform_is_rejected_by_counter(self) -> None:
         with self.assertRaises(ValueError):

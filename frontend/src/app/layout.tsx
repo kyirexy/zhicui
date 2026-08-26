@@ -6,7 +6,7 @@ import BottomTabBar from '@/components/BottomTabBar';
 import GlobalSheetManager from '@/components/GlobalSheetManager';
 import FeedbackButton from '@/components/FeedbackButton';
 import AppUpdatePrompt from '@/components/AppUpdatePrompt';
-import DesktopUpdatePrompt from '@/components/DesktopUpdatePrompt';
+import WebBuildUpdatePrompt from '@/components/WebBuildUpdatePrompt';
 import DesktopAppFrame from '@/components/DesktopAppFrame';
 import AuthGuard from '@/components/AuthGuard';
 import Providers from './Providers';
@@ -224,7 +224,7 @@ export default function RootLayout({
             <BottomTabBar />
             <FeedbackButton />
             <AppUpdatePrompt />
-            <DesktopUpdatePrompt />
+            <WebBuildUpdatePrompt />
           </DesktopAppFrame>
         </Providers>
       </body>

@@ -26,6 +26,7 @@ import {
 import { useAuth } from '@/lib/hooks/AuthContext';
 
 const DISMISSED_BUILD_KEY = 'zhicui_update_dismissed_build';
+const PERIODIC_UPDATE_CHECK_MS = 60 * 60_000;
 
 interface AvailableUpdate {
   installed: RuntimeAppInfo;
@@ -79,6 +80,33 @@ export default function AppUpdatePrompt() {
       });
     return () => {
       active = false;
+    };
+  }, [authLoading, user]);
+
+  useEffect(() => {
+    if (authLoading || !user) return undefined;
+    const nativeAndroid = (
+      Capacitor.isNativePlatform()
+      && Capacitor.getPlatform() === 'android'
+    );
+    if (!nativeAndroid) return undefined;
+
+    let disposed = false;
+    const intervalId = window.setInterval(() => {
+      void checkAndroidAppUpdate()
+        .then((result) => {
+          if (disposed || result.status !== 'update-available') return;
+          const dismissedBuild = sessionStorage.getItem(DISMISSED_BUILD_KEY);
+          if (dismissedBuild === String(result.release.build)) return;
+          setAvailable({ installed: result.installed, release: result.release });
+        })
+        .catch(() => {
+          // A periodic check is advisory and never blocks the current session.
+        });
+    }, PERIODIC_UPDATE_CHECK_MS);
+    return () => {
+      disposed = true;
+      window.clearInterval(intervalId);
     };
   }, [authLoading, user]);
 

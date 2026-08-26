@@ -286,5 +286,5 @@ export function openInstalledDesktopApp(): void {
 }
 
 export const DESKTOP_DOWNLOAD_URL = (
-  'https://luxai.cn/download/Zhicui-Setup-1.0.3-x64.exe'
+  'https://luxai.cn/download/windows/Zhicui-Setup-latest-x64.exe'
 );

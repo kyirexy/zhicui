@@ -181,7 +181,7 @@ export default function AppUpdateSettingsCard() {
           <h2 className="text-base font-semibold text-foreground text-balance">{title}</h2>
           <p className="mt-1 text-sm leading-6 text-foreground-muted text-pretty">
             {mode === 'desktop'
-              ? `当前安装 ${desktopInfo?.version || desktopUpdate?.installedVersion || '未知版本'}，启动后会自动检查新版。`
+              ? `当前安装 ${desktopInfo?.version || desktopUpdate?.installedVersion || '未知版本'}。网页功能刷新即可更新；Windows 程序更新会在后台下载，完成后由你决定何时重启安装。`
               : mode === 'android'
                 ? androidResult
                   ? `当前安装 ${androidResult.installed.version} (${androidResult.installed.build})，启动时自动检查新版。`
@@ -218,7 +218,7 @@ export default function AppUpdateSettingsCard() {
       {desktopDownloaded && (
         <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
           <p className="font-semibold text-foreground">知萃 {desktopUpdate.version} 已准备好</p>
-          <p className="mt-1 text-sm text-foreground-muted">重启桌面端即可完成安装。</p>
+          <p className="mt-1 text-sm text-foreground-muted">点击“重启并安装”才会关闭当前窗口；未保存的输入请先处理。若自动更新不可用，也可从官网下载完整安装包覆盖安装，账号和资料不会丢失。</p>
         </div>
       )}
 

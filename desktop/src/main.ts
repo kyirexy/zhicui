@@ -36,13 +36,14 @@ import {
   getDesktopUpdateState,
   initializeDesktopUpdater,
   installDesktopUpdate,
-  scheduleDesktopUpdateCheck,
+  scheduleDesktopUpdateChecks,
 } from './updater';
 
 const DEEP_LINK_PREFIX = 'zhicui://';
 let mainWindow: BrowserWindow | null = null;
 let pendingDeepLink: string | null = null;
 let mediaLibrary: DesktopMediaLibrary | null = null;
+let stopDesktopUpdateChecks: (() => void) | null = null;
 const DEVELOPMENT_LOAD_RETRY_MS = 1_000;
 const DEVELOPMENT_LOAD_RETRY_LIMIT = 120;
 
@@ -377,7 +378,7 @@ app.whenReady().then(() => {
   registerIpc();
   pendingDeepLink = findDeepLink(process.argv);
   mainWindow = createMainWindow();
-  scheduleDesktopUpdateCheck();
+  stopDesktopUpdateChecks = scheduleDesktopUpdateChecks(mainWindow);
 });
 
 app.on('activate', () => {
@@ -385,6 +386,8 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', () => {
+  stopDesktopUpdateChecks?.();
+  stopDesktopUpdateChecks = null;
   void douyinLogin.cancel();
   void zhicuiLogin.cancel();
 });

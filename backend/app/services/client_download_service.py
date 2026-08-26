@@ -15,7 +15,7 @@ from app.models.client_download_daily import ClientDownloadDaily
 PLATFORMS = {"android", "windows"}
 DOWNLOAD_TARGETS = {
     "android": "/download/zhicui.apk",
-    "windows": "/download/Zhicui-Setup-1.0.3-x64.exe",
+    "windows": "/download/windows/Zhicui-Setup-latest-x64.exe",
 }
 _LOCAL_TIMEZONE = ZoneInfo("Asia/Shanghai")
 

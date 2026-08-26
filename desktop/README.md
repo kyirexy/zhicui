@@ -7,7 +7,7 @@
 - 可选的视频本地保存、自定义目录和本地优先播放
 - `zhicui://` 深链
 - 单实例窗口
-- GitHub Release 自动更新基础
+- luxai.cn 受控更新源、后台下载和左下角一键完成更新
 
 ## 开发
 
@@ -82,3 +82,22 @@ npm run dist:win
 ```
 
 产物位于 `desktop/release-<version>/`。首个内部测试包可以不签名；公开发布前必须配置 Windows 代码签名证书，否则 SmartScreen 会显示未知发布者。
+
+## 发布桌面更新
+
+Electron 使用 `https://luxai.cn/download/windows/` generic feed。每个版本必须同时包含：
+
+- `latest.yml`
+- 版本化 NSIS 安装包 `Zhicui-Setup-<version>-x64.exe`
+- 对应 `.blockmap` 差分文件
+
+在仓库根目录执行：
+
+```powershell
+.\scripts\release-desktop.ps1 -Version 1.0.4 -Publish
+```
+
+脚本会更新版本号、构建并核验 SHA-512，先上传 EXE 和 blockmap，最后原子切换
+`latest.yml`。没有代码签名时脚本默认拒绝公开发布；仅限内部验证时可显式追加
+`-AllowUnsigned`。客户端启动 12 秒后、窗口重新聚焦时和每小时都会检查更新，
+下载期间继续可用，完成后左下角出现“完成更新”。

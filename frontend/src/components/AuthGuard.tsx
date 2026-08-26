@@ -6,21 +6,9 @@ import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import { useDesktopApp } from '@/components/DesktopAppFrame';
 import { isNativeAndroidApp } from '@/lib/douyinNative';
+import { resolveClientAuthPolicy } from '@/lib/clientAuthPolicy';
 
-/** Browser-only public pages. Installed clients treat `/` as the workspace. */
-const BROWSER_PUBLIC = ['/', '/style'];
-const ALWAYS_PUBLIC = ['/login'];
 const IS_DEV = process.env.NODE_ENV === 'development';
-const CLIENT_ONLY_PATHS = [
-  '/harness',
-  '/extract',
-  '/library',
-  '/notes',
-  '/plans',
-  '/process',
-  '/settings',
-  '/style',
-];
 
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const {
@@ -32,29 +20,24 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { isDesktop, resolved: desktopResolved } = useDesktopApp();
   const isNativeAndroid = isNativeAndroidApp();
-  const isInstalledClient = isDesktop || isNativeAndroid;
-  const isPublic = ALWAYS_PUBLIC.includes(pathname)
-    || (!isInstalledClient && BROWSER_PUBLIC.includes(pathname));
-  const isClientOnlyPath = CLIENT_ONLY_PATHS.some(
-    (path) => pathname === path || pathname.startsWith(`${path}/`),
-  );
-  const clientGateActive = !IS_DEV
-    && isClientOnlyPath
-    && desktopResolved
-    && !isInstalledClient;
+  const policy = resolveClientAuthPolicy(pathname, {
+    desktop: isDesktop,
+    nativeAndroid: isNativeAndroid,
+    development: IS_DEV,
+  });
+  const clientGateActive = desktopResolved && policy.browserClientGate;
   useEffect(() => {
-    if (IS_DEV || !desktopResolved || !isClientOnlyPath || isInstalledClient) return;
+    if (!desktopResolved || !policy.browserClientGate) return;
     router.replace('/#download');
   }, [
     desktopResolved,
-    isClientOnlyPath,
-    isInstalledClient,
+    policy.browserClientGate,
     router,
   ]);
 
   useEffect(() => {
     if (!desktopResolved || clientGateActive || loading) return;
-    if (!user && !isPublic) {
+    if (!user && !policy.publicRoute) {
       const requestedPath = typeof window === 'undefined'
         ? pathname
         : `${pathname}${window.location.search}${window.location.hash}`;
@@ -62,7 +45,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     }
   }, [
     clientGateActive,
-    isPublic,
+    policy.publicRoute,
     user,
     loading,
     pathname,
@@ -103,7 +86,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (isPublic) {
+  if (policy.publicRoute) {
     return <>{children}</>;
   }
 

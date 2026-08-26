@@ -4,11 +4,13 @@ API route definitions for VideoCapsule.
 
 from __future__ import annotations
 
+import io
 import json
 import importlib.util
 import time
 import traceback
 import uuid
+import wave
 from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib.parse import unquote
@@ -5071,6 +5073,10 @@ def admin_test_llm_config(
             "messages": [{"role": "user", "content": "请只回复两个字：成功"}],
             "max_tokens": 16,
             "timeout": 20,
+            # Connection tests must fail fast. LiteLLM/provider retries can
+            # otherwise keep an admin request open for several minutes after
+            # the configured timeout (for example on an exhausted account).
+            "num_retries": 0,
         }
         if cfg["api_base"]:
             kwargs["api_base"] = cfg["api_base"]
@@ -5106,6 +5112,17 @@ def admin_test_llm_config(
         return _ok({"ok": False, "error": str(e)[:200]})
 
 
+def _asr_probe_wav() -> bytes:
+    """Build a tiny valid WAV so providers test auth and decoding, not EOF."""
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(16_000)
+        audio.writeframes(b"\x00\x00" * 4_000)
+    return buffer.getvalue()
+
+
 @router.post("/api/admin/asr-config/test")
 def admin_test_asr_config(
     request: Request,
@@ -5114,9 +5131,8 @@ def admin_test_asr_config(
 ) -> dict:
     """Test current ASR config by probing the endpoint with the configured key.
 
-    A 400/422 on an empty audio payload means the key was accepted (auth ok)
-    and only the payload was rejected — that counts as a pass. 401/403 means
-    the key is invalid.
+    A 400/422 means the key was accepted (auth ok) and only the probe payload
+    was rejected — that counts as a pass. 401/403 means the key is invalid.
     """
     cfg = settings_service.get_asr_config(db)
     if not cfg["api_key"]:
@@ -5125,7 +5141,10 @@ def admin_test_asr_config(
         return _ok({"ok": False, "error": "未配置 API Base URL"})
     try:
         headers = {"Authorization": f"Bearer {cfg['api_key']}"}
-        files = {"file": ("test.wav", b"", "audio/wav"), "model": (None, cfg["model"])}
+        files = {
+            "file": ("test.wav", _asr_probe_wav(), "audio/wav"),
+            "model": (None, cfg["model"]),
+        }
         r = http_requests.post(cfg["api_base_url"], headers=headers, files=files, timeout=20)
         if r.status_code in (401, 403):
             return _ok({"ok": False, "error": f"API Key 无效 (HTTP {r.status_code})", "status": r.status_code})

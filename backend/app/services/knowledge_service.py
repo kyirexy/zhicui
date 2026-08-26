@@ -425,7 +425,7 @@ def _candidate_eligibility_sql(db: Session):
             "WHERE ki.ord <= 50 AND jsonb_typeof(ki.value) = 'string' AND "
             "NULLIF(BTRIM(COALESCE(ki.value #>> '{}', ''), E' \\t\\n\\v\\f\\r'), '') "
             "IS NOT NULL)"
-            "))) ELSE FALSE END"
+            ")))) ELSE FALSE END"
         )
     # The supported deployments are SQLite and PostgreSQL. Keep an explicit
     # conservative fallback for test/dialect adapters rather than exposing all

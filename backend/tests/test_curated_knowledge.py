@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import json
 import unittest
+import wave
 
 from fastapi import HTTPException
 from sqlalchemy import create_engine, inspect, text
@@ -141,6 +143,50 @@ class CuratedKnowledgeServiceTests(unittest.TestCase):
             )["status"],
             "source-only",
         )
+
+    def test_postgresql_candidate_predicate_has_balanced_grouping(self) -> None:
+        class PostgreSQLDialect:
+            name = "postgresql"
+
+        class PostgreSQLBind:
+            dialect = PostgreSQLDialect()
+
+        class PostgreSQLSession:
+            @staticmethod
+            def get_bind() -> PostgreSQLBind:
+                return PostgreSQLBind()
+
+        sql = str(knowledge_service._candidate_eligibility_sql(PostgreSQLSession()))
+        depth = 0
+        in_string = False
+        index = 0
+        while index < len(sql):
+            character = sql[index]
+            if character == "'":
+                if in_string and index + 1 < len(sql) and sql[index + 1] == "'":
+                    index += 2
+                    continue
+                in_string = not in_string
+            elif not in_string and character == "(":
+                depth += 1
+            elif not in_string and character == ")":
+                depth -= 1
+                self.assertGreaterEqual(depth, 0, sql)
+            index += 1
+
+        self.assertFalse(in_string, sql)
+        self.assertEqual(depth, 0, sql)
+        self.assertIn("IS JSON", sql)
+        self.assertIn("ELSE FALSE END", sql)
+
+    def test_asr_connection_probe_is_a_valid_wav(self) -> None:
+        payload = routes._asr_probe_wav()
+
+        with wave.open(io.BytesIO(payload), "rb") as audio:
+            self.assertEqual(audio.getnchannels(), 1)
+            self.assertEqual(audio.getsampwidth(), 2)
+            self.assertEqual(audio.getframerate(), 16_000)
+            self.assertEqual(audio.getnframes(), 4_000)
 
     def test_views_search_counts_and_pagination_are_database_scoped(self) -> None:
         for index in range(5):

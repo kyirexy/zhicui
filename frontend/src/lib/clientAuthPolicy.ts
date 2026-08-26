@@ -18,6 +18,22 @@ export interface ClientAuthPolicy {
   browserClientGate: boolean;
 }
 
+const RESERVED_DEVELOPMENT_EMAIL = 'dev@zhicui.local';
+
+export function shouldDiscardDevelopmentSession(
+  user: { email?: string | null },
+  options: {
+    desktop: boolean;
+    development: boolean;
+    automaticDevAuth: boolean;
+  },
+): boolean {
+  return options.development
+    && options.desktop
+    && !options.automaticDevAuth
+    && user.email?.trim().toLowerCase() === RESERVED_DEVELOPMENT_EMAIL;
+}
+
 export function resolveClientAuthPolicy(
   pathname: string,
   options: {

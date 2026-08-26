@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resolveClientAuthPolicy } from './clientAuthPolicy.ts';
+import {
+  resolveClientAuthPolicy,
+  shouldDiscardDevelopmentSession,
+} from './clientAuthPolicy.ts';
 
 test('anonymous browser keeps the marketing homepage public', () => {
   const policy = resolveClientAuthPolicy('/', {
@@ -47,4 +50,26 @@ test('login remains public in every runtime', () => {
   });
   assert.equal(policy.publicRoute, true);
   assert.equal(policy.browserClientGate, false);
+});
+
+test('desktop development discards a legacy implicit dev account by default', () => {
+  assert.equal(shouldDiscardDevelopmentSession(
+    { email: 'dev@zhicui.local' },
+    { desktop: true, development: true, automaticDevAuth: false },
+  ), true);
+});
+
+test('real accounts and explicitly enabled dev auth remain persistent', () => {
+  assert.equal(shouldDiscardDevelopmentSession(
+    { email: 'user@example.com' },
+    { desktop: true, development: true, automaticDevAuth: false },
+  ), false);
+  assert.equal(shouldDiscardDevelopmentSession(
+    { email: 'dev@zhicui.local' },
+    { desktop: true, development: true, automaticDevAuth: true },
+  ), false);
+  assert.equal(shouldDiscardDevelopmentSession(
+    { email: 'dev@zhicui.local' },
+    { desktop: true, development: false, automaticDevAuth: false },
+  ), false);
 });

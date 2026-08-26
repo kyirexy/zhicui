@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 import { API_BASE } from '@/lib/api';
+import { shouldDiscardDevelopmentSession } from '@/lib/clientAuthPolicy';
 
 interface AuthUser {
   id: string;
@@ -244,6 +245,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }, AUTH_RESTORE_TIMEOUT_MS);
         if (cancelled) return;
         if (restored.success && restored.data) {
+          if (shouldDiscardDevelopmentSession(restored.data, {
+            desktop: typeof window !== 'undefined' && Boolean(window.zhicuiDesktop),
+            development: IS_DEV,
+            automaticDevAuth: DEV_AUTH_AUTO,
+          })) {
+            removeStoredToken();
+            setToken(null);
+            setUser(null);
+            setError(null);
+            return;
+          }
           applySession({ token: saved, user: restored.data });
           return;
         }

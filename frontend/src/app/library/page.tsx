@@ -86,6 +86,7 @@ import {
 import {
   formatCollectionSyncMessage,
   formatDouyinSyncError,
+  hasDouyinSyncFailureDiagnostic,
 } from '@/lib/douyinSyncFeedback';
 import { useLocalStorage } from '@/lib/hooks/useLocalStorage';
 import { useMarqueeSelection } from '@/lib/hooks/useMarqueeSelection';
@@ -1839,7 +1840,18 @@ export default function VideoLibraryPage() {
         error: waitResult.error,
       };
     }
-    if (!finalJob || finalJob.status === 'failed') {
+    const hasFailureDiagnostic = finalJob
+      ? hasDouyinSyncFailureDiagnostic(finalJob)
+      : false;
+    const synchronizedCount = finalJob
+      ? nonNegativeInteger(finalJob.success || finalJob.total)
+      : 0;
+    if (
+      !finalJob
+      || finalJob.status === 'failed'
+      || hasFailureDiagnostic
+      || (finalJob.status === 'success' && synchronizedCount === 0)
+    ) {
       if (
         requestedMode === 'collect'
         && finalJob
@@ -1975,7 +1987,19 @@ export default function VideoLibraryPage() {
     const successful = results.filter((result) => !result.error && result.finalJob);
     const allRefreshed = results.filter((result) => !result.error && result.refreshed !== null);
     if (successful.length === 0) {
-      if (results.length === 0) publishSourceManagerNotice('没有可同步的来源');
+      const failureMessages = results
+        .filter((result) => result.error)
+        .map((result) => {
+          const label = SOURCE_MODES.find(
+            (mode) => mode.value === result.requestedMode,
+          )?.label || '该来源';
+          return `${label}：${result.error}`;
+        });
+      publishSourceManagerNotice(
+        failureMessages.length > 0
+          ? failureMessages.join('；')
+          : '没有可同步的来源',
+      );
       return { started: true };
     }
     if (modes.length === 1) {
@@ -1996,11 +2020,17 @@ export default function VideoLibraryPage() {
         (total, result) => total + result.newlyVisible.length,
         0,
       );
-      const failedLabels = results
+      const failedMessages = results
         .filter((result) => result.error)
-        .map((result) => SOURCE_MODES.find((mode) => mode.value === result.requestedMode)?.label || '')
-        .filter(Boolean);
-      const suffix = failedLabels.length > 0 ? `；${failedLabels.join('、')}未完成，可稍后单独重试` : '';
+        .map((result) => {
+          const label = SOURCE_MODES.find(
+            (mode) => mode.value === result.requestedMode,
+          )?.label || '该来源';
+          return `${label}：${result.error}`;
+        });
+      const suffix = failedMessages.length > 0
+        ? `；${failedMessages.join('；')}`
+        : '';
       publishSourceManagerNotice(
         `已同步 ${successful.length} 个来源，共检查 ${checkedTotal} 条，新显示 ${newTotal} 条${suffix}`,
       );

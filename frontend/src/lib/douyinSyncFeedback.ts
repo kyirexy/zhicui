@@ -19,6 +19,15 @@ function boundedCount(value: number | undefined): number {
   return Math.max(0, Math.trunc(value || 0));
 }
 
+export function hasDouyinSyncFailureDiagnostic(
+  input: Pick<CollectionSyncMessageInput,
+    'error' | 'error_code' | 'needs_action'>,
+): boolean {
+  const errorCode = (input.error_code || '').trim();
+  const error = (input.error || '').trim();
+  return Boolean(errorCode || input.needs_action || error);
+}
+
 export function formatDouyinSyncError(
   error: string | null | undefined,
   sourceLabel = '视频',
@@ -86,7 +95,12 @@ export function formatCollectionSyncMessage({
     return `正在读取最近 ${safeRequestedCount} 条${sourceLabel}，请稍候…`;
   }
 
-  if (status === 'failed') {
+  // 部分连接器版本会同时返回 success 和受限诊断，不能让传输状态掩盖风控。
+  if (status === 'failed' || hasDouyinSyncFailureDiagnostic({
+    error,
+    error_code,
+    needs_action,
+  })) {
     return formatDouyinSyncError(error, sourceLabel, {
       error_code,
       retry_after_seconds,
@@ -99,7 +113,7 @@ export function formatCollectionSyncMessage({
     if (synchronized > 0) {
       return `已检查 ${synchronized} 条${sourceLabel}，正在更新资料库…`;
     }
-    return `没有读取到${sourceLabel}。请确认登录的是正确的抖音账号，或重新绑定后再试`;
+    return `本次未读取到${sourceLabel}，不计为同步成功。可能是该列表为空、登录账号不匹配，或抖音暂时限制了列表读取；请稍后再试，暂时不要连续同步。`;
   }
 
   return `正在准备${sourceLabel}同步…`;

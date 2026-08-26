@@ -1877,9 +1877,8 @@ def get_douyin_library_job(
             detail={
                 "outcome": job_status,
                 "error_category": (
-                    str(job.get("error_code") or "upstream_sync_failed")
-                    if job_status == "failed"
-                    else None
+                    str(job.get("error_code") or "").strip()
+                    or ("upstream_sync_failed" if job_status == "failed" else None)
                 ),
                 "source_mode": job.get("mode"),
                 "channel": job.get("channel"),

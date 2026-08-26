@@ -5,10 +5,15 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from app.services.desktop_handoff_service import _is_expired, _naive_utc
+from app.services.desktop_handoff_service import _is_expired, _naive_utc, _utcnow
 
 
 class DesktopHandoffTimeTest(unittest.TestCase):
+    def test_new_timestamps_are_written_as_aware_utc(self) -> None:
+        value = _utcnow()
+        self.assertIsNotNone(value.tzinfo)
+        self.assertEqual(value.utcoffset(), timedelta(0))
+
     def test_normalizes_aware_postgres_timestamp_to_naive_utc(self) -> None:
         value = datetime(2026, 8, 26, 23, 0, tzinfo=timezone(timedelta(hours=8)))
         self.assertEqual(_naive_utc(value), datetime(2026, 8, 26, 15, 0))

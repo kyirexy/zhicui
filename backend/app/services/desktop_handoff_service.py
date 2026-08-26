@@ -22,8 +22,10 @@ EXPIRES_AT_DEFAULT = HANDOFF_TTL_SECONDS
 
 
 def _utcnow() -> datetime:
-    # SQLite 读回的 DateTime(timezone=True) 是 naive 值，统一使用 naive UTC 比较。
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    # 写入 PostgreSQL 的 timestamptz 必须携带 UTC 时区，否则会按数据库会话时区
+    # 解释为本地时间，导致刚创建的票据立即过期。SQLite 读回时即使丢失时区，
+    # 比较入口也会通过 _naive_utc 统一处理。
+    return datetime.now(timezone.utc)
 
 
 def _naive_utc(value: datetime) -> datetime:

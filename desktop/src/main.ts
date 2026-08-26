@@ -17,6 +17,7 @@ import type {
   DesktopZhicuiSession,
   PlatformAccountStatus,
 } from './contract';
+import { desktopBuildIdentity } from './build-identity';
 import { DouyinDesktopLogin } from './douyin-login';
 import { DesktopMediaLibrary } from './media-library';
 import { PlatformAccountConnector } from './platform-account';
@@ -40,6 +41,8 @@ import {
 } from './updater';
 
 const DEEP_LINK_PREFIX = 'zhicui://';
+const BUILD_IDENTITY = desktopBuildIdentity(app.isPackaged);
+app.setName(BUILD_IDENTITY.displayName);
 let mainWindow: BrowserWindow | null = null;
 let pendingDeepLink: string | null = null;
 let mediaLibrary: DesktopMediaLibrary | null = null;
@@ -164,7 +167,7 @@ function createMainWindow(): BrowserWindow {
     minHeight: 700,
     show: false,
     backgroundColor: darkTitlebar ? '#111714' : '#f5f7f6',
-    title: '知萃',
+    title: BUILD_IDENTITY.windowTitle,
     icon: desktopIconPath(),
     autoHideMenuBar: true,
     titleBarStyle: 'hidden',
@@ -189,6 +192,12 @@ function createMainWindow(): BrowserWindow {
     if (external) void shell.openExternal(external);
     return { action: 'deny' };
   });
+  if (BUILD_IDENTITY.channel === 'development') {
+    window.on('page-title-updated', (event) => {
+      event.preventDefault();
+      window.setTitle(BUILD_IDENTITY.windowTitle);
+    });
+  }
   window.webContents.on('will-navigate', (event, url) => {
     if (isTrustedAppUrl(url)) return;
     event.preventDefault();
@@ -225,6 +234,8 @@ function registerIpc(): void {
       platform: process.platform,
       version: app.getVersion(),
       packaged: app.isPackaged,
+      channel: BUILD_IDENTITY.channel,
+      displayName: BUILD_IDENTITY.displayName,
     };
   });
   ipcMain.handle(

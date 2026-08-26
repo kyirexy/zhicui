@@ -12,6 +12,8 @@ export interface DesktopRuntimeInfo {
   platform: NodeJS.Platform;
   version: string;
   packaged: boolean;
+  channel: 'development' | 'stable';
+  displayName: string;
 }
 
 export interface DesktopLoginRequest {

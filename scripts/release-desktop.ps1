@@ -60,6 +60,13 @@ if ([string]$package.version -ne $Version) {
     }
 }
 
+Push-Location $desktopDir
+try {
+    Invoke-Checked 'npm.cmd' @('run', 'verify:release-contract')
+} finally {
+    Pop-Location
+}
+
 $releaseDir = Join-Path $desktopDir "release-$Version"
 if (-not $SkipBuild) {
     Push-Location $desktopDir

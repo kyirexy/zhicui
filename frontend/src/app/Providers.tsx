@@ -6,11 +6,13 @@ import { ExtractionProvider } from '@/lib/hooks/ExtractionContext';
 import { VideoAnalysisProvider } from '@/lib/hooks/VideoAnalysisContext';
 import { CreatorSyncProvider } from '@/lib/hooks/CreatorSyncContext';
 import ClientErrorReporter from '@/components/ClientErrorReporter';
+import DesktopBuildBadge from '@/components/DesktopBuildBadge';
 
 export default function Providers({ children }: { children: React.ReactNode }) {
   return (
     <AuthProvider>
       <ClientErrorReporter />
+      <DesktopBuildBadge />
       <SettingsProvider>
         <VideoAnalysisProvider>
           <CreatorSyncProvider>

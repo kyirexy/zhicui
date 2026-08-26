@@ -1,6 +1,6 @@
 {
   "name": "zhicui-desktop",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "知萃 Windows 桌面应用",
   "main": "dist/main.js",
   "author": "知萃",
@@ -14,6 +14,7 @@
     "dev:electron": "npm run build && electron .",
     "verify:platform-account": "npm run build && node scripts/verify-platform-account.mjs",
     "verify:update-policy": "npm run build && node scripts/verify-update-policy.mjs",
+    "verify:release-contract": "npm run build && node scripts/verify-release-contract.mjs",
     "pack": "npm run build && npm run patch:builder && electron-builder --dir --win --x64",
     "dist:win": "npm run build && npm run patch:builder && electron-builder --win nsis --x64",
     "typecheck": "tsc -p tsconfig.json --noEmit"
@@ -76,7 +77,7 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
+      "createDesktopShortcut": "always",
       "createStartMenuShortcut": true,
       "shortcutName": "知萃",
       "deleteAppDataOnUninstall": false

@@ -8,7 +8,7 @@ fi
 
 APP_ROOT="/opt/douyin-downloader"
 DEPLOY_ROOT="/opt/zhicui/deploy/douyin-sidecar"
-UPSTREAM_URL="https://github.com/jiji262/douyin-downloader.git"
+UPSTREAM_URL="${DOUYIN_UPSTREAM_URL:-https://github.com/jiji262/douyin-downloader.git}"
 UPSTREAM_COMMIT="c8ddfeb997c0fd8aec6480ed056bf84d265cc954"
 RELEASE_ID="${UPSTREAM_COMMIT:0:8}-$(date -u +%Y%m%d%H%M%S)"
 RELEASE_DIR="${APP_ROOT}/releases/${RELEASE_ID}"
@@ -39,7 +39,21 @@ install -d -o ubuntu -g ubuntu -m 0750 "${RELEASE_DIR}"
 
 sudo -u ubuntu git -C "${RELEASE_DIR}" init --quiet
 sudo -u ubuntu git -C "${RELEASE_DIR}" remote add origin "${UPSTREAM_URL}"
-sudo -u ubuntu git -C "${RELEASE_DIR}" fetch --depth 1 origin "${UPSTREAM_COMMIT}"
+FETCHED=0
+for attempt in 1 2 3; do
+  if sudo -u ubuntu git -C "${RELEASE_DIR}" fetch --depth 1 origin "${UPSTREAM_COMMIT}"; then
+    FETCHED=1
+    break
+  fi
+  if [[ "${attempt}" -lt 3 ]]; then
+    echo "Upstream fetch failed (attempt ${attempt}/3); retrying..." >&2
+    sleep $((attempt * 3))
+  fi
+done
+if [[ "${FETCHED}" -ne 1 ]]; then
+  echo "Unable to fetch pinned Douyin sidecar commit from ${UPSTREAM_URL}." >&2
+  exit 1
+fi
 sudo -u ubuntu git -C "${RELEASE_DIR}" checkout --detach FETCH_HEAD
 sudo -u ubuntu git -C "${RELEASE_DIR}" apply --unidiff-zero --check "${DEPLOY_ROOT}/zhicui-sidecar.patch"
 sudo -u ubuntu git -C "${RELEASE_DIR}" apply --unidiff-zero "${DEPLOY_ROOT}/zhicui-sidecar.patch"

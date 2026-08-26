@@ -25,6 +25,8 @@ sudo bash /opt/zhicui/deploy/douyin-sidecar/install.sh
 
 安装器还会安装 Node.js，并预取、校验固定 SHA-256 的抖音 SecSDK 运行文件。校验失败会阻止版本切换，避免运行未经验证的远端脚本。
 
+服务器临时无法访问 GitHub 时，可以把包含固定提交的 Git bundle 上传到受控路径，并通过 `DOUYIN_UPSTREAM_URL=/path/to/upstream.bundle` 运行安装器；安装器仍只检出 `UPSTREAM_COMMIT` 指定的提交并执行相同补丁校验。默认远端拉取会自动重试三次。
+
 ## 运维
 
 ```bash

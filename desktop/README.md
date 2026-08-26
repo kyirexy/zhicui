@@ -94,7 +94,7 @@ Electron 使用 `https://luxai.cn/download/windows/` generic feed。每个版本
 在仓库根目录执行：
 
 ```powershell
-.\scripts\release-desktop.ps1 -Version 1.0.4 -Publish
+.\scripts\release-desktop.ps1 -Version <version> -Publish
 ```
 
 脚本会更新版本号、构建并核验 SHA-512，先上传 EXE 和 blockmap，最后原子切换

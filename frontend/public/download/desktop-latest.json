@@ -2,15 +2,15 @@
   "schema_version": 1,
   "platform": "windows",
   "architecture": "x64",
-  "version": "1.0.4",
-  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.0.4-x64.exe",
-  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.0.4-x64.exe",
-  "size_bytes": 102020573,
-  "published_at": "2026-08-26T03:04:12.5011719Z",
+  "version": "1.0.5",
+  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.0.5-x64.exe",
+  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.0.5-x64.exe",
+  "size_bytes": 93527494,
+  "published_at": "2026-08-26T03:52:26.6691323Z",
   "notes": [
-    "支持后台下载桌面端更新，并在左下角显示实时进度。",
-    "下载完成后可一键重启并安装，新版会自动回到知萃。",
-    "网页功能更新与原生客户端更新采用独立、安全的发布通道。"
+    "精简未使用的 Electron 语言资源，安装包减少约 8 MiB。",
+    "移除生产包内无用的源码映射与类型声明，安装后占用减少约 46 MiB。",
+    "完整保留抖音、B站账号连接、视频同步和自动更新能力。"
   ],
   "code_signed": false,
   "release_status": "public_download"

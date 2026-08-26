@@ -1,6 +1,6 @@
 {
   "name": "zhicui-desktop",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "知萃 Windows 桌面应用",
   "main": "dist/main.js",
   "author": "知萃",
@@ -32,12 +32,20 @@
     "productName": "知萃",
     "artifactName": "Zhicui-Setup-${version}-${arch}.${ext}",
     "asar": true,
+    "compression": "maximum",
+    "electronLanguages": [
+      "zh-CN",
+      "en-US"
+    ],
     "directories": {
       "output": "release-${version}"
     },
     "files": [
       "dist/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/**/*.map",
+      "!node_modules/**/*.d.ts",
+      "!node_modules/playwright-core/types/**/*"
     ],
     "extraResources": [
       {

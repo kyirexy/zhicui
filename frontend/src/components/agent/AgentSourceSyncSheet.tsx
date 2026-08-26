@@ -37,7 +37,9 @@ import type {
   CreatorSourceCatalog,
   CreatorSourcePreview,
   CreatorSyncRun,
+  DouyinLibraryStatus,
 } from '@/lib/types';
+import { formatDouyinSyncError } from '@/lib/douyinSyncFeedback';
 import { useCreatorSync } from '@/lib/hooks/CreatorSyncContext';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import {
@@ -105,6 +107,9 @@ export default function AgentSourceSyncSheet({
   const [platform, setPlatform] = useState<PlatformBrand>('douyin');
   const [sourceKind, setSourceKind] = useState<'account' | 'creator'>('account');
   const [douyinMode, setDouyinMode] = useState<'collect' | 'like'>('like');
+  const [douyinReadiness, setDouyinReadiness] = useState<
+    DouyinLibraryStatus['private_list_readiness'] | null
+  >(null);
   const [syncCount, setSyncCount] = useState<(typeof syncCounts)[number]>(50);
   const [urls, setUrls] = useState('');
   const [pending, setPending] = useState(false);
@@ -214,6 +219,18 @@ export default function AgentSourceSyncSheet({
   }, [loadCreatorData, open, refreshCreatorRuns]);
 
   useEffect(() => {
+    if (!open || sourceKind !== 'account' || platform !== 'douyin') return;
+    let disposed = false;
+    void getDouyinLibraryStatus().then((response) => {
+      if (disposed || !response.success || !response.data) return;
+      setDouyinReadiness(response.data.private_list_readiness || null);
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [open, platform, sourceKind]);
+
+  useEffect(() => {
     if (!open) return;
     const run = activeCreatorRuns[0];
     if (run) {
@@ -317,9 +334,31 @@ export default function AgentSourceSyncSheet({
       if (!connection.success || !connection.data?.cookie_valid) {
         throw new Error('抖音账号连接已失效，请重新连接账号后再同步');
       }
+      const readiness = connection.data.private_list_readiness || null;
+      setDouyinReadiness(readiness);
+      if (readiness?.reported && douyinMode === 'collect' && !readiness.collection_ready) {
+        throw new Error(formatDouyinSyncError('', '收藏', {
+          error_code: 'argus_uifid_missing',
+          needs_action: true,
+        }));
+      }
+      if (readiness?.reported && douyinMode === 'like' && !readiness.like_ready) {
+        throw new Error(formatDouyinSyncError('', '喜欢', {
+          error_code: 'session_expired',
+          needs_action: true,
+        }));
+      }
       const started = await collectDouyinLibrary(syncCount, douyinMode);
       if (!started.success || !started.data) {
-        throw new Error(started.error || '同步未能启动，请检查抖音连接');
+        throw new Error(formatDouyinSyncError(
+          started.error || '同步未能启动，请检查抖音连接',
+          modeLabel,
+          {
+            error_code: started.error_details?.code,
+            retry_after_seconds: started.error_details?.retry_after_seconds,
+            needs_action: started.error_details?.needs_action,
+          },
+        ));
       }
       let collectionSuccess = 0;
       let collectionFinished = false;
@@ -331,7 +370,13 @@ export default function AgentSourceSyncSheet({
         setMessage(job.processed
           ? `正在同步 ${job.processed}/${job.target || syncCount}`
           : `正在读取抖音${modeLabel}，首次同步可能需要 1–2 分钟…`);
-        if (job.status === 'failed') throw new Error(job.error || '同步失败，请稍后重试');
+        if (job.status === 'failed') {
+          throw new Error(formatDouyinSyncError(job.error, modeLabel, {
+            error_code: job.error_code,
+            retry_after_seconds: job.retry_after_seconds,
+            needs_action: job.needs_action,
+          }));
+        }
         if (attempt >= 44 && !job.processed) {
           throw new Error('抖音没有返回视频，请重新连接账号后重试');
         }
@@ -679,6 +724,12 @@ export default function AgentSourceSyncSheet({
                   <button type="button" role="radio" aria-checked={douyinMode === 'like'} disabled={pending} onClick={() => { setDouyinMode('like'); setMessage(''); }}><Heart size={17} weight={douyinMode === 'like' ? 'fill' : 'regular'} />喜欢</button>
                   <button type="button" role="radio" aria-checked={douyinMode === 'collect'} disabled={pending} onClick={() => { setDouyinMode('collect'); setMessage(''); }}><BookmarkSimple size={17} weight={douyinMode === 'collect' ? 'fill' : 'regular'} />收藏</button>
                 </div>
+                {douyinReadiness?.reported
+                  && !douyinReadiness.collection_ready && (
+                  <p role="status">
+                    收藏读取条件未完成，请重新连接抖音账号并等待登录确认；喜欢仍可正常同步。
+                  </p>
+                )}
                 <div className={styles.countRow}>
                   <span>同步最近</span>
                   <div role="radiogroup" aria-label="同步视频数量">

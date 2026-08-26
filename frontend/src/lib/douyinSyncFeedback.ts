@@ -14,6 +14,13 @@ export interface CollectionSyncMessageInput {
   requestedCount: number;
 }
 
+export interface MultiSourceSyncResult {
+  sourceLabel: string;
+  checked: number;
+  newlyVisible: number;
+  error?: string;
+}
+
 function boundedCount(value: number | undefined): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.trunc(value || 0));
@@ -26,6 +33,30 @@ export function hasDouyinSyncFailureDiagnostic(
   const errorCode = (input.error_code || '').trim();
   const error = (input.error || '').trim();
   return Boolean(errorCode || input.needs_action || error);
+}
+
+export function formatMultiSourceSyncSummary(
+  results: MultiSourceSyncResult[],
+): string {
+  const successful = results.filter((result) => !result.error);
+  const failed = results.filter((result) => Boolean(result.error));
+  if (successful.length === 0) {
+    return failed.length > 0
+      ? failed.map((result) => `${result.sourceLabel}：${result.error}`).join('；')
+      : '没有可同步的来源';
+  }
+  const checked = successful.reduce(
+    (total, result) => total + boundedCount(result.checked),
+    0,
+  );
+  const newlyVisible = successful.reduce(
+    (total, result) => total + boundedCount(result.newlyVisible),
+    0,
+  );
+  const failedSuffix = failed.length > 0
+    ? `；${failed.map((result) => `${result.sourceLabel}：${result.error}`).join('；')}`
+    : '';
+  return `已同步 ${successful.length} 个来源，共检查 ${checked} 条，新显示 ${newlyVisible} 条${failedSuffix}`;
 }
 
 export function formatDouyinSyncError(
@@ -42,11 +73,18 @@ export function formatDouyinSyncError(
   const retryHint = retrySeconds > 0
     ? `约 ${Math.max(1, Math.ceil(retrySeconds / 60))} 分钟后可再试。`
     : '请稍后再试。';
+  if (
+    diagnostics.error_code === 'argus_uifid_missing'
+    || /收藏登录信息不完整|UIFID/i.test(cleaned)
+  ) {
+    return '收藏读取条件还没有完成。请重新连接抖音账号，扫码后等待页面确认登录完成；喜欢和我的作品仍可正常同步。';
+  }
   if (diagnostics.error_code === 'verification_required' || diagnostics.needs_action) {
     return `抖音要求重新验证账号后才能读取${sourceLabel}。已有资料不会丢失，请在账号管理中完成验证。`;
   }
   if (
     diagnostics.error_code === 'source_blocked'
+    || diagnostics.error_code === 'risk_controlled'
     || /403|风控|www-hj\.douyin\.com|挑战域|平台风控拒绝/i.test(cleaned)
   ) {
     return `抖音暂时限制了${sourceLabel}列表读取。账号仍保持绑定，已有资料不会丢失；${retryHint}暂时不要连续同步。`;

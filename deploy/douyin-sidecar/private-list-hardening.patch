@@ -1,0 +1,599 @@
+diff --git a/core/api_client.py b/core/api_client.py
+index 04a0682..5a72cc2 100644
+--- a/core/api_client.py
++++ b/core/api_client.py
+@@ -14,0 +15 @@ from auth import MsTokenManager
++from core.private_list_websign import PrivateListWebSignError, sign_url as sign_private_list_url
+@@ -138,0 +140,7 @@ _USER_AGENT_POOL = [
++_PRIVATE_LIST_USER_AGENT = (
++    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
++    "AppleWebKit/537.36 (KHTML, like Gecko) "
++    "Chrome/123.0.0.0 Safari/537.36"
++)
++_PRIVATE_LIST_LIKES_BASE_URL = "https://www-hj.douyin.com"
++
+@@ -280 +288,7 @@ class DouyinAPIClient:
+-    def _build_abogus_url(self, base_url: str, query: str) -> Optional[Tuple[str, str]]:
++    def _build_abogus_url(
++        self,
++        base_url: str,
++        query: str,
++        *,
++        user_agent: Optional[str] = None,
++    ) -> Optional[Tuple[str, str]]:
+@@ -284,0 +299 @@ class DouyinAPIClient:
++            selected_user_agent = user_agent or self.headers["User-Agent"]
+@@ -286 +301 @@ class DouyinAPIClient:
+-            signer = ABogus(fp=browser_fp, user_agent=self.headers["User-Agent"])
++            signer = ABogus(fp=browser_fp, user_agent=selected_user_agent)
+@@ -415 +430,5 @@ class DouyinAPIClient:
+-                        self.last_response_signal = f"http_{int(response.status)}"
++                        failure_body = await response.content.read(1024)
++                        self.last_response_signal = self._response_block_signal(
++                            int(response.status),
++                            failure_body,
++                        )
+@@ -419 +438 @@ class DouyinAPIClient:
+-                            "duration_ms=%d suppress_error=%s",
++                            "duration_ms=%d suppress_error=%s signal=%s",
+@@ -425,0 +445 @@ class DouyinAPIClient:
++                            self.last_response_signal,
+@@ -429 +449,8 @@ class DouyinAPIClient:
+-                    self.last_response_signal = f"http_{int(response.status)}"
++                    if response.status == 429:
++                        failure_body = await response.content.read(1024)
++                        self.last_response_signal = self._response_block_signal(
++                            int(response.status),
++                            failure_body,
++                        )
++                    else:
++                        self.last_response_signal = "network_error"
+@@ -477,0 +505,114 @@ class DouyinAPIClient:
++    @staticmethod
++    def _response_block_signal(status: int, body: bytes) -> str:
++        """Classify a bounded upstream failure without retaining its payload."""
++        marker = body[:1024].decode("utf-8", errors="ignore").lower()
++        if "uifid not found" in marker:
++            return "argus_uifid_missing"
++        if "verify" in marker or "captcha" in marker:
++            return "verification_required"
++        if status in {401, 419}:
++            return "session_expired"
++        if status in {403, 429} or "argussecurityplugin" in marker:
++            return "risk_controlled"
++        return "connector_error"
++
++    async def _request_prepared_json(
++        self,
++        path: str,
++        prepared_url: str,
++        *,
++        request_headers: Optional[Dict[str, str]] = None,
++    ) -> Dict[str, Any]:
++        """Execute one pre-signed private-list request with redacted diagnostics."""
++        await self._ensure_session()
++        self.last_http_status = 0
++        self.last_http_path = path
++        self.last_response_signal = ""
++        started = time.monotonic()
++        logger.info("Douyin private-list request: path=%s", path)
++        try:
++            async with self._session.get(
++                prepared_url,
++                headers={
++                    **self.headers,
++                    **(request_headers or {}),
++                },
++                proxy=self.proxy or None,
++            ) as response:
++                self.last_http_status = int(response.status)
++                body = await response.read()
++                if response.status != 200:
++                    self.last_response_signal = self._response_block_signal(
++                        int(response.status),
++                        body,
++                    )
++                    logger.warning(
++                        "Douyin private-list failure: path=%s status=%s signal=%s "
++                        "duration_ms=%d",
++                        path,
++                        response.status,
++                        self.last_response_signal,
++                        _elapsed_ms(started),
++                    )
++                    return {}
++                if not body:
++                    self.last_response_signal = "risk_controlled"
++                    logger.warning(
++                        "Douyin private-list empty response: path=%s duration_ms=%d",
++                        path,
++                        _elapsed_ms(started),
++                    )
++                    return {}
++                try:
++                    data = json.loads(body)
++                except (TypeError, ValueError, json.JSONDecodeError):
++                    self.last_response_signal = "connector_error"
++                    logger.warning(
++                        "Douyin private-list non-JSON response: path=%s bytes=%d "
++                        "duration_ms=%d",
++                        path,
++                        len(body),
++                        _elapsed_ms(started),
++                    )
++                    return {}
++                result = data if isinstance(data, dict) else {}
++                if _is_login_required(result):
++                    self.last_response_signal = "session_expired"
++                    return {}
++                _log_api_response(path, 0, 1, body, result, started)
++                return result
++        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
++            self.last_response_signal = "network_error"
++            logger.warning(
++                "Douyin private-list network failure: path=%s duration_ms=%d "
++                "error_type=%s",
++                path,
++                _elapsed_ms(started),
++                type(exc).__name__,
++            )
++            return {}
++
++    def _normalize_private_list_response(
++        self,
++        raw_data: Any,
++        *,
++        source: str,
++    ) -> Dict[str, Any]:
++        raw = raw_data if isinstance(raw_data, dict) else {}
++        status_code = raw.get("status_code")
++        complete = status_code in {0, "0"} and isinstance(raw.get("aweme_list"), list)
++        if not complete and not self.last_response_signal:
++            if _is_login_required(raw):
++                self.last_response_signal = "session_expired"
++            elif raw.get("verify_ticket"):
++                self.last_response_signal = "verification_required"
++            else:
++                self.last_response_signal = "connector_error"
++        normalized = self._normalize_paged_response(
++            raw,
++            item_keys=["aweme_list"],
++            source=source,
++        )
++        normalized["complete"] = complete
++        return normalized
++
+@@ -557,9 +698 @@ class DouyinAPIClient:
+-        """构建「喜欢」接口的无签名直连参数模板。
+-
+-        参数模板忠实复刻 dysync.net（抖小云）验证过的 ``InitUserFavoriteParams``：
+-        该模板在宽松风控窗口下曾稳定命中真实 ``www.douyin.com`` 并拿到
+-        ``aweme_list=19``。关键差异点：version_code=170400 / version_name=17.4.0、
+-        屏幕 1536x960、browser_version=140、min_cursor/cut_version=1，且不携带
+-        ``uifid`` 参数（而不是空串）。签名路径的 ``_default_query`` 保持不动，
+-        此方法只服务 ``get_user_like_plain`` 这一条无签名快路径。
+-        """
++        """构建经真实账号验证的当前用户喜欢列表参数模板。"""
+@@ -571,3 +703,0 @@ class DouyinAPIClient:
+-            "update_version_code": "170400",
+-            "pc_client_type": "1",
+-            "pc_libra_divert": "Windows",
+@@ -577,2 +707,2 @@ class DouyinAPIClient:
+-            "screen_width": "1536",
+-            "screen_height": "960",
++            "screen_width": "1920",
++            "screen_height": "1080",
+@@ -582 +712 @@ class DouyinAPIClient:
+-            "browser_version": "140.0.0.0",
++            "browser_version": "123.0.0.0",
+@@ -585 +715 @@ class DouyinAPIClient:
+-            "engine_version": "140.0.0.0",
++            "engine_version": "123.0.0.0",
+@@ -588 +718 @@ class DouyinAPIClient:
+-            "cpu_core_num": "20",
++            "cpu_core_num": "16",
+@@ -593,6 +723 @@ class DouyinAPIClient:
+-            "round_trip_time": "0",
+-            "support_h265": "1",
+-            "support_dash": "1",
+-            "min_cursor": "0",
+-            "cut_version": "1",
+-            "whale_cut_token": "",
++            "round_trip_time": "50",
+@@ -600 +725 @@ class DouyinAPIClient:
+-            "sec_user_id": sec_uid,
++            "cursor": str(max_cursor),
+@@ -603 +727,0 @@ class DouyinAPIClient:
+-            "locate_query": "false",
+@@ -678 +802 @@ class DouyinAPIClient:
+-        """无签名直连喜欢接口（favorite/）。
++        """使用 SecSDK web-sign 读取当前账号的喜欢列表。
+@@ -680,7 +804 @@ class DouyinAPIClient:
+-        本地生成的 a_bogus 可能过期/被误杀：带错签名会 403 或被护航到
+-        www-hj.douyin.com，而不带任何签名反而命中真实 www.douyin.com。
+-        此方法用于签名路径 403 后的第一优先兜底。仅 favorite（喜欢）:
+-        listcollection（收藏）的无签名直连实测仍被 waf 拦截成 "blocked"。
+-
+-        与 ``get_user_like`` 的差异：使用 dysync 验证过的 favorite 参数模板
+-        并使用与登录页一致的 Referer，避免触发 Argus 的 UIFID/签名双重校验。
++        方法名为兼容现有 server 调用保留；实现已不再是 unsigned 请求。
+@@ -687,0 +806 @@ class DouyinAPIClient:
++        path = "/aweme/v1/web/aweme/favorite/"
+@@ -689,4 +808,33 @@ class DouyinAPIClient:
+-        raw = await self._request_json(
+-            "/aweme/v1/web/aweme/favorite/",
+-            params,
+-            unsigned=True,
++        endpoint = f"{_PRIVATE_LIST_LIKES_BASE_URL}{path}"
++        query = urlencode(params)
++        prepared = self._build_abogus_url(
++            endpoint,
++            query,
++            user_agent=_PRIVATE_LIST_USER_AGENT,
++        )
++        if prepared:
++            prepared_url = prepared[0]
++        else:
++            prepared_url, _ = XBogus(_PRIVATE_LIST_USER_AGENT).build(
++                f"{endpoint}?{query}"
++            )
++        try:
++            signed_url, websign_headers = await asyncio.to_thread(
++                sign_private_list_url,
++                prepared_url,
++                self.cookies,
++                _PRIVATE_LIST_USER_AGENT,
++            )
++        except PrivateListWebSignError as exc:
++            self.last_http_status = 0
++            self.last_http_path = path
++            self.last_response_signal = "connector_error"
++            logger.warning(
++                "Douyin private-list signing failed: path=%s error_type=%s",
++                path,
++                type(exc).__name__,
++            )
++            return self._normalize_private_list_response({}, source="api_websign")
++        raw = await self._request_prepared_json(
++            path,
++            signed_url,
+@@ -693,0 +842 @@ class DouyinAPIClient:
++                **websign_headers,
+@@ -695,0 +845 @@ class DouyinAPIClient:
++                "User-Agent": _PRIVATE_LIST_USER_AGENT,
+@@ -698 +848 @@ class DouyinAPIClient:
+-        return self._normalize_paged_response(raw, item_keys=["aweme_list"])
++        return self._normalize_private_list_response(raw, source="api_websign")
+@@ -770 +920 @@ class DouyinAPIClient:
+-        return self._normalize_paged_response(raw, item_keys=["aweme_list"])
++        return self._normalize_private_list_response(raw, source="api")
+@@ -797 +947 @@ class DouyinAPIClient:
+-        return self._normalize_paged_response(raw, item_keys=["aweme_list"])
++        return self._normalize_private_list_response(raw, source="api")
+diff --git a/server/app.py b/server/app.py
+index 5ccb0e8..d0f08bf 100644
+--- a/server/app.py
++++ b/server/app.py
+@@ -85 +85,10 @@ COLLECTION_BLOCK_SIGNALS = frozenset(
+-    {"blocked", "anti_bot_empty", "non_json", "http_403", "http_429"}
++    {
++        "blocked",
++        "anti_bot_empty",
++        "non_json",
++        "http_403",
++        "http_429",
++        "argus_uifid_missing",
++        "risk_controlled",
++        "verification_required",
++    }
+@@ -284,0 +294,24 @@ def _has_authenticated_session(cookies: Dict[str, str]) -> bool:
++def _private_list_readiness(cookies: Dict[str, str]) -> Dict[str, Any]:
++    """Return capability booleans without exposing private Cookie values."""
++    normalized = {
++        str(name or "").strip().lower(): str(value or "").strip()
++        for name, value in (cookies or {}).items()
++        if str(name or "").strip() and str(value or "").strip()
++    }
++    authenticated = any(
++        bool(normalized.get(name.lower()))
++        for name in AUTHENTICATED_SESSION_COOKIE_NAMES
++    )
++    missing: List[str] = []
++    if not authenticated:
++        missing.append("authenticated_session")
++    # UIFID_TEMP is deliberately not accepted: Argus requires the final UIFID.
++    if not normalized.get("uifid"):
++        missing.append("UIFID")
++    return {
++        "like_ready": authenticated,
++        "collection_ready": authenticated and "UIFID" not in missing,
++        "missing_requirements": missing,
++    }
++
++
+@@ -1371,0 +1405 @@ async def _fetch_library_metadata(
++    response_complete = False
+@@ -1393,0 +1428 @@ async def _fetch_library_metadata(
++            response_complete = bool(page.get("complete")) if isinstance(page, dict) else False
+@@ -1470,0 +1506,52 @@ async def _fetch_library_metadata(
++        if safe_mode in {"collection", "like"} and not response_complete:
++            if response_signal == "argus_uifid_missing":
++                raise SourceSyncError(
++                    "收藏登录信息不完整，请重新连接抖音账号后再试",
++                    error_code="argus_uifid_missing",
++                    source_mode=safe_mode,
++                    channel=channel,
++                    fallback_attempted=fallback_attempted,
++                    needs_action=True,
++                )
++            if response_signal in {"verification_required", "session_expired"}:
++                raise SourceSyncError(
++                    "抖音账号需要重新验证，请在账号管理中重新连接后再试",
++                    error_code=response_signal,
++                    source_mode=safe_mode,
++                    channel=channel,
++                    fallback_attempted=fallback_attempted,
++                    needs_action=True,
++                )
++            if response_signal == "risk_controlled" or last_http_status in {403, 429}:
++                raise SourceSyncError(
++                    "抖音暂时限制了该列表读取，已有资料不会丢失；请稍后再试",
++                    error_code="risk_controlled",
++                    source_mode=safe_mode,
++                    channel=channel,
++                    fallback_attempted=fallback_attempted,
++                    retry_after_seconds=deps.collection_cooldown_seconds,
++                )
++            raise SourceSyncError(
++                "抖音列表本次没有返回可确认的结果，已有资料不会丢失",
++                error_code=(
++                    "network_error"
++                    if response_signal == "network_error"
++                    else "connector_error"
++                ),
++                source_mode=safe_mode,
++                channel=channel,
++                fallback_attempted=fallback_attempted,
++            )
++        if safe_mode in {"collection", "like"} and response_complete:
++            return {
++                "total": 0,
++                "success": 0,
++                "failed": 0,
++                "skipped": 0,
++                "error_code": "",
++                "source_mode": safe_mode,
++                "channel": channel,
++                "fallback_attempted": fallback_attempted,
++                "retry_after_seconds": 0,
++                "needs_action": False,
++            }
+@@ -2433,0 +2521 @@ def build_app(config: ConfigLoader) -> FastAPI:
++            "private_list_readiness": _private_list_readiness(cookies),
+@@ -2472,0 +2561 @@ def build_app(config: ConfigLoader) -> FastAPI:
++            "private_list_readiness": _private_list_readiness(cookies),
+@@ -2915,0 +3005,32 @@ def build_app(config: ConfigLoader) -> FastAPI:
++        scoped = deps.session(scope)
++        readiness = _private_list_readiness(
++            scoped.cookie_manager.get_cookies()
++        )
++        if (
++            scope != DEFAULT_SESSION_SCOPE
++            and mode == "collection"
++            and not readiness["collection_ready"]
++        ):
++            raise HTTPException(
++                status_code=409,
++                detail={
++                    "code": "argus_uifid_missing",
++                    "message": "收藏登录信息不完整，请重新连接抖音账号后再试",
++                    "needs_action": True,
++                    "source_mode": "collection",
++                },
++            )
++        if (
++            scope != DEFAULT_SESSION_SCOPE
++            and mode in {"like", "post"}
++            and not readiness["like_ready"]
++        ):
++            raise HTTPException(
++                status_code=401,
++                detail={
++                    "code": "session_expired",
++                    "message": "抖音账号登录已失效，请重新连接后再试",
++                    "needs_action": True,
++                    "source_mode": mode,
++                },
++            )
+diff --git a/tests/test_api_client.py b/tests/test_api_client.py
+index 1f9fd11..4f47339 100644
+--- a/tests/test_api_client.py
++++ b/tests/test_api_client.py
+@@ -7,0 +8 @@ import pytest
++import core.api_client as api_client_module
+@@ -36,0 +38,60 @@ def test_build_signed_path_accepts_absolute_base_override():
++@pytest.mark.asyncio
++async def test_verified_likes_use_websign_and_require_explicit_list(monkeypatch):
++    client = DouyinAPIClient({"msToken": "token-1", "sessionid": "private"})
++    captured = {}
++
++    monkeypatch.setattr(
++        client,
++        "_build_abogus_url",
++        lambda *_args, **_kwargs: ("https://www-hj.douyin.com/favorite?a_bogus=x", "ua"),
++    )
++    monkeypatch.setattr(
++        api_client_module,
++        "sign_private_list_url",
++        lambda url, _cookies, _ua: (url + "&uifid=safe", {"uifid": "safe"}),
++    )
++
++    async def fake_request(path, prepared_url, *, request_headers=None):
++        captured.update(
++            path=path,
++            prepared_url=prepared_url,
++            request_headers=dict(request_headers or {}),
++        )
++        return {
++            "status_code": 0,
++            "aweme_list": [{"aweme_id": "liked-1"}],
++            "has_more": 1,
++            "max_cursor": 10,
++        }
++
++    monkeypatch.setattr(client, "_request_prepared_json", fake_request)
++
++    result = await client.get_user_like_plain("self", max_cursor=0, count=5)
++
++    assert captured["path"] == "/aweme/v1/web/aweme/favorite/"
++    assert captured["prepared_url"].startswith("https://www-hj.douyin.com/")
++    assert result["complete"] is True
++    assert result["items"] == [{"aweme_id": "liked-1"}]
++
++
++def test_private_list_response_rejects_missing_list_shape():
++    client = DouyinAPIClient({"msToken": "token-1"})
++
++    result = client._normalize_private_list_response(
++        {"status_code": 0, "has_more": 0},
++        source="api_websign",
++    )
++
++    assert result["complete"] is False
++    assert result["items"] == []
++    assert client.last_response_signal == "connector_error"
++
++
++def test_private_list_block_signal_distinguishes_missing_uifid():
++    assert DouyinAPIClient._response_block_signal(
++        403,
++        b"Blocked by ArgusSecurityPlugin Uifid Not Found",
++    ) == "argus_uifid_missing"
++    assert DouyinAPIClient._response_block_signal(403, b"forbidden") == "risk_controlled"
++
++
+diff --git a/tests/test_server.py b/tests/test_server.py
+index 6582047..18ac0bd 100644
+--- a/tests/test_server.py
++++ b/tests/test_server.py
+@@ -625 +625,6 @@ async def test_empty_metadata_response_preserves_previous_catalog(tmp_path, monk
+-            return {"items": [], "has_more": False, "max_cursor": 0}
++            return {
++                "items": [],
++                "has_more": False,
++                "max_cursor": 0,
++                "complete": True,
++            }
+@@ -632,2 +637 @@ async def test_empty_metadata_response_preserves_previous_catalog(tmp_path, monk
+-    with pytest.raises(RuntimeError, match="已保留上次同步结果"):
+-        await server_app._fetch_library_metadata(deps, "collection", 50)
++    result = await server_app._fetch_library_metadata(deps, "collection", 50)
+@@ -635,0 +640,2 @@ async def test_empty_metadata_response_preserves_previous_catalog(tmp_path, monk
++    assert result["total"] == 0
++    assert result["failed"] == 0
+@@ -660 +666,6 @@ async def test_empty_metadata_response_is_valid_for_new_account(tmp_path, monkey
+-            return {"items": [], "has_more": False, "max_cursor": 0}
++            return {
++                "items": [],
++                "has_more": False,
++                "max_cursor": 0,
++                "complete": True,
++            }
+@@ -675,0 +687,39 @@ async def test_empty_metadata_response_is_valid_for_new_account(tmp_path, monkey
++@pytest.mark.asyncio
++async def test_private_list_403_is_not_reported_as_empty_success(tmp_path, monkeypatch):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path), server={"metadata_only": True})
++    app = build_app(config)
++    deps = app.state.deps.session(server_app.DEFAULT_SESSION_SCOPE)
++
++    class RiskControlledAPIClient:
++        def __init__(self, *_args, **_kwargs):
++            self.last_http_status = 403
++            self.last_response_signal = "risk_controlled"
++
++        async def __aenter__(self):
++            return self
++
++        async def __aexit__(self, *_args):
++            return None
++
++        async def get_user_collection(self, *_args, **_kwargs):
++            return {
++                "items": [],
++                "has_more": False,
++                "max_cursor": 0,
++                "complete": False,
++            }
++
++        get_user_like_plain = get_user_collection
++        get_user_post = get_user_collection
++
++    monkeypatch.setattr(server_app, "DouyinAPIClient", RiskControlledAPIClient)
++
++    with pytest.raises(server_app.SourceSyncError) as raised:
++        await server_app._fetch_library_metadata(deps, "collection", 50)
++
++    assert raised.value.error_code == "risk_controlled"
++    assert raised.value.retry_after_seconds > 0
++    assert not deps.catalog_path.exists()
++
++
+@@ -813,0 +864,52 @@ def test_cookie_status_never_returns_cookie_values(tmp_path):
++def test_private_list_readiness_is_source_specific_and_redacted(tmp_path):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path))
++    app = build_app(config)
++    session = app.state.deps.session(server_app.DEFAULT_SESSION_SCOPE)
++    session.cookie_manager.cookies = {
++        "sessionid": "private-session-value",
++        "UIFID_TEMP": "temporary-value",
++    }
++
++    with TestClient(app) as client:
++        response = client.get("/api/v1/cookies")
++
++    readiness = response.json()["private_list_readiness"]
++    assert readiness == {
++        "like_ready": True,
++        "collection_ready": False,
++        "missing_requirements": ["UIFID"],
++    }
++    assert "private-session-value" not in response.text
++    assert "temporary-value" not in response.text
++
++
++def test_scoped_collection_preflight_requires_final_uifid(tmp_path):
++    config = ConfigLoader(None)
++    config.update(path=str(tmp_path), server={"metadata_only": True})
++    app = build_app(config)
++    scope = "private-list-scope-123456789012345"
++    session = app.state.deps.session(scope)
++    session.cookie_manager.cookies = {
++        "sessionid": "private-session-value",
++        "UIFID_TEMP": "temporary-value",
++    }
++
++    with TestClient(app) as client:
++        response = client.post(
++            "/api/v1/auto-collect",
++            json={"mode": "collection", "count": 5},
++            headers={"X-Zhicui-Scope": scope},
++        )
++
++    assert response.status_code == 409
++    assert response.json()["detail"] == {
++        "code": "argus_uifid_missing",
++        "message": "收藏登录信息不完整，请重新连接抖音账号后再试",
++        "needs_action": True,
++        "source_mode": "collection",
++    }
++    assert "private-session-value" not in response.text
++    assert "temporary-value" not in response.text
++
++
+@@ -976,0 +1079,4 @@ def test_scoped_job_cannot_be_read_from_another_scope(tmp_path, monkeypatch):
++    app.state.deps.session(scope_a).cookie_manager.cookies = {
++        "sessionid": "private-session-value",
++        "UIFID": "private-uifid-value",
++    }

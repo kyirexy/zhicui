@@ -133,10 +133,14 @@ function validationLocations(detail: unknown): string[] {
 
 async function responseErrorMessage(response: Response): Promise<string> {
   const payload: unknown = await response.json().catch(() => null);
+  return responseErrorMessageFromPayload(response.status, payload);
+}
+
+function responseErrorMessageFromPayload(status: number, payload: unknown): string {
   const data = isRecord(payload) ? payload : {};
 
-  if (response.status === 401) return '请先登录';
-  if (response.status === 422) {
+  if (status === 401) return '请先登录';
+  if (status === 422) {
     if (typeof data.detail === 'string' && data.detail) return data.detail;
     if (isRecord(data.detail) && typeof data.detail.message === 'string') {
       return data.detail.message;
@@ -155,7 +159,28 @@ async function responseErrorMessage(response: Response): Promise<string> {
   const messages = validationMessages(data.detail);
   if (messages.length > 0) return messages.join('；');
   if (typeof data.message === 'string' && data.message) return data.message;
-  return `请求失败（${response.status}）`;
+  return `请求失败（${status}）`;
+}
+
+function responseErrorDetails(payload: unknown): ApiResponse<never>['error_details'] {
+  const data = isRecord(payload) ? payload : {};
+  const detail = isRecord(data.detail) ? data.detail : null;
+  if (!detail) return undefined;
+  const code = typeof detail.code === 'string' ? detail.code : undefined;
+  const sourceMode = typeof detail.source_mode === 'string'
+    ? detail.source_mode
+    : undefined;
+  const retryAfter = typeof detail.retry_after_seconds === 'number'
+    ? Math.max(0, Math.min(21600, Math.trunc(detail.retry_after_seconds)))
+    : undefined;
+  return {
+    ...(code ? { code } : {}),
+    ...(typeof detail.needs_action === 'boolean'
+      ? { needs_action: detail.needs_action }
+      : {}),
+    ...(sourceMode ? { source_mode: sourceMode } : {}),
+    ...(retryAfter !== undefined ? { retry_after_seconds: retryAfter } : {}),
+  };
 }
 
 function requestFailureMessage(error: unknown): string {
@@ -174,10 +199,12 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<ApiR
     });
 
     if (!response.ok) {
+      const payload: unknown = await response.json().catch(() => null);
       return {
         success: false,
-        error: await responseErrorMessage(response),
+        error: responseErrorMessageFromPayload(response.status, payload),
         status: response.status,
+        error_details: responseErrorDetails(payload),
       };
     }
 

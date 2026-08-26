@@ -991,7 +991,7 @@
 
 .sourceAccountSummary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1px;
   margin: 0 0 12px;
   overflow: hidden;
@@ -1033,6 +1033,10 @@
   align-items: center;
   gap: 5px;
   color: var(--accent-brand);
+}
+
+.sourceAccountSummary dd[data-status='attention'] {
+  color: var(--accent-amber);
 }
 
 .accountTime {

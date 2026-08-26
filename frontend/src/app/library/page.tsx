@@ -86,6 +86,7 @@ import {
 import {
   formatCollectionSyncMessage,
   formatDouyinSyncError,
+  formatMultiSourceSyncSummary,
   hasDouyinSyncFailureDiagnostic,
 } from '@/lib/douyinSyncFeedback';
 import { useLocalStorage } from '@/lib/hooks/useLocalStorage';
@@ -1820,6 +1821,11 @@ export default function VideoLibraryPage() {
         error: formatDouyinSyncError(
           response.error || `${requestedSourceLabel}采集任务启动失败`,
           requestedSourceLabel,
+          {
+            error_code: response.error_details?.code,
+            retry_after_seconds: response.error_details?.retry_after_seconds,
+            needs_action: response.error_details?.needs_action,
+          },
         ),
       };
     }
@@ -1855,7 +1861,12 @@ export default function VideoLibraryPage() {
       if (
         requestedMode === 'collect'
         && finalJob
-        && (finalJob.error_code === 'source_blocked' || finalJob.error_code === 'verification_required')
+        && (
+          finalJob.error_code === 'source_blocked'
+          || finalJob.error_code === 'risk_controlled'
+          || finalJob.error_code === 'argus_uifid_missing'
+          || finalJob.error_code === 'verification_required'
+        )
       ) {
         setSourceReadability((current) => ({
           ...current,
@@ -1929,9 +1940,24 @@ export default function VideoLibraryPage() {
     persistedModes: DouyinSourceMode[],
     countOverride?: number,
   ): Promise<{ started: boolean }> => {
-    const modes = requestedModes.length > 0
+    const selectedModes = requestedModes.length > 0
       ? requestedModes.slice(0, SOURCE_MODES.length)
       : [sourceModeRef.current];
+    const readiness = status?.private_list_readiness;
+    const blockedModes = readiness?.reported
+      ? selectedModes.filter((mode) => (
+          mode === 'collect' ? !readiness.collection_ready : !readiness.like_ready
+        ))
+      : [];
+    const modes = selectedModes.filter((mode) => !blockedModes.includes(mode));
+    if (blockedModes.length > 0) {
+      const blockedLabels = blockedModes.map((mode) => (
+        SOURCE_MODES.find((item) => item.value === mode)?.label || '该来源'
+      ));
+      publishSourceManagerNotice(
+        `${blockedLabels.join('、')}当前不可读取，请重新连接抖音账号并等待登录确认；其他来源仍可同步。`,
+      );
+    }
     if (refreshing || !loggedIn || modes.length === 0) return { started: false };
     const requestedCount = clampInteger(countOverride ?? syncCount, 1, MAX_SYNC_COUNT);
     saveLibraryQuickSyncPreferences(
@@ -2012,27 +2038,15 @@ export default function VideoLibraryPage() {
         }),
       );
     } else {
-      const checkedTotal = successful.reduce(
-        (total, result) => total + (result.finalJob?.success || result.finalJob?.total || 0),
-        0,
-      );
-      const newTotal = allRefreshed.reduce(
-        (total, result) => total + result.newlyVisible.length,
-        0,
-      );
-      const failedMessages = results
-        .filter((result) => result.error)
-        .map((result) => {
-          const label = SOURCE_MODES.find(
-            (mode) => mode.value === result.requestedMode,
-          )?.label || '该来源';
-          return `${label}：${result.error}`;
-        });
-      const suffix = failedMessages.length > 0
-        ? `；${failedMessages.join('；')}`
-        : '';
       publishSourceManagerNotice(
-        `已同步 ${successful.length} 个来源，共检查 ${checkedTotal} 条，新显示 ${newTotal} 条${suffix}`,
+        formatMultiSourceSyncSummary(results.map((result) => ({
+          sourceLabel: SOURCE_MODES.find(
+            (mode) => mode.value === result.requestedMode,
+          )?.label || '该来源',
+          checked: result.finalJob?.success || result.finalJob?.total || 0,
+          newlyVisible: result.newlyVisible.length,
+          error: result.error || undefined,
+        }))),
       );
     }
 
@@ -2883,21 +2897,50 @@ export default function VideoLibraryPage() {
                     {formatAccountTime(status?.binding?.last_sync_at)}
                   </dd>
                 </div>
+                {status?.private_list_readiness?.reported && (
+                  <>
+                    <div>
+                      <dt>喜欢读取</dt>
+                      <dd data-status={status.private_list_readiness.like_ready ? 'connected' : 'attention'}>
+                        {status.private_list_readiness.like_ready ? '可以同步' : '需要重新连接'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>收藏读取</dt>
+                      <dd data-status={status.private_list_readiness.collection_ready ? 'connected' : 'attention'}>
+                        {status.private_list_readiness.collection_ready ? '可以同步' : '登录信息不完整'}
+                      </dd>
+                    </div>
+                  </>
+                )}
               </dl>
             )}
             <div className="library-source-main">
               <div className="library-source-modes" role="group" aria-label="选择要同步的抖音来源，可多选">
                 {SOURCE_MODES.map(({ value, label, Icon }) => {
                   const active = sourceManagerModes.includes(value);
-                  const collectionUnavailable = value === 'collect'
-                    && Boolean(collectionReadability)
-                    && (collectionRetryMinutes > 0 || Boolean(collectionReadability?.needsAction));
+                  const readinessUnavailable = Boolean(
+                    status?.private_list_readiness?.reported
+                    && (
+                      value === 'collect'
+                        ? !status.private_list_readiness.collection_ready
+                        : !status.private_list_readiness.like_ready
+                    ),
+                  );
+                  const collectionUnavailable = value === 'collect' && (
+                    readinessUnavailable
+                    || (
+                      Boolean(collectionReadability)
+                      && (collectionRetryMinutes > 0 || Boolean(collectionReadability?.needsAction))
+                    )
+                  );
+                  const sourceUnavailable = readinessUnavailable || collectionUnavailable;
                   return (
                     <button
                       type="button"
                       key={value}
                       className={active ? 'is-active' : ''}
-                      data-unavailable={collectionUnavailable || undefined}
+                      data-unavailable={sourceUnavailable || undefined}
                       aria-pressed={active}
                       disabled={refreshing || batchExtracting}
                       onClick={() => {
@@ -2913,9 +2956,11 @@ export default function VideoLibraryPage() {
                       <Icon size={17} />
                       <strong>{label}</strong>
                       <small>
-                        {collectionUnavailable
-                          ? collectionReadability?.needsAction
-                            ? '需要验证账号'
+                        {sourceUnavailable
+                          ? readinessUnavailable
+                            ? value === 'collect' ? '需重新连接' : '登录已失效'
+                            : collectionReadability?.needsAction
+                              ? '需要验证账号'
                             : `约 ${collectionRetryMinutes} 分钟后重试`
                           : active ? '已选' : '未选'}
                       </small>
@@ -2942,6 +2987,16 @@ export default function VideoLibraryPage() {
                 </button>
               </div>
             </div>
+
+            {status?.private_list_readiness?.reported
+              && !status.private_list_readiness.collection_ready && (
+              <div className={styles.sourceNotice} role="status">
+                <Info size={15} aria-hidden="true" />
+                <span>
+                  收藏读取条件未完成，请重新连接抖音账号并等待登录确认；喜欢和我的作品不受影响。
+                </span>
+              </div>
+            )}
 
             <details className="library-processing-settings">
               <summary className="library-processing-heading">

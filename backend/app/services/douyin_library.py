@@ -35,6 +35,74 @@ _BINDING_REF_PATTERN = re.compile(r"^dyb-[0-9a-f]{20}$")
 class DouyinLibraryError(RuntimeError):
     """Raised when the companion service is unavailable or returns bad data."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "connector_error",
+        needs_action: bool = False,
+        source_mode: str = "",
+        retry_after_seconds: int = 0,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.needs_action = bool(needs_action)
+        self.source_mode = source_mode
+        self.retry_after_seconds = max(
+            0,
+            min(int(retry_after_seconds or 0), 21600),
+        )
+
+
+_CONNECTOR_ERROR_MESSAGES = {
+    "argus_uifid_missing": "收藏登录信息不完整，请重新连接抖音账号后再试",
+    "risk_controlled": (
+        "抖音暂时限制了列表读取。账号仍保持绑定，已有资料不会丢失；"
+        "请稍后再试，暂时不要连续同步"
+    ),
+    "verification_required": "抖音要求完成验证，请重新连接账号后再试",
+    "session_expired": "抖音登录状态已失效，请重新连接账号",
+    "network_error": "抖音连接器网络暂时不可用，请稍后重试",
+    "connector_error": "抖音连接器返回异常，请稍后重试",
+}
+_STRUCTURED_CONNECTOR_ERROR_CODES = set(_CONNECTOR_ERROR_MESSAGES)
+
+
+def _connector_error_from_response(
+    detail: Any,
+    status_code: int,
+) -> DouyinLibraryError:
+    raw = detail if isinstance(detail, dict) else {}
+    code = str(raw.get("code") or "").strip()
+    if code == "source_blocked":
+        code = "risk_controlled"
+    if code not in _STRUCTURED_CONNECTOR_ERROR_CODES:
+        if status_code in {401, 419}:
+            code = "session_expired"
+        elif status_code in {403, 429}:
+            code = "risk_controlled"
+        else:
+            code = "connector_error"
+    raw_mode = str(raw.get("source_mode") or "").strip()
+    source_mode = "collect" if raw_mode == "collection" else raw_mode
+    if source_mode not in {"collect", "like", "post"}:
+        source_mode = ""
+    try:
+        retry_after = int(raw.get("retry_after_seconds") or 0)
+    except (TypeError, ValueError):
+        retry_after = 0
+    return DouyinLibraryError(
+        _CONNECTOR_ERROR_MESSAGES[code],
+        code=code,
+        needs_action=(
+            bool(raw.get("needs_action"))
+            or code
+            in {"argus_uifid_missing", "verification_required", "session_expired"}
+        ),
+        source_mode=source_mode,
+        retry_after_seconds=retry_after,
+    )
+
 
 def _base_url() -> str:
     return settings.DOUYIN_DOWNLOADER_URL.strip().rstrip("/")
@@ -74,17 +142,25 @@ def _request(
             )
             if not response.ok:
                 try:
-                    detail = str(response.json().get("detail") or "").strip()
+                    payload = response.json()
+                    detail = payload.get("detail") if isinstance(payload, dict) else None
                 except (AttributeError, ValueError):
-                    detail = ""
-                if detail:
-                    raise DouyinLibraryError(f"抖音收藏连接器拒绝操作：{detail}")
+                    detail = None
+                raise _connector_error_from_response(detail, response.status_code)
             response.raise_for_status()
             return response.json()
     except DouyinLibraryError:
         raise
-    except (requests.RequestException, ValueError) as exc:
-        raise DouyinLibraryError(f"抖音收藏连接器暂不可用：{exc}") from exc
+    except requests.RequestException as exc:
+        raise DouyinLibraryError(
+            "抖音收藏连接器暂不可用，请稍后重试",
+            code="network_error",
+        ) from exc
+    except ValueError as exc:
+        raise DouyinLibraryError(
+            "抖音收藏连接器返回了无法识别的数据",
+            code="connector_error",
+        ) from exc
 
 
 def _request_qr(path: str, session_scope: str) -> dict[str, Any]:
@@ -137,6 +213,10 @@ def connection_status(session_scope: str) -> dict[str, Any]:
             "storage_mode": "unknown",
             "login_browser_mode": "unavailable",
             "max_sync_count": _MAX_SYNC_COUNT,
+            "private_list_readiness": _safe_private_list_readiness(
+                None,
+                cookie_valid=False,
+            ),
             "error": str(exc),
         }
 
@@ -144,6 +224,10 @@ def connection_status(session_scope: str) -> dict[str, Any]:
     cookie_valid = False
     cookie_count = 0
     cookie_error: str | None = None
+    private_list_readiness = _safe_private_list_readiness(
+        None,
+        cookie_valid=False,
+    )
     if connected:
         try:
             cookie_state = _request(
@@ -154,6 +238,10 @@ def connection_status(session_scope: str) -> dict[str, Any]:
             )
             cookie_valid = bool(cookie_state.get("valid"))
             cookie_count = int(cookie_state.get("count") or 0)
+            private_list_readiness = _safe_private_list_readiness(
+                cookie_state.get("private_list_readiness"),
+                cookie_valid=cookie_valid,
+            )
         except DouyinLibraryError as exc:
             # 连接器健康与某个账号的会话读取是两件事。会话目录刚创建、
             # 正在换绑或短暂被占用时，仍应允许用户继续扫码，而不是把整套
@@ -181,7 +269,36 @@ def connection_status(session_scope: str) -> dict[str, Any]:
         "collection_resilience": _safe_collection_resilience(
             health.get("collection_resilience")
         ),
+        "private_list_readiness": private_list_readiness,
         "error": cookie_error,
+    }
+
+
+def _safe_private_list_readiness(
+    value: Any,
+    *,
+    cookie_valid: bool,
+) -> dict[str, Any]:
+    raw = value if isinstance(value, dict) else None
+    if raw is None:
+        # Rolling-upgrade compatibility: an older sidecar did not report
+        # per-list readiness, so keep its prior behavior until it is replaced.
+        return {
+            "reported": False,
+            "like_ready": bool(cookie_valid),
+            "collection_ready": bool(cookie_valid),
+            "missing_requirements": [],
+        }
+    missing = [
+        str(item)
+        for item in (raw.get("missing_requirements") or [])
+        if str(item) in {"authenticated_session", "UIFID"}
+    ]
+    return {
+        "reported": True,
+        "like_ready": bool(raw.get("like_ready")),
+        "collection_ready": bool(raw.get("collection_ready")),
+        "missing_requirements": missing,
     }
 
 
@@ -202,6 +319,8 @@ def _safe_collection_resilience(value: Any) -> dict[str, Any]:
 _SAFE_SYNC_ERROR_CODES = {
     "",
     "source_blocked",
+    "argus_uifid_missing",
+    "risk_controlled",
     "verification_required",
     "session_expired",
     "network_error",
@@ -754,6 +873,30 @@ def trigger_collect(
         safe_count = max(1, min(int(count), _MAX_SYNC_COUNT))
     except (TypeError, ValueError):
         safe_count = 50
+    cookie_state = _request(
+        "GET",
+        "/api/v1/cookies",
+        session_scope=session_scope,
+        timeout=3.0,
+    )
+    readiness = _safe_private_list_readiness(
+        cookie_state.get("private_list_readiness"),
+        cookie_valid=bool(cookie_state.get("valid")),
+    )
+    if safe_mode == "collect" and not readiness["collection_ready"]:
+        raise DouyinLibraryError(
+            _CONNECTOR_ERROR_MESSAGES["argus_uifid_missing"],
+            code="argus_uifid_missing",
+            needs_action=True,
+            source_mode="collect",
+        )
+    if safe_mode in {"like", "post"} and not readiness["like_ready"]:
+        raise DouyinLibraryError(
+            _CONNECTOR_ERROR_MESSAGES["session_expired"],
+            code="session_expired",
+            needs_action=True,
+            source_mode=safe_mode,
+        )
     job = _request(
         "POST",
         "/api/v1/auto-collect",

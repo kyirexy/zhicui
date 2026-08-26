@@ -1741,21 +1741,38 @@ def collect_douyin_library(
         )
         douyin_binding_service.mark_sync_started(db, binding)
     except douyin_library.DouyinLibraryError as exc:
+        error_status = 409 if exc.code in {
+            "argus_uifid_missing",
+            "risk_controlled",
+            "verification_required",
+            "session_expired",
+        } else 502
         activity_service.log_activity_safely(
             user_id=current_user.id,
             action="douyin_sync_failed",
             method="POST",
             path="/api/library/douyin/collect",
-            status_code=502,
+            status_code=error_status,
             ip=request.client.host if request.client else None,
             detail={
                 "outcome": "failed",
-                "error_category": "connector_unavailable",
-                "source_mode": body.mode,
+                "error_category": exc.code,
+                "source_mode": exc.source_mode or body.mode,
                 "requested_count": body.count,
+                "needs_action": exc.needs_action,
+                "retry_after_seconds": exc.retry_after_seconds,
             },
         )
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=error_status,
+            detail={
+                "code": exc.code,
+                "message": str(exc),
+                "needs_action": exc.needs_action,
+                "source_mode": exc.source_mode or body.mode,
+                "retry_after_seconds": exc.retry_after_seconds,
+            },
+        ) from exc
     job_id = str(job.get("job_id") or "").strip()
     activity_service.log_activity_safely(
         user_id=current_user.id,

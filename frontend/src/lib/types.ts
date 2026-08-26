@@ -113,11 +113,19 @@ export interface VideoInfo {
   platform: string;
 }
 
+export interface ApiErrorDetails {
+  code?: string;
+  needs_action?: boolean;
+  source_mode?: string;
+  retry_after_seconds?: number;
+}
+
 export interface ApiResponse<T> {
   success: boolean;
   data?: T;
   error?: string;
   status?: number;
+  error_details?: ApiErrorDetails;
 }
 
 // ============================================================================
@@ -642,6 +650,12 @@ export interface DouyinLibraryStatus {
     cooldown_seconds: number;
     cooldown_cap_seconds: number;
   };
+  private_list_readiness?: {
+    reported: boolean;
+    like_ready: boolean;
+    collection_ready: boolean;
+    missing_requirements: Array<'authenticated_session' | 'UIFID'>;
+  };
   error?: string | null;
 }
 
@@ -686,7 +700,7 @@ export interface DouyinCollectionJob {
   processed?: number;
   error?: string | null;
   mode?: DouyinSourceMode | null;
-  error_code?: '' | 'source_blocked' | 'verification_required' | 'session_expired' | 'network_error' | 'connector_error';
+  error_code?: '' | 'source_blocked' | 'argus_uifid_missing' | 'risk_controlled' | 'verification_required' | 'session_expired' | 'network_error' | 'connector_error';
   source_mode?: DouyinSourceMode;
   channel?: 'api' | 'browser' | 'circuit_breaker';
   fallback_attempted?: boolean;

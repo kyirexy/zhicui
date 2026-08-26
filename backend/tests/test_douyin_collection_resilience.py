@@ -42,7 +42,15 @@ class DouyinCollectionResilienceTests(unittest.TestCase):
                     "cooldown_cap_seconds": 21600,
                 },
             },
-            {"valid": True, "count": 12},
+            {
+                "valid": True,
+                "count": 12,
+                "private_list_readiness": {
+                    "like_ready": True,
+                    "collection_ready": False,
+                    "missing_requirements": ["UIFID", "cookie-value-must-not-pass"],
+                },
+            },
         ]
         with patch.object(douyin_library, "_request", side_effect=responses):
             status = douyin_library.connection_status("scope-safe")
@@ -54,6 +62,15 @@ class DouyinCollectionResilienceTests(unittest.TestCase):
             ["creator_catalog", "collection_resilience"],
         )
         self.assertTrue(status["collection_resilience"]["browser_headless"])
+        self.assertEqual(
+            status["private_list_readiness"],
+            {
+                "reported": True,
+                "like_ready": True,
+                "collection_ready": False,
+                "missing_requirements": ["UIFID"],
+            },
+        )
 
     def test_get_job_preserves_only_safe_diagnostics(self):
         payload = {
@@ -75,6 +92,59 @@ class DouyinCollectionResilienceTests(unittest.TestCase):
         self.assertEqual(result["channel"], "browser")
         self.assertEqual(result["retry_after_seconds"], 900)
         self.assertNotIn("authorization", result)
+
+    def test_structured_sidecar_error_is_allowlisted_and_user_friendly(self):
+        error = douyin_library._connector_error_from_response(
+            {
+                "code": "argus_uifid_missing",
+                "message": "unsafe upstream details",
+                "needs_action": True,
+                "source_mode": "collection",
+                "cookie": "must-not-escape",
+            },
+            409,
+        )
+
+        self.assertEqual(error.code, "argus_uifid_missing")
+        self.assertEqual(error.source_mode, "collect")
+        self.assertTrue(error.needs_action)
+        self.assertIn("重新连接抖音账号", str(error))
+        self.assertNotIn("unsafe upstream details", str(error))
+        self.assertNotIn("must-not-escape", str(error))
+
+    def test_collection_readiness_blocks_only_collection_mode(self):
+        cookie_state = {
+            "valid": True,
+            "private_list_readiness": {
+                "like_ready": True,
+                "collection_ready": False,
+                "missing_requirements": ["UIFID"],
+            },
+        }
+        with patch.object(
+            douyin_library,
+            "_request",
+            return_value=cookie_state,
+        ) as request:
+            with self.assertRaises(douyin_library.DouyinLibraryError) as raised:
+                douyin_library.trigger_collect("scope-safe", 50, "collect")
+
+        self.assertEqual(raised.exception.code, "argus_uifid_missing")
+        self.assertTrue(raised.exception.needs_action)
+        self.assertEqual(request.call_count, 1)
+
+        with patch.object(
+            douyin_library,
+            "_request",
+            side_effect=[
+                cookie_state,
+                {"job_id": "like-job", "status": "pending"},
+            ],
+        ):
+            result = douyin_library.trigger_collect("scope-safe", 20, "like")
+
+        self.assertEqual(result["job_id"], "like-job")
+        self.assertEqual(result["mode"], "like")
 
 
 if __name__ == "__main__":

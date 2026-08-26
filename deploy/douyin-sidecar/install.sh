@@ -14,6 +14,7 @@ RELEASE_ID="${UPSTREAM_COMMIT:0:8}-$(date -u +%Y%m%d%H%M%S)"
 RELEASE_DIR="${APP_ROOT}/releases/${RELEASE_ID}"
 
 test -f "${DEPLOY_ROOT}/zhicui-sidecar.patch"
+test -f "${DEPLOY_ROOT}/private-list-hardening.patch"
 test -f "${DEPLOY_ROOT}/config.production.yml"
 test -f "${DEPLOY_ROOT}/zhicui-douyin-sidecar.service"
 
@@ -22,6 +23,7 @@ apt-get update
 apt-get install -y --no-install-recommends \
   curl \
   git \
+  nodejs \
   python3-venv \
   xvfb \
   xauth
@@ -41,6 +43,8 @@ sudo -u ubuntu git -C "${RELEASE_DIR}" fetch --depth 1 origin "${UPSTREAM_COMMIT
 sudo -u ubuntu git -C "${RELEASE_DIR}" checkout --detach FETCH_HEAD
 sudo -u ubuntu git -C "${RELEASE_DIR}" apply --unidiff-zero --check "${DEPLOY_ROOT}/zhicui-sidecar.patch"
 sudo -u ubuntu git -C "${RELEASE_DIR}" apply --unidiff-zero "${DEPLOY_ROOT}/zhicui-sidecar.patch"
+sudo -u ubuntu git -C "${RELEASE_DIR}" apply --unidiff-zero --check "${DEPLOY_ROOT}/private-list-hardening.patch"
+sudo -u ubuntu git -C "${RELEASE_DIR}" apply --unidiff-zero "${DEPLOY_ROOT}/private-list-hardening.patch"
 
 if [[ ! -x "${APP_ROOT}/.venv/bin/python" ]]; then
   sudo -u ubuntu python3 -m venv "${APP_ROOT}/.venv"
@@ -55,6 +59,14 @@ sudo -u ubuntu "${APP_ROOT}/.venv/bin/python" -m pip install \
   "fastapi>=0.110,<1" \
   "uvicorn[standard]>=0.27,<1" \
   "playwright>=1.48,<2"
+
+# Fetch the exact, hash-pinned SecSDK runtime once during deployment. Runtime
+# requests never download unverified JavaScript and never log cookies or signed URLs.
+sudo -u ubuntu env \
+  XDG_CACHE_HOME="${APP_ROOT}/.cache" \
+  PYTHONPATH="${RELEASE_DIR}" \
+  "${APP_ROOT}/.venv/bin/python" -c \
+  "from core.private_list_websign import ensure_runtime; ensure_runtime()"
 
 "${APP_ROOT}/.venv/bin/playwright" install-deps chromium
 sudo -u ubuntu env PLAYWRIGHT_BROWSERS_PATH="${APP_ROOT}/ms-playwright" \

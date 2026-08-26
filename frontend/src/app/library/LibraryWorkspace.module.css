@@ -989,6 +989,56 @@
   font-size: 0.75rem;
 }
 
+.sourceAccountSummary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0 0 12px;
+  overflow: hidden;
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  background: var(--card-border);
+}
+
+.sourceAccountSummary > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--card-bg);
+}
+
+.sourceAccountSummary dt,
+.sourceAccountSummary dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourceAccountSummary dt {
+  color: var(--foreground-muted);
+  font-size: 0.6875rem;
+}
+
+.sourceAccountSummary dd {
+  color: var(--foreground-secondary);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.sourceAccountSummary dd[data-status='connected'] {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent-brand);
+}
+
+.accountTime {
+  font-variant-numeric: tabular-nums;
+}
+
 .sourceLoginAction,
 .sourceAccountMenu summary {
   display: inline-flex;
@@ -2389,6 +2439,10 @@
   .sourceAccountMenu summary {
     min-height: 48px;
     font-size: 0.75rem;
+  }
+
+  .sourceAccountSummary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .sourceRail :global(.library-source-main) {

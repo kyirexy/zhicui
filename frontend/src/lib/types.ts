@@ -623,6 +623,13 @@ export interface DouyinLibraryStatus {
   base_url: string;
   cookie_valid: boolean;
   cookie_count: number;
+  binding?: {
+    status: 'connected' | 'pending' | 'disconnected' | string;
+    cookie_count: number;
+    bound_at?: string | null;
+    last_verified_at?: string | null;
+    last_sync_at?: string | null;
+  };
   storage_mode?: 'metadata_only' | 'local_media' | 'unknown';
   login_browser_mode?: 'visible_chrome' | 'remote_capture' | 'headless' | 'unavailable' | string;
   max_sync_count?: number;

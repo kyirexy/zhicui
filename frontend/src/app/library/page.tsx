@@ -287,6 +287,19 @@ function friendlyLibraryError(message: string): string {
     : message;
 }
 
+function formatAccountTime(value?: string | null, emptyLabel = '暂无记录'): string {
+  if (!value) return emptyLabel;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return emptyLabel;
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(parsed);
+}
+
 function canStartLibraryMarquee(target: HTMLElement, container: HTMLElement): boolean {
   const selectableCard = target.closest<HTMLElement>('[data-marquee-id]');
   if (selectableCard) {
@@ -2813,6 +2826,35 @@ export default function VideoLibraryPage() {
                 )}
               </div>
             </div>
+            {loggedIn && (
+              <dl className={styles.sourceAccountSummary} aria-label="抖音账号连接详情">
+                <div>
+                  <dt>账号状态</dt>
+                  <dd data-status="connected">
+                    <CheckCircle2 size={14} aria-hidden="true" />
+                    连接正常
+                  </dd>
+                </div>
+                <div>
+                  <dt>绑定时间</dt>
+                  <dd className={styles.accountTime}>
+                    {formatAccountTime(status?.binding?.bound_at, '本次已连接')}
+                  </dd>
+                </div>
+                <div>
+                  <dt>最近验证</dt>
+                  <dd className={styles.accountTime}>
+                    {formatAccountTime(status?.binding?.last_verified_at, '刚刚验证')}
+                  </dd>
+                </div>
+                <div>
+                  <dt>最近同步</dt>
+                  <dd className={styles.accountTime}>
+                    {formatAccountTime(status?.binding?.last_sync_at)}
+                  </dd>
+                </div>
+              </dl>
+            )}
             <div className="library-source-main">
               <div className="library-source-modes" role="group" aria-label="选择要同步的抖音来源，可多选">
                 {SOURCE_MODES.map(({ value, label, Icon }) => {

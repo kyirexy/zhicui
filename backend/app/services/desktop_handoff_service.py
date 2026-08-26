@@ -26,6 +26,23 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def _naive_utc(value: datetime) -> datetime:
+    """把不同数据库返回的时间统一成 naive UTC。
+
+    SQLite 会丢失 ``DateTime(timezone=True)`` 的时区信息，而 PostgreSQL 会保留
+    ``+00:00``。业务层若直接比较两者会在生产环境抛出
+    ``can't compare offset-naive and offset-aware datetimes``。
+    """
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _is_expired(expires_at: datetime, *, now: datetime | None = None) -> bool:
+    """跨 SQLite/PostgreSQL 安全判断一次性票据是否过期。"""
+    return _naive_utc(expires_at) < _naive_utc(now or _utcnow())
+
+
 def normalize_session_id(raw: object) -> str | None:
     """校验并规范化 session_id；不合法返回 None。"""
     if not isinstance(raw, str):
@@ -91,7 +108,7 @@ def claim_handoff(db: Session, session_id: str, user_id: str) -> str:
     handoff = get_handoff(db, session_id)
     if handoff is None:
         return "not_found"
-    if handoff.expires_at < _utcnow():
+    if _is_expired(handoff.expires_at):
         handoff.status = "expired"
         db.commit()
         return "expired"
@@ -116,7 +133,7 @@ def consume_handoff(db: Session, session_id: str) -> tuple[str, str | None]:
     handoff = get_handoff(db, session_id)
     if handoff is None:
         return "not_found", None
-    if handoff.expires_at < _utcnow():
+    if _is_expired(handoff.expires_at):
         handoff.status = "expired"
         db.commit()
         return "expired", None

@@ -137,6 +137,7 @@ export class ZhicuiWebLogin {
           user?: DesktopZhicuiUser | null;
         };
         error?: string;
+        detail?: string;
       } | null;
       if (payload?.success && payload.data?.status === 'success' && payload.data.token) {
         this.notify({ stage: 'success', message: '网页登录成功，正在回到客户端…' });
@@ -155,7 +156,11 @@ export class ZhicuiWebLogin {
       if (payload?.success) {
         return 'retry'; // 仍是 pending
       }
-      return payload?.error || '登录状态确认失败，请返回客户端重新发起';
+      return payload?.error
+        || payload?.detail
+        || (response.status >= 500
+          ? '登录服务暂时异常，请重新发起登录'
+          : '登录状态确认失败，请返回客户端重新发起');
     } catch {
       return 'retry'; // 网络抖动，继续轮询
     }

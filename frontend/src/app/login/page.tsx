@@ -109,13 +109,20 @@ export default function LoginPage() {
       const payload = await response.json().catch(() => null) as {
         success?: boolean;
         error?: string;
+        detail?: string;
       } | null;
       if (response.ok && payload?.success) {
         setClaimState('claimed');
         return;
       }
       setClaimState('failed');
-      setFieldError(payload?.error || '登录交接失败，请返回客户端重新发起');
+      setFieldError(
+        payload?.error
+        || payload?.detail
+        || (response.status >= 500
+          ? '登录服务暂时异常，请返回客户端重新发起'
+          : '登录交接失败，请返回客户端重新发起'),
+      );
     } catch {
       setClaimState('failed');
       setFieldError('登录交接失败，请检查网络后重试');

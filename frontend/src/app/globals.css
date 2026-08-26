@@ -5746,6 +5746,7 @@ html[data-desktop-app="true"] .desktop-sidebar {
 
 .desktop-sidebar__mobile-download {
   display: grid;
+  width: 100%;
   grid-template-columns: 36px minmax(0, 1fr) 20px;
   min-height: 58px;
   align-items: center;
@@ -5756,7 +5757,10 @@ html[data-desktop-app="true"] .desktop-sidebar {
   border-radius: 10px;
   background: var(--desktop-sidebar-account);
   color: var(--desktop-sidebar-ink);
+  font: inherit;
+  text-align: left;
   text-decoration: none;
+  cursor: pointer;
   transition: background-color 180ms ease, border-color 180ms ease, transform 180ms ease;
 }
 

@@ -14,12 +14,10 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   ChevronUp,
   CircleUserRound,
-  Download,
   Sparkles,
   ShieldCheck,
   LogOut,
   Settings,
-  Smartphone,
 } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import {
@@ -32,6 +30,7 @@ import {
   type DesktopRuntimeInfo,
 } from '@/lib/desktopRuntime';
 import DesktopSidebarUpdate from '@/components/DesktopSidebarUpdate';
+import QRModal from '@/components/QRModal';
 
 interface DesktopRuntimeState {
   isDesktop: boolean;
@@ -128,21 +127,7 @@ function DesktopNavigation() {
         </nav>
 
         <nav className="desktop-sidebar__utility" aria-label="应用与支持">
-          <a
-            href="/api/client-downloads/android"
-            download
-            className="desktop-sidebar__mobile-download"
-            aria-label="下载知萃 Android 移动端安装包"
-            title="下载 Android APK"
-          >
-            <span className="desktop-sidebar__mobile-download-icon" aria-hidden="true">
-              <Smartphone size={20} strokeWidth={1.8} />
-            </span>
-            <span className="desktop-sidebar__mobile-download-copy">
-              <strong>下载移动端</strong>
-            </span>
-            <Download size={17} aria-hidden="true" />
-          </a>
+          <QRModal triggerVariant="sidebar" />
         </nav>
 
         <DesktopSidebarUpdate />

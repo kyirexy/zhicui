@@ -2,13 +2,15 @@
   "schema_version": 1,
   "platform": "windows",
   "architecture": "x64",
-  "version": "1.0.7",
-  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.0.7-x64.exe",
-  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.0.7-x64.exe",
-  "size_bytes": 93529647,
-  "published_at": "2026-08-27T03:31:50.0137604Z",
+  "version": "1.0.8",
+  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.0.8-x64.exe",
+  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.0.8-x64.exe",
+  "size_bytes": 93530028,
+  "published_at": "2026-08-27T14:16:12.9333902Z",
   "notes": [
-    "抖音喜欢、收藏和自己的作品改为 Windows 本机手动读取；账号登录只保存在本机，支持 1–100 条同步。"
+    "修复抖音列表封面、作者和标题被页面级文字覆盖的问题。",
+    "修复桌面同步后云端无法取得视频流、完整文案提取失败的问题。",
+    "临时播放地址只用于当前提取任务，不保存 Cookie、媒体地址或本机路径。"
   ],
   "code_signed": false,
   "release_status": "public_download"

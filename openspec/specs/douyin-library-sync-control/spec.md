@@ -8,22 +8,27 @@ Define bounded Douyin library synchronization, optional post-sync AI processing,
 
 ### Requirement: Visible bounded synchronization controls
 
-The system SHALL display synchronization presets for 50 and 100 items without requiring the user to expand another settings section, and SHALL allow an authenticated user to enter an integer synchronization count from 1 through 100.
+The system SHALL display synchronization presets for 20, 50, and 100 items without requiring the user to expand another settings section, SHALL allow an authenticated user to enter an integer synchronization count from 1 through 100, and SHALL start synchronization only after an explicit user action.
 
 #### Scenario: User selects a visible preset
 
 - **WHEN** the collection interface is opened
-- **THEN** the 50-item and 100-item preset controls are immediately visible and selectable
+- **THEN** the 20-item, 50-item, and 100-item preset controls are immediately visible and selectable
 
 #### Scenario: User enters a custom range
 
 - **WHEN** the user enters an integer from 1 through 100
-- **THEN** the next synchronization request uses that exact bounded count
+- **THEN** the next manually triggered synchronization uses that exact bounded count
 
-#### Scenario: Backend rejects an invalid range
+#### Scenario: Backend or desktop bridge rejects an invalid range
 
 - **WHEN** a client submits a count below 1 or above 100
-- **THEN** the backend rejects the request without starting a downloader job
+- **THEN** the request is rejected without starting a local connector or downloader job
+
+#### Scenario: No automatic synchronization occurs
+
+- **WHEN** the user has connected an account but does not click synchronization
+- **THEN** the system does not start a private-list request, scheduled refresh, or automatic retry
 
 ### Requirement: Bounded automatic processing
 
@@ -46,40 +51,47 @@ The system SHALL let the user enter an automatic-processing count from 0 through
 
 ### Requirement: Safe Douyin session sign-out
 
-The system SHALL allow an authenticated user to explicitly end the active Douyin downloader session without deleting synchronized library metadata, generated transcripts, knowledge cards, plans, or video files.
+The system SHALL allow an authenticated user to explicitly end the active local Douyin session without deleting synchronized library metadata, generated transcripts, knowledge cards, plans, or video files, and SHALL retain legacy cloud-session clearing only for compatible old clients.
 
-#### Scenario: User confirms sign-out
+#### Scenario: User confirms sign-out on Windows
 
-- **WHEN** a connected user confirms the `退出抖音` action
-- **THEN** the downloader login cookies and active session state are cleared and the application reports disconnected status
+- **WHEN** a connected Windows user confirms the `退出抖音` action
+- **THEN** the current user's local Douyin profile is removed and the application reports disconnected status
+- **AND** no other user's profile or synchronized data is changed
 
 #### Scenario: User cancels sign-out
 
 - **WHEN** the user cancels the confirmation
-- **THEN** the current Douyin session and library data remain unchanged
+- **THEN** the current local session and library data remain unchanged
+
+#### Scenario: Legacy client signs out
+
+- **WHEN** an old client clears its cloud sidecar session
+- **THEN** the compatibility session is cleared without deleting metadata or knowledge outcomes
 
 ### Requirement: Guided account rebinding
 
-The system SHALL provide a `换绑账号` action that clears the current Douyin session and then starts the existing QR-code login flow.
+The system SHALL provide a `换绑账号` action that clears the current user's local Douyin profile and then starts an official-page login flow; it SHALL NOT treat a server Cookie handoff as the default path for updated Windows clients.
 
 #### Scenario: Rebinding succeeds
 
-- **WHEN** a connected user confirms `换绑账号`
-- **THEN** the previous session is cleared before a new QR login session starts
+- **WHEN** a connected Windows user confirms `换绑账号`
+- **THEN** the previous local profile is cleared before the official Douyin login page opens
 
-#### Scenario: Session clearing fails
+#### Scenario: Local session clearing fails
 
-- **WHEN** the downloader cannot safely clear the current session
-- **THEN** the application shows an adjacent error and does not start a new QR login session
+- **WHEN** the desktop client cannot safely remove the current user's isolated profile
+- **THEN** the application shows an adjacent error and does not start a new login session
 
 ### Requirement: Session privacy and activity logging
 
-The system MUST NOT expose or log Douyin cookies or account secrets and SHALL record only bounded operation metadata for logout and rebinding requests.
+The system MUST NOT expose, upload, persist in the application database, or log Douyin cookies, LocalStorage, signatures, profile paths, or account secrets and SHALL record only bounded operation metadata for login, synchronization, logout, and rebinding requests.
 
 #### Scenario: Administrator reviews user activity
 
-- **WHEN** an administrator views the activity report after a logout or rebind action
-- **THEN** the report identifies the operation and result without containing cookie values or account secrets
+- **WHEN** an administrator views the activity report after a local sync, logout, or rebind action
+- **THEN** the report identifies operation, source mode, bounded count, result category, and client capability version
+- **AND** it contains no Cookie values, signatures, local paths, or response bodies
 
 ### Requirement: User-scoped persistent library removal
 
@@ -169,29 +181,30 @@ The collection interface SHALL distinguish source items from visible items and S
 
 ### Requirement: Accurate collection discovery feedback
 
-The collection interface SHALL distinguish an unknown running total from a confirmed empty result, SHALL display only confirmed progress counts, and SHALL describe the bounded synchronization behavior in plain user-facing language without provider implementation terms.
+The synchronization interface SHALL distinguish login prerequisites from an actual successful read, SHALL distinguish an unknown running total from a confirmed empty result, SHALL display only confirmed progress counts, and SHALL identify whether the current task runs locally or through a legacy compatibility path without exposing implementation secrets.
 
-#### Scenario: Collection total is not known yet
+#### Scenario: Login prerequisites are complete
 
-- **WHEN** a collection synchronization job is running and its reported total is missing or zero
-- **THEN** the interface says it is reading the user's collection and does not claim that zero items were saved
+- **WHEN** an account has the expected authentication evidence but no sync has run
+- **THEN** the interface says the local login is valid
+- **AND** it does not claim the source is guaranteed to synchronize
 
-#### Scenario: Collection progress is known
+#### Scenario: Discovery total is not known yet
 
-- **WHEN** a running collection synchronization job reports a positive total
-- **THEN** the interface displays the confirmed successful count and total
+- **WHEN** a manual local synchronization is running and no work has been discovered
+- **THEN** the interface says it is reading the selected source and does not claim that zero items were saved
 
-#### Scenario: Collection synchronization succeeds
+#### Scenario: Discovery progress is known
 
-- **WHEN** a collection synchronization job completes with one or more successful items
-- **THEN** the interface reports the actual synchronized count before loading the refreshed library
+- **WHEN** a running synchronization has discovered one or more works
+- **THEN** the interface displays the confirmed discovered count
 
-#### Scenario: Completed synchronization is empty
+#### Scenario: Synchronization succeeds
 
-- **WHEN** a collection synchronization job completes successfully with zero items
-- **THEN** the interface explains that no collection was read and suggests checking or rebinding the Douyin account
+- **WHEN** a synchronization completes with one or more accepted items
+- **THEN** the interface reports actual discovered, accepted, reused, and failed counts before loading the refreshed library
 
-#### Scenario: User reads the collection explanation
+#### Scenario: Completed synchronization is empty or restricted
 
-- **WHEN** the collection source is selected
-- **THEN** the interface explains the selected range, automatic transcript preparation, direct Q&A, on-demand knowledge cards, and no server-side video storage without naming ASR or a model provider
+- **WHEN** a synchronization completes with zero items or the platform requires verification
+- **THEN** the interface explains the difference and offers the relevant retry, reconnect, or official-page verification action

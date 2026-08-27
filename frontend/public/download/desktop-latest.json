@@ -6,10 +6,10 @@
   "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.0.7-x64.exe",
   "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.0.7-x64.exe",
   "size_bytes": 93529647,
-  "published_at": "2026-08-27T03:22:36.3308674Z",
+  "published_at": "2026-08-27T03:31:50.0137604Z",
   "notes": [
     "抖音喜欢、收藏和自己的作品改为 Windows 本机手动读取；账号登录只保存在本机，支持 1–100 条同步。"
   ],
   "code_signed": false,
-  "release_status": "build_ready"
+  "release_status": "public_download"
 }

@@ -32,5 +32,5 @@
 ## 5. 发布与正式部署
 
 - [x] 5.1 提升桌面版本并生成、核验 Windows 安装包、blockmap 与 `latest.yml`
-- [ ] 5.2 提交并推送 GitHub/Gitee，等待 Jenkins 部署兼容后端和 Web，再原子发布 Windows 更新源
-- [ ] 5.3 验收 luxai.cn 构建版本、生产 API、桌面更新清单和服务健康，并用本地连接器执行一次受控冒烟
+- [x] 5.2 提交并推送 GitHub/Gitee，等待 Jenkins 部署兼容后端和 Web，再原子发布 Windows 更新源
+- [x] 5.3 验收 luxai.cn 构建版本、生产 API、桌面更新清单和服务健康，并用本地连接器执行一次受控冒烟

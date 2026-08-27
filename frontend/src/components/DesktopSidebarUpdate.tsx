@@ -43,7 +43,11 @@ export default function DesktopSidebarUpdate() {
       return { label: `更新中 ${percent}%`, detail: '可以继续使用', icon: LoaderCircle, percent };
     }
     if (update.status === 'downloaded') {
-      return { label: '完成更新', detail: `知萃 ${update.version || ''} 已就绪`, icon: Check };
+      return {
+        label: '重启并安装',
+        detail: `知萃 ${update.version || ''} 已下载`,
+        icon: Check,
+      };
     }
     if (update.status === 'error') {
       return { label: '重试更新', detail: '更新服务暂时不可用', icon: CircleAlert };

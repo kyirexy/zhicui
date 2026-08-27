@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  requiresLocalDouyinDesktopUpdate,
   supportsLocalDouyinRuntime,
   toLocalDouyinSyncItems,
 } from './douyinDesktopSync.ts';
@@ -11,6 +12,9 @@ test('local Douyin connector is gated to the compatible desktop version', () => 
   assert.equal(supportsLocalDouyinRuntime('1.0.7'), true);
   assert.equal(supportsLocalDouyinRuntime('1.1.0'), true);
   assert.equal(supportsLocalDouyinRuntime('2.0.0'), true);
+  assert.equal(requiresLocalDouyinDesktopUpdate(''), false);
+  assert.equal(requiresLocalDouyinDesktopUpdate('1.0.6'), true);
+  assert.equal(requiresLocalDouyinDesktopUpdate('1.0.7'), false);
 });
 
 test('desktop result is reduced to the public server metadata contract', () => {

@@ -43,6 +43,7 @@ import type {
 } from '@/lib/types';
 import { formatDouyinSyncError } from '@/lib/douyinSyncFeedback';
 import {
+  requiresLocalDouyinDesktopUpdate,
   supportsLocalDouyinRuntime,
   toLocalDouyinSyncItems,
 } from '@/lib/douyinDesktopSync';
@@ -142,6 +143,9 @@ export default function AgentSourceSyncSheet({
   const removeDialogRef = useRef<HTMLDialogElement | null>(null);
   const completedCreatorRef = useRef('');
   const busy = pending || biliPending;
+  const douyinDesktopUpdateRequired = requiresLocalDouyinDesktopUpdate(
+    douyinDesktopVersion,
+  );
 
   const biliAccountSyncAvailable = useMemo(() => {
     return typeof window !== 'undefined' && supportsPlatformAccountSync(window.zhicuiDesktop);
@@ -377,6 +381,11 @@ export default function AgentSourceSyncSheet({
     setFailed(false);
     setMessage(`正在读取最近 ${syncCount} 条${modeLabel}…`);
     try {
+      if (douyinDesktopUpdateRequired) {
+        throw new Error(
+          `当前仍在运行知萃 ${douyinDesktopVersion}，请先重启并安装 1.0.7 或更高版本`,
+        );
+      }
       if (douyinDesktopAvailable) {
         const bridge = window.zhicuiDesktop;
         if (!bridge || !douyinConnected) {
@@ -577,6 +586,29 @@ export default function AgentSourceSyncSheet({
     setDouyinStage(response.cancelled ? 'cancelled' : 'error');
     setFailed(!response.cancelled);
     setMessage(response.cancelled ? '登录已取消' : response.error || '抖音登录失败');
+  };
+
+  const installDouyinDesktopUpdate = async () => {
+    const bridge = window.zhicuiDesktop;
+    if (!douyinDesktopUpdateRequired || !bridge || pending) return;
+    setPending(true);
+    setFailed(false);
+    setMessage('正在准备重启并安装桌面更新…');
+    let update = await bridge.getUpdateState();
+    if (update.status !== 'downloaded') {
+      update = await bridge.checkForUpdates();
+    }
+    if (update.status !== 'downloaded') {
+      setPending(false);
+      setFailed(update.status === 'error');
+      setMessage(
+        update.status === 'error'
+          ? update.error || '更新服务暂时不可用，请稍后重试'
+          : '更新包仍在下载，完成后这里会显示“重启并安装”',
+      );
+      return;
+    }
+    await bridge.installUpdate();
   };
 
   const removeCreator = async () => {
@@ -830,10 +862,16 @@ export default function AgentSourceSyncSheet({
               </>
             ) : platform === 'douyin' ? (
               <>
+                {douyinDesktopUpdateRequired && (
+                  <p role="alert">
+                    当前运行的是知萃 {douyinDesktopVersion}，旧版仍会走云端兼容链路。
+                    请重启安装更新后，再在本机连接抖音。
+                  </p>
+                )}
                 <div className={styles.douyinModes} role="radiogroup" aria-label="选择抖音同步来源">
-                  <button type="button" role="radio" aria-checked={douyinMode === 'like'} disabled={pending} onClick={() => { setDouyinMode('like'); setMessage(''); }}><Heart size={17} weight={douyinMode === 'like' ? 'fill' : 'regular'} />喜欢</button>
-                  <button type="button" role="radio" aria-checked={douyinMode === 'collect'} disabled={pending} onClick={() => { setDouyinMode('collect'); setMessage(''); }}><BookmarkSimple size={17} weight={douyinMode === 'collect' ? 'fill' : 'regular'} />收藏</button>
-                  <button type="button" role="radio" aria-checked={douyinMode === 'post'} disabled={pending} onClick={() => { setDouyinMode('post'); setMessage(''); }}><UserCirclePlus size={17} weight={douyinMode === 'post' ? 'fill' : 'regular'} />我的作品</button>
+                  <button type="button" role="radio" aria-checked={douyinMode === 'like'} disabled={pending || douyinDesktopUpdateRequired} onClick={() => { setDouyinMode('like'); setMessage(''); }}><Heart size={17} weight={douyinMode === 'like' ? 'fill' : 'regular'} />喜欢</button>
+                  <button type="button" role="radio" aria-checked={douyinMode === 'collect'} disabled={pending || douyinDesktopUpdateRequired} onClick={() => { setDouyinMode('collect'); setMessage(''); }}><BookmarkSimple size={17} weight={douyinMode === 'collect' ? 'fill' : 'regular'} />收藏</button>
+                  <button type="button" role="radio" aria-checked={douyinMode === 'post'} disabled={pending || douyinDesktopUpdateRequired} onClick={() => { setDouyinMode('post'); setMessage(''); }}><UserCirclePlus size={17} weight={douyinMode === 'post' ? 'fill' : 'regular'} />我的作品</button>
                 </div>
                 {!douyinDesktopAvailable && douyinReadiness?.reported
                   && !douyinReadiness.collection_ready && (
@@ -853,7 +891,7 @@ export default function AgentSourceSyncSheet({
                       min={1}
                       max={100}
                       value={syncCount}
-                      disabled={pending}
+                      disabled={pending || douyinDesktopUpdateRequired}
                       aria-label="自定义同步数量"
                       onChange={(event) => setSyncCount(Math.max(1, Math.min(100, Number(event.target.value) || 1)))}
                     />
@@ -862,6 +900,8 @@ export default function AgentSourceSyncSheet({
                 </div>
                 <p>{douyinDesktopAvailable
                   ? '登录保存在本机；仅点击同步后读取官方页面，服务器不接收 Cookie。'
+                  : douyinDesktopUpdateRequired
+                    ? '更新完成后，抖音登录只保存在本机，不再使用旧云端私人列表。'
                   : '不会定时或启动时自动同步；当前设备继续使用兼容连接器。'}</p>
                 {douyinDesktopAvailable && (
                   <p role="status" aria-live="polite">
@@ -874,11 +914,19 @@ export default function AgentSourceSyncSheet({
                   type="button"
                   disabled={pending}
                   data-loading={pending}
-                  onClick={douyinDesktopAvailable && !douyinConnected ? loginDouyinDesktop : syncDouyin}
+                  onClick={douyinDesktopUpdateRequired
+                    ? installDouyinDesktopUpdate
+                    : douyinDesktopAvailable && !douyinConnected
+                      ? loginDouyinDesktop
+                      : syncDouyin}
                 >
                   {pending ? <SpinnerGap size={18} weight="bold" aria-hidden="true" /> : <CloudArrowDown size={19} weight="bold" aria-hidden="true" />}
                   <span>{pending
-                    ? (douyinDesktopAvailable && !douyinConnected ? '正在连接' : '正在同步')
+                    ? (douyinDesktopUpdateRequired
+                        ? '正在准备更新'
+                        : douyinDesktopAvailable && !douyinConnected ? '正在连接' : '正在同步')
+                    : douyinDesktopUpdateRequired
+                      ? '重启并安装桌面更新'
                     : douyinDesktopAvailable && !douyinConnected
                       ? '连接抖音账号'
                       : `同步抖音${douyinMode === 'collect' ? '收藏' : douyinMode === 'post' ? '我的作品' : '喜欢'}`}</span>

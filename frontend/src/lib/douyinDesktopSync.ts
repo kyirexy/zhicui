@@ -11,6 +11,10 @@ export function supportsLocalDouyinRuntime(version: string): boolean {
   return major > 1 || (major === 1 && (minor > 0 || patch >= 7));
 }
 
+export function requiresLocalDouyinDesktopUpdate(version: string): boolean {
+  return Boolean(String(version || '').trim()) && !supportsLocalDouyinRuntime(version);
+}
+
 export function toLocalDouyinSyncItems(
   items: PlatformAccountItem[],
 ): DouyinLocalSyncItem[] {

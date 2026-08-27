@@ -91,6 +91,7 @@ import {
   hasDouyinSyncFailureDiagnostic,
 } from '@/lib/douyinSyncFeedback';
 import {
+  requiresLocalDouyinDesktopUpdate,
   supportsLocalDouyinRuntime,
   toLocalDouyinSyncItems,
 } from '@/lib/douyinDesktopSync';
@@ -407,6 +408,7 @@ export default function VideoLibraryPage() {
   const [desktopVersion, setDesktopVersion] = useState('');
   const [desktopDouyinConnected, setDesktopDouyinConnected] = useState(false);
   const [desktopDouyinStage, setDesktopDouyinStage] = useState('idle');
+  const [desktopUpdateInstalling, setDesktopUpdateInstalling] = useState(false);
   const persistDesktopDouyinConnection = useCallback((connectedValue: boolean) => {
     setDesktopDouyinConnected(connectedValue);
     if (!user?.id || typeof window === 'undefined') return;
@@ -763,10 +765,15 @@ export default function VideoLibraryPage() {
       && visibleDouyinIds.every(id => selected.has(id))
       && visiblePlatformIds.every(id => selectedPlatform.has(id));
   }, [filteredItems, filteredPlatformItems, platformFilter, selected, selectedPlatform]);
-  const connected = desktopLocalDouyin || Boolean(status?.connected);
+  const desktopDouyinUpdateRequired = (
+    bindingClient === 'desktop-app'
+    && requiresLocalDouyinDesktopUpdate(desktopVersion)
+  );
+  const connected = desktopLocalDouyin
+    || (!desktopDouyinUpdateRequired && Boolean(status?.connected));
   const loggedIn = desktopLocalDouyin
     ? desktopDouyinConnected
-    : Boolean(status?.cookie_valid);
+    : !desktopDouyinUpdateRequired && Boolean(status?.cookie_valid);
   const loginBrowserMode = status?.login_browser_mode || 'unavailable';
   const localBrowserAvailable = (
     bindingClient === 'desktop-web'
@@ -1720,6 +1727,27 @@ export default function VideoLibraryPage() {
     }
   };
 
+  const installDesktopUpdateForDouyin = async () => {
+    const bridge = window.zhicuiDesktop;
+    if (!bridge || !desktopDouyinUpdateRequired || desktopUpdateInstalling) return;
+    setDesktopUpdateInstalling(true);
+    setNotice('正在准备重启并安装桌面更新…');
+    let update = await bridge.getUpdateState();
+    if (update.status !== 'downloaded') {
+      update = await bridge.checkForUpdates();
+    }
+    if (update.status !== 'downloaded') {
+      setDesktopUpdateInstalling(false);
+      setNotice(
+        update.status === 'error'
+          ? update.error || '更新服务暂时不可用，请稍后重试'
+          : '更新包仍在下载，完成后请再次点击“重启并安装”',
+      );
+      return;
+    }
+    await bridge.installUpdate();
+  };
+
   useEffect(() => {
     if (
       bindingClient !== 'desktop-app'
@@ -2126,6 +2154,12 @@ export default function VideoLibraryPage() {
     persistedModes: DouyinSourceMode[],
     countOverride?: number,
   ): Promise<{ started: boolean }> => {
+    if (desktopDouyinUpdateRequired) {
+      publishSourceManagerNotice(
+        `当前仍在运行知萃 ${desktopVersion}，请先重启并安装 1.0.7 或更高版本`,
+      );
+      return { started: false };
+    }
     const selectedModes = requestedModes.length > 0
       ? requestedModes.slice(0, SOURCE_MODES.length)
       : [sourceModeRef.current];
@@ -2977,7 +3011,33 @@ export default function VideoLibraryPage() {
           {sourceManagerView === 'douyin' && (
           <>
 
-          {statusError && !desktopLocalDouyin && (
+          {desktopDouyinUpdateRequired && (
+            <div className="library-offline-note" role="alert">
+              <RefreshCw size={17} />
+              <div>
+                <strong>需要重启安装桌面更新</strong>
+                <p>
+                  当前运行的是知萃 {desktopVersion}，所以仍显示旧云端账号记录。
+                  更新后将改为本机读取抖音喜欢、收藏和自己的作品。
+                </p>
+                <button
+                  type="button"
+                  className={styles.inlineRetry}
+                  disabled={desktopUpdateInstalling}
+                  onClick={() => void installDesktopUpdateForDouyin()}
+                >
+                  {desktopUpdateInstalling ? (
+                    <LoaderCircle size={14} className="animate-spin" />
+                  ) : (
+                    <RefreshCw size={14} />
+                  )}
+                  {desktopUpdateInstalling ? '正在准备更新' : '重启并安装'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {statusError && !desktopLocalDouyin && !desktopDouyinUpdateRequired && (
             <div className="library-offline-note" role="alert">
               <ServerOff size={17} />
               <div>
@@ -2995,7 +3055,7 @@ export default function VideoLibraryPage() {
             </div>
           )}
 
-          {!statusError && !connected && status && (
+          {!statusError && !connected && status && !desktopDouyinUpdateRequired && (
             <div className="library-offline-note">
               <ServerOff size={17} />
               <div>
@@ -3012,12 +3072,28 @@ export default function VideoLibraryPage() {
               </span>
               <div>
                 <strong>抖音账号</strong>
-                <small>{desktopLocalDouyin
+                <small>{desktopDouyinUpdateRequired
+                  ? `需要更新 ${desktopVersion}`
+                  : desktopLocalDouyin
                   ? loggedIn ? '本机登录有效' : '等待本机登录'
                   : statusError ? '连接待检测' : loggedIn ? '已连接' : '等待登录'}</small>
               </div>
               <div className={styles.sourceAccountActions}>
-                {loggedIn ? (
+                {desktopDouyinUpdateRequired ? (
+                  <button
+                    type="button"
+                    onClick={() => void installDesktopUpdateForDouyin()}
+                    disabled={desktopUpdateInstalling}
+                    className={styles.sourceLoginAction}
+                  >
+                    {desktopUpdateInstalling ? (
+                      <LoaderCircle size={15} className="animate-spin" />
+                    ) : (
+                      <RefreshCw size={15} />
+                    )}
+                    {desktopUpdateInstalling ? '正在更新' : '重启并安装'}
+                  </button>
+                ) : loggedIn ? (
                   <details className={styles.sourceAccountMenu}>
                     <summary>
                       账号管理
@@ -3115,7 +3191,8 @@ export default function VideoLibraryPage() {
               <div className="library-source-modes" role="group" aria-label="选择要同步的抖音来源，可多选">
                 {SOURCE_MODES.map(({ value, label, Icon }) => {
                   const active = sourceManagerModes.includes(value);
-                  const readinessUnavailable = !desktopLocalDouyin && Boolean(
+                  const readinessUnavailable = !desktopLocalDouyin
+                    && !desktopDouyinUpdateRequired && Boolean(
                     status?.private_list_readiness?.reported
                     && (
                       value === 'collect'
@@ -3140,7 +3217,7 @@ export default function VideoLibraryPage() {
                       className={active ? 'is-active' : ''}
                       data-unavailable={sourceUnavailable || undefined}
                       aria-pressed={active}
-                      disabled={refreshing || batchExtracting}
+                      disabled={refreshing || batchExtracting || desktopDouyinUpdateRequired}
                       onClick={() => {
                         setSourceManagerModes((current) => {
                           const next = current.includes(value)
@@ -3170,7 +3247,7 @@ export default function VideoLibraryPage() {
                 <button
                   type="button"
                   onClick={() => void syncCollection(sourceManagerModes, sourceManagerModes)}
-                  disabled={!connected || !loggedIn || refreshing || sourceManagerModes.length === 0}
+                  disabled={desktopDouyinUpdateRequired || !connected || !loggedIn || refreshing || sourceManagerModes.length === 0}
                   className="library-pipeline-button"
                 >
                   {refreshing ? (
@@ -3186,7 +3263,8 @@ export default function VideoLibraryPage() {
               </div>
             </div>
 
-            {!desktopLocalDouyin && status?.private_list_readiness?.reported
+            {!desktopLocalDouyin && !desktopDouyinUpdateRequired
+              && status?.private_list_readiness?.reported
               && !status.private_list_readiness.collection_ready && (
               <div className={styles.sourceNotice} role="status">
                 <Info size={15} aria-hidden="true" />

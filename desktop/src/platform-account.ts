@@ -8,6 +8,7 @@ import {
 } from 'playwright-core';
 import type {
   PlatformAccountCollectRequest,
+  PlatformAccountItem,
   PlatformAccountProvider,
   PlatformAccountRequest,
   PlatformAccountResult,
@@ -20,8 +21,11 @@ const XHS_PROFILE_TIMEOUT_MS = 2 * 60 * 1000;
 const POLL_INTERVAL_MS = 1200;
 const MAX_BILIBILI_FOLDERS = 20;
 const MAX_XHS_SCROLLS = 8;
+const MAX_DOUYIN_SCROLLS = 36;
 const BILIBILI_LOGIN_URL = 'https://passport.bilibili.com/login';
 const XHS_LOGIN_URL = 'https://www.xiaohongshu.com/explore';
+const DOUYIN_LOGIN_URL = 'https://www.douyin.com/?showLogin=true';
+const DOUYIN_PROFILE_URL = 'https://www.douyin.com/user/self?from_tab_name=main';
 
 type SupportedBrowser = 'chrome' | 'msedge';
 type StatusListener = (status: PlatformAccountStatus) => void;
@@ -56,6 +60,60 @@ function numeric(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value || '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function firstUrl(value: unknown): string {
+  if (typeof value === 'string') return /^https:\/\//i.test(value) ? value : '';
+  const payload = record(value);
+  for (const candidate of list(payload.url_list)) {
+    const url = firstUrl(candidate);
+    if (url) return url;
+  }
+  return firstUrl(payload.url || payload.uri);
+}
+
+function normalizeDouyinRecord(
+  value: unknown,
+  sourceRank: number,
+): PlatformAccountItem | null {
+  const payload = record(value);
+  const videoId = firstText(payload.aweme_id, payload.awemeId, payload.item_id);
+  if (!/^\d{5,32}$/.test(videoId)) return null;
+  const sourceUrl = normalizeDouyinUrl(`https://www.douyin.com/video/${videoId}`);
+  if (!sourceUrl) return null;
+  const author = record(payload.author);
+  const video = record(payload.video);
+  const share = record(payload.share_info);
+  const caption = firstText(payload.desc, payload.caption).slice(0, 20_000);
+  const title = firstText(
+    payload.title,
+    share.share_title,
+    caption,
+    '抖音作品',
+  ).slice(0, 500);
+  const createdAt = numeric(payload.create_time || payload.createTime);
+  const rawDuration = numeric(video.duration || payload.duration);
+  return {
+    videoId,
+    sourceUrl,
+    title,
+    caption,
+    authorName: firstText(author.nickname, author.unique_id, payload.author_name).slice(0, 200),
+    coverUrl: firstUrl(video.cover || video.origin_cover || payload.cover).slice(0, 2048),
+    publishedAt: createdAt > 0 ? new Date(createdAt * 1000).toISOString() : '',
+    durationSeconds: rawDuration > 1000
+      ? Math.round(rawDuration / 1000)
+      : Math.round(rawDuration),
+    sourceRank,
+  };
+}
+
 function publicError(platform: PlatformAccountProvider, error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error || '');
   if (/Executable doesn't exist|launchPersistentContext/i.test(detail)) {
@@ -71,7 +129,20 @@ function publicError(platform: PlatformAccountProvider, error: unknown): string 
     .slice(0, 180);
   return sanitized || (platform === 'bilibili'
     ? 'B站账号操作失败，请重新登录后重试'
-    : '小红书账号操作失败，请重新登录后重试');
+    : platform === 'douyin'
+      ? '抖音账号操作失败，请重新登录后重试'
+      : '小红书账号操作失败，请重新登录后重试');
+}
+
+function normalizeDouyinUrl(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(rawUrl, 'https://www.douyin.com');
+    if (!/(^|\.)douyin\.com$/i.test(parsed.hostname)) return null;
+    const match = parsed.pathname.match(/^\/video\/(\d{5,32})\/?$/);
+    return match ? `https://www.douyin.com/video/${match[1]}` : null;
+  } catch {
+    return null;
+  }
 }
 
 function normalizeBilibiliUrl(rawUrl: string): string | null {
@@ -117,7 +188,9 @@ export function boundedPlatformUrls(
   for (const value of values) {
     const normalized = platform === 'bilibili'
       ? normalizeBilibiliUrl(value)
-      : normalizeXhsUrl(value);
+      : platform === 'douyin'
+        ? normalizeDouyinUrl(value)
+        : normalizeXhsUrl(value);
     if (!normalized || seen.has(normalized)) continue;
     seen.add(normalized);
     result.push(normalized);
@@ -132,8 +205,14 @@ export function hasPlatformAuthCookie(
 ): boolean {
   const expectedNames = platform === 'bilibili'
     ? new Set(['SESSDATA', 'DedeUserID'])
-    : new Set(['web_session']);
-  const expectedDomain = platform === 'bilibili' ? 'bilibili.com' : 'xiaohongshu.com';
+    : platform === 'douyin'
+      ? new Set(['sessionid', 'sessionid_ss'])
+      : new Set(['web_session']);
+  const expectedDomain = platform === 'bilibili'
+    ? 'bilibili.com'
+    : platform === 'douyin'
+      ? 'douyin.com'
+      : 'xiaohongshu.com';
   return cookies.some((cookie) => {
     const domain = String(cookie.domain || '').toLowerCase().replace(/^\./, '');
     return (
@@ -164,7 +243,9 @@ export class PlatformAccountConnector {
       const page = launched.context.pages()[0] || await launched.context.newPage();
       const loginUrl = request.platform === 'bilibili'
         ? BILIBILI_LOGIN_URL
-        : XHS_LOGIN_URL;
+        : request.platform === 'douyin'
+          ? DOUYIN_LOGIN_URL
+          : XHS_LOGIN_URL;
       await page.goto(loginUrl, { waitUntil: 'commit', timeout: 20_000 })
         .catch(() => undefined);
       await page.bringToFront().catch(() => undefined);
@@ -173,7 +254,9 @@ export class PlatformAccountConnector {
         'browser-open',
         request.platform === 'bilibili'
           ? '请在 B站官方页面完成扫码或账号登录'
-          : '请在小红书官方页面完成登录',
+          : request.platform === 'douyin'
+            ? '请在抖音官方页面完成扫码或账号登录'
+            : '请在小红书官方页面完成登录',
         launched.browser,
       );
 
@@ -183,7 +266,11 @@ export class PlatformAccountConnector {
           this.notifyStatus(
             request.platform,
             'success',
-            request.platform === 'bilibili' ? 'B站连接成功' : '小红书连接成功',
+            request.platform === 'bilibili'
+              ? 'B站连接成功'
+              : request.platform === 'douyin'
+                ? '抖音本机登录已保存'
+                : '小红书连接成功',
             launched.browser,
           );
           return {
@@ -207,7 +294,10 @@ export class PlatformAccountConnector {
     return this.runExclusive(request.platform, async () => {
       const profilePath = await this.profilePath(request);
       this.notifyStatus(request.platform, 'starting', '正在读取本机登录会话…');
-      const launched = await this.launchBrowser(profilePath);
+      const launched = await this.launchBrowser(
+        profilePath,
+        request.platform === 'douyin',
+      );
       this.activeContext = launched.context;
       if (!hasPlatformAuthCookie(request.platform, await launched.context.cookies())) {
         throw new Error('账号登录已失效，请先重新登录');
@@ -215,24 +305,35 @@ export class PlatformAccountConnector {
       this.notifyStatus(
         request.platform,
         'collecting',
-        request.mode === 'collect' ? '正在读取最近收藏…' : '正在读取最近喜欢…',
+        request.mode === 'collect'
+          ? '正在读取最近收藏…'
+          : request.mode === 'post'
+            ? '正在读取最近发布的作品…'
+            : '正在读取最近喜欢…',
         launched.browser,
       );
+      const douyinItems = request.platform === 'douyin'
+        ? await this.collectDouyin(launched.context, request.mode, request.limit)
+        : [];
       const urls = request.platform === 'bilibili'
         ? await this.collectBilibili(launched.context, request.mode, request.limit)
-        : await this.collectXiaohongshu(launched.context, request.mode, request.limit);
+        : request.platform === 'xiaohongshu'
+          ? await this.collectXiaohongshu(launched.context, request.mode, request.limit)
+          : douyinItems.map((item) => item.sourceUrl);
       if (this.cancelled) {
         return { success: false, cancelled: true, platform: request.platform };
       }
       if (urls.length === 0) {
         throw new Error(request.platform === 'bilibili'
           ? '没有读取到可同步的 B站作品，请确认账号列表可见'
-          : '没有读取到可同步的小红书作品，请确认已进入自己的主页和对应标签');
+          : request.platform === 'douyin'
+            ? '没有读取到作品；若抖音出现验证，请在官方窗口完成后再重试'
+            : '没有读取到可同步的小红书作品，请确认已进入自己的主页和对应标签');
       }
       this.notifyStatus(
         request.platform,
         'success',
-        `已读取 ${urls.length} 条${request.mode === 'collect' ? '收藏' : '喜欢'}作品`,
+        `已读取 ${urls.length} 条${request.mode === 'collect' ? '收藏' : request.mode === 'post' ? '自己的' : '喜欢'}作品`,
         launched.browser,
       );
       return {
@@ -240,6 +341,7 @@ export class PlatformAccountConnector {
         connected: true,
         platform: request.platform,
         urls,
+        items: douyinItems.length > 0 ? douyinItems : undefined,
         count: urls.length,
       };
     });
@@ -307,6 +409,7 @@ export class PlatformAccountConnector {
 
   private async launchBrowser(
     profilePath: string,
+    background = false,
   ): Promise<{ context: BrowserContext; browser: SupportedBrowser }> {
     let lastError: unknown;
     for (const browser of ['chrome', 'msedge'] as const) {
@@ -318,7 +421,7 @@ export class PlatformAccountConnector {
           viewport: null,
           acceptDownloads: false,
           args: [
-            '--start-maximized',
+            background ? '--start-minimized' : '--start-maximized',
             '--disable-background-mode',
             '--no-first-run',
             '--no-default-browser-check',
@@ -477,6 +580,172 @@ export class PlatformAccountConnector {
       await page.waitForTimeout(900);
     }
     return collected;
+  }
+
+  private collectDouyinRecords(
+    value: unknown,
+    target: Map<string, PlatformAccountItem>,
+    limit: number,
+    depth = 0,
+  ): void {
+    if (depth > 7 || target.size >= limit) return;
+    if (Array.isArray(value)) {
+      for (const entry of value.slice(0, 500)) {
+        this.collectDouyinRecords(entry, target, limit, depth + 1);
+        if (target.size >= limit) return;
+      }
+      return;
+    }
+    const payload = record(value);
+    if (Object.keys(payload).length === 0) return;
+    const item = normalizeDouyinRecord(payload, target.size);
+    if (item && !target.has(item.videoId)) target.set(item.videoId, item);
+    for (const entry of Object.values(payload)) {
+      if (typeof entry !== 'object' || entry === null) continue;
+      this.collectDouyinRecords(entry, target, limit, depth + 1);
+      if (target.size >= limit) return;
+    }
+  }
+
+  private async collectVisibleDouyinCards(
+    page: Page,
+    target: Map<string, PlatformAccountItem>,
+    limit: number,
+  ): Promise<void> {
+    const values = await page.locator('a[href*="/video/"]:visible').evaluateAll(
+      (anchors) => anchors.slice(0, 300).map((node) => {
+        const anchor = node as HTMLAnchorElement;
+        const card = anchor.closest('li, article, [data-e2e], div') || anchor;
+        const image = card.querySelector('img') as HTMLImageElement | null;
+        return {
+          href: anchor.href,
+          text: (card.textContent || anchor.textContent || '').trim(),
+          image: image?.currentSrc || image?.src || '',
+          imageAlt: image?.alt || '',
+        };
+      }),
+    ).catch(() => [] as Array<{
+      href: string;
+      text: string;
+      image: string;
+      imageAlt: string;
+    }>);
+    for (const value of values) {
+      if (target.size >= limit) break;
+      const sourceUrl = normalizeDouyinUrl(value.href);
+      const match = sourceUrl?.match(/\/video\/(\d{5,32})$/);
+      if (!sourceUrl || !match || target.has(match[1])) continue;
+      const caption = firstText(value.imageAlt, value.text).slice(0, 20_000);
+      target.set(match[1], {
+        videoId: match[1],
+        sourceUrl,
+        title: firstText(value.imageAlt, value.text, '抖音作品').slice(0, 500),
+        caption,
+        authorName: '',
+        coverUrl: /^https:\/\//i.test(value.image) ? value.image.slice(0, 2048) : '',
+        publishedAt: '',
+        durationSeconds: 0,
+        sourceRank: target.size,
+      });
+    }
+  }
+
+  private async selectDouyinTab(
+    page: Page,
+    platform: PlatformAccountProvider,
+    mode: PlatformAccountSourceMode,
+    browser: SupportedBrowser,
+  ): Promise<void> {
+    const label = mode === 'collect' ? '收藏' : mode === 'post' ? '作品' : '喜欢';
+    const clickVisibleTab = async (): Promise<boolean> => {
+      const matches = page.getByText(label, { exact: true });
+      const count = Math.min(await matches.count().catch(() => 0), 16);
+      for (let index = 0; index < count; index += 1) {
+        const candidate = matches.nth(index);
+        if (!await candidate.isVisible().catch(() => false)) continue;
+        if (await candidate.click({ timeout: 2500 }).then(() => true).catch(() => false)) {
+          await page.waitForTimeout(900);
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const backgroundDeadline = Date.now() + 15_000;
+    while (!this.cancelled && Date.now() < backgroundDeadline) {
+      if (await clickVisibleTab()) return;
+      await page.waitForTimeout(POLL_INTERVAL_MS);
+    }
+    this.notifyStatus(
+      platform,
+      'needs-action',
+      `抖音需要你确认官方页面；完成验证并进入“${label}”后会继续`,
+      browser,
+    );
+    await page.bringToFront().catch(() => undefined);
+    const actionDeadline = Date.now() + XHS_PROFILE_TIMEOUT_MS;
+    while (!this.cancelled && Date.now() < actionDeadline) {
+      if (await clickVisibleTab()) return;
+      await page.waitForTimeout(POLL_INTERVAL_MS);
+    }
+    if (!this.cancelled) {
+      throw new Error(`没有找到抖音“${label}”列表，请确认当前是本人主页并完成官方验证`);
+    }
+  }
+
+  private async collectDouyin(
+    context: BrowserContext,
+    mode: PlatformAccountSourceMode,
+    limit: number,
+  ): Promise<PlatformAccountItem[]> {
+    const page = context.pages()[0] || await context.newPage();
+    const items = new Map<string, PlatformAccountItem>();
+    const pending = new Set<Promise<void>>();
+    const onResponse = (response: { url(): string; headers(): Record<string, string>; json(): Promise<unknown> }): void => {
+      const url = response.url();
+      if (!/douyin\.com/i.test(url) || !/(aweme|favorite|collection|post|user)/i.test(url)) {
+        return;
+      }
+      const contentType = String(response.headers()['content-type'] || '');
+      if (!/json/i.test(contentType)) return;
+      const work = response.json()
+        .then((payload) => this.collectDouyinRecords(payload, items, limit))
+        .catch(() => undefined)
+        .then(() => undefined);
+      pending.add(work);
+      void work.finally(() => pending.delete(work));
+    };
+    page.on('response', onResponse);
+    try {
+      await page.goto(DOUYIN_PROFILE_URL, { waitUntil: 'commit', timeout: 25_000 })
+        .catch(() => undefined);
+      const browser = context.browser()?.browserType().name() === 'chromium'
+        ? 'chrome'
+        : 'msedge';
+      await this.selectDouyinTab(page, 'douyin', mode, browser);
+      let unchangedRounds = 0;
+      for (let index = 0; index < MAX_DOUYIN_SCROLLS && items.size < limit; index += 1) {
+        if (this.cancelled) break;
+        const before = items.size;
+        await this.collectVisibleDouyinCards(page, items, limit);
+        await Promise.allSettled([...pending]);
+        unchangedRounds = items.size === before ? unchangedRounds + 1 : 0;
+        if (items.size >= limit || unchangedRounds >= 5) break;
+        await page.evaluate(() => {
+          window.scrollBy({
+            top: Math.max(window.innerHeight * 0.88, 720),
+            behavior: 'instant',
+          });
+        }).catch(() => undefined);
+        await page.waitForTimeout(850);
+      }
+      await Promise.allSettled([...pending]);
+    } finally {
+      page.off('response', onResponse);
+    }
+    return [...items.values()]
+      .slice(0, limit)
+      .map((item, sourceRank) => ({ ...item, sourceRank }));
   }
 
   private latestPage(context: BrowserContext, fallback: Page): Page {

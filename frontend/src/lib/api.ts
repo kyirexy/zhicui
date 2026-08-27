@@ -39,6 +39,8 @@ import type {
   DouyinBatchExtractionOperation,
   DouyinLibraryItem,
   DouyinLibraryListResult,
+  DouyinLocalSyncItem,
+  DouyinLocalSyncResult,
   DouyinLocalHandoff,
   DouyinPermanentHiddenItem,
   DouyinLibrarySort,
@@ -799,6 +801,21 @@ export async function collectDouyinLibrary(
     body: JSON.stringify({
       count: boundedCount,
       mode,
+    }),
+  });
+}
+
+export async function ingestLocalDouyinLibrary(
+  sourceMode: DouyinSourceMode,
+  items: DouyinLocalSyncItem[],
+  clientVersion = '',
+): Promise<ApiResponse<DouyinLocalSyncResult>> {
+  return request<DouyinLocalSyncResult>('/api/library/douyin/local-sync', {
+    method: 'POST',
+    body: JSON.stringify({
+      source_mode: sourceMode,
+      items: items.slice(0, 100),
+      client_version: clientVersion,
     }),
   });
 }

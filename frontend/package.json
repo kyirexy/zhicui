@@ -13,6 +13,7 @@
     "test:agent-v2": "node --experimental-strip-types --test src/lib/agentTurnUi.test.ts src/lib/agentTextStream.test.ts",
     "test:navigation": "node --experimental-strip-types --test src/lib/productNavigation.test.ts",
     "test:douyin-sync": "node --experimental-strip-types --test src/lib/douyinSyncFeedback.test.ts",
+    "test:douyin-desktop": "node --experimental-strip-types --test src/lib/douyinDesktopSync.test.ts",
     "test:manual-sync": "node --experimental-strip-types --test src/lib/manualSyncPolicy.test.ts",
     "test:client-update": "npm run generate:build-version && node --experimental-strip-types --test src/lib/webBuildUpdate.test.ts src/lib/clientAuthPolicy.test.ts",
     "start": "next start",

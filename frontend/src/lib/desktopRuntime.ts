@@ -33,7 +33,7 @@ export interface DesktopLoginStatus {
   browser?: 'chrome' | 'msedge';
 }
 
-export type PlatformAccountProvider = 'bilibili' | 'xiaohongshu';
+export type PlatformAccountProvider = 'douyin' | 'bilibili' | 'xiaohongshu';
 
 // ---------------------------------------------------------------------------
 // 知萃账号 桌面端 ↔ Web 联动登录
@@ -70,12 +70,13 @@ export interface DesktopZhicuiLoginResult {
   cancelled?: boolean;
   error?: string;
 }
-export type PlatformAccountSourceMode = 'like' | 'collect';
+export type PlatformAccountSourceMode = 'like' | 'collect' | 'post';
 export type PlatformAccountStage =
   | 'starting'
   | 'browser-open'
   | 'waiting'
   | 'collecting'
+  | 'needs-action'
   | 'success'
   | 'cancelled'
   | 'disconnected'
@@ -98,6 +99,18 @@ export interface PlatformAccountStatus {
   browser?: 'chrome' | 'msedge';
 }
 
+export interface PlatformAccountItem {
+  videoId: string;
+  sourceUrl: string;
+  title: string;
+  caption: string;
+  authorName: string;
+  coverUrl: string;
+  publishedAt: string;
+  durationSeconds: number;
+  sourceRank: number;
+}
+
 export interface PlatformAccountResult {
   success: boolean;
   platform: PlatformAccountProvider;
@@ -105,6 +118,7 @@ export interface PlatformAccountResult {
   connected?: boolean;
   error?: string;
   urls?: string[];
+  items?: PlatformAccountItem[];
   count?: number;
 }
 

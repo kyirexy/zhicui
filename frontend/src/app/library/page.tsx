@@ -67,6 +67,7 @@ import {
   getDouyinLoginQr,
   getDouyinLoginStatus,
   initializePlatformLibraryItem,
+  ingestLocalDouyinLibrary,
   listDouyinLibraryItems,
   listPermanentlyHiddenDouyinItems,
   removeDouyinLibraryItems,
@@ -89,7 +90,12 @@ import {
   formatMultiSourceSyncSummary,
   hasDouyinSyncFailureDiagnostic,
 } from '@/lib/douyinSyncFeedback';
+import {
+  supportsLocalDouyinRuntime,
+  toLocalDouyinSyncItems,
+} from '@/lib/douyinDesktopSync';
 import { useLocalStorage } from '@/lib/hooks/useLocalStorage';
+import { useAuth } from '@/lib/hooks/AuthContext';
 import { useMarqueeSelection } from '@/lib/hooks/useMarqueeSelection';
 import {
   QUICK_SYNC_MAX_COUNT,
@@ -323,6 +329,7 @@ function canStartLibraryMarquee(target: HTMLElement, container: HTMLElement): bo
 }
 
 export default function VideoLibraryPage() {
+  const { user } = useAuth();
   const [status, setStatus] = useState<DouyinLibraryStatus | null>(null);
   const [collectionJob, setCollectionJob] = useState<DouyinCollectionJob | null>(null);
   const [storedSourceMode, setSourceMode] = useLocalStorage<DouyinSourceMode | string>(
@@ -380,7 +387,8 @@ export default function VideoLibraryPage() {
     syncPlatformFromLocation();
     window.addEventListener('popstate', syncPlatformFromLocation);
     return () => window.removeEventListener('popstate', syncPlatformFromLocation);
-  }, []);
+  }, [user?.id]);
+
   const [platformPanelVersion, setPlatformPanelVersion] = useState(0);
   const [sourceManagerOpen, setSourceManagerOpen] = useState(false);
   const [sourceManagerView, setSourceManagerView] = useState<SourceManagerView>('douyin');
@@ -395,6 +403,21 @@ export default function VideoLibraryPage() {
   const [, setQrFallbackVisible] = useState(false);
   const [, setQrFallbackMode] = useState('remote_capture');
   const [bindingClient, setBindingClient] = useState<BindingClient>('desktop-web');
+  const [desktopLocalDouyin, setDesktopLocalDouyin] = useState(false);
+  const [desktopVersion, setDesktopVersion] = useState('');
+  const [desktopDouyinConnected, setDesktopDouyinConnected] = useState(false);
+  const [desktopDouyinStage, setDesktopDouyinStage] = useState('idle');
+  const persistDesktopDouyinConnection = useCallback((connectedValue: boolean) => {
+    setDesktopDouyinConnected(connectedValue);
+    if (!user?.id || typeof window === 'undefined') return;
+    try {
+      const key = `zhicui-platform-account-connections:${user.id}`;
+      const stored = JSON.parse(window.localStorage.getItem(key) || '{}') as Record<string, boolean>;
+      window.localStorage.setItem(key, JSON.stringify({ ...stored, douyin: connectedValue }));
+    } catch {
+      // 浏览器禁用本地存储时只保留本次会话状态。
+    }
+  }, [user?.id]);
   const [bindingCheckPending, setBindingCheckPending] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [batchExtracting, setBatchExtracting] = useState(false);
@@ -560,7 +583,7 @@ export default function VideoLibraryPage() {
     return () => {
       activeRef.current = false;
     };
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
     if (!sortMenuOpen) return;
@@ -589,6 +612,19 @@ export default function VideoLibraryPage() {
       if (!active) return;
       if (runtime) {
         setBindingClient('desktop-app');
+        const supportsLocal = supportsLocalDouyinRuntime(runtime.version);
+        setDesktopVersion(runtime.version);
+        setDesktopLocalDouyin(supportsLocal);
+        if (supportsLocal && user?.id) {
+          try {
+            const stored = JSON.parse(
+              window.localStorage.getItem(`zhicui-platform-account-connections:${user.id}`) || '{}',
+            ) as { douyin?: boolean };
+            setDesktopDouyinConnected(Boolean(stored.douyin));
+          } catch {
+            setDesktopDouyinConnected(false);
+          }
+        }
         return;
       }
       if (isNativeAndroidApp()) {
@@ -604,7 +640,7 @@ export default function VideoLibraryPage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
     if (bindingClient !== 'desktop-app' || !window.zhicuiDesktop) return undefined;
@@ -621,6 +657,18 @@ export default function VideoLibraryPage() {
       }
     });
   }, [bindingClient]);
+
+  useEffect(() => {
+    if (!desktopLocalDouyin || !window.zhicuiDesktop) return undefined;
+    return window.zhicuiDesktop.onPlatformAccountStatus((nextStatus) => {
+      if (nextStatus.platform !== 'douyin') return;
+      setDesktopDouyinStage(nextStatus.stage);
+      setNotice(nextStatus.message);
+      setSourceManagerNotice(nextStatus.message);
+      if (nextStatus.stage === 'success') persistDesktopDouyinConnection(true);
+      if (nextStatus.stage === 'disconnected') persistDesktopDouyinConnection(false);
+    });
+  }, [desktopLocalDouyin, persistDesktopDouyinConnection]);
 
   useEffect(() => {
     if (!qrPanelOpen || typeof window === 'undefined') return undefined;
@@ -715,8 +763,10 @@ export default function VideoLibraryPage() {
       && visibleDouyinIds.every(id => selected.has(id))
       && visiblePlatformIds.every(id => selectedPlatform.has(id));
   }, [filteredItems, filteredPlatformItems, platformFilter, selected, selectedPlatform]);
-  const connected = Boolean(status?.connected);
-  const loggedIn = Boolean(status?.cookie_valid);
+  const connected = desktopLocalDouyin || Boolean(status?.connected);
+  const loggedIn = desktopLocalDouyin
+    ? desktopDouyinConnected
+    : Boolean(status?.cookie_valid);
   const loginBrowserMode = status?.login_browser_mode || 'unavailable';
   const localBrowserAvailable = (
     bindingClient === 'desktop-web'
@@ -1568,6 +1618,26 @@ export default function VideoLibraryPage() {
       setNotice('未检测到知萃桌面端，请重新打开应用后再试');
       return;
     }
+    if (desktopLocalDouyin && user?.id) {
+      setScanning(true);
+      setQrPanelOpen(false);
+      setLoginStatusMessage('正在打开抖音官方登录页面…');
+      setNotice('请在抖音官方页面完成扫码登录');
+      const result = await desktop.loginPlatformAccount({
+        platform: 'douyin',
+        profileKey: user.id,
+      });
+      setScanning(false);
+      if (!result.success) {
+        setDesktopDouyinStage(result.cancelled ? 'cancelled' : 'error');
+        setNotice(result.cancelled ? '已取消抖音登录' : result.error || '抖音登录失败');
+        return;
+      }
+      persistDesktopDouyinConnection(true);
+      setDesktopDouyinStage('success');
+      setNotice('抖音本机登录已保存；仅在你点击同步时读取');
+      return;
+    }
     setScanning(true);
     setQrPanelOpen(false);
     setLoginQr('');
@@ -1686,6 +1756,27 @@ export default function VideoLibraryPage() {
     const action = sessionAction;
     setSessionPending(true);
     setSessionError('');
+    if (desktopLocalDouyin && user?.id && window.zhicuiDesktop) {
+      const localResult = await window.zhicuiDesktop.disconnectPlatformAccount({
+        platform: 'douyin',
+        profileKey: user.id,
+      });
+      if (!localResult.success) {
+        setSessionPending(false);
+        setSessionError(localResult.error || '无法安全断开本机抖音登录');
+        return;
+      }
+      persistDesktopDouyinConnection(false);
+      setDesktopDouyinStage('disconnected');
+      setSessionPending(false);
+      sessionDialogRef.current?.close();
+      setSessionAction(null);
+      setNotice(action === 'rebind'
+        ? '原抖音本机登录已断开，请重新连接新账号'
+        : '已退出抖音，视频资料仍会保留');
+      if (action === 'rebind') await startQrLogin();
+      return;
+    }
     const response = await disconnectDouyinLibrary(action);
     if (!response.success || !response.data) {
       setSessionPending(false);
@@ -1809,6 +1900,101 @@ export default function VideoLibraryPage() {
       }
     }
     const previousIds = new Set(baselineItems.map((item) => item.aweme_id));
+
+    if (desktopLocalDouyin) {
+      const bridge = window.zhicuiDesktop;
+      if (!bridge || !user?.id) {
+        return {
+          requestedMode,
+          refreshed: null,
+          newlyVisible: [],
+          overview: null,
+          finalJob: null,
+          error: '未检测到可用的知萃桌面连接器',
+        };
+      }
+      publishSourceManagerNotice(`正在本机读取抖音${requestedSourceLabel}…`);
+      const collected = await bridge.collectPlatformAccount({
+        platform: 'douyin',
+        profileKey: user.id,
+        mode: requestedMode,
+        limit: requestedCount,
+      });
+      if (!collected.success || !collected.items?.length) {
+        if (collected.error?.includes('重新登录')) {
+          persistDesktopDouyinConnection(false);
+        }
+        return {
+          requestedMode,
+          refreshed: null,
+          newlyVisible: [],
+          overview: null,
+          finalJob: null,
+          error: collected.cancelled
+            ? '本机读取已取消'
+            : collected.error || `没有读取到抖音${requestedSourceLabel}`,
+        };
+      }
+      publishSourceManagerNotice(
+        `本机已读取 ${collected.items.length} 条${requestedSourceLabel}，正在登记公开资料…`,
+      );
+      const ingested = await ingestLocalDouyinLibrary(
+        requestedMode,
+        toLocalDouyinSyncItems(collected.items),
+        desktopVersion,
+      );
+      if (!ingested.success || !ingested.data) {
+        return {
+          requestedMode,
+          refreshed: null,
+          newlyVisible: [],
+          overview: null,
+          finalJob: null,
+          error: ingested.error || '本机已读取作品，但服务器登记失败',
+        };
+      }
+      const refreshedResponse = await listDouyinLibraryItems(
+        ALL_LIBRARY_ITEMS,
+        requestedMode,
+        requestedSort,
+      );
+      if (!refreshedResponse.success || !refreshedResponse.data) {
+        return {
+          requestedMode,
+          refreshed: null,
+          newlyVisible: [],
+          overview: null,
+          finalJob: null,
+          error: `${requestedSourceLabel}已读取，但视频列表刷新失败`,
+        };
+      }
+      const refreshed = refreshedResponse.data.items || [];
+      const localJob: DouyinCollectionJob = {
+        job_id: `desktop-${Date.now()}`,
+        url: 'desktop-local',
+        status: 'success',
+        total: ingested.data.accepted,
+        success: ingested.data.accepted,
+        failed: 0,
+        skipped: 0,
+        target: requestedCount,
+        processed: ingested.data.accepted,
+        mode: requestedMode,
+        source_mode: requestedMode,
+        channel: 'browser',
+        fallback_attempted: false,
+      };
+      return {
+        requestedMode,
+        refreshed,
+        newlyVisible: baselineKnown
+          ? refreshed.filter((item) => !previousIds.has(item.aweme_id))
+          : [],
+        overview: refreshedResponse.data,
+        finalJob: localJob,
+        error: '',
+      };
+    }
 
     const response = await collectDouyinLibrary(requestedCount, requestedMode);
     if (!response.success || !response.data) {
@@ -1943,7 +2129,9 @@ export default function VideoLibraryPage() {
     const selectedModes = requestedModes.length > 0
       ? requestedModes.slice(0, SOURCE_MODES.length)
       : [sourceModeRef.current];
-    const readiness = status?.private_list_readiness;
+    const readiness = desktopLocalDouyin
+      ? undefined
+      : status?.private_list_readiness;
     const blockedModes = readiness?.reported
       ? selectedModes.filter((mode) => (
           mode === 'collect' ? !readiness.collection_ready : !readiness.like_ready
@@ -2170,7 +2358,7 @@ export default function VideoLibraryPage() {
       `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`,
     );
     setQuickSyncRequested(true);
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
     if (!quickSyncRequested || loading || refreshing) return;
@@ -2789,7 +2977,7 @@ export default function VideoLibraryPage() {
           {sourceManagerView === 'douyin' && (
           <>
 
-          {statusError && (
+          {statusError && !desktopLocalDouyin && (
             <div className="library-offline-note" role="alert">
               <ServerOff size={17} />
               <div>
@@ -2824,7 +3012,9 @@ export default function VideoLibraryPage() {
               </span>
               <div>
                 <strong>抖音账号</strong>
-                <small>{statusError ? '连接待检测' : loggedIn ? '已连接' : '等待登录'}</small>
+                <small>{desktopLocalDouyin
+                  ? loggedIn ? '本机登录有效' : '等待本机登录'
+                  : statusError ? '连接待检测' : loggedIn ? '已连接' : '等待登录'}</small>
               </div>
               <div className={styles.sourceAccountActions}>
                 {loggedIn ? (
@@ -2882,22 +3072,28 @@ export default function VideoLibraryPage() {
                 <div>
                   <dt>绑定时间</dt>
                   <dd className={styles.accountTime}>
-                    {formatAccountTime(status?.binding?.bound_at, '本次已连接')}
+                    {desktopLocalDouyin
+                      ? '仅保存在这台电脑'
+                      : formatAccountTime(status?.binding?.bound_at, '本次已连接')}
                   </dd>
                 </div>
                 <div>
                   <dt>最近验证</dt>
                   <dd className={styles.accountTime}>
-                    {formatAccountTime(status?.binding?.last_verified_at, '刚刚验证')}
+                    {desktopLocalDouyin
+                      ? desktopDouyinStage === 'needs-action' ? '需要官方验证' : '本机会话有效'
+                      : formatAccountTime(status?.binding?.last_verified_at, '刚刚验证')}
                   </dd>
                 </div>
                 <div>
                   <dt>最近同步</dt>
                   <dd className={styles.accountTime}>
-                    {formatAccountTime(status?.binding?.last_sync_at)}
+                    {desktopLocalDouyin
+                      ? '仅手动触发'
+                      : formatAccountTime(status?.binding?.last_sync_at)}
                   </dd>
                 </div>
-                {status?.private_list_readiness?.reported && (
+                {!desktopLocalDouyin && status?.private_list_readiness?.reported && (
                   <>
                     <div>
                       <dt>喜欢读取</dt>
@@ -2919,12 +3115,14 @@ export default function VideoLibraryPage() {
               <div className="library-source-modes" role="group" aria-label="选择要同步的抖音来源，可多选">
                 {SOURCE_MODES.map(({ value, label, Icon }) => {
                   const active = sourceManagerModes.includes(value);
-                  const readinessUnavailable = Boolean(
+                  const readinessUnavailable = !desktopLocalDouyin && Boolean(
                     status?.private_list_readiness?.reported
                     && (
                       value === 'collect'
                         ? !status.private_list_readiness.collection_ready
-                        : !status.private_list_readiness.like_ready
+                        : value === 'like'
+                          ? !status.private_list_readiness.like_ready
+                          : false
                     ),
                   );
                   const collectionUnavailable = value === 'collect' && (
@@ -2988,7 +3186,7 @@ export default function VideoLibraryPage() {
               </div>
             </div>
 
-            {status?.private_list_readiness?.reported
+            {!desktopLocalDouyin && status?.private_list_readiness?.reported
               && !status.private_list_readiness.collection_ready && (
               <div className={styles.sourceNotice} role="status">
                 <Info size={15} aria-hidden="true" />

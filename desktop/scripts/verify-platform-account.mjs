@@ -24,6 +24,31 @@ assert.throws(
   /会话标识无效/,
 );
 
+assert.deepEqual(
+  validatePlatformAccountCollectRequest({
+    platform: 'douyin',
+    profileKey: 'user_123-safe',
+    mode: 'post',
+    limit: 100,
+  }),
+  {
+    platform: 'douyin',
+    profileKey: 'user_123-safe',
+    mode: 'post',
+    limit: 100,
+  },
+);
+
+assert.throws(
+  () => validatePlatformAccountCollectRequest({
+    platform: 'bilibili',
+    profileKey: 'user_123-safe',
+    mode: 'post',
+    limit: 20,
+  }),
+  /不支持同步自己的作品/,
+);
+
 assert.throws(
   () => validatePlatformAccountCollectRequest({
     platform: 'xiaohongshu',
@@ -52,6 +77,18 @@ assert.equal(
   ]),
   true,
 );
+assert.equal(
+  hasPlatformAuthCookie('douyin', [
+    { name: 'sessionid_ss', value: 'secret', domain: '.douyin.com' },
+  ]),
+  true,
+);
+assert.equal(
+  hasPlatformAuthCookie('douyin', [
+    { name: 'sessionid_ss', value: 'secret', domain: '.example.com' },
+  ]),
+  false,
+);
 
 assert.deepEqual(
   boundedPlatformUrls('bilibili', [
@@ -73,6 +110,20 @@ assert.deepEqual(
     'https://www.xiaohongshu.com/explore/def456?xsec_source=pc_user',
   ], 1),
   ['https://www.xiaohongshu.com/explore/abc123?xsec_token=token'],
+);
+
+assert.deepEqual(
+  boundedPlatformUrls('douyin', [
+    'https://www.douyin.com/video/7672579366093622537?from_tab_name=main',
+    'https://www.douyin.com/video/7672579366093622537',
+    'https://example.com/video/123456789',
+    'https://www.douyin.com/user/example',
+    'https://www.douyin.com/video/7672579366093622538',
+  ], 100),
+  [
+    'https://www.douyin.com/video/7672579366093622537',
+    'https://www.douyin.com/video/7672579366093622538',
+  ],
 );
 
 console.log('platform-account verification passed');

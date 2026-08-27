@@ -23,12 +23,14 @@ const HANDOFF_TOKEN_PATTERN = /^[A-Za-z0-9_-]{40,4096}\.[a-f0-9]{64}$/;
 const AWEME_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const PROFILE_KEY_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const PLATFORM_ACCOUNT_PROVIDERS = new Set<PlatformAccountProvider>([
+  'douyin',
   'bilibili',
   'xiaohongshu',
 ]);
 const PLATFORM_ACCOUNT_MODES = new Set<PlatformAccountSourceMode>([
   'like',
   'collect',
+  'post',
 ]);
 
 export function configuredAppUrl(): URL {
@@ -130,6 +132,9 @@ export function validatePlatformAccountCollectRequest(
   const limit = Number(value?.limit);
   if (!PLATFORM_ACCOUNT_MODES.has(mode)) {
     throw new Error('账号同步来源无效');
+  }
+  if (request.platform !== 'douyin' && mode === 'post') {
+    throw new Error('当前平台不支持同步自己的作品');
   }
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
     throw new Error('账号同步数量必须在 1–100 条之间');

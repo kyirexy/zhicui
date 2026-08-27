@@ -13,6 +13,7 @@ from app.services import (
     ai_juicer,
     douyin_binding_service,
     douyin_library,
+    local_douyin_library_service,
     note_service,
     plan_service,
     settings_service,
@@ -264,11 +265,21 @@ def extract_library_item(
                 raise ValueError("完整文案尚未就绪，请先完成文案提取")
 
             binding = douyin_binding_service.get_or_create(db, user_id)
-            item = item or douyin_library.get_item(
-                binding.session_scope,
-                binding.id,
-                clean_id,
-            )
+            if item is None:
+                try:
+                    item = douyin_library.get_item(
+                        binding.session_scope,
+                        binding.id,
+                        clean_id,
+                    )
+                except douyin_library.DouyinLibraryError:
+                    item = None
+            if item is None:
+                item = local_douyin_library_service.get_item(
+                    db,
+                    user_id=user_id,
+                    video_id=clean_id,
+                )
             if item is None:
                 raise ValueError("收藏视频不存在或尚未同步")
             if not item.get("can_extract"):
@@ -287,14 +298,38 @@ def extract_library_item(
                 if progress:
                     progress("transcribing")
                 try:
+                    if item.get("provider") == "desktop-local":
+                        video_info = video_extractor.parse_video_info(
+                            item["source_url"]
+                        )
+                        media_url = str(
+                            video_info.get("download_url")
+                            or video_info.get("url")
+                            or ""
+                        ).strip()
+                        if not media_url:
+                            raise RuntimeError("抖音作品播放地址暂时无法解析")
+                        request_headers = {
+                            "Referer": "https://www.douyin.com/",
+                            "User-Agent": (
+                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                "Chrome/124.0.0.0 Safari/537.36"
+                            ),
+                        }
+                    else:
+                        media_url = douyin_library.companion_media_url(
+                            item["aweme_id"]
+                        )
+                        request_headers = douyin_library.companion_headers(
+                            session_scope,
+                        )
                     transcript = video_extractor.extract_media_url_transcript(
-                        douyin_library.companion_media_url(item["aweme_id"]),
+                        media_url,
                         asr_config["api_key"],
                         asr_config["api_base_url"],
                         asr_config["model"],
-                        request_headers=douyin_library.companion_headers(
-                            session_scope,
-                        ),
+                        request_headers=request_headers,
                     )
                 except RuntimeError as exc:
                     # Short Douyin works are often silent and communicate through
@@ -599,15 +634,27 @@ def create_batch_job(
     try:
         with SessionLocal() as db:
             binding = douyin_binding_service.get_or_create(db, user_id)
-            item_by_id = {
-                str(item.get("aweme_id") or "").strip(): item
-                for item in douyin_library.list_items(
+            try:
+                sidecar_items = douyin_library.list_items(
                     binding.session_scope,
                     binding.id,
                     limit=0,
                 )
+            except douyin_library.DouyinLibraryError:
+                sidecar_items = []
+            local_items = local_douyin_library_service.list_items(
+                db,
+                user_id=user_id,
+            )
+            item_by_id = {
+                str(item.get("aweme_id") or "").strip(): item
+                for item in sidecar_items
                 if str(item.get("aweme_id") or "").strip()
             }
+            for local_item in local_items:
+                aweme_id = str(local_item.get("aweme_id") or "").strip()
+                if aweme_id and aweme_id not in item_by_id:
+                    item_by_id[aweme_id] = local_item
     except Exception:
         # 预取失败不阻塞任务：任务内会退回逐条 get_item。
         item_by_id = {}

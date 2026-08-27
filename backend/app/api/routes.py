@@ -18,7 +18,7 @@ from urllib.parse import unquote
 import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.responses import RedirectResponse, StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -50,6 +50,7 @@ from app.services import (
     image_memory_cache,
     library_extraction_service,
     library_hidden_service,
+    local_douyin_library_service,
     llm_usage_service,
     knowledge_service,
     note_service,
@@ -239,6 +240,34 @@ class PlatformLibraryImportRequest(BaseModel):
         if len(cleaned) > platform_library_service.MAX_IMPORT_URLS:
             raise ValueError("每次最多导入 10 条链接")
         return cleaned
+
+
+class LocalDouyinLibraryItemRequest(BaseModel):
+    """Public metadata only; unknown or sensitive-looking fields are rejected."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    video_id: str = Field(..., min_length=5, max_length=32)
+    source_url: str = Field(..., min_length=20, max_length=512)
+    title: str = Field(default="", max_length=500)
+    caption: str = Field(default="", max_length=20_000)
+    author_name: str = Field(default="", max_length=200)
+    cover_url: str = Field(default="", max_length=2048)
+    published_at: str | int | float = ""
+    duration_seconds: int = Field(default=0, ge=0, le=86_400)
+    source_rank: int | None = Field(default=None, ge=0, lt=100)
+
+
+class LocalDouyinLibrarySyncRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_mode: Literal["collect", "like", "post"]
+    items: list[LocalDouyinLibraryItemRequest] = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+    )
+    client_version: str = Field(default="", max_length=32)
 
 
 class CreatorSourceRequest(BaseModel):
@@ -1796,6 +1825,57 @@ def collect_douyin_library(
     return _ok(job)
 
 
+@router.post("/api/library/douyin/local-sync")
+def ingest_local_douyin_library(
+    body: LocalDouyinLibrarySyncRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """Accept bounded public metadata discovered by the Windows client."""
+    try:
+        result = local_douyin_library_service.ingest_items(
+            db,
+            user_id=current_user.id,
+            source_mode=body.source_mode,
+            items=[item.model_dump() for item in body.items],
+        )
+    except ValueError as exc:
+        activity_service.log_activity_safely(
+            user_id=current_user.id,
+            action="douyin_local_sync_failed",
+            method="POST",
+            path="/api/library/douyin/local-sync",
+            status_code=422,
+            ip=request.client.host if request.client else None,
+            detail={
+                "outcome": "rejected",
+                "source_mode": body.source_mode,
+                "requested_count": len(body.items),
+                "client_version": body.client_version,
+            },
+        )
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    activity_service.log_activity_safely(
+        user_id=current_user.id,
+        action="douyin_local_sync",
+        method="POST",
+        path="/api/library/douyin/local-sync",
+        status_code=200,
+        ip=request.client.host if request.client else None,
+        detail={
+            "outcome": "completed",
+            "source_mode": result["source_mode"],
+            "accepted": result["accepted"],
+            "created": result["created"],
+            "reused": result["reused"],
+            "client_version": body.client_version,
+            "channel": "desktop-local",
+        },
+    )
+    return _ok(result)
+
+
 @router.get("/api/library/douyin/jobs/{job_id}")
 def get_douyin_library_job(
     job_id: str,
@@ -2108,10 +2188,17 @@ def list_douyin_library_items(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
-    """Return downloader items enriched with this user's extraction state."""
+    """Return the merged desktop snapshot and legacy downloader catalog."""
     binding = douyin_binding_service.get_or_create(db, current_user.id)
+    local_items = local_douyin_library_service.list_items(
+        db,
+        user_id=current_user.id,
+        source_mode=mode,
+    )
+    sidecar_items: list[dict[str, Any]] = []
+    catalog_warning = ""
     try:
-        items = douyin_library.list_items(
+        sidecar_items = douyin_library.list_items(
             binding.session_scope,
             binding.id,
             0,
@@ -2120,7 +2207,63 @@ def list_douyin_library_items(
             refresh_order=refresh_order,
         )
     except douyin_library.DouyinLibraryError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        # A locally discovered snapshot remains useful when the historical
+        # cloud sidecar is unavailable or risk-controlled. Never discard it.
+        catalog_warning = str(exc)
+
+    sidecar_by_id = {
+        str(item.get("aweme_id") or "").strip(): dict(item)
+        for item in sidecar_items
+        if str(item.get("aweme_id") or "").strip()
+    }
+    items: list[dict[str, Any]] = []
+    emitted: set[str] = set()
+    for local_item in local_items:
+        aweme_id = str(local_item.get("aweme_id") or "").strip()
+        if not aweme_id or aweme_id in emitted:
+            continue
+        sidecar_item = sidecar_by_id.get(aweme_id)
+        if sidecar_item is None:
+            merged = dict(local_item)
+        else:
+            # Keep the sidecar media capability when it exists, while using
+            # the newest public metadata and ordering captured on the device.
+            merged = dict(sidecar_item)
+            for key in (
+                "title",
+                "caption",
+                "author_name",
+                "source_url",
+                "cover_url",
+                "published_at",
+                "duration",
+                "source_mode",
+                "source_rank",
+                "source_synced_at",
+                "first_seen_at",
+                "last_seen_at",
+            ):
+                value = local_item.get(key)
+                if value not in (None, ""):
+                    merged[key] = value
+        emitted.add(aweme_id)
+        items.append(merged)
+    for sidecar_item in sidecar_items:
+        aweme_id = str(sidecar_item.get("aweme_id") or "").strip()
+        if aweme_id and aweme_id not in emitted:
+            emitted.add(aweme_id)
+            items.append(dict(sidecar_item))
+
+    if sort == "published":
+        items.sort(
+            key=lambda item: str(item.get("published_at") or ""),
+            reverse=True,
+        )
+    else:
+        items.sort(key=lambda item: (
+            item.get("source_rank") is None,
+            int(item.get("source_rank") or 0),
+        ))
 
     source_total = len(items)
     hidden_modes = library_hidden_service.list_hidden_modes(
@@ -2197,6 +2340,11 @@ def list_douyin_library_items(
             current_user.id,
             "permanent",
         ),
+        "catalog_warning": catalog_warning,
+        "catalog_channels": {
+            "desktop_local": len(local_items),
+            "legacy_sidecar": len(sidecar_items),
+        },
     })
 
 
@@ -2235,16 +2383,23 @@ def list_permanently_hidden_douyin_items(
     )
     catalog: dict[str, dict[str, Any]] = {}
     try:
-        catalog = {
+        catalog.update({
             item["aweme_id"]: item
             for item in douyin_library.list_items(
                 binding.session_scope,
                 binding.id,
                 0,
             )
-        }
+        })
     except douyin_library.DouyinLibraryError:
         pass
+    catalog.update({
+        item["aweme_id"]: item
+        for item in local_douyin_library_service.list_items(
+            db,
+            user_id=current_user.id,
+        )
+    })
 
     items: list[dict[str, Any]] = []
     for record in records:
@@ -2301,6 +2456,7 @@ def get_douyin_library_item(
     if library_hidden_service.is_hidden(db, current_user.id, aweme_id):
         raise HTTPException(status_code=404, detail="视频已从当前资料库移除")
     binding = douyin_binding_service.get_or_create(db, current_user.id)
+    item: dict[str, Any] | None = None
     try:
         item = douyin_library.get_item(
             binding.session_scope,
@@ -2308,7 +2464,13 @@ def get_douyin_library_item(
             aweme_id,
         )
     except douyin_library.DouyinLibraryError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        item = None
+    if item is None:
+        item = local_douyin_library_service.get_item(
+            db,
+            user_id=current_user.id,
+            video_id=aweme_id,
+        )
     if item is None:
         raise HTTPException(status_code=404, detail="视频不存在或尚未同步")
 
@@ -2378,6 +2540,7 @@ def ask_douyin_library_visual_item(
         raise HTTPException(status_code=404, detail="作品不存在或尚未同步")
 
     binding = douyin_binding_service.get_or_create(db, current_user.id)
+    item: dict[str, Any] | None = None
     try:
         item = douyin_library.get_item(
             binding.session_scope,
@@ -2385,7 +2548,13 @@ def ask_douyin_library_visual_item(
             aweme_id,
         )
     except douyin_library.DouyinLibraryError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        item = None
+    if item is None:
+        item = local_douyin_library_service.get_item(
+            db,
+            user_id=current_user.id,
+            video_id=aweme_id,
+        )
     if item is None:
         raise HTTPException(status_code=404, detail="作品不存在或尚未同步")
 
@@ -2397,6 +2566,27 @@ def ask_douyin_library_visual_item(
                 aweme_id,
                 len(item.get("gallery_images") or []),
                 max_images=8,
+            )
+        elif item.get("provider") == "desktop-local":
+            video_info = video_extractor.parse_video_info(item["source_url"])
+            media_url = str(
+                video_info.get("download_url")
+                or video_info.get("url")
+                or ""
+            ).strip()
+            if not media_url:
+                raise ValueError("当前作品暂时无法解析播放地址，请稍后重试")
+            images = ai_juicer.extract_video_frames(
+                media_url,
+                max_frames=8,
+                request_headers={
+                    "Referer": "https://www.douyin.com/",
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    ),
+                },
             )
         else:
             images = ai_juicer.extract_video_frames(

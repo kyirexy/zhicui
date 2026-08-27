@@ -746,6 +746,32 @@ export interface DouyinLibraryListResult {
     permanent: number;
   };
   permanent_hidden_total: number;
+  catalog_warning?: string;
+  catalog_channels?: {
+    desktop_local: number;
+    legacy_sidecar: number;
+  };
+}
+
+export interface DouyinLocalSyncItem {
+  video_id: string;
+  source_url: string;
+  title: string;
+  caption: string;
+  author_name: string;
+  cover_url: string;
+  published_at: string;
+  duration_seconds: number;
+  source_rank: number;
+}
+
+export interface DouyinLocalSyncResult {
+  accepted: number;
+  created: number;
+  reused: number;
+  source_mode: DouyinSourceMode;
+  source_synced_at: string;
+  video_ids: string[];
 }
 
 export interface DouyinPermanentHiddenItem {

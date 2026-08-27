@@ -1,6 +1,6 @@
 {
   "name": "zhicui-desktop",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "知萃 Windows 桌面应用",
   "main": "dist/main.js",
   "author": "知萃",

@@ -69,13 +69,14 @@ export interface DesktopZhicuiLoginResult {
   error?: string;
 }
 
-export type PlatformAccountProvider = 'bilibili' | 'xiaohongshu';
-export type PlatformAccountSourceMode = 'like' | 'collect';
+export type PlatformAccountProvider = 'douyin' | 'bilibili' | 'xiaohongshu';
+export type PlatformAccountSourceMode = 'like' | 'collect' | 'post';
 export type PlatformAccountStage =
   | 'starting'
   | 'browser-open'
   | 'waiting'
   | 'collecting'
+  | 'needs-action'
   | 'success'
   | 'cancelled'
   | 'disconnected'
@@ -98,6 +99,18 @@ export interface PlatformAccountStatus {
   browser?: 'chrome' | 'msedge';
 }
 
+export interface PlatformAccountItem {
+  videoId: string;
+  sourceUrl: string;
+  title: string;
+  caption: string;
+  authorName: string;
+  coverUrl: string;
+  publishedAt: string;
+  durationSeconds: number;
+  sourceRank: number;
+}
+
 export interface PlatformAccountResult {
   success: boolean;
   platform: PlatformAccountProvider;
@@ -105,6 +118,7 @@ export interface PlatformAccountResult {
   connected?: boolean;
   error?: string;
   urls?: string[];
+  items?: PlatformAccountItem[];
   count?: number;
 }
 

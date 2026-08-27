@@ -96,6 +96,7 @@ interface AccountConnectionState {
 type AccountConnectionMap = Record<PlatformAccountProvider, AccountConnectionState>;
 
 const INITIAL_ACCOUNT_CONNECTIONS: AccountConnectionMap = {
+  douyin: { connected: false, stage: 'idle', message: '尚未连接' },
   bilibili: { connected: false, stage: 'idle', message: '尚未连接' },
   xiaohongshu: { connected: false, stage: 'idle', message: '尚未连接' },
 };
@@ -157,6 +158,7 @@ export default function PlatformLibraryPanel({
     PlatformAccountProvider,
     PlatformAccountSourceMode[]
   >>({
+    douyin: ['like', 'collect', 'post'],
     bilibili: ['like', 'collect'],
     xiaohongshu: ['like', 'collect'],
   });
@@ -206,6 +208,7 @@ export default function PlatformLibraryPanel({
         window.localStorage.setItem(
           `zhicui-platform-account-connections:${user.id}`,
           JSON.stringify({
+            douyin: next.douyin.connected,
             bilibili: next.bilibili.connected,
             xiaohongshu: next.xiaohongshu.connected,
           }),
@@ -224,6 +227,11 @@ export default function PlatformLibraryPanel({
         ) || '{}',
       ) as Partial<Record<PlatformAccountProvider, boolean>>;
       setAccountConnections({
+        douyin: {
+          connected: Boolean(stored.douyin),
+          stage: 'idle',
+          message: stored.douyin ? '本机已连接' : '尚未连接',
+        },
         bilibili: {
           connected: Boolean(stored.bilibili),
           stage: 'idle',

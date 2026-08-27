@@ -25,6 +25,7 @@ import {
   getDouyinBatchExtraction,
   getDouyinCollectionJob,
   getDouyinLibraryStatus,
+  ingestLocalDouyinLibrary,
   importPlatformLibraryItems,
   listCreatorSources,
   listDouyinLibraryItems,
@@ -38,8 +39,13 @@ import type {
   CreatorSourcePreview,
   CreatorSyncRun,
   DouyinLibraryStatus,
+  DouyinSourceMode,
 } from '@/lib/types';
 import { formatDouyinSyncError } from '@/lib/douyinSyncFeedback';
+import {
+  supportsLocalDouyinRuntime,
+  toLocalDouyinSyncItems,
+} from '@/lib/douyinDesktopSync';
 import { useCreatorSync } from '@/lib/hooks/CreatorSyncContext';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import {
@@ -106,11 +112,15 @@ export default function AgentSourceSyncSheet({
   const { user } = useAuth();
   const [platform, setPlatform] = useState<PlatformBrand>('douyin');
   const [sourceKind, setSourceKind] = useState<'account' | 'creator'>('account');
-  const [douyinMode, setDouyinMode] = useState<'collect' | 'like'>('like');
+  const [douyinMode, setDouyinMode] = useState<DouyinSourceMode>('like');
   const [douyinReadiness, setDouyinReadiness] = useState<
     DouyinLibraryStatus['private_list_readiness'] | null
   >(null);
-  const [syncCount, setSyncCount] = useState<(typeof syncCounts)[number]>(50);
+  const [syncCount, setSyncCount] = useState<number>(50);
+  const [douyinDesktopAvailable, setDouyinDesktopAvailable] = useState(false);
+  const [douyinDesktopVersion, setDouyinDesktopVersion] = useState('');
+  const [douyinConnected, setDouyinConnected] = useState(false);
+  const [douyinStage, setDouyinStage] = useState<PlatformAccountStage | 'idle'>('idle');
   const [urls, setUrls] = useState('');
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState('');
@@ -152,6 +162,20 @@ export default function AgentSourceSyncSheet({
     }
   }, [profileKey]);
 
+  const setDouyinConnection = useCallback((connected: boolean) => {
+    setDouyinConnected(connected);
+    if (typeof window !== 'undefined' && profileKey !== 'guest') {
+      try {
+        const key = `zhicui-platform-account-connections:${profileKey}`;
+        const stored = JSON.parse(window.localStorage.getItem(key) || '{}') as
+          Partial<Record<'douyin' | 'bilibili' | 'xiaohongshu', boolean>>;
+        window.localStorage.setItem(key, JSON.stringify({ ...stored, douyin: connected }));
+      } catch {
+        // localStorage 不可用时静默降级为会话内状态
+      }
+    }
+  }, [profileKey]);
+
   useEffect(() => {
     if (!open || !biliAccountSyncAvailable) return;
     let disposed = false;
@@ -164,8 +188,10 @@ export default function AgentSourceSyncSheet({
       try {
         const stored = JSON.parse(
           window.localStorage.getItem(`zhicui-platform-account-connections:${profileKey}`) || '{}',
-        ) as Partial<Record<'bilibili' | 'xiaohongshu', boolean>>;
+        ) as Partial<Record<'douyin' | 'bilibili' | 'xiaohongshu', boolean>>;
         restoreConnection(Boolean(stored.bilibili));
+        setDouyinConnected(Boolean(stored.douyin));
+        setDouyinStage(stored.douyin ? 'success' : 'idle');
       } catch {
         restoreConnection(false);
       }
@@ -173,7 +199,15 @@ export default function AgentSourceSyncSheet({
       restoreConnection(false);
     }
     const unsubscribe = window.zhicuiDesktop?.onPlatformAccountStatus((status: PlatformAccountStatus) => {
-      if (status.platform !== 'bilibili' || disposed) return;
+      if (disposed) return;
+      if (status.platform === 'douyin') {
+        if (status.stage === 'success') setDouyinConnection(true);
+        if (status.stage === 'disconnected') setDouyinConnection(false);
+        setDouyinStage(status.stage);
+        setMessage(status.message);
+        return;
+      }
+      if (status.platform !== 'bilibili') return;
       if (status.stage === 'success') {
         setBiliConnection(true);
       } else if (status.stage === 'disconnected') {
@@ -188,7 +222,20 @@ export default function AgentSourceSyncSheet({
       disposed = true;
       if (typeof unsubscribe === 'function') unsubscribe();
     };
-  }, [open, biliAccountSyncAvailable, profileKey, setBiliConnection]);
+  }, [open, biliAccountSyncAvailable, profileKey, setBiliConnection, setDouyinConnection]);
+
+  useEffect(() => {
+    if (!open || !biliAccountSyncAvailable || typeof window === 'undefined') return;
+    let disposed = false;
+    void window.zhicuiDesktop?.getRuntimeInfo().then((runtime) => {
+      if (disposed) return;
+      setDouyinDesktopVersion(runtime.version);
+      setDouyinDesktopAvailable(supportsLocalDouyinRuntime(runtime.version));
+    }).catch(() => undefined);
+    return () => {
+      disposed = true;
+    };
+  }, [biliAccountSyncAvailable, open]);
 
   const closeOrBackground = useCallback(() => {
     if (busy) {
@@ -283,7 +330,7 @@ export default function AgentSourceSyncSheet({
     };
   }, [closeOrBackground, open]);
 
-  const prepareNewTranscripts = async (mode: 'collect' | 'like', count: number) => {
+  const prepareNewTranscripts = async (mode: DouyinSourceMode, count: number) => {
     setMessage('视频列表已更新，正在检查新视频…');
     const listResponse = await listDouyinLibraryItems(count, mode, 'collection');
     if (!listResponse.success || !listResponse.data) {
@@ -330,6 +377,43 @@ export default function AgentSourceSyncSheet({
     setFailed(false);
     setMessage(`正在读取最近 ${syncCount} 条${modeLabel}…`);
     try {
+      if (douyinDesktopAvailable) {
+        const bridge = window.zhicuiDesktop;
+        if (!bridge || !douyinConnected) {
+          throw new Error('请先在本机连接抖音账号');
+        }
+        setDouyinStage('collecting');
+        const collected = await bridge.collectPlatformAccount({
+          platform: 'douyin',
+          profileKey,
+          mode: douyinMode,
+          limit: Math.max(1, Math.min(100, Math.trunc(syncCount) || 50)),
+        });
+        if (!collected.success || !collected.items?.length) {
+          if (collected.error?.includes('重新登录')) setDouyinConnection(false);
+          throw new Error(collected.cancelled
+            ? '同步已取消'
+            : collected.error || '本机没有读取到可同步的抖音作品');
+        }
+        setMessage(`本机已读取 ${collected.items.length} 条，正在登记公开资料…`);
+        const ingested = await ingestLocalDouyinLibrary(
+          douyinMode,
+          toLocalDouyinSyncItems(collected.items),
+          douyinDesktopVersion,
+        );
+        if (!ingested.success || !ingested.data) {
+          throw new Error(ingested.error || '本机已读取作品，但服务器登记失败');
+        }
+        const prepared = await prepareNewTranscripts(douyinMode, syncCount);
+        const completedMessage = prepared.total > 0
+          ? `同步完成 · 本机读取 ${ingested.data.accepted} 条，新增文稿 ${prepared.prepared} 条`
+          : `同步完成 · 最近 ${ingested.data.accepted} 条已是最新`;
+        setDouyinStage('success');
+        setMessage(completedMessage);
+        await onSynced();
+        onCompleted(completedMessage, true);
+        return;
+      }
       const connection = await getDouyinLibraryStatus();
       if (!connection.success || !connection.data?.cookie_valid) {
         throw new Error('抖音账号连接已失效，请重新连接账号后再同步');
@@ -472,6 +556,29 @@ export default function AgentSourceSyncSheet({
     });
   };
 
+  const loginDouyinDesktop = async () => {
+    const bridge = window.zhicuiDesktop;
+    if (!douyinDesktopAvailable || !bridge || pending) return;
+    setPending(true);
+    setFailed(false);
+    setDouyinStage('starting');
+    setMessage('正在打开抖音官方登录页面…');
+    const response = await bridge.loginPlatformAccount({
+      platform: 'douyin',
+      profileKey,
+    });
+    setPending(false);
+    if (response.success) {
+      setDouyinConnection(true);
+      setDouyinStage('success');
+      setMessage('抖音本机登录已保存；以后仅手动同步时读取');
+      return;
+    }
+    setDouyinStage(response.cancelled ? 'cancelled' : 'error');
+    setFailed(!response.cancelled);
+    setMessage(response.cancelled ? '登录已取消' : response.error || '抖音登录失败');
+  };
+
   const removeCreator = async () => {
     if (!removeTarget) return;
     const response = await deleteCreatorSource(removeTarget.id);
@@ -495,7 +602,10 @@ export default function AgentSourceSyncSheet({
     setPending(true);
     setFailed(false);
     setMessage('正在创建后台任务…');
-    const response = await createCreatorSyncRun(selectedCreatorId, syncCount);
+    const creatorLimit = syncCounts.includes(syncCount as (typeof syncCounts)[number])
+      ? syncCount as (typeof syncCounts)[number]
+      : 50;
+    const response = await createCreatorSyncRun(selectedCreatorId, creatorLimit);
     if (!response.success || !response.data) {
       setPending(false);
       setFailed(true);
@@ -506,7 +616,7 @@ export default function AgentSourceSyncSheet({
     trackCreatorRun(run);
     setActiveCreatorRun(run);
     setMessage(creatorProgress(run));
-    onBackgrounded(`正在同步该博主最近 ${syncCount} 条，完成后会提示`);
+    onBackgrounded(`正在同步该博主最近 ${creatorLimit} 条，完成后会提示`);
     onClose();
   };
 
@@ -723,8 +833,9 @@ export default function AgentSourceSyncSheet({
                 <div className={styles.douyinModes} role="radiogroup" aria-label="选择抖音同步来源">
                   <button type="button" role="radio" aria-checked={douyinMode === 'like'} disabled={pending} onClick={() => { setDouyinMode('like'); setMessage(''); }}><Heart size={17} weight={douyinMode === 'like' ? 'fill' : 'regular'} />喜欢</button>
                   <button type="button" role="radio" aria-checked={douyinMode === 'collect'} disabled={pending} onClick={() => { setDouyinMode('collect'); setMessage(''); }}><BookmarkSimple size={17} weight={douyinMode === 'collect' ? 'fill' : 'regular'} />收藏</button>
+                  <button type="button" role="radio" aria-checked={douyinMode === 'post'} disabled={pending} onClick={() => { setDouyinMode('post'); setMessage(''); }}><UserCirclePlus size={17} weight={douyinMode === 'post' ? 'fill' : 'regular'} />我的作品</button>
                 </div>
-                {douyinReadiness?.reported
+                {!douyinDesktopAvailable && douyinReadiness?.reported
                   && !douyinReadiness.collection_ready && (
                   <p role="status">
                     收藏读取条件未完成，请重新连接抖音账号并等待登录确认；喜欢仍可正常同步。
@@ -736,14 +847,45 @@ export default function AgentSourceSyncSheet({
                     {syncCounts.map((count) => (
                       <button key={count} type="button" role="radio" aria-checked={syncCount === count} disabled={pending} onClick={() => setSyncCount(count)}>{count}</button>
                     ))}
+                    <input
+                      className={styles.countInput}
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={syncCount}
+                      disabled={pending}
+                      aria-label="自定义同步数量"
+                      onChange={(event) => setSyncCount(Math.max(1, Math.min(100, Number(event.target.value) || 1)))}
+                    />
                   </div>
                   <span>条</span>
                 </div>
-                <p>不会定时或启动时自动同步；点击下方按钮后，新视频会在后台准备普通文稿。</p>
-                <button className={styles.primary} type="button" disabled={pending} data-loading={pending} onClick={syncDouyin}>
+                <p>{douyinDesktopAvailable
+                  ? '登录保存在本机；仅点击同步后读取官方页面，服务器不接收 Cookie。'
+                  : '不会定时或启动时自动同步；当前设备继续使用兼容连接器。'}</p>
+                {douyinDesktopAvailable && (
+                  <p role="status" aria-live="polite">
+                    {douyinConnected ? '抖音本机登录有效' : '首次使用请连接抖音账号'}
+                    {douyinStage === 'needs-action' ? ' · 需要在官方窗口完成验证' : ''}
+                  </p>
+                )}
+                <button
+                  className={styles.primary}
+                  type="button"
+                  disabled={pending}
+                  data-loading={pending}
+                  onClick={douyinDesktopAvailable && !douyinConnected ? loginDouyinDesktop : syncDouyin}
+                >
                   {pending ? <SpinnerGap size={18} weight="bold" aria-hidden="true" /> : <CloudArrowDown size={19} weight="bold" aria-hidden="true" />}
-                  <span>{pending ? '正在同步' : `同步抖音${douyinMode === 'collect' ? '收藏' : '喜欢'}`}</span>
+                  <span>{pending
+                    ? (douyinDesktopAvailable && !douyinConnected ? '正在连接' : '正在同步')
+                    : douyinDesktopAvailable && !douyinConnected
+                      ? '连接抖音账号'
+                      : `同步抖音${douyinMode === 'collect' ? '收藏' : douyinMode === 'post' ? '我的作品' : '喜欢'}`}</span>
                 </button>
+                {douyinDesktopAvailable && pending && (
+                  <button type="button" className={styles.background} onClick={cancelBilibili}>取消本机读取</button>
+                )}
               </>
             ) : platform === 'bilibili' && biliAccountSyncAvailable ? (
               <>

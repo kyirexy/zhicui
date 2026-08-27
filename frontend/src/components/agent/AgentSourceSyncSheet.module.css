@@ -64,7 +64,7 @@
 .sourceSwitch button { min-height: 44px; border: 0; border-radius: 8px; color: var(--foreground-muted); background: transparent; font-size: .86rem; font-weight: 650; }
 .sourceSwitch button[aria-selected="true"] { color: var(--foreground); background: var(--card-bg); box-shadow: 0 1px 3px rgb(0 0 0 / 7%); }
 .sourceSwitch button:disabled { opacity: .55; }
-.douyinModes { display: grid; padding: 3px; border-radius: 10px; grid-template-columns: repeat(2, 1fr); gap: 3px; background: var(--background-secondary); }
+.douyinModes { display: grid; padding: 3px; border-radius: 10px; grid-template-columns: repeat(3, 1fr); gap: 3px; background: var(--background-secondary); }
 .douyinModes button { display: inline-flex; min-height: 44px; border: 0; border-radius: 8px; align-items: center; justify-content: center; gap: 6px; color: var(--foreground-muted); background: transparent; font-weight: 650; }
 .douyinModes button[aria-checked="true"] { color: var(--foreground); background: var(--card-bg); }
 .douyinModes button:disabled { opacity: .55; }
@@ -83,6 +83,8 @@
 .countRow > div { display: inline-flex; padding: 2px; border-radius: 8px; gap: 2px; background: var(--background-secondary); }
 .countRow button { min-width: 44px; min-height: 44px; border: 0; border-radius: 7px; color: var(--foreground-muted); background: transparent; font-weight: 650; font-variant-numeric: tabular-nums; }
 .countRow button[aria-checked="true"] { color: var(--foreground); background: var(--card-bg); box-shadow: 0 1px 3px rgb(0 0 0 / 8%); }
+.countInput { width: 58px; min-height: 44px; border: 0; border-left: 1px solid var(--border); border-radius: 0 7px 7px 0; color: var(--foreground); background: var(--card-bg); text-align: center; font: inherit; font-weight: 650; font-variant-numeric: tabular-nums; outline: none; }
+.countInput:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--primary) 55%, transparent); }
 .manage { display: inline-flex; width: max-content; min-height: 44px; padding: 0 4px; border: 0; align-items: center; gap: 6px; color: var(--foreground-muted); background: transparent; font-size: .82rem; }
 .manage:hover { color: var(--foreground); }
 .manage:disabled { opacity: .45; }

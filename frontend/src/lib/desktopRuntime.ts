@@ -109,6 +109,7 @@ export interface PlatformAccountItem {
   publishedAt: string;
   durationSeconds: number;
   sourceRank: number;
+  ephemeralMediaUrl?: string;
 }
 
 export interface PlatformAccountResult {

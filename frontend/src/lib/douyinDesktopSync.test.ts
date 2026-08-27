@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  getEphemeralDouyinMediaSources,
   requiresLocalDouyinDesktopUpdate,
   supportsLocalDouyinRuntime,
   toLocalDouyinSyncItems,
@@ -9,12 +10,14 @@ import {
 
 test('local Douyin connector is gated to the compatible desktop version', () => {
   assert.equal(supportsLocalDouyinRuntime('1.0.6'), false);
-  assert.equal(supportsLocalDouyinRuntime('1.0.7'), true);
+  assert.equal(supportsLocalDouyinRuntime('1.0.7'), false);
+  assert.equal(supportsLocalDouyinRuntime('1.0.8'), true);
   assert.equal(supportsLocalDouyinRuntime('1.1.0'), true);
   assert.equal(supportsLocalDouyinRuntime('2.0.0'), true);
   assert.equal(requiresLocalDouyinDesktopUpdate(''), false);
   assert.equal(requiresLocalDouyinDesktopUpdate('1.0.6'), true);
-  assert.equal(requiresLocalDouyinDesktopUpdate('1.0.7'), false);
+  assert.equal(requiresLocalDouyinDesktopUpdate('1.0.7'), true);
+  assert.equal(requiresLocalDouyinDesktopUpdate('1.0.8'), false);
 });
 
 test('desktop result is reduced to the public server metadata contract', () => {
@@ -28,6 +31,7 @@ test('desktop result is reduced to the public server metadata contract', () => {
     publishedAt: '2026-08-27T08:00:00Z',
     durationSeconds: 20,
     sourceRank: 0,
+    ephemeralMediaUrl: 'https://v3-web.douyinvod.com/video.mp4?token=temporary',
   }]);
 
   assert.deepEqual(Object.keys(mapped[0]).sort(), [
@@ -43,4 +47,8 @@ test('desktop result is reduced to the public server metadata contract', () => {
   ]);
   assert.equal(JSON.stringify(mapped).toLowerCase().includes('cookie'), false);
   assert.equal(JSON.stringify(mapped).toLowerCase().includes('media_url'), false);
+  assert.deepEqual(getEphemeralDouyinMediaSources(['7672579366093622537']), [{
+    aweme_id: '7672579366093622537',
+    media_url: 'https://v3-web.douyinvod.com/video.mp4?token=temporary',
+  }]);
 });

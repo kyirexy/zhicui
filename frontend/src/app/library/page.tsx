@@ -91,6 +91,7 @@ import {
   hasDouyinSyncFailureDiagnostic,
 } from '@/lib/douyinSyncFeedback';
 import {
+  MIN_LOCAL_DOUYIN_DESKTOP_VERSION,
   requiresLocalDouyinDesktopUpdate,
   supportsLocalDouyinRuntime,
   toLocalDouyinSyncItems,
@@ -2156,7 +2157,7 @@ export default function VideoLibraryPage() {
   ): Promise<{ started: boolean }> => {
     if (desktopDouyinUpdateRequired) {
       publishSourceManagerNotice(
-        `当前仍在运行知萃 ${desktopVersion}，请先重启并安装 1.0.7 或更高版本`,
+        `当前仍在运行知萃 ${desktopVersion}，请先重启并安装 ${MIN_LOCAL_DOUYIN_DESKTOP_VERSION} 或更高版本`,
       );
       return { started: false };
     }

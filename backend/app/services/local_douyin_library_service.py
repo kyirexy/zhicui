@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Iterable
 from urllib.parse import urlsplit, urlunsplit
@@ -31,6 +32,11 @@ _FORBIDDEN_KEYS = {
     "signature",
     "signed_url",
 }
+_COVER_HOST_SUFFIXES = (
+    ".douyinpic.com",
+    ".byteimg.com",
+    ".ibytedtos.com",
+)
 
 
 def _utcnow() -> datetime:
@@ -52,6 +58,14 @@ def _safe_https_url(value: object, *, hosts: set[str] | None = None) -> str:
     if hosts is not None and host not in hosts:
         raise ValueError("本地同步包含非抖音作品链接")
     return urlunsplit(("https", parsed.netloc, parsed.path, parsed.query, ""))
+
+
+def _safe_cover_url(value: object) -> str:
+    url = _safe_https_url(value)
+    host = (urlsplit(url).hostname or "").lower()
+    if not any(host.endswith(suffix) for suffix in _COVER_HOST_SUFFIXES):
+        raise ValueError("本地同步包含非抖音封面地址")
+    return url
 
 
 def normalize_video_id(value: object, source_url: object) -> tuple[str, str]:
@@ -100,7 +114,7 @@ def normalize_item(raw: dict[str, Any], *, fallback_rank: int) -> dict[str, Any]
     rank = int(rank_value) if rank_value is not None else fallback_rank
     if rank < 0 or rank >= MAX_LOCAL_SYNC_ITEMS:
         raise ValueError("抖音来源顺序无效")
-    cover_url = _safe_https_url(raw.get("cover_url")) if raw.get("cover_url") else ""
+    cover_url = _safe_cover_url(raw.get("cover_url")) if raw.get("cover_url") else ""
     caption = _bounded_text(raw.get("caption"), 20_000)
     title = _bounded_text(raw.get("title"), 500) or caption[:120] or "抖音作品"
     return {
@@ -113,7 +127,33 @@ def normalize_item(raw: dict[str, Any], *, fallback_rank: int) -> dict[str, Any]
         "published_at": _normalize_published_at(raw.get("published_at")),
         "duration_seconds": duration,
         "source_rank": rank,
+        "metadata_degraded": False,
     }
+
+
+def _discard_repeated_page_metadata(items: list[dict[str, Any]]) -> None:
+    """Drop page-wide text accidentally attached to several visible cards."""
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in items:
+        signature = str(item.get("caption") or item.get("title") or "").strip()
+        if len(signature) >= 32:
+            grouped[signature].append(item)
+    for repeated in grouped.values():
+        if len(repeated) < 3:
+            continue
+        if not all(
+            not item.get("author_name")
+            and not item.get("published_at")
+            and int(item.get("duration_seconds") or 0) == 0
+            for item in repeated
+        ):
+            continue
+        for item in repeated:
+            item["discarded_title"] = item.get("title") or ""
+            item["discarded_caption"] = item.get("caption") or ""
+            item["title"] = "抖音作品"
+            item["caption"] = ""
+            item["metadata_degraded"] = True
 
 
 def ingest_items(
@@ -140,6 +180,7 @@ def ingest_items(
         normalized.append(item)
     if not normalized:
         raise ValueError("抖音本地同步没有可登记的作品")
+    _discard_repeated_page_metadata(normalized)
 
     existing_rows = db.execute(
         select(DouyinLocalLibraryItem).where(
@@ -162,15 +203,29 @@ def ingest_items(
                 row = DouyinLocalLibraryItem(
                     user_id=user_id,
                     first_seen_at=now,
-                    **{key: value for key, value in item.items() if key != "source_rank"},
+                    **{
+                        key: value
+                        for key, value in item.items()
+                        if key in {
+                            "video_id", "title", "source_url", "cover_url",
+                            "caption", "author_name", "published_at",
+                            "duration_seconds",
+                        }
+                    },
                 )
                 db.add(row)
                 created += 1
             else:
-                row.title = item["title"]
+                if item["metadata_degraded"]:
+                    if row.title == item.get("discarded_title"):
+                        row.title = "抖音作品"
+                    if row.caption == item.get("discarded_caption"):
+                        row.caption = ""
+                else:
+                    row.title = item["title"]
+                    row.caption = item["caption"] or row.caption
                 row.source_url = item["source_url"]
                 row.cover_url = item["cover_url"] or row.cover_url
-                row.caption = item["caption"] or row.caption
                 row.author_name = item["author_name"] or row.author_name
                 row.published_at = item["published_at"] or row.published_at
                 row.duration_seconds = item["duration_seconds"] or row.duration_seconds
@@ -278,3 +333,20 @@ def get_item(db: Session, *, user_id: str, video_id: str) -> dict[str, Any] | No
         source_rank=ledger.source_rank if ledger else None,
         source_synced_at=ledger.source_synced_at if ledger else snapshot.last_seen_at,
     )
+
+
+def get_cover_url(db: Session, *, user_id: str, video_id: str) -> str:
+    clean_id = str(video_id or "").strip()
+    if not _VIDEO_ID_PATTERN.fullmatch(clean_id):
+        return ""
+    value = db.execute(
+        select(DouyinLocalLibraryItem.cover_url).where(
+            DouyinLocalLibraryItem.user_id == user_id,
+            DouyinLocalLibraryItem.video_id == clean_id,
+            DouyinLocalLibraryItem.available.is_(True),
+        )
+    ).scalar_one_or_none()
+    try:
+        return _safe_cover_url(value) if value else ""
+    except ValueError:
+        return ""

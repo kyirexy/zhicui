@@ -78,7 +78,53 @@ function firstUrl(value: unknown): string {
   return firstUrl(payload.url || payload.uri);
 }
 
-function normalizeDouyinRecord(
+function firstDouyinMediaUrl(video: Record<string, unknown>): string {
+  for (const candidate of [
+    video.play_addr,
+    video.play_addr_h264,
+    video.download_addr,
+  ]) {
+    const url = firstUrl(candidate);
+    if (url) return url;
+  }
+  for (const bitrate of list(video.bit_rate)) {
+    const url = firstUrl(record(bitrate).play_addr);
+    if (url) return url;
+  }
+  return '';
+}
+
+function douyinItemQuality(item: PlatformAccountItem): number {
+  return (
+    (item.ephemeralMediaUrl ? 16 : 0)
+    + (item.authorName ? 8 : 0)
+    + (item.coverUrl ? 4 : 0)
+    + (item.publishedAt ? 4 : 0)
+    + (item.durationSeconds > 0 ? 4 : 0)
+    + (item.caption && item.caption !== '抖音作品' ? 2 : 0)
+    + (item.title && item.title !== '抖音作品' ? 1 : 0)
+  );
+}
+
+function mergeDouyinItem(
+  target: Map<string, PlatformAccountItem>,
+  item: PlatformAccountItem,
+  limit: number,
+): void {
+  const existing = target.get(item.videoId);
+  if (!existing) {
+    if (target.size < limit) target.set(item.videoId, item);
+    return;
+  }
+  if (douyinItemQuality(item) <= douyinItemQuality(existing)) return;
+  target.set(item.videoId, {
+    ...existing,
+    ...item,
+    sourceRank: existing.sourceRank,
+  });
+}
+
+export function normalizeDouyinRecord(
   value: unknown,
   sourceRank: number,
 ): PlatformAccountItem | null {
@@ -111,6 +157,7 @@ function normalizeDouyinRecord(
       ? Math.round(rawDuration / 1000)
       : Math.round(rawDuration),
     sourceRank,
+    ephemeralMediaUrl: firstDouyinMediaUrl(video).slice(0, 8192) || undefined,
   };
 }
 
@@ -588,22 +635,20 @@ export class PlatformAccountConnector {
     limit: number,
     depth = 0,
   ): void {
-    if (depth > 7 || target.size >= limit) return;
+    if (depth > 7 || (target.size >= limit && depth > 2)) return;
     if (Array.isArray(value)) {
       for (const entry of value.slice(0, 500)) {
         this.collectDouyinRecords(entry, target, limit, depth + 1);
-        if (target.size >= limit) return;
       }
       return;
     }
     const payload = record(value);
     if (Object.keys(payload).length === 0) return;
     const item = normalizeDouyinRecord(payload, target.size);
-    if (item && !target.has(item.videoId)) target.set(item.videoId, item);
+    if (item) mergeDouyinItem(target, item, limit);
     for (const entry of Object.values(payload)) {
       if (typeof entry !== 'object' || entry === null) continue;
       this.collectDouyinRecords(entry, target, limit, depth + 1);
-      if (target.size >= limit) return;
     }
   }
 
@@ -615,13 +660,14 @@ export class PlatformAccountConnector {
     const values = await page.locator('a[href*="/video/"]:visible').evaluateAll(
       (anchors) => anchors.slice(0, 300).map((node) => {
         const anchor = node as HTMLAnchorElement;
-        const card = anchor.closest('li, article, [data-e2e], div') || anchor;
-        const image = card.querySelector('img') as HTMLImageElement | null;
+        const image = anchor.querySelector('img') as HTMLImageElement | null;
+        const ownText = (anchor.textContent || '').trim();
         return {
           href: anchor.href,
-          text: (card.textContent || anchor.textContent || '').trim(),
+          text: ownText.length <= 500 ? ownText : '',
           image: image?.currentSrc || image?.src || '',
           imageAlt: image?.alt || '',
+          ariaLabel: anchor.getAttribute('aria-label') || anchor.title || '',
         };
       }),
     ).catch(() => [] as Array<{
@@ -629,24 +675,25 @@ export class PlatformAccountConnector {
       text: string;
       image: string;
       imageAlt: string;
+      ariaLabel: string;
     }>);
     for (const value of values) {
       if (target.size >= limit) break;
       const sourceUrl = normalizeDouyinUrl(value.href);
       const match = sourceUrl?.match(/\/video\/(\d{5,32})$/);
       if (!sourceUrl || !match || target.has(match[1])) continue;
-      const caption = firstText(value.imageAlt, value.text).slice(0, 20_000);
-      target.set(match[1], {
+      const caption = firstText(value.imageAlt, value.ariaLabel, value.text).slice(0, 500);
+      mergeDouyinItem(target, {
         videoId: match[1],
         sourceUrl,
-        title: firstText(value.imageAlt, value.text, '抖音作品').slice(0, 500),
+        title: firstText(value.imageAlt, value.ariaLabel, value.text, '抖音作品').slice(0, 500),
         caption,
         authorName: '',
         coverUrl: /^https:\/\//i.test(value.image) ? value.image.slice(0, 2048) : '',
         publishedAt: '',
         durationSeconds: 0,
         sourceRank: target.size,
-      });
+      }, limit);
     }
   }
 

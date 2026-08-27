@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   boundedPlatformUrls,
   hasPlatformAuthCookie,
+  normalizeDouyinRecord,
 } from '../dist/platform-account.js';
 import {
   validatePlatformAccountCollectRequest,
@@ -14,6 +15,25 @@ assert.deepEqual(
     profileKey: 'user_123-safe',
   }),
   { platform: 'bilibili', profileKey: 'user_123-safe' },
+);
+
+const normalizedDouyin = normalizeDouyinRecord({
+  aweme_id: '7672579366093622537',
+  desc: '来自接口的真实作品标题',
+  create_time: 1787817600,
+  author: { nickname: '真实作者' },
+  video: {
+    duration: 23000,
+    cover: { url_list: ['https://p3.douyinpic.com/cover.jpg'] },
+    play_addr: { url_list: ['https://v3-web.douyinvod.com/video.mp4?token=short-lived'] },
+  },
+}, 0);
+assert.equal(normalizedDouyin?.title, '来自接口的真实作品标题');
+assert.equal(normalizedDouyin?.authorName, '真实作者');
+assert.equal(normalizedDouyin?.durationSeconds, 23);
+assert.equal(
+  normalizedDouyin?.ephemeralMediaUrl,
+  'https://v3-web.douyinvod.com/video.mp4?token=short-lived',
 );
 
 assert.throws(

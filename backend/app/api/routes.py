@@ -166,6 +166,12 @@ def _proxy_douyin_image(target_url: str, session_scope: str) -> Response:
             headers={
                 "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
                 "Accept-Encoding": "identity",
+                "Referer": "https://www.douyin.com/",
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
                 **douyin_library.companion_headers(session_scope),
             },
             stream=True,
@@ -419,6 +425,7 @@ class LibraryHandoffCompleteRequest(BaseModel):
 class LibraryExtractRequest(BaseModel):
     aweme_id: str = Field(..., min_length=1, max_length=128)
     operation: Literal["transcript", "ai", "full"] = "full"
+    ephemeral_media_url: str = Field(default="", max_length=8192)
 
 
 class LibraryRemoveRequest(BaseModel):
@@ -454,6 +461,10 @@ class LibraryBatchExtractRequest(LibraryRemoveRequest):
     """Start concurrent transcript/card generation for selected work IDs."""
     aweme_ids: list[str] = Field(..., min_length=1, max_length=100)
     operation: Literal["transcript", "ai", "full"] = "full"
+    ephemeral_media_sources: list[dict[str, str]] = Field(
+        default_factory=list,
+        max_length=100,
+    )
 
 
 class LibraryAskRequest(BaseModel):
@@ -2236,6 +2247,13 @@ def stream_douyin_library_cover(
             headers={"Cache-Control": "private, no-store"},
         )
     target_url = douyin_library.companion_cover_url(aweme_id)
+    local_cover_url = local_douyin_library_service.get_cover_url(
+        db,
+        user_id=account_binding.user_id,
+        video_id=aweme_id,
+    )
+    if local_cover_url:
+        target_url = local_cover_url
     return _proxy_douyin_image(
         target_url,
         account_binding.session_scope,
@@ -2335,6 +2353,11 @@ def list_douyin_library_items(
         sidecar_item = sidecar_by_id.get(aweme_id)
         if sidecar_item is None:
             merged = dict(local_item)
+            if merged.get("cover_url"):
+                merged["cover_proxy_url"] = douyin_library.public_cover_url(
+                    aweme_id,
+                    binding.id,
+                )
         else:
             # Keep the sidecar media capability when it exists, while using
             # the newest public metadata and ordering captured on the device.
@@ -2757,6 +2780,7 @@ def extract_douyin_library_item(
             user_id=current_user.id,
             aweme_id=body.aweme_id,
             operation=body.operation,
+            ephemeral_media_url=body.ephemeral_media_url,
         )
         return _ok(result)
     except (ValueError, douyin_library.DouyinLibraryError) as exc:
@@ -2778,12 +2802,18 @@ def start_douyin_library_batch_extraction(
     """Start all selected items as one concurrent metadata-only job."""
     concurrency = settings_service.get_extraction_concurrency(db)
     try:
+        ephemeral_media_sources = {
+            str(item.get("aweme_id") or "").strip(): str(item.get("media_url") or "").strip()
+            for item in body.ephemeral_media_sources
+            if isinstance(item, dict)
+        }
         job = library_extraction_service.create_batch_job(
             user_id=current_user.id,
             aweme_ids=body.aweme_ids,
             operation=body.operation,
             asr_concurrency=concurrency["asr"],
             llm_concurrency=concurrency["llm"],
+            ephemeral_media_sources=ephemeral_media_sources,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

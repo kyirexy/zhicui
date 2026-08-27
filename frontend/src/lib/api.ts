@@ -88,6 +88,7 @@ import type {
   VideoAnalysisTrigger,
   VideoInfo,
 } from './types';
+import { getEphemeralDouyinMediaSources } from './douyinDesktopSync';
 export type { ApiResponse };
 
 // In Capacitor/static-export mode, NEXT_PUBLIC_API_URL is set explicitly
@@ -966,7 +967,11 @@ export async function extractDouyinLibraryItem(
     '/api/library/douyin/extract',
     {
       method: 'POST',
-      body: JSON.stringify({ aweme_id: awemeId, operation }),
+      body: JSON.stringify({
+        aweme_id: awemeId,
+        operation,
+        ephemeral_media_url: getEphemeralDouyinMediaSources([awemeId])[0]?.media_url || '',
+      }),
     },
   );
 }
@@ -975,13 +980,15 @@ export async function startDouyinBatchExtraction(
   awemeIds: string[],
   operation: DouyinBatchExtractionOperation = 'full',
 ): Promise<ApiResponse<DouyinBatchExtractionJob>> {
+  const boundedIds = awemeIds.slice(0, operation === 'transcript' ? 100 : 50);
   return request<DouyinBatchExtractionJob>(
     '/api/library/douyin/extractions/batch',
     {
       method: 'POST',
       body: JSON.stringify({
-        aweme_ids: awemeIds.slice(0, operation === 'transcript' ? 100 : 50),
+        aweme_ids: boundedIds,
         operation,
+        ephemeral_media_sources: getEphemeralDouyinMediaSources(boundedIds),
       }),
     },
   );

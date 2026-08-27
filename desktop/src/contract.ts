@@ -109,6 +109,12 @@ export interface PlatformAccountItem {
   publishedAt: string;
   durationSeconds: number;
   sourceRank: number;
+  /**
+   * Short-lived playback capability captured from the official page.
+   * The renderer may submit it directly to one extraction job, but it must
+   * never be included in the persisted public metadata snapshot.
+   */
+  ephemeralMediaUrl?: string;
 }
 
 export interface PlatformAccountResult {

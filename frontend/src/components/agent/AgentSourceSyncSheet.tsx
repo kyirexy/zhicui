@@ -43,6 +43,7 @@ import type {
 } from '@/lib/types';
 import { formatDouyinSyncError } from '@/lib/douyinSyncFeedback';
 import {
+  MIN_LOCAL_DOUYIN_DESKTOP_VERSION,
   requiresLocalDouyinDesktopUpdate,
   supportsLocalDouyinRuntime,
   toLocalDouyinSyncItems,
@@ -383,7 +384,7 @@ export default function AgentSourceSyncSheet({
     try {
       if (douyinDesktopUpdateRequired) {
         throw new Error(
-          `当前仍在运行知萃 ${douyinDesktopVersion}，请先重启并安装 1.0.7 或更高版本`,
+          `当前仍在运行知萃 ${douyinDesktopVersion}，请先重启并安装 ${MIN_LOCAL_DOUYIN_DESKTOP_VERSION} 或更高版本`,
         );
       }
       if (douyinDesktopAvailable) {

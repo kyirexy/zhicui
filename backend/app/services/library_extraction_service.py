@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Literal
+from urllib.parse import urlsplit
 
 from app.core.database import SessionLocal
 from app.services import (
@@ -35,6 +37,14 @@ _JOBS_LOCK = threading.RLock()
 _JOBS: dict[str, dict[str, Any]] = {}
 _ITEM_LOCKS_GUARD = threading.Lock()
 _ITEM_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+logger = logging.getLogger(__name__)
+_EPHEMERAL_MEDIA_HOST_SUFFIXES = (
+    ".douyinvod.com",
+    ".bytecdn.cn",
+    ".snssdk.com",
+    ".ibytedtos.com",
+    ".douyin.com",
+)
 
 
 def _utcnow() -> datetime:
@@ -53,6 +63,28 @@ def _item_lock(user_id: str, aweme_id: str) -> threading.Lock:
             lock = threading.Lock()
             _ITEM_LOCKS[key] = lock
         return lock
+
+
+def normalize_ephemeral_media_url(value: object) -> str:
+    """Validate a one-job Douyin media capability without persisting it."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if len(raw) > 8192:
+        raise ValueError("临时播放地址过长")
+    parsed = urlsplit(raw)
+    host = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme != "https"
+        or not host
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+        or parsed.port not in (None, 443)
+        or not any(host.endswith(suffix) for suffix in _EPHEMERAL_MEDIA_HOST_SUFFIXES)
+    ):
+        raise ValueError("临时播放地址不是受信任的抖音媒体地址")
+    return raw
 
 
 def _has_retryable_ai_failure(note: Any) -> bool:
@@ -221,6 +253,7 @@ def extract_library_item(
     progress: ProgressCallback | None = None,
     operation: LibraryExtractionOperation = "full",
     item: dict[str, Any] | None = None,
+    ephemeral_media_url: str = "",
 ) -> dict[str, Any]:
     """Run one idempotent transcript or AI stage with text-only persistence."""
     clean_id = aweme_id.strip()
@@ -299,14 +332,16 @@ def extract_library_item(
                     progress("transcribing")
                 try:
                     if item.get("provider") == "desktop-local":
-                        video_info = video_extractor.parse_video_info(
-                            item["source_url"]
-                        )
-                        media_url = str(
-                            video_info.get("download_url")
-                            or video_info.get("url")
-                            or ""
-                        ).strip()
+                        media_url = normalize_ephemeral_media_url(ephemeral_media_url)
+                        if not media_url:
+                            video_info = video_extractor.parse_video_info(
+                                item["source_url"]
+                            )
+                            media_url = str(
+                                video_info.get("download_url")
+                                or video_info.get("url")
+                                or ""
+                            ).strip()
                         if not media_url:
                             raise RuntimeError("抖音作品播放地址暂时无法解析")
                         request_headers = {
@@ -426,6 +461,8 @@ def extract_library_item(
 
 
 def _safe_error(exc: Exception) -> str:
+    if isinstance(exc, KeyError) and "videoInfoRes" in str(exc):
+        return "抖音公开页面没有返回播放信息，请在桌面端重新同步后再提取文案"
     message = str(exc).strip()
     if not message:
         message = type(exc).__name__
@@ -509,6 +546,7 @@ def _run_job_item(
     asr_gate: threading.Semaphore,
     llm_gate: threading.Semaphore,
     item: dict[str, Any] | None = None,
+    ephemeral_media_url: str = "",
 ) -> None:
     def progress(state: str) -> None:
         _update_item(job_id, aweme_id, state=state, error="")
@@ -522,6 +560,7 @@ def _run_job_item(
             progress=progress,
             operation=operation,
             item=item,
+            ephemeral_media_url=ephemeral_media_url,
         )
         _update_item(
             job_id,
@@ -535,6 +574,13 @@ def _run_job_item(
             already_existed=bool(result.get("already_existed")),
         )
     except Exception as exc:
+        logger.warning(
+            "Douyin extraction failed job=%s item=%s error_type=%s error=%s",
+            job_id,
+            aweme_id,
+            type(exc).__name__,
+            _safe_error(exc),
+        )
         _update_item(
             job_id,
             aweme_id,
@@ -569,6 +615,7 @@ def create_batch_job(
     operation: LibraryExtractionOperation = "full",
     asr_concurrency: int,
     llm_concurrency: int,
+    ephemeral_media_sources: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Submit every accepted item immediately and return a user-scoped job."""
     clean_ids = list(dict.fromkeys(
@@ -585,6 +632,12 @@ def create_batch_job(
     )
     if not 1 <= len(clean_ids) <= max_items:
         raise ValueError(f"本次{operation}任务请选择 1–{max_items} 条视频")
+    clean_id_set = set(clean_ids)
+    media_sources = {
+        str(aweme_id or "").strip(): normalize_ephemeral_media_url(media_url)
+        for aweme_id, media_url in (ephemeral_media_sources or {}).items()
+        if str(aweme_id or "").strip() in clean_id_set and str(media_url or "").strip()
+    }
     safe_asr = max(
         1,
         min(
@@ -671,6 +724,7 @@ def create_batch_job(
             asr_gate,
             llm_gate,
             item_by_id.get(aweme_id),
+            media_sources.get(aweme_id, ""),
         )
     with _JOBS_LOCK:
         return _snapshot(job)

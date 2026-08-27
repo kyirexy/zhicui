@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -98,6 +99,78 @@ class PlatformLibraryImportTests(unittest.TestCase):
         self.assertIsNone(platform_library_service.get_import(
             self.db, user_id=self.user_b.id, note_id=first["item"]["id"],
         ))
+
+    def test_bilibili_cover_is_returned_through_signed_proxy(self) -> None:
+        with patch.object(
+            platform_library_service,
+            "_extract_bilibili",
+            return_value=self.bili_result(),
+        ):
+            result = platform_library_service.import_one(
+                self.db,
+                user_id=self.user_a.id,
+                value="https://www.bilibili.com/video/BV1TEST",
+            )
+
+        item = result["item"]
+        self.assertNotIn("example.com", item["cover_url"])
+        parsed = urlsplit(item["cover_url"])
+        query = parse_qs(parsed.query)
+        self.assertEqual(
+            parsed.path,
+            f"/api/library/imports/{item['id']}/cover",
+        )
+        self.assertTrue(platform_library_service.verify_cover_signature(
+            item["id"],
+            int(query["expires"][0]),
+            query["signature"][0],
+        ))
+        self.assertEqual(
+            platform_library_service.cover_target(self.db, item["id"]),
+            "https://example.com/cover.jpg",
+        )
+
+    def test_bilibili_import_keeps_spoken_text_from_direct_audio_fallback(self) -> None:
+        info = self.bili_result()[0] | {
+            "bvid": "BV1TEST",
+            "cid": "123",
+            "cover_url": "https://i0.hdslb.com/cover.jpg",
+            "source_url": "https://www.bilibili.com/video/BV1TEST/",
+            "tags": [],
+            "media_url": "",
+        }
+        with (
+            patch.object(platform_library_service.video_extractor, "_parse_bilibili", return_value=info),
+            patch.object(
+                platform_library_service.video_extractor,
+                "_bilibili_subtitles_with_source",
+                side_effect=RuntimeError("no subtitle"),
+            ),
+            patch.object(
+                platform_library_service.settings_service,
+                "get_asr_config",
+                return_value={
+                    "api_key": "asr-key",
+                    "api_base_url": "https://asr.example",
+                    "model": "sensevoice",
+                },
+            ),
+            patch.object(
+                platform_library_service.video_extractor,
+                "extract_transcript",
+                return_value="这是从公开视频音轨识别出的完整内容",
+            ),
+        ):
+            _, transcript, meta = platform_library_service._extract_bilibili(
+                info["source_url"],
+                self.db,
+            )
+
+        self.assertIn("【视频语音】", transcript)
+        self.assertIn("完整内容", transcript)
+        self.assertEqual(meta["transcript_source"], "cloud-asr")
+        self.assertTrue(meta["speech_ready"])
+        self.assertEqual(meta["media_url"], "")
 
     def test_partial_batch_failure_does_not_discard_success(self) -> None:
         with patch.object(

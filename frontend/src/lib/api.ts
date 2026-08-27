@@ -68,6 +68,7 @@ import type {
   PlanStats,
   PlanWeeklyReview,
   PlatformLibraryImportResult,
+  PlatformLibraryItem,
   PlatformLibraryListResult,
   PlatformLibraryPlatform,
   ResearchScope,
@@ -94,6 +95,18 @@ export type { ApiResponse };
 // Development can either set a local backend URL or leave it empty to use
 // the Next.js /api rewrite.
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
+
+function apiAssetUrl(value: string): string {
+  if (!value.startsWith('/')) return value;
+  return `${API_BASE.replace(/\/$/, '')}${value}`;
+}
+
+function normalizePlatformLibraryItem(item: PlatformLibraryItem): PlatformLibraryItem {
+  return {
+    ...item,
+    cover_url: apiAssetUrl(item.cover_url || ''),
+  };
+}
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -599,30 +612,60 @@ export async function importPlatformLibraryItems(
   urls: string[],
   sourceMode?: 'collect' | 'like' | 'post',
 ): Promise<ApiResponse<PlatformLibraryImportResult>> {
-  return request<PlatformLibraryImportResult>('/api/library/imports', {
+  const response = await request<PlatformLibraryImportResult>('/api/library/imports', {
     method: 'POST',
     body: JSON.stringify({
       urls: urls.slice(0, 10),
       ...(sourceMode ? { source_mode: sourceMode } : {}),
     }),
   });
+  if (!response.data) return response;
+  return {
+    ...response,
+    data: {
+      ...response.data,
+      items: response.data.items.map((entry) => ({
+        ...entry,
+        item: entry.item ? normalizePlatformLibraryItem(entry.item) : undefined,
+      })),
+    },
+  };
 }
 
 export async function listPlatformLibraryItems(
   platform: 'all' | PlatformLibraryPlatform = 'all',
 ): Promise<ApiResponse<PlatformLibraryListResult>> {
-  return request<PlatformLibraryListResult>(
+  const response = await request<PlatformLibraryListResult>(
     `/api/library/imports?platform=${encodeURIComponent(platform)}`,
   );
+  if (!response.data) return response;
+  return {
+    ...response,
+    data: {
+      ...response.data,
+      items: response.data.items.map(normalizePlatformLibraryItem),
+    },
+  };
 }
 
 export async function getPlatformLibraryItem(
   noteId: string,
   refreshMedia = false,
 ): Promise<ApiResponse<DouyinVideoWorkspace>> {
-  return request<DouyinVideoWorkspace>(
+  const response = await request<DouyinVideoWorkspace>(
     `/api/library/imports/${encodeURIComponent(noteId)}${refreshMedia ? '?refresh_media=true' : ''}`,
   );
+  if (!response.data) return response;
+  return {
+    ...response,
+    data: {
+      ...response.data,
+      item: {
+        ...response.data.item,
+        cover_url: apiAssetUrl(response.data.item.cover_url || ''),
+      },
+    },
+  };
 }
 
 export async function initializePlatformLibraryItem(

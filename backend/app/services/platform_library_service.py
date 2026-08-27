@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
+import hmac
+import time
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote
 
 from sqlalchemy.orm import Session
 
@@ -21,6 +25,7 @@ from app.services.xhs_downloader_client import (
 SOURCE_KIND = "platform-import"
 SUPPORTED_PLATFORMS = {"bilibili", "xiaohongshu"}
 MAX_IMPORT_URLS = 10
+_COVER_URL_TTL_SECONDS = 6 * 60 * 60
 
 _URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _XHS_MEDIA_HEADERS = {
@@ -55,6 +60,55 @@ def _load_payload(note: Note) -> dict[str, Any]:
 def _source_meta(note: Note) -> dict[str, Any]:
     source_meta = _load_payload(note).get("source_meta")
     return source_meta if isinstance(source_meta, dict) else {}
+
+
+def _cover_signature(note_id: str, expires: int) -> str:
+    payload = f"platform-cover:{note_id}:{expires}".encode("utf-8")
+    return hmac.new(
+        settings.JWT_SECRET.encode("utf-8"),
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def public_cover_url(note_id: str) -> str:
+    """Create a short-lived same-origin capability for one imported cover."""
+    expires = int(time.time()) + _COVER_URL_TTL_SECONDS
+    signature = _cover_signature(note_id, expires)
+    return (
+        f"/api/library/imports/{quote(note_id, safe='')}/cover"
+        f"?expires={expires}&signature={signature}"
+    )
+
+
+def verify_cover_signature(
+    note_id: str,
+    expires: int,
+    signature: str,
+    *,
+    allow_expired: bool = False,
+) -> bool:
+    now = int(time.time())
+    if (
+        (not allow_expired and expires < now)
+        or expires > now + _COVER_URL_TTL_SECONDS + 60
+    ):
+        return False
+    return hmac.compare_digest(_cover_signature(note_id, expires), signature)
+
+
+def cover_target(db: Session, note_id: str) -> str:
+    """Return only the reviewed Bilibili CDN cover for a signed capability."""
+    note = db.query(Note).filter(Note.id == note_id).first()
+    if note is None:
+        return ""
+    meta = _source_meta(note)
+    if (
+        meta.get("source_kind") != SOURCE_KIND
+        or meta.get("platform") != "bilibili"
+    ):
+        return ""
+    return str(meta.get("cover_url") or "").strip()
 
 
 def _find_existing(
@@ -383,6 +437,12 @@ def list_notes(db: Session, *, user_id: str, platform: str = "all") -> list[Note
 def serialize_item(note: Note) -> dict[str, Any]:
     data = note.to_dict()
     meta = _source_meta(note)
+    raw_cover_url = str(meta.get("cover_url") or "").strip()
+    display_cover_url = (
+        public_cover_url(note.id)
+        if raw_cover_url and meta.get("platform") == "bilibili"
+        else raw_cover_url
+    )
     return {
         "id": note.id,
         "video_id": note.video_id,
@@ -390,7 +450,7 @@ def serialize_item(note: Note) -> dict[str, Any]:
         "platform": meta.get("platform") or "",
         "caption": meta.get("caption") or "",
         "author_name": meta.get("author_name") or "",
-        "cover_url": meta.get("cover_url") or "",
+        "cover_url": display_cover_url,
         "source_url": meta.get("source_url") or note.video_url,
         "media_url": meta.get("media_url") or note.video_url or "",
         "media_type": meta.get("media_type") or "video",

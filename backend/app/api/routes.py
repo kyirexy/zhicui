@@ -13,7 +13,7 @@ import uuid
 import wave
 from datetime import datetime, timezone
 from typing import Any, Literal
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
@@ -167,6 +167,80 @@ def _proxy_douyin_image(target_url: str, session_scope: str) -> Response:
                 "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
                 "Accept-Encoding": "identity",
                 **douyin_library.companion_headers(session_scope),
+            },
+            stream=True,
+            timeout=(5, 45),
+        )
+        response.raise_for_status()
+    except Exception:
+        return _cover_placeholder_response()
+
+    content_type = response.headers.get("Content-Type", "image/jpeg")
+    if not content_type.lower().startswith("image/"):
+        response.close()
+        return _cover_placeholder_response()
+    try:
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in response.iter_content(chunk_size=64 * 1024):
+            if not chunk:
+                continue
+            total += len(chunk)
+            if total > _COVER_MAX_BYTES:
+                return _cover_placeholder_response()
+            chunks.append(chunk)
+        image_bytes = b"".join(chunks)
+    except Exception:
+        return _cover_placeholder_response()
+    finally:
+        response.close()
+    if not image_bytes:
+        return _cover_placeholder_response()
+    image_memory_cache.put(cache_key, content_type, image_bytes)
+    return Response(
+        content=image_bytes,
+        media_type=content_type,
+        headers={
+            "Cache-Control": "private, max-age=1800, stale-while-revalidate=60",
+            "X-Content-Type-Options": "nosniff",
+            "X-Zhicui-Image-Cache": "miss",
+        },
+    )
+
+
+def _proxy_bilibili_image(target_url: str) -> Response:
+    """Proxy one allowlisted Bilibili cover with the required source headers."""
+    parsed = urlparse(target_url)
+    hostname = (parsed.hostname or "").lower()
+    allowed = hostname in {"hdslb.com", "biliimg.com"} or hostname.endswith(
+        (".hdslb.com", ".biliimg.com")
+    )
+    if parsed.scheme not in {"http", "https"} or not allowed:
+        return _cover_placeholder_response()
+
+    cache_key = f"bilibili:{target_url}"
+    cached = image_memory_cache.get(cache_key)
+    if cached is not None:
+        return Response(
+            content=cached.content,
+            media_type=cached.content_type,
+            headers={
+                "Cache-Control": "private, max-age=1800, stale-while-revalidate=60",
+                "X-Content-Type-Options": "nosniff",
+                "X-Zhicui-Image-Cache": "hit",
+            },
+        )
+    try:
+        response = http_requests.get(
+            target_url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Referer": "https://www.bilibili.com/",
+                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+                "Accept-Encoding": "identity",
             },
             stream=True,
             timeout=(5, 45),
@@ -1459,6 +1533,42 @@ def list_platform_library_items(
         "items": [platform_library_service.serialize_item(note) for note in notes],
         "total": len(notes),
     })
+
+
+@router.get("/api/library/imports/{note_id}/cover", include_in_schema=False)
+def stream_platform_library_cover(
+    note_id: str = Path(..., min_length=1, max_length=128),
+    expires: int = Query(..., ge=1),
+    signature: str = Query(..., min_length=64, max_length=64),
+    db: Session = Depends(get_db),
+):
+    """Serve an imported Bilibili cover without exposing upstream hotlinking."""
+    signature_is_current = platform_library_service.verify_cover_signature(
+        note_id,
+        expires,
+        signature,
+    )
+    signature_is_authentic = (
+        signature_is_current
+        or platform_library_service.verify_cover_signature(
+            note_id,
+            expires,
+            signature,
+            allow_expired=True,
+        )
+    )
+    if not signature_is_authentic:
+        raise HTTPException(status_code=403, detail="视频封面地址已失效，请刷新页面")
+    target_url = platform_library_service.cover_target(db, note_id)
+    if not target_url:
+        raise HTTPException(status_code=404, detail="视频封面不存在")
+    if not signature_is_current:
+        return RedirectResponse(
+            url=platform_library_service.public_cover_url(note_id),
+            status_code=307,
+            headers={"Cache-Control": "private, no-store"},
+        )
+    return _proxy_bilibili_image(target_url)
 
 
 @router.get("/api/library/imports/{note_id}")

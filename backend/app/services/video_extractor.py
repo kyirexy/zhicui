@@ -12,8 +12,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 
 def _patch_ffmpeg_path():
@@ -93,6 +95,19 @@ _BILI_HEADERS = [
     '--add-header', 'Accept-Language:zh-CN,zh;q=0.9,en;q=0.8',
 ]
 
+_BILI_HTTP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Referer": "https://www.bilibili.com/",
+    "Origin": "https://www.bilibili.com",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+}
+_BILI_API_BASE = "https://api.bilibili.com"
+_BILI_AUDIO_MAX_BYTES = 800 * 1024 * 1024
+_ASR_DIRECT_UPLOAD_MAX_BYTES = 15 * 1024 * 1024
+
 
 def _clean_bilibili_url(url: str) -> str:
     """Extract a clean B站 BV/av URL from any user input."""
@@ -117,6 +132,90 @@ def _clean_bilibili_url(url: str) -> str:
     # Fallback: strip query + spaces
     return url.split('?')[0].split(' ')[0].rstrip('/')
 
+
+def _bilibili_api_data(path: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Read one public Bilibili API response without depending on the video page.
+
+    Bilibili may return HTTP 412 for cloud-server requests to ``/video/*`` while
+    its public metadata and play APIs remain available.  Keeping this path
+    independent from yt-dlp prevents one page-level risk-control response from
+    disabling metadata, covers, subtitles and audio extraction together.
+    """
+    import requests as _requests
+
+    with _requests.Session() as session:
+        session.trust_env = False
+        response = session.get(
+            f"{_BILI_API_BASE}{path}",
+            params=params,
+            headers=_BILI_HTTP_HEADERS,
+            timeout=(8, 30),
+        )
+        response.raise_for_status()
+        payload = response.json()
+    if not isinstance(payload, dict) or int(payload.get("code") or 0) != 0:
+        message = str((payload or {}).get("message") or "B站公开接口暂时不可用")
+        raise RuntimeError(message[:160])
+    data = payload.get("data")
+    return data if isinstance(data, dict) else {}
+
+
+def _bilibili_public_info(url: str) -> dict[str, Any]:
+    """Resolve stable Bilibili metadata through the public view API."""
+    clean_url = _clean_bilibili_url(url)
+    bv_match = re.search(r"(BV[0-9A-Za-z]+)", clean_url)
+    if not bv_match:
+        raise RuntimeError("B站公开视频接口需要有效的 BV 号")
+    bvid = bv_match.group(1)
+    view = _bilibili_api_data("/x/web-interface/view", {"bvid": bvid})
+    pages = view.get("pages") if isinstance(view.get("pages"), list) else []
+    try:
+        page_number = int((parse_qs(urlsplit(clean_url).query).get("p") or ["1"])[0])
+    except (TypeError, ValueError):
+        page_number = 1
+    page_number = min(max(page_number, 1), max(len(pages), 1))
+    page = pages[page_number - 1] if pages else {}
+    owner = view.get("owner") if isinstance(view.get("owner"), dict) else {}
+    published_at = ""
+    try:
+        published_at = datetime.fromtimestamp(
+            int(view.get("pubdate") or 0),
+            tz=timezone.utc,
+        ).isoformat()
+    except (OSError, OverflowError, TypeError, ValueError):
+        pass
+    source_url = f"https://www.bilibili.com/video/{bvid}/"
+    if page_number > 1:
+        source_url += f"?p={page_number}"
+    cover_url = str(view.get("pic") or "").strip()
+    if cover_url.startswith("http://"):
+        cover_url = "https://" + cover_url.removeprefix("http://")
+    return {
+        "video_id": bvid,
+        "bvid": bvid,
+        "cid": str(page.get("cid") or view.get("cid") or ""),
+        "page": page_number,
+        "pages": pages,
+        "title": str(view.get("title") or page.get("part") or "B站视频"),
+        "description": str(view.get("desc") or ""),
+        "author_name": str(owner.get("name") or ""),
+        "author_id": str(owner.get("mid") or ""),
+        "cover_url": cover_url,
+        "tags": [],
+        "duration": page.get("duration") or view.get("duration"),
+        "published_at": published_at,
+        "source_url": source_url,
+        "webpage_url": source_url,
+        # Signed CDN URLs are resolved only when needed and never persisted.
+        "media_url": "",
+        "download_url": "",
+        "url": "",
+        "platform": "bilibili",
+        "media_type": "video",
+        "subtitles": {},
+        "automatic_captions": {},
+    }
+
 def _bilibili_get_title(bvid: str) -> str:
     """Return the title for a B站 BV id, or empty string on any error."""
     try:
@@ -133,13 +232,21 @@ def _bilibili_get_title(bvid: str) -> str:
         return ''
 
 def _parse_bilibili(url: str) -> dict[str, Any]:
-    """Extract normalized Bilibili metadata, preferring yt-dlp's full record."""
+    """Extract normalized Bilibili metadata, preferring the public view API."""
     import json as _json
     import re as _re
 
     clean_url = _clean_bilibili_url(url)
     bv_match = _re.search(r'(BV[\w]+|av\d+)', clean_url)
     bvid = bv_match.group(1) if bv_match else ''
+
+    # The public API remains usable when Bilibili rejects a cloud server's
+    # webpage request with HTTP 412.  It is also substantially faster than
+    # spawning yt-dlp for each item in an account batch.
+    try:
+        return _bilibili_public_info(clean_url)
+    except Exception:
+        pass
 
     full_cmd = [
         sys.executable, '-m', 'yt_dlp',
@@ -258,8 +365,73 @@ def _bilibili_subtitles_with_source(
 
     Raises RuntimeError if no subtitles are available.
     """
+    resolved = info or _parse_bilibili(url)
+    bvid = str(resolved.get("bvid") or resolved.get("video_id") or "").strip()
+    cid = str(resolved.get("cid") or "").strip()
+    public_player_read = False
+    if bvid.startswith("BV") and cid:
+        try:
+            player = _bilibili_api_data(
+                "/x/player/v2",
+                {"bvid": bvid, "cid": cid},
+            )
+            public_player_read = True
+            subtitle_data = player.get("subtitle")
+            subtitle_items = (
+                subtitle_data.get("subtitles")
+                if isinstance(subtitle_data, dict)
+                and isinstance(subtitle_data.get("subtitles"), list)
+                else []
+            )
+            preferred = sorted(
+                (item for item in subtitle_items if isinstance(item, dict)),
+                key=lambda item: (
+                    0 if str(item.get("lan") or "").lower() in {"zh-hans", "zh-cn", "zh"} else 1,
+                    str(item.get("lan") or ""),
+                ),
+            )
+            import requests as _requests
+
+            for item in preferred:
+                subtitle_url = str(item.get("subtitle_url") or "").strip()
+                if subtitle_url.startswith("//"):
+                    subtitle_url = "https:" + subtitle_url
+                if not subtitle_url.startswith("https://"):
+                    continue
+                with _requests.Session() as session:
+                    session.trust_env = False
+                    response = session.get(
+                        subtitle_url,
+                        headers=_BILI_HTTP_HEADERS,
+                        timeout=(8, 30),
+                    )
+                    response.raise_for_status()
+                    body = response.json().get("body") or []
+                lines: list[str] = []
+                for row in body:
+                    if not isinstance(row, dict):
+                        continue
+                    line = str(row.get("content") or "").strip()
+                    if line and (not lines or lines[-1] != line):
+                        lines.append(line)
+                clean = "\n".join(lines).strip()
+                if clean:
+                    language = str(item.get("lan") or "").lower()
+                    source = (
+                        "automatic-subtitle"
+                        if language.startswith("ai-") or bool(item.get("ai_type"))
+                        else "manual-subtitle"
+                    )
+                    return clean, source
+        except Exception:
+            # Old/region-limited videos may not expose subtitles through the
+            # public player API.  Keep yt-dlp as a compatibility fallback.
+            pass
+    if public_player_read:
+        raise RuntimeError("B站视频没有可用的字幕")
+
     clean_url = _clean_bilibili_url(url)
-    manual_available = bool((info or {}).get('subtitles'))
+    manual_available = bool(resolved.get('subtitles'))
     with tempfile.TemporaryDirectory() as tmpdir:
         outtmpl = os.path.join(tmpdir, '%(id)s.%(ext)s')
         cmd = [
@@ -307,6 +479,101 @@ def _bilibili_subtitles(url: str) -> str:
 
 def _bilibili_download_audio(url: str, output_dir: str) -> str:
     """Download B站 audio track to *output_dir*, return the file path."""
+    resolved = _parse_bilibili(url)
+    bvid = str(resolved.get("bvid") or resolved.get("video_id") or "").strip()
+    cid = str(resolved.get("cid") or "").strip()
+    if bvid.startswith("BV") and cid:
+        try:
+            play = _bilibili_api_data(
+                "/x/player/playurl",
+                {
+                    "bvid": bvid,
+                    "cid": cid,
+                    "qn": 64,
+                    "fnval": 16,
+                    "fourk": 1,
+                },
+            )
+            dash = play.get("dash") if isinstance(play.get("dash"), dict) else {}
+            audio_tracks = dash.get("audio") if isinstance(dash.get("audio"), list) else []
+            candidates = sorted(
+                (track for track in audio_tracks if isinstance(track, dict)),
+                key=lambda track: int(track.get("bandwidth") or 0),
+            )
+            import requests as _requests
+
+            for track in candidates:
+                urls = [
+                    track.get("baseUrl") or track.get("base_url"),
+                    *(track.get("backupUrl") or track.get("backup_url") or []),
+                ]
+                for candidate_url in urls:
+                    media_url = str(candidate_url or "").strip()
+                    if not media_url.startswith("https://"):
+                        continue
+                    raw_path = Path(output_dir) / "bilibili-audio.m4s"
+                    mp3_path = Path(output_dir) / "bilibili-audio.mp3"
+                    try:
+                        with _requests.Session() as session:
+                            session.trust_env = False
+                            with session.get(
+                                media_url,
+                                headers={
+                                    **_BILI_HTTP_HEADERS,
+                                    "Referer": f"https://www.bilibili.com/video/{bvid}/",
+                                },
+                                stream=True,
+                                timeout=(10, 300),
+                            ) as response:
+                                response.raise_for_status()
+                                content_length = int(response.headers.get("Content-Length") or 0)
+                                if content_length > _BILI_AUDIO_MAX_BYTES:
+                                    raise RuntimeError("B站音轨过大，暂不支持提取")
+                                written = 0
+                                with raw_path.open("wb") as output:
+                                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                                        if not chunk:
+                                            continue
+                                        written += len(chunk)
+                                        if written > _BILI_AUDIO_MAX_BYTES:
+                                            raise RuntimeError("B站音轨过大，暂不支持提取")
+                                        output.write(chunk)
+                        if not raw_path.exists() or raw_path.stat().st_size == 0:
+                            raise RuntimeError("B站音轨为空")
+                        converted = subprocess.run(
+                            [
+                                _get_ffmpeg_path(),
+                                "-y",
+                                "-loglevel",
+                                "error",
+                                "-i",
+                                str(raw_path),
+                                "-vn",
+                                "-ac",
+                                "1",
+                                "-ar",
+                                "16000",
+                                "-codec:a",
+                                "libmp3lame",
+                                "-b:a",
+                                "48k",
+                                str(mp3_path),
+                            ],
+                            capture_output=True,
+                            text=True,
+                            timeout=900,
+                        )
+                        if converted.returncode != 0 or not mp3_path.exists():
+                            raise RuntimeError(f"B站音轨转换失败：{converted.stderr[-200:]}")
+                        raw_path.unlink(missing_ok=True)
+                        return str(mp3_path)
+                    except Exception:
+                        raw_path.unlink(missing_ok=True)
+                        mp3_path.unlink(missing_ok=True)
+                        continue
+        except Exception:
+            pass
+
     clean_url = _clean_bilibili_url(url)
     outtmpl = os.path.join(output_dir, '%(id)s.%(ext)s')
     cmd = [
@@ -328,17 +595,13 @@ def _bilibili_download_audio(url: str, output_dir: str) -> str:
     raise RuntimeError(f"B站音频下载失败: {r.stderr[:300]}")
 
 
-def _asr_audio_file(
+def _asr_single_audio_file(
     audio_path: str,
     api_key: str,
     api_base_url: str | None = None,
     model: str | None = None,
 ) -> str:
-    """Send an audio file to the SiliconFlow ASR API, return transcribed text.
-
-    This is the B站 equivalent of ``DouyinProcessor.extract_text_from_audio``
-    — it uploads the downloaded audio and gets back the transcript.
-    """
+    """Send one bounded audio file to the configured ASR endpoint."""
     import requests as _req
     api_base_url = api_base_url or "https://api.siliconflow.cn/v1/audio/transcriptions"
     model = model or "FunAudioLLM/SenseVoiceSmall"
@@ -353,6 +616,53 @@ def _asr_audio_file(
         )
     resp.raise_for_status()
     return resp.json().get("text", "")
+
+
+def _asr_audio_file(
+    audio_path: str,
+    api_key: str,
+    api_base_url: str | None = None,
+    model: str | None = None,
+) -> str:
+    """Transcribe short audio directly and split long Bilibili audio safely."""
+    source = Path(audio_path)
+    if source.stat().st_size <= _ASR_DIRECT_UPLOAD_MAX_BYTES:
+        return _asr_single_audio_file(
+            str(source), api_key, api_base_url, model,
+        )
+
+    with tempfile.TemporaryDirectory(prefix="zhicui-bili-asr-") as chunk_dir:
+        chunk_pattern = str(Path(chunk_dir) / "chunk-%03d.mp3")
+        segmented = subprocess.run(
+            [
+                _get_ffmpeg_path(),
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                str(source),
+                "-f",
+                "segment",
+                "-segment_time",
+                "900",
+                "-reset_timestamps",
+                "1",
+                "-c",
+                "copy",
+                chunk_pattern,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=900,
+        )
+        chunks = sorted(Path(chunk_dir).glob("chunk-*.mp3"))
+        if segmented.returncode != 0 or not chunks:
+            raise RuntimeError(f"长音频切分失败：{segmented.stderr[-200:]}")
+        texts = [
+            _asr_single_audio_file(str(chunk), api_key, api_base_url, model).strip()
+            for chunk in chunks
+        ]
+    return "\n".join(text for text in texts if text).strip()
 
 
 # ---------------------------------------------------------------------------

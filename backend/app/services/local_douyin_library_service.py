@@ -156,6 +156,24 @@ def _discard_repeated_page_metadata(items: list[dict[str, Any]]) -> None:
             item["metadata_degraded"] = True
 
 
+def _is_displayable_snapshot(value: dict[str, Any] | DouyinLocalLibraryItem) -> bool:
+    """Keep empty discovery placeholders out of the user's visible library."""
+    if isinstance(value, dict):
+        read = value.get
+    else:
+        read = lambda key, default=None: getattr(value, key, default)
+    title = _bounded_text(read("title"), 500)
+    caption = _bounded_text(read("caption"), 20_000)
+    has_meaningful_title = bool(title and title != "抖音作品")
+    has_public_metadata = bool(
+        _bounded_text(read("cover_url"), 2048)
+        or _bounded_text(read("author_name"), 200)
+        or _bounded_text(read("published_at"), 64)
+        or int(read("duration_seconds", 0) or 0) > 0
+    )
+    return bool(caption or has_meaningful_title or has_public_metadata)
+
+
 def ingest_items(
     db: Session,
     *,
@@ -203,6 +221,7 @@ def ingest_items(
                 row = DouyinLocalLibraryItem(
                     user_id=user_id,
                     first_seen_at=now,
+                    available=_is_displayable_snapshot(item),
                     **{
                         key: value
                         for key, value in item.items()
@@ -229,7 +248,7 @@ def ingest_items(
                 row.author_name = item["author_name"] or row.author_name
                 row.published_at = item["published_at"] or row.published_at
                 row.duration_seconds = item["duration_seconds"] or row.duration_seconds
-                row.available = True
+                row.available = _is_displayable_snapshot(row)
             row.last_seen_at = now
             row.updated_at = now
             note = note_map.get(item["video_id"])
@@ -288,7 +307,11 @@ def list_items(
             DouyinLocalLibraryItem.available.is_(True),
         )
     ).scalars().all()
-    snapshot_by_id = {row.video_id: row for row in snapshots}
+    snapshot_by_id = {
+        row.video_id: row
+        for row in snapshots
+        if _is_displayable_snapshot(row)
+    }
     result: list[dict[str, Any]] = []
     emitted: set[str] = set()
     for ledger in rows:
@@ -317,7 +340,7 @@ def get_item(db: Session, *, user_id: str, video_id: str) -> dict[str, Any] | No
             DouyinLocalLibraryItem.available.is_(True),
         )
     ).scalar_one_or_none()
-    if snapshot is None:
+    if snapshot is None or not _is_displayable_snapshot(snapshot):
         return None
     ledgers = db.execute(
         select(VideoSourceLedger)

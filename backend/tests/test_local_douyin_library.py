@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -139,8 +139,29 @@ class LocalDouyinLibraryTests(unittest.TestCase):
             user_id=self.user_a.id,
             source_mode="like",
         )
-        self.assertEqual([item["title"] for item in items], ["抖音作品"] * 3)
-        self.assertEqual([item["caption"] for item in items], [""] * 3)
+        self.assertEqual(items, [])
+        stored = self.db.execute(
+            select(DouyinLocalLibraryItem).where(
+                DouyinLocalLibraryItem.user_id == self.user_a.id,
+            )
+        ).scalars().all()
+        self.assertEqual(len(stored), 3)
+        self.assertTrue(all(not item.available for item in stored))
+
+        recovered_id = "767257936609362250"
+        local_douyin_library_service.ingest_items(
+            self.db,
+            user_id=self.user_a.id,
+            source_mode="like",
+            items=[self.item(video_id=recovered_id, source_rank=0)],
+        )
+        recovered = local_douyin_library_service.list_items(
+            self.db,
+            user_id=self.user_a.id,
+            source_mode="like",
+        )
+        self.assertEqual([item["id"] for item in recovered], [recovered_id])
+        self.assertEqual(recovered[0]["title"], "测试作品")
 
     def test_local_item_uses_canonical_url_for_transcript_extraction(self) -> None:
         item = self.item()

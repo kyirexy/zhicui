@@ -30,8 +30,8 @@ export const CLIENT_RELEASE_FALLBACKS: ClientReleaseCatalog = {
     version: '1.2.7',
     build: 19,
     downloadUrl: 'https://luxai.cn/download/zhicui.apk',
-    sizeBytes: 9_859_270,
-    publishedAt: '2026-08-28T04:30:00.000Z',
+    sizeBytes: 9_878_245,
+    publishedAt: '2026-08-28T04:32:18.9888176Z',
     releaseStatus: 'public_download',
   },
   windows: {

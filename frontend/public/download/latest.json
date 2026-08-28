@@ -3,9 +3,9 @@
   "platform": "android",
   "version": "1.2.7",
   "build": 19,
-  "published_at": "2026-08-28T04:30:00.000Z",
+  "published_at": "2026-08-28T04:32:18.9888176Z",
   "download_url": "https://luxai.cn/download/zhicui.apk",
-  "size_bytes": 9859270,
+  "size_bytes": 9878245,
   "mandatory": false,
   "release_notes": [
     "知萃 AI 回答改为连续增量显示，减少分段停顿和整块跳出。",

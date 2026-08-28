@@ -34,7 +34,8 @@
 - [x] 5.2 为 Electron 增加 Authenticode 配置、发布者/时间戳/哈希验证和 stable 拒绝闸门
 - [x] 5.3 为 Android 增加环境注入的 release signingConfig、不可调试构建和证书指纹闸门
 - [x] 5.4 更新客户端设置与更新 UI，明确渠道以及 Android 系统浏览器/安装器边界
-- [ ] 5.5 构建并验证当前 beta 发行物；在获得外部可信凭据后验证 stable 发行路径
+- [x] 5.5 从指定不可变提交构建并验证当前 Android/Windows beta 发行物
+- [ ] 5.6 在获得外部可信签名凭据后验证 Android/Windows stable 发行路径
 
 ## 6. 发布验证与部署
 

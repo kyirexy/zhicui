@@ -118,7 +118,7 @@ npm ci --silent
 CAPACITOR_BUILD=true \
 NEXT_PUBLIC_API_URL="$API_URL" \
 NEXT_PUBLIC_RELEASE_CHANNEL="$CHANNEL" \
-npx next build
+npm run build
 npx cap sync android
 # public/download 是站点发行目录，不能递归嵌入 APK 自身。
 find "$ROOT/frontend/android/app/src/main/assets/public/download" -type f -name '*.apk' -delete 2>/dev/null || true

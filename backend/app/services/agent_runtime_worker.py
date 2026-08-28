@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from concurrent.futures import Future, ThreadPoolExecutor
 
 from app.core.database import SessionLocal
@@ -27,11 +28,17 @@ _HEARTBEAT_SECONDS = 60.0
 class _DurableAnswerWriter:
     """Coalesce visible answer text into small lease-checked replay events."""
 
-    # 持久层负责可恢复边界，浏览器文本泵负责可见节奏。过小的事件会让一篇
-    # 长证据产生数百次事务；128–192 字仍足够细粒度，又不会把数据库当成
-    # 逐 token 传输层。
-    _TARGET_CHARS = 128
-    _MAX_CHARS = 192
+    # Live model chunks must stay visible while the durable log remains
+    # bounded. 48–96 characters yields roughly 10–25 database events for an
+    # ordinary answer; sentence endings and a short time budget flush earlier
+    # so a sub-threshold tail is never held until the outer JSON finishes.
+    _MIN_BOUNDARY_CHARS = 12
+    _TARGET_CHARS = 48
+    _MAX_CHARS = 96
+    _PERSIST_INTERVAL_SECONDS = 0.35
+    _CONTROL_CHECK_INTERVAL_SECONDS = 0.25
+    _STRONG_BOUNDARIES = frozenset("。！？!?\n")
+    _SOFT_BOUNDARIES = frozenset("，；：、,.;:")
 
     def __init__(self, db, turn, lease_token: str) -> None:
         self.db = db
@@ -41,11 +48,21 @@ class _DurableAnswerWriter:
         self.buffer = ""
         self.visible_text = ""
         self.chunk_index = 0
+        self.persisted_offset = 0
+        now = time.monotonic()
+        self.last_persisted_at = now
+        self.next_control_check_at = now + self._CONTROL_CHECK_INTERVAL_SECONDS
+        self.cancel_signal = agent_runtime_service.cancellation_signal(turn.id)
 
     def __call__(self, delta: str) -> None:
         text = str(delta or "")
         if not text:
             return
+        if self.started:
+            self.check_active()
+        elif self.cancel_signal.is_set():
+            raise agent_runtime_service.AgentTurnCancelled("Agent Turn 已取消")
+        self.visible_text += text
         if not self.started:
             agent_runtime_service.append_event(
                 self.db,
@@ -60,41 +77,84 @@ class _DurableAnswerWriter:
             # Expose the first non-empty content immediately, but bound it as
             # strictly as later chunks. Some providers deliver the whole JSON
             # answer field in one callback.
-            self._append(text[:self._MAX_CHARS])
+            self._persist(text[:self._MAX_CHARS])
             text = text[self._MAX_CHARS:]
         self.buffer += text
-        while len(self.buffer) >= self._TARGET_CHARS:
-            self._append(self._take_chunk())
+        self._flush_ready()
 
-    def _take_chunk(self) -> str:
+    def check_active(self, *, force: bool = False) -> None:
+        """Stop explicit cancellation quickly, with a DB cross-process fallback."""
+        if self.cancel_signal.is_set():
+            raise agent_runtime_service.AgentTurnCancelled("Agent Turn 已取消")
+        now = time.monotonic()
+        if not force and now < self.next_control_check_at:
+            return
+        agent_runtime_service.assert_turn_active(
+            self.db, self.turn.id, self.lease_token
+        )
+        self.next_control_check_at = now + self._CONTROL_CHECK_INTERVAL_SECONDS
+
+    def _boundary_index(self, boundaries: frozenset[str]) -> int:
         limit = min(self._MAX_CHARS, len(self.buffer))
-        lower_bound = min(self._TARGET_CHARS, limit)
-        split_at = limit
-        for index in range(limit - 1, lower_bound - 1, -1):
-            if self.buffer[index] in "，。！？；：、,.!?;:\n":
-                split_at = index + 1
-                break
+        if limit < self._MIN_BOUNDARY_CHARS:
+            return 0
+        for index in range(limit - 1, self._MIN_BOUNDARY_CHARS - 2, -1):
+            if self.buffer[index] in boundaries:
+                return index + 1
+        return 0
+
+    def _take_chunk(self, *, force: bool = False) -> str:
+        limit = min(self._MAX_CHARS, len(self.buffer))
+        split_at = self._boundary_index(self._STRONG_BOUNDARIES)
+        if not split_at and (force or len(self.buffer) >= self._TARGET_CHARS):
+            split_at = self._boundary_index(self._SOFT_BOUNDARIES)
+        if not split_at:
+            if not force and len(self.buffer) < self._TARGET_CHARS:
+                return ""
+            split_at = limit
         chunk = self.buffer[:split_at]
         self.buffer = self.buffer[split_at:]
         return chunk
 
-    def _append(self, delta: str) -> None:
+    def _flush_ready(self) -> None:
+        while self.buffer:
+            now = time.monotonic()
+            has_sentence = bool(self._boundary_index(self._STRONG_BOUNDARIES))
+            force = now - self.last_persisted_at >= self._PERSIST_INTERVAL_SECONDS
+            if not has_sentence and len(self.buffer) < self._TARGET_CHARS and not force:
+                return
+            chunk = self._take_chunk(force=force)
+            if not chunk:
+                return
+            self._persist(chunk)
+
+    def _persist(self, delta: str) -> None:
         if not delta:
             return
         self.chunk_index += 1
-        self.visible_text += delta
+        start_offset = self.persisted_offset
+        self.persisted_offset += len(delta)
         agent_runtime_service.append_event(
             self.db,
             turn=self.turn,
             event_type="turn.answer.delta",
             phase="synthesizing",
-            payload={"delta": delta, "chunk_index": self.chunk_index},
+            payload={
+                "delta": delta,
+                "chunk_index": self.chunk_index,
+                "start_offset": start_offset,
+                "end_offset": self.persisted_offset,
+            },
             lease_token=self.lease_token,
         )
+        self.last_persisted_at = time.monotonic()
 
     def flush(self) -> None:
+        if not self.started and not self.buffer:
+            return
+        self.check_active(force=True)
         while self.buffer:
-            self._append(self._take_chunk())
+            self._persist(self._take_chunk(force=True))
 
     def finish(self, canonical: str) -> None:
         """Finish with the validated answer without retracting visible text."""

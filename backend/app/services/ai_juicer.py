@@ -22,6 +22,7 @@ from litellm import completion
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.services import (
+    agent_runtime_service,
     error_log_service,
     llm_usage_service,
     settings_service,
@@ -703,8 +704,10 @@ def _call_llm_stream(
         raise
     parts: list[str] = []
     captured_usage: Any = None
+    exhausted = False
+    stream_iterator = iter(response)
     try:
-        for chunk in response:
+        for chunk in stream_iterator:
             usage = getattr(chunk, "usage", None)
             if usage is None:
                 hidden = getattr(chunk, "_hidden_params", None) or {}
@@ -721,23 +724,45 @@ def _call_llm_stream(
             if delta_text:
                 parts.append(delta_text)
                 if on_token is not None:
-                    try:
-                        on_token(delta_text)
-                    except Exception:
-                        # A disconnected browser must never cancel the answer.
-                        pass
+                    # The callback is also the durable Turn's cancellation
+                    # boundary. Swallowing it leaves the upstream model stream
+                    # running after the user presses stop, so consumer errors
+                    # deliberately propagate and close the provider iterator.
+                    on_token(delta_text)
+        exhausted = True
     except Exception as exc:
-        error_log_service.record_exception_safely(
+        if not isinstance(
             exc,
-            source="llm",
-            status_code=502,
-            metadata={
-                "provider": llm_cfg["provider"],
-                "model": display_model or llm_cfg["model"],
-                "operation": operation,
-            },
-        )
+            (
+                agent_runtime_service.AgentTurnCancelled,
+                agent_runtime_service.AgentTurnLeaseLost,
+            ),
+        ):
+            error_log_service.record_exception_safely(
+                exc,
+                source="llm",
+                status_code=502,
+                metadata={
+                    "provider": llm_cfg["provider"],
+                    "model": display_model or llm_cfg["model"],
+                    "operation": operation,
+                },
+            )
         raise
+    finally:
+        if not exhausted:
+            # LiteLLM currently returns a synchronous stream wrapper with
+            # ``close``. Fall back to the iterator for test/provider adapters.
+            # Teardown is best-effort and must not replace the cancellation or
+            # transport exception that ended the stream.
+            close = getattr(stream_iterator, "close", None)
+            if not callable(close):
+                close = getattr(response, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
 
     raw = "".join(parts).strip()
     if not raw:
@@ -3414,6 +3439,12 @@ def _run_library_synthesis(
         nonlocal state, pending_escape
         pending_escape = ""
         if state == "stream_answer":
+            flush = getattr(answer_delta, "flush", None)
+            if callable(flush):
+                # The user-visible answer string has ended even though the
+                # provider may still be generating claims/usage JSON. Flush
+                # its short tail now instead of waiting for the outer object.
+                flush()
             # Claims are drafts until the server has verified their exact
             # quotes and source identities.  Streaming them here made the UI
             # visibly shrink when invalid claims were removed at finalization.
@@ -3455,6 +3486,11 @@ def _run_library_synthesis(
 
     def json_text_delta(delta_text: str) -> None:
         nonlocal probe_buffer, state
+        check_active = getattr(answer_delta, "check_active", None)
+        if callable(check_active):
+            # Keep explicit stop/lease transfer observable even after the
+            # answer field closes and only private JSON fields remain.
+            check_active()
         pending = delta_text
         while pending:
             if state.startswith("search_"):
@@ -4017,6 +4053,14 @@ def answer_library_question(
             return
         streamed_answer_parts.append(delta)
         answer_delta(delta)
+
+    if answer_delta is not None:
+        flush = getattr(answer_delta, "flush", None)
+        if callable(flush):
+            setattr(stream_answer_narrative, "flush", flush)
+        check_active = getattr(answer_delta, "check_active", None)
+        if callable(check_active):
+            setattr(stream_answer_narrative, "check_active", check_active)
 
     narrative_delta = (
         stream_answer_narrative

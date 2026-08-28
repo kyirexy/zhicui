@@ -562,6 +562,101 @@ class AgentPipelineBoundaryTests(unittest.TestCase):
 
         self.assertEqual("".join(streamed), "总览")
 
+    def test_answer_field_end_flushes_tail_before_private_claims_finish(self) -> None:
+        class AnswerRecorder:
+            def __init__(self) -> None:
+                self.parts: list[str] = []
+                self.flush_snapshots: list[str] = []
+                self.active_checks = 0
+
+            def __call__(self, delta: str) -> None:
+                self.parts.append(delta)
+
+            def flush(self) -> None:
+                self.flush_snapshots.append("".join(self.parts))
+
+            def check_active(self) -> None:
+                self.active_checks += 1
+
+        recorder = AnswerRecorder()
+        provider_chunks = [
+            '{"answer":"最后一小段',
+            '也必须立即出现。","claims":[{"claim_id":"C1",',
+            '"text":"私有候选","explanation":"待校验","evidence":[]}]}',
+        ]
+
+        def fake_stream(**kwargs):
+            for chunk in provider_chunks:
+                kwargs["on_token"](chunk)
+            return "".join(provider_chunks)
+
+        with patch.object(ai_juicer, "_call_llm_stream", side_effect=fake_stream):
+            ai_juicer._run_library_synthesis(
+                {
+                    "system": "system",
+                    "user": "question",
+                    "operation": "answer_end_flush_test",
+                },
+                recorder,
+            )
+
+        self.assertEqual(
+            recorder.flush_snapshots[0],
+            "最后一小段也必须立即出现。",
+        )
+        self.assertGreaterEqual(recorder.active_checks, len(provider_chunks))
+
+    def test_stream_callback_cancellation_closes_provider_iterator(self) -> None:
+        class FakeStream:
+            def __init__(self) -> None:
+                self.emitted = False
+                self.closed = False
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                if self.emitted:
+                    raise StopIteration
+                self.emitted = True
+                return SimpleNamespace(
+                    usage=None,
+                    choices=[SimpleNamespace(
+                        delta=SimpleNamespace(content="第一个增量")
+                    )],
+                )
+
+            def close(self) -> None:
+                self.closed = True
+
+        stream = FakeStream()
+        llm_config = {
+            "provider": "custom",
+            "model": "test-model",
+            "runtime_model": "openai/test-model",
+            "api_base": "",
+            "api_key": "",
+        }
+
+        def cancel_on_token(_delta: str) -> None:
+            raise ai_juicer.agent_runtime_service.AgentTurnCancelled("已停止")
+
+        with (
+            patch.object(ai_juicer, "_get_llm_config", return_value=llm_config),
+            patch.object(ai_juicer, "completion", return_value=stream),
+        ):
+            with self.assertRaises(
+                ai_juicer.agent_runtime_service.AgentTurnCancelled
+            ):
+                ai_juicer._call_llm_stream(
+                    "system",
+                    "question",
+                    on_token=cancel_on_token,
+                    operation="cancel_close_test",
+                )
+
+        self.assertTrue(stream.closed)
+
     def test_cross_source_answer_waits_for_validation_before_streaming(self) -> None:
         sources = [
             {

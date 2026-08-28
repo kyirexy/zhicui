@@ -73,6 +73,7 @@ import {
   type AgentActivityItem,
 } from '@/lib/agentTurnUi';
 import { AgentTextStreamPump } from '@/lib/agentTextStream';
+import { resolveAgentScrollFollow } from '@/lib/agentScrollFollow';
 import {
   createAgentAutomation,
   createAgentThread,
@@ -688,6 +689,7 @@ export default function VideoAgentWorkspace({
   const sourceHandoffNoticeSettledRef = useRef(false);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const threadScrollRef = useRef<HTMLDivElement | null>(null);
+  const threadContentRef = useRef<HTMLDivElement | null>(null);
   const activeRef = useRef(active);
   activeRef.current = active;
   // DSH follows only while the viewer is pinned to the bottom; scrolling up
@@ -722,7 +724,10 @@ export default function VideoAgentWorkspace({
       if (!activeRef.current || !followingRef.current) return;
       const scroller = threadScrollRef.current;
       if (scroller) {
-        scroller.scrollTop = scroller.scrollHeight;
+        scroller.scrollTop = Math.max(
+          0,
+          scroller.scrollHeight - scroller.clientHeight,
+        );
         observedScrollTopRef.current = scroller.scrollTop;
       }
     });
@@ -748,12 +753,11 @@ export default function VideoAgentWorkspace({
         const liveMessage = streamingMessageViewRef.current;
         if (liveMessage) liveMessage.append(delta);
         else pendingStreamTextRef.current += delta;
-        scheduleStreamFollow();
       },
     });
     answerTextPumpRef.current = pump;
     return pump;
-  }, [scheduleStreamFollow]);
+  }, []);
 
   const attachStreamingMessageView = useCallback((handle: AgentStreamingMessageHandle | null) => {
     streamingMessageViewRef.current = handle;
@@ -1427,7 +1431,10 @@ export default function VideoAgentWorkspace({
     const frame = window.requestAnimationFrame(() => {
       const scroller = threadScrollRef.current;
       if (scroller) {
-        scroller.scrollTop = scroller.scrollHeight;
+        scroller.scrollTop = Math.max(
+          0,
+          scroller.scrollHeight - scroller.clientHeight,
+        );
         observedScrollTopRef.current = scroller.scrollTop;
       }
     });
@@ -1440,42 +1447,54 @@ export default function VideoAgentWorkspace({
   useEffect(() => {
     if (!active) return;
     const el = threadScrollRef.current;
+    const content = threadContentRef.current;
     if (!el) return;
     const update = () => {
       if (!activeRef.current) return;
-      const floor = Math.max(0, el.scrollHeight - el.clientHeight);
-      const deliveredTop = Math.min(observedScrollTopRef.current, floor);
-      const movedByReader = Math.abs(el.scrollTop - deliveredTop) > 0.5;
-      const distance = floor - el.scrollTop;
-      // Like DSH, only a real reader movement may take ownership away from
-      // bottom-follow. Programmatic stream alignment records its position
-      // before the browser emits scroll, so it never fights manual scrolling.
-      if (movedByReader) followingRef.current = distance <= 24;
+      const next = resolveAgentScrollFollow({
+        clientHeight: el.clientHeight,
+        following: followingRef.current,
+        observedScrollTop: observedScrollTopRef.current,
+        scrollHeight: el.scrollHeight,
+        scrollTop: el.scrollTop,
+      });
+      followingRef.current = next.following;
       observedScrollTopRef.current = el.scrollTop;
-      setShowBackToBottom(distance > 56);
+      setShowBackToBottom((current) => (
+        current === next.showBackToBottom
+          ? current
+          : next.showBackToBottom
+      ));
     };
+    observedScrollTopRef.current = el.scrollTop;
     update();
     el.addEventListener('scroll', update, { passive: true });
-    el.addEventListener('wheel', releaseStreamFollowToReader, { passive: true });
-    el.addEventListener('touchstart', releaseStreamFollowToReader, { passive: true });
-    el.addEventListener('pointerdown', releaseStreamFollowToReader, { passive: true });
-    const observer = new ResizeObserver(update);
+    const onWheel = (event: WheelEvent) => {
+      if (event.deltaY < 0) releaseStreamFollowToReader();
+    };
+    el.addEventListener('wheel', onWheel, { passive: true });
+    const observer = new ResizeObserver(() => {
+      update();
+      if (followingRef.current) scheduleStreamFollow();
+    });
     observer.observe(el);
+    if (content) observer.observe(content);
     return () => {
       el.removeEventListener('scroll', update);
-      el.removeEventListener('wheel', releaseStreamFollowToReader);
-      el.removeEventListener('touchstart', releaseStreamFollowToReader);
-      el.removeEventListener('pointerdown', releaseStreamFollowToReader);
+      el.removeEventListener('wheel', onWheel);
       observer.disconnect();
     };
-  }, [active, releaseStreamFollowToReader, threadLoading]);
+  }, [active, releaseStreamFollowToReader, scheduleStreamFollow]);
 
   const scrollThreadToBottom = useCallback(() => {
     followingRef.current = true;
     setShowBackToBottom(false);
     const scroller = threadScrollRef.current;
     if (!scroller) return;
-    scroller.scrollTop = scroller.scrollHeight;
+    scroller.scrollTop = Math.max(
+      0,
+      scroller.scrollHeight - scroller.clientHeight,
+    );
     observedScrollTopRef.current = scroller.scrollTop;
   }, []);
 
@@ -3072,11 +3091,6 @@ export default function VideoAgentWorkspace({
       cancellationRequested={Boolean(
         activeThread?.active_turn?.cancellation_requested,
       )}
-      cancelling={turnAction === 'cancel'}
-      canCancel={Boolean(
-        activeThread?.active_turn?.id || durableTurnIdRef.current,
-      )}
-      onCancel={() => void cancelCurrentTurn()}
     />
   ) : null;
 
@@ -3341,6 +3355,10 @@ export default function VideoAgentWorkspace({
             aria-live="polite"
             aria-relevant="additions text"
           >
+            <div
+              ref={threadContentRef}
+              className="video-agent-thread-content"
+            >
             {threadLoading ? (
               <div className="video-agent-thread-skeleton" aria-label="正在打开任务">
                 <i /><i /><i />
@@ -3547,6 +3565,7 @@ export default function VideoAgentWorkspace({
               </button>
             </div>
             <div ref={messageEndRef} />
+            </div>
           </div>
 
           <AgentComposer

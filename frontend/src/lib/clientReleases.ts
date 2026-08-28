@@ -27,11 +27,11 @@ const WINDOWS_MANIFEST_URL = '/download/desktop-latest.json';
 export const CLIENT_RELEASE_FALLBACKS: ClientReleaseCatalog = {
   android: {
     platform: 'android',
-    version: '1.2.6',
-    build: 18,
+    version: '1.2.7',
+    build: 19,
     downloadUrl: 'https://luxai.cn/download/zhicui.apk',
     sizeBytes: 9_859_270,
-    publishedAt: '2026-08-25T13:23:59.3545909Z',
+    publishedAt: '2026-08-28T04:30:00.000Z',
     releaseStatus: 'public_download',
   },
   windows: {

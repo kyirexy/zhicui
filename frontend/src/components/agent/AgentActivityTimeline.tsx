@@ -6,7 +6,6 @@ import {
   CheckCircle,
   CircleNotch,
   WarningCircle,
-  X,
 } from '@phosphor-icons/react';
 import {
   DEFAULT_AGENT_ACTIVITY_EXPANDED,
@@ -17,9 +16,6 @@ import {
 interface AgentActivityTimelineProps {
   activities: AgentActivityItem[];
   cancellationRequested?: boolean;
-  cancelling?: boolean;
-  canCancel?: boolean;
-  onCancel?: () => void;
   answerStarted?: boolean;
 }
 
@@ -36,9 +32,6 @@ function ActivityIcon({ status }: { status: AgentActivityItem['status'] }) {
 export default function AgentActivityTimeline({
   activities,
   cancellationRequested = false,
-  cancelling = false,
-  canCancel = false,
-  onCancel,
   answerStarted = false,
 }: AgentActivityTimelineProps) {
   const disclosureId = useId();
@@ -103,23 +96,6 @@ export default function AgentActivityTimeline({
             />
           ) : null}
         </button>
-        {canCancel && onCancel ? (
-          <button
-            type="button"
-            className="video-agent-turn-action"
-            disabled={cancelling || cancellationRequested}
-            onClick={onCancel}
-            aria-label="停止本次回答"
-            title="停止本次回答"
-          >
-            <X size={14} aria-hidden="true" />
-            {cancellationRequested
-              ? '正在停止'
-              : cancelling
-                ? '正在停止'
-                : '停止生成'}
-          </button>
-        ) : null}
       </header>
 
       <span className="video-agent-visually-hidden" role="status" aria-live="polite">

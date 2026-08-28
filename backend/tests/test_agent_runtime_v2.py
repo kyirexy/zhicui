@@ -14,7 +14,9 @@ from app.services import agent_runtime_service, agent_service, ai_juicer
 from app.services import agent_runtime_worker
 from app.api.agent_routes import (
     _DURABLE_STREAM_POLL_SECONDS,
+    _SSE_HEARTBEAT_SECONDS,
     _project_durable_event,
+    _sse_headers,
 )
 from app.services.agent_repeat_tool_guard import RepeatToolGuard, canonical_arguments
 from app.services.agent_tool_runtime import (
@@ -40,6 +42,14 @@ class AgentRuntimeV2Tests(unittest.TestCase):
 
     def test_durable_stream_discovers_committed_events_within_fifty_ms(self):
         self.assertLessEqual(_DURABLE_STREAM_POLL_SECONDS, 0.05)
+
+    def test_sse_transport_disables_buffering_and_sends_frequent_heartbeats(self):
+        headers = _sse_headers()
+
+        self.assertLessEqual(_SSE_HEARTBEAT_SECONDS, 5.0)
+        self.assertEqual(headers["X-Accel-Buffering"], "no")
+        self.assertEqual(headers["Content-Encoding"], "identity")
+        self.assertIn("no-transform", headers["Cache-Control"])
 
     def test_exact_broad_question_resolves_deep(self):
         self.assertEqual(
@@ -593,13 +603,20 @@ class AgentRuntimeV2Tests(unittest.TestCase):
                 visible_answer,
             )
             self.assertTrue(all(
-                len(str(event.payload.get("delta") or "")) <= 192
+                len(str(event.payload.get("delta") or "")) <= 96
                 for event in delta_events
             ))
             self.assertLessEqual(
                 len(str(delta_events[0].payload.get("delta") or "")),
-                192,
+                96,
             )
+            self.assertLessEqual(len(delta_events), 20)
+            expected_offset = 0
+            for event in delta_events:
+                delta = str(event.payload.get("delta") or "")
+                self.assertEqual(event.payload.get("start_offset"), expected_offset)
+                expected_offset += len(delta)
+                self.assertEqual(event.payload.get("end_offset"), expected_offset)
             projected = _project_durable_event(claimed_turn, delta_events[0])
             self.assertEqual(projected["type"], "delta")
             self.assertEqual(projected["event_seq"], delta_events[0].seq)
@@ -619,6 +636,37 @@ class AgentRuntimeV2Tests(unittest.TestCase):
                 writer("租约失效后不得继续输出")
                 writer.flush()
 
+    def test_answer_writer_flushes_sentence_boundary_and_short_final_tail(self):
+        with self.Session() as db:
+            _, turn = self._new_turn(db, suffix="answer-natural-flush")
+            claimed_turn, lease_token = agent_runtime_service.claim_turn(db, turn.id)
+            writer = agent_runtime_worker._DurableAnswerWriter(
+                db, claimed_turn, lease_token
+            )
+
+            writer("开头")
+            writer("这是达到自然边界后应立即出现的完整句子。")
+            writer("短尾")
+
+            before_flush = [
+                str(event.payload.get("delta") or "")
+                for event in agent_runtime_service.list_events(db, turn=claimed_turn)
+                if event.event_type == "turn.answer.delta"
+            ]
+            self.assertEqual(
+                "".join(before_flush),
+                "开头这是达到自然边界后应立即出现的完整句子。",
+            )
+
+            writer.flush()
+            after_flush = [
+                str(event.payload.get("delta") or "")
+                for event in agent_runtime_service.list_events(db, turn=claimed_turn)
+                if event.event_type == "turn.answer.delta"
+            ]
+            self.assertEqual("".join(after_flush), writer.visible_text)
+            self.assertEqual(after_flush[-1], "短尾")
+
     def test_answer_delta_honors_running_turn_cancellation(self):
         with self.Session() as db:
             _, turn = self._new_turn(db, suffix="answer-cancel")
@@ -629,6 +677,16 @@ class AgentRuntimeV2Tests(unittest.TestCase):
             agent_runtime_service.request_cancel(db, claimed_turn)
             with self.assertRaises(agent_runtime_service.AgentTurnCancelled):
                 writer("取消后不得继续输出")
+
+    def test_queued_cancellation_does_not_retain_local_worker_signal(self):
+        with self.Session() as db:
+            _, turn = self._new_turn(db, suffix="queued-cancel-signal")
+            agent_runtime_service.cancellation_signal(turn.id)
+
+            cancelled = agent_runtime_service.request_cancel(db, turn)
+
+            self.assertEqual(cancelled.status, "cancelled")
+            self.assertNotIn(turn.id, agent_runtime_service._CANCEL_SIGNALS)
 
     def test_answer_finish_streams_the_canonical_suffix_without_retracting_text(self):
         with self.Session() as db:
@@ -682,7 +740,7 @@ class AgentRuntimeV2Tests(unittest.TestCase):
                 for earlier, later in zip(delta_events, delta_events[1:])
             ))
             self.assertTrue(all(
-                len(str(event.payload.get("delta") or "")) <= 192
+                len(str(event.payload.get("delta") or "")) <= 96
                 for event in delta_events
             ))
 

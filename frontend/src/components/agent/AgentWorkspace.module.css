@@ -304,10 +304,10 @@
 .root :global(.video-agent-mobile-close),
 .root :global(.video-agent-topbar-icon) {
   display: grid;
-  width: 40px;
-  height: 40px;
-  min-width: 40px;
-  min-height: 40px;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
   border: 0;
   border-radius: 10px;
   place-items: center;
@@ -786,6 +786,12 @@
   overflow-anchor: none;
 }
 
+.root :global(.video-agent-thread-content) {
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+}
+
 .root :global(.video-agent-to-bottom-slot) {
   position: sticky;
   z-index: 8;
@@ -1157,6 +1163,19 @@
   line-height: 28px;
   overflow-wrap: anywhere;
   text-wrap: pretty;
+}
+
+.root :global(.video-agent-answer-stream) {
+  white-space: normal;
+}
+
+.root :global(.video-agent-stream-stable-block) {
+  margin-bottom: 1em;
+}
+
+.root :global(.video-agent-stream-tail) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .root :global(.video-agent-message.is-streaming .video-agent-answer-markdown > :last-child::after) {
@@ -5258,6 +5277,7 @@
     min-height: 0;
     margin-inline: -1rem;
     overflow: hidden;
+    overscroll-behavior: none;
   }
 
   .root :global(.video-agent-shell) {
@@ -5304,7 +5324,7 @@
     display: flex;
     width: 100%;
     height: min(86dvh, 760px);
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-bottom: 0;
     border: 1px solid var(--aw-line);
     border-right: 0;
     border-bottom: 0;
@@ -5497,6 +5517,22 @@
     padding:
       24px max(15px, env(safe-area-inset-right, 0px))
       22px max(15px, env(safe-area-inset-left, 0px));
+    scroll-padding-block: 16px 28px;
+    scrollbar-gutter: auto;
+    overscroll-behavior-y: contain;
+  }
+
+  /* `content-visibility:auto` estimates every restored answer at 220px until
+     it is painted. On a phone that estimate changes while the user is
+     swiping, which can move the scroll position backwards. Keep mobile
+     message heights real and isolate each row's layout/paint work instead. */
+  .root :global(.video-agent-message) {
+    contain: layout style paint;
+  }
+
+  .root :global(.video-agent-message:not(.is-streaming)) {
+    content-visibility: visible;
+    contain-intrinsic-size: none;
   }
 
   .root :global(.video-agent-welcome) {
@@ -5656,7 +5692,17 @@
 
   .root :global(.video-agent-composer-controls) {
     overflow: visible;
+    flex: 1 1 auto;
     gap: 4px;
+  }
+
+  .root :global(.video-agent-composer-context),
+  .root :global(.video-agent-options-picker) {
+    flex: 0 1 auto;
+  }
+
+  .root :global(.video-agent-options-trigger) {
+    width: 100%;
   }
 
   .root :global(.video-agent-composer-context),
@@ -5676,21 +5722,34 @@
     transform-origin: right bottom;
   }
 
-  .root :global(.video-agent-send) {
-    width: 34px;
-    height: 34px;
-    min-width: 34px;
-    min-height: 34px;
+  .root :global(.video-agent-send),
+  .root :global(.video-agent-send.is-stop) {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    flex-basis: 44px;
+    padding: 0;
   }
 
-  .root :global(.video-agent-send.is-stop) {
-    width: 34px;
-    min-width: 34px;
-    padding: 0;
+  .root :global(.video-agent-composer-send-actions) {
+    gap: 4px;
   }
 
   .root :global(.video-agent-composer-count) {
     display: none;
+  }
+
+  .root :global(.video-agent-source-list),
+  .root :global(.video-agent-history-list),
+  .root :global(.video-agent-studio-body) {
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+  }
+
+  .root :global(.video-agent-source-item) {
+    contain-intrinsic-size: auto 76px;
   }
 
   .root :global(.video-agent-source-search) {
@@ -5742,7 +5801,7 @@
 
   .root :global(.video-agent-apply-sources) {
     min-height: 48px;
-    margin-bottom: max(10px, env(safe-area-inset-bottom, 0px));
+    margin-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
   }
 
   .root :global(.video-agent-studio-create),
@@ -5781,6 +5840,23 @@
     border-left: 0;
     border-radius: 18px 18px 0 0;
     box-shadow: 0 -12px 28px color-mix(in srgb, var(--card-shadow) 66%, transparent);
+  }
+
+  /* Embedded workspaces have more-specific desktop panel rules above. Restore
+     the phone safe area explicitly so their fixed action regions never sit
+     below Android gesture navigation or the iOS home indicator. */
+  .root.embedded :global(.video-agent-history) {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .root.embedded :global(.video-agent-sources) {
+    padding-bottom: 0;
+  }
+
+  .root.embedded :global(.video-agent-studio),
+  .root.embedded :global(.video-agent-automation-sheet) {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
   .root :global(.video-agent-automation-fixed-scope) {
@@ -5840,11 +5916,6 @@
     display: none;
   }
 
-  .root :global(.video-agent-activity .video-agent-turn-action) {
-    min-height: 44px;
-    padding-inline: 9px;
-  }
-
   .root :global(.video-agent-activity-copy) {
     display: grid;
     gap: 1px;
@@ -5853,6 +5924,28 @@
   .root :global(.video-agent-activity-copy small) {
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+}
+
+@media (max-width: 360px) {
+  .root :global(.video-agent-composer-context) {
+    max-width: 112px;
+  }
+
+  .root :global(.video-agent-options-trigger span),
+  .root :global(.video-agent-composer-queue-count) {
+    display: none;
+  }
+
+  .root :global(.video-agent-options-trigger) {
+    width: 44px;
+    min-width: 44px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .root :global(.video-agent-options-trigger > svg:last-child) {
+    display: none;
   }
 }
 

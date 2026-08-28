@@ -1,6 +1,6 @@
 {
   "name": "frontend",
-  "version": "1.1.9",
+  "version": "1.1.10",
   "private": true,
   "scripts": {
     "generate:build-version": "node scripts/generate-build-version.mjs",
@@ -10,7 +10,7 @@
     "prebuild": "npm run generate:build-version",
     "build": "next build",
     "typecheck": "npm run generate:build-version && tsc --noEmit",
-    "test:agent-v2": "node --experimental-strip-types --test src/lib/agentTurnUi.test.ts src/lib/agentTextStream.test.ts",
+    "test:agent-v2": "node --experimental-strip-types --test src/lib/agentTurnUi.test.ts src/lib/agentTextStream.test.ts src/lib/agentMarkdownStream.test.ts src/lib/agentScrollFollow.test.ts src/lib/agentMobileParity.test.ts",
     "test:navigation": "node --experimental-strip-types --test src/lib/productNavigation.test.ts",
     "test:douyin-sync": "node --experimental-strip-types --test src/lib/douyinSyncFeedback.test.ts",
     "test:douyin-desktop": "node --experimental-strip-types --test src/lib/douyinDesktopSync.test.ts",

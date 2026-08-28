@@ -42,7 +42,7 @@ import { useIsMobile } from '@/lib/hooks/useMediaQuery';
 import type { DesktopLayoutDensity } from '@/lib/types';
 import styles from './SettingsWorkspace.module.css';
 
-const WEB_APP_VERSION = '1.1.9';
+const WEB_APP_VERSION = '1.1.10';
 
 type SettingsSectionId = 'general' | 'appearance' | 'storage' | 'sync' | 'models' | 'ai' | 'about';
 

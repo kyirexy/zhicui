@@ -25,6 +25,10 @@ import AgentVideoAnalysisCard, {
 import AgentPlanChangeCard from '@/components/agent/AgentPlanChangeCard';
 import { MessageResponse } from '@/components/ai-elements/message';
 import {
+  AgentMarkdownStreamBuffer,
+  type AgentMarkdownStreamSnapshot,
+} from '@/lib/agentMarkdownStream';
+import {
   hasVisibleAgentAnswer,
   shouldShowAgentCitationCoverage,
 } from '@/lib/agentTurnUi';
@@ -38,6 +42,7 @@ interface AgentMessageViewProps {
   deliveryState?: AgentMessageDeliveryState;
   deliveryError?: string;
   streaming?: boolean;
+  streamingMarkdown?: AgentMarkdownStreamSnapshot;
   onFollowUp: (question: string) => void;
   onRetry?: (message: AgentMessage) => void;
   onEdit?: (message: AgentMessage) => void;
@@ -57,6 +62,23 @@ interface AgentStreamingMessageViewProps extends Omit<AgentMessageViewProps, 'me
   initialMessage: AgentMessage;
   onFirstContent?: () => void;
 }
+
+const AgentStableMarkdownChunks = memo(function AgentStableMarkdownChunks({
+  chunks,
+}: {
+  chunks: readonly string[];
+}) {
+  return chunks.map((chunk, index) => (
+    <MessageResponse
+      // chunks 只会在尾部追加，索引在整个流式周期内保持稳定。
+      key={index}
+      className="video-agent-stream-stable-block"
+      mode="static"
+    >
+      {chunk}
+    </MessageResponse>
+  ));
+});
 
 function readableAssistantContent(content: string): string {
   const original = typeof content === 'string' ? content.trim() : '';
@@ -102,6 +124,7 @@ function AgentMessageView({
   deliveryState,
   deliveryError,
   streaming = false,
+  streamingMarkdown,
   onFollowUp,
   onRetry,
   onEdit,
@@ -200,12 +223,23 @@ function AgentMessageView({
 
       {isAssistant ? (
         displayContent ? (
-          <MessageResponse
-            className="video-agent-answer-markdown"
-            isAnimating={streaming}
-          >
-            {displayContent}
-          </MessageResponse>
+          streaming && streamingMarkdown ? (
+            <div className="video-agent-answer-markdown video-agent-answer-stream">
+              <AgentStableMarkdownChunks chunks={streamingMarkdown.stableChunks} />
+              <span className="video-agent-stream-tail">
+                {streamingMarkdown.tail}
+              </span>
+            </div>
+          ) : (
+            <MessageResponse
+              className="video-agent-answer-markdown"
+              isAnimating={streaming}
+              mode={streaming ? 'streaming' : 'static'}
+              parseIncompleteMarkdown={streaming}
+            >
+              {displayContent}
+            </MessageResponse>
+          )
         ) : null
       ) : (
         <div className="video-agent-message-content">{displayContent}</div>
@@ -503,7 +537,20 @@ export const AgentStreamingMessageView = memo(forwardRef<
   onFirstContent,
   ...props
 }, ref) {
-  const [message, setMessage] = useState(initialMessage);
+  const markdownBufferRef = useRef<AgentMarkdownStreamBuffer | null>(null);
+  if (markdownBufferRef.current === null) {
+    markdownBufferRef.current = new AgentMarkdownStreamBuffer(
+      initialMessage.content,
+    );
+  }
+  const [streamState, setStreamState] = useState(() => ({
+    markdown: markdownBufferRef.current?.snapshot() ?? {
+      stableChunks: [],
+      tail: initialMessage.content,
+    },
+    message: initialMessage,
+  }));
+  const { markdown, message } = streamState;
   const visibleRef = useRef(hasVisibleAgentAnswer(initialMessage.content));
   const onFirstContentRef = useRef(onFirstContent);
   onFirstContentRef.current = onFirstContent;
@@ -511,9 +558,16 @@ export const AgentStreamingMessageView = memo(forwardRef<
   useImperativeHandle(ref, () => ({
     append(delta: string) {
       if (!delta) return;
-      setMessage((current) => ({
-        ...current,
-        content: `${current.content}${delta}`,
+      const nextMarkdown = markdownBufferRef.current?.append(delta)
+        ?? { stableChunks: [], tail: delta };
+      setStreamState((current) => ({
+        markdown: nextMarkdown,
+        message: {
+          ...current.message,
+          // 流式正文由稳定块缓冲器持有；message 这里只保留首段作为
+          // 可见性哨兵，避免每个小分片都复制一遍完整历史字符串。
+          content: current.message.content || delta,
+        },
       }));
       if (!visibleRef.current) {
         visibleRef.current = true;
@@ -521,16 +575,26 @@ export const AgentStreamingMessageView = memo(forwardRef<
       }
     },
     hydrate(nextMessage: AgentMessage) {
-      setMessage((current) => ({
-        ...nextMessage,
-        id: current.id,
-        content: current.content,
+      setStreamState((current) => ({
+        ...current,
+        message: {
+          ...nextMessage,
+          id: current.message.id,
+          content: current.message.content,
+        },
       }));
     },
   }), []);
 
   if (!visibleRef.current && !hasVisibleAgentAnswer(message.content)) return null;
-  return <AgentMessageView {...props} message={message} streaming />;
+  return (
+    <AgentMessageView
+      {...props}
+      message={message}
+      streamingMarkdown={markdown}
+      streaming
+    />
+  );
 }));
 
 AgentStreamingMessageView.displayName = 'AgentStreamingMessageView';

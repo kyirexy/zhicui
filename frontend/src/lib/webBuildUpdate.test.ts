@@ -10,7 +10,7 @@ const CURRENT: WebBuildManifest = {
   schema_version: 1,
   build_id: 'abc123def456-20260826120000',
   revision: 'abc123def456',
-  version: '1.1.9',
+  version: '1.1.10',
   built_at: '2026-08-26T12:00:00.000Z',
 };
 

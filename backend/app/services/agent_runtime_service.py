@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -44,6 +45,13 @@ _SENSITIVE_KEYS = (
     "download_url", "media_url", "signed_url", "local_path", "file_path",
 )
 
+# Explicit cancellation uses a process-local fast path in addition to the
+# durable database flag. The event lets a same-process worker stop on the next
+# provider chunk without turning every token into a database query;
+# ``assert_turn_active`` remains the cross-process source of truth.
+_CANCEL_SIGNAL_LOCK = threading.Lock()
+_CANCEL_SIGNALS: dict[str, threading.Event] = {}
+
 
 class AgentTurnLeaseLost(RuntimeError):
     pass
@@ -51,6 +59,28 @@ class AgentTurnLeaseLost(RuntimeError):
 
 class AgentTurnCancelled(RuntimeError):
     pass
+
+
+def cancellation_signal(turn_id: str) -> threading.Event:
+    """Return the process-local cancellation signal for one durable Turn."""
+    with _CANCEL_SIGNAL_LOCK:
+        return _CANCEL_SIGNALS.setdefault(str(turn_id), threading.Event())
+
+
+def _signal_cancel(turn_id: str) -> None:
+    cancellation_signal(turn_id).set()
+
+
+def _clear_cancel_signal(turn_id: str) -> None:
+    with _CANCEL_SIGNAL_LOCK:
+        signal = _CANCEL_SIGNALS.get(str(turn_id))
+        if signal is not None:
+            signal.clear()
+
+
+def _drop_cancel_signal(turn_id: str) -> None:
+    with _CANCEL_SIGNAL_LOCK:
+        _CANCEL_SIGNALS.pop(str(turn_id), None)
 
 
 def _utcnow() -> datetime:
@@ -347,6 +377,8 @@ def claim_turn(db: Session, turn_id: str) -> tuple[AgentTurn, str] | None:
         return None
     db.commit()
     turn = db.query(AgentTurn).filter(AgentTurn.id == turn_id).first()
+    if turn is not None:
+        _clear_cancel_signal(turn.id)
     return (turn, token) if turn is not None else None
 
 
@@ -381,6 +413,32 @@ def renew_lease_or_raise(turn_id: str, lease_token: str) -> None:
     raise AgentTurnLeaseLost("Agent Turn 租约已转移")
 
 
+def assert_turn_active(db: Session, turn_id: str, lease_token: str) -> None:
+    """Check cancellation/ownership through the worker's existing session.
+
+    The lease heartbeat owns renewal.  Token callbacks only need a cheap,
+    read-only control-plane check; reusing their session also keeps SQLite
+    tests and deployments with a custom session factory on the same database.
+    ``populate_existing`` prevents the identity map from hiding a cancel or
+    lease transfer committed by another request/process.
+    """
+    turn = db.query(AgentTurn).populate_existing().filter(
+        AgentTurn.id == turn_id
+    ).first()
+    if (
+        turn is not None
+        and turn.lease_token == lease_token
+        and turn.cancellation_requested
+    ):
+        raise AgentTurnCancelled("Agent Turn 已取消")
+    if (
+        turn is None
+        or turn.status != "running"
+        or turn.lease_token != lease_token
+    ):
+        raise AgentTurnLeaseLost("Agent Turn 租约已转移")
+
+
 def request_cancel(db: Session, turn: AgentTurn) -> AgentTurn:
     if turn.status in TERMINAL_STATUSES:
         return turn
@@ -395,6 +453,13 @@ def request_cancel(db: Session, turn: AgentTurn) -> AgentTurn:
         turn.completed_at = _utcnow()
     db.commit()
     db.refresh(turn)
+    # Wake a same-process streaming worker immediately. A queued Turn has no
+    # consumer to wake, so avoid retaining an unused process-local signal.
+    # The committed flag remains authoritative across workers/restarts.
+    if queued:
+        _drop_cancel_signal(turn.id)
+    else:
+        _signal_cancel(turn.id)
     append_event(
         db,
         turn=turn,
@@ -432,6 +497,7 @@ def retry_turn(db: Session, turn: AgentTurn) -> AgentTurn:
     }, synchronize_session=False)
     db.commit()
     db.refresh(turn)
+    _clear_cancel_signal(turn.id)
     append_event(db, turn=turn, event_type="turn.retried", phase="queued", message="任务已重新排队")
     return turn
 
@@ -489,6 +555,7 @@ def complete_turn(
             "evidence_count": turn.evidence_count,
         },
     )
+    _drop_cancel_signal(turn.id)
 
 
 def fail_turn(turn_id: str, lease_token: str, exc: Exception) -> None:
@@ -524,6 +591,7 @@ def fail_turn(turn_id: str, lease_token: str, exc: Exception) -> None:
             message="本次生成已停止" if cancelled else "视频 Agent 暂时没有完成回答",
             payload={"error_code": turn.error_code},
         )
+        _drop_cancel_signal(turn.id)
 
 
 def latest_memory(db: Session, thread_id: str, user_id: str) -> dict[str, Any]:

@@ -21,15 +21,17 @@ interface AgentTextStreamPumpOptions {
   now?: () => number;
 }
 
-const SMOOTH_CHARACTERS_PER_COMMIT = 20;
-const SMOOTH_COMMIT_INTERVAL_MS = 24;
-const CATCH_UP_COMMIT_INTERVAL_MS = 16;
-const CATCH_UP_DEPTH_CHARACTERS = 96;
-const CATCH_UP_OLDEST_AGE_MS = 240;
-const CATCH_UP_MIN_CHARACTERS = 32;
-const CATCH_UP_MAX_CHARACTERS = 192;
-const CATCH_UP_TARGET_COMMITS = 18;
-const FINISHING_TARGET_COMMITS = 12;
+// 生产 SSE 通常每 1.5–2.8 秒交付约 128 个汉字。常态以约
+// 60–72 CJK 字/秒持续展开，避免每个网络分片在几十毫秒内整块闪现。
+const SMOOTH_CHARACTERS_PER_COMMIT = 3;
+const SMOOTH_COMMIT_INTERVAL_MS = 40;
+// 只有真正的大积压才进入追赶档；单个正常 SSE 分片不会触发突发渲染。
+const CATCH_UP_COMMIT_INTERVAL_MS = 24;
+const CATCH_UP_DEPTH_CHARACTERS = 640;
+const CATCH_UP_OLDEST_AGE_MS = 6_000;
+const CATCH_UP_MIN_CHARACTERS = 16;
+const CATCH_UP_MAX_CHARACTERS = 256;
+const CATCH_UP_TARGET_COMMITS = 24;
 export const AGENT_TEXT_STREAM_DEFAULT_DRAIN_TIMEOUT_MS = 2_500;
 
 /**
@@ -65,19 +67,18 @@ export function decideAgentTextStreamDrain({
     || pending >= CATCH_UP_DEPTH_CHARACTERS
     || oldestAgeMs >= CATCH_UP_OLDEST_AGE_MS
   ) {
-    const targetCommits = finishing
-      ? FINISHING_TARGET_COMMITS
-      : CATCH_UP_TARGET_COMMITS;
     return {
       mode: 'catch-up',
-      characters: Math.min(
-        pending,
-        CATCH_UP_MAX_CHARACTERS,
-        Math.max(
-          CATCH_UP_MIN_CHARACTERS,
-          Math.ceil(pending / targetCommits),
+      characters: finishing
+        ? Math.min(pending, CATCH_UP_MAX_CHARACTERS)
+        : Math.min(
+          pending,
+          CATCH_UP_MAX_CHARACTERS,
+          Math.max(
+            CATCH_UP_MIN_CHARACTERS,
+            Math.ceil(pending / CATCH_UP_TARGET_COMMITS),
+          ),
         ),
-      ),
       intervalMs: CATCH_UP_COMMIT_INTERVAL_MS,
     };
   }
@@ -91,12 +92,19 @@ export function decideAgentTextStreamDrain({
 
 function splitAtCodePoint(value: string, characterCount: number): [string, string] {
   if (characterCount <= 0) return ['', value];
-  const characters = Array.from(value);
-  if (characterCount >= characters.length) return [value, ''];
-  return [
-    characters.slice(0, characterCount).join(''),
-    characters.slice(characterCount).join(''),
-  ];
+  let offset = 0;
+  let consumed = 0;
+  while (offset < value.length && consumed < characterCount) {
+    const codePoint = value.codePointAt(offset);
+    offset += codePoint !== undefined && codePoint > 0xffff ? 2 : 1;
+    consumed += 1;
+  }
+  if (offset >= value.length) return [value, ''];
+  return [value.slice(0, offset), value.slice(offset)];
+}
+
+function countCodePoints(value: string): number {
+  return Array.from(value).length;
 }
 
 function defaultScheduleFrame(callback: FrameRequestCallback): number {
@@ -122,6 +130,7 @@ export class AgentTextStreamPump {
   private readonly cancelFrame: (frameId: number) => void;
   private readonly now: () => number;
   private pending = '';
+  private pendingCharacters = 0;
   private pendingSince = 0;
   private frameId: number | null = null;
   private scheduleGeneration = 0;
@@ -141,6 +150,7 @@ export class AgentTextStreamPump {
     if (!delta) return;
     if (!this.pending) this.pendingSince = this.now();
     this.pending += delta;
+    this.pendingCharacters += countCodePoints(delta);
     this.ensureScheduled();
   }
 
@@ -201,9 +211,8 @@ export class AgentTextStreamPump {
 
   private commitFrame(timestamp: number): void {
     if (!this.pending) return;
-    const pendingCharacters = Array.from(this.pending).length;
     const decision = decideAgentTextStreamDrain({
-      pendingCharacters,
+      pendingCharacters: this.pendingCharacters,
       oldestAgeMs: Math.max(0, timestamp - this.pendingSince),
       finishing: this.finishing,
       reducedMotion: this.reducedMotion,
@@ -219,6 +228,10 @@ export class AgentTextStreamPump {
       decision.characters,
     );
     this.pending = remaining;
+    this.pendingCharacters = Math.max(
+      0,
+      this.pendingCharacters - decision.characters,
+    );
     this.lastCommitAt = timestamp;
     if (!remaining) {
       this.pendingSince = 0;
@@ -235,6 +248,7 @@ export class AgentTextStreamPump {
 
   private resetQueue(): void {
     this.pending = '';
+    this.pendingCharacters = 0;
     this.pendingSince = 0;
     this.lastCommitAt = null;
     this.finishing = false;

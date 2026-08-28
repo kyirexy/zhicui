@@ -37,27 +37,35 @@ test('常态流每次只排空小字符组', () => {
     oldestAgeMs: 32,
   }), {
     mode: 'smooth',
-    characters: 20,
-    intervalMs: 24,
+    characters: 3,
+    intervalMs: 40,
   });
 });
 
-test('队列过深或等待过久时进入追赶档', () => {
+test('普通 SSE 分片保持匀速，只有大积压或久候才进入追赶档', () => {
   assert.deepEqual(decideAgentTextStreamDrain({
-    pendingCharacters: 240,
+    pendingCharacters: 128,
+    oldestAgeMs: 40,
+  }), {
+    mode: 'smooth',
+    characters: 3,
+    intervalMs: 40,
+  });
+  assert.deepEqual(decideAgentTextStreamDrain({
+    pendingCharacters: 800,
     oldestAgeMs: 40,
   }), {
     mode: 'catch-up',
-    characters: 32,
-    intervalMs: 16,
+    characters: 34,
+    intervalMs: 24,
   });
   assert.deepEqual(decideAgentTextStreamDrain({
     pendingCharacters: 20,
-    oldestAgeMs: 1_300,
+    oldestAgeMs: 7_000,
   }), {
     mode: 'catch-up',
-    characters: 20,
-    intervalMs: 16,
+    characters: 16,
+    intervalMs: 24,
   });
 });
 
@@ -68,8 +76,8 @@ test('终态 drain 立即切换到快速追赶且保持单帧上限', () => {
     finishing: true,
   }), {
     mode: 'catch-up',
-    characters: 192,
-    intervalMs: 16,
+    characters: 256,
+    intervalMs: 24,
   });
   assert.equal(AGENT_TEXT_STREAM_DEFAULT_DRAIN_TIMEOUT_MS, 2_500);
 });
@@ -90,11 +98,11 @@ test('同一绘制帧前的多个 delta 只触发一次有界提交', () => {
   assert.equal(frames.count(), 1);
   now = 16;
   frames.run(now);
-  assert.deepEqual(commits, ['甲乙丙丁戊己庚辛']);
+  assert.deepEqual(commits, ['甲乙丙']);
 
   now = 32;
   frames.run(now);
-  assert.deepEqual(commits, ['甲乙丙丁戊己庚辛']);
+  assert.deepEqual(commits, ['甲乙丙']);
 });
 
 test('大量积压也保持有界提交，不会把证据正文整块塞进一帧', () => {
@@ -103,11 +111,11 @@ test('大量积压也保持有界提交，不会把证据正文整块塞进一�
     oldestAgeMs: 2_000,
   });
   assert.equal(decision.mode, 'catch-up');
-  assert.equal(decision.characters, 192);
-  assert.equal(decision.intervalMs, 16);
+  assert.equal(decision.characters, 256);
+  assert.equal(decision.intervalMs, 24);
 });
 
-test('六千字终态积压在 60Hz 下 1.5 秒内排空', async () => {
+test('六千字终态积压在 60Hz 下 0.9 秒内排空', async () => {
   const frames = createFrameHarness();
   const commits: string[] = [];
   let now = 0;
@@ -130,8 +138,30 @@ test('六千字终态积压在 60Hz 下 1.5 秒内排空', async () => {
   await drainPromise;
 
   assert.equal(commits.join(''), answer);
-  assert.ok(frameCount * 16 <= 1_500);
-  assert.ok(commits.every((chunk) => Array.from(chunk).length <= 192));
+  assert.ok(frameCount * 16 <= 900);
+  assert.ok(commits.every((chunk) => Array.from(chunk).length <= 256));
+});
+
+test('生产常见 128 字分片会连续展开约两秒而不是瞬间闪现', () => {
+  const frames = createFrameHarness();
+  const commits: string[] = [];
+  let now = 0;
+  const pump = new AgentTextStreamPump({
+    onCommit: (text) => commits.push(text),
+    scheduleFrame: (callback) => frames.schedule(callback),
+    cancelFrame: (id) => frames.cancel(id),
+    now: () => now,
+  });
+
+  pump.enqueue('流'.repeat(128));
+  while (frames.count() && now < 3_000) {
+    now += 16;
+    frames.run(now);
+  }
+
+  assert.equal(commits.join('').length, 128);
+  assert.ok(now >= 1_800 && now <= 2_200);
+  assert.ok(commits.every((chunk) => Array.from(chunk).length <= 3));
 });
 
 test('drain 等待所有帧完成后再允许 canonical 消息接管', async () => {

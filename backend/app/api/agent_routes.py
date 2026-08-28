@@ -45,6 +45,7 @@ from app.services import (
 
 
 _DURABLE_STREAM_POLL_SECONDS = 0.05
+_SSE_HEARTBEAT_SECONDS = 5.0
 
 
 router = APIRouter(prefix="/api/agent", tags=["video-agent"])
@@ -93,6 +94,20 @@ def _release_chat_charge_safely(db: Session, charge) -> None:
 
 def _sse_data(event: dict[str, Any]) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
+def _sse_headers() -> dict[str, str]:
+    """Headers that keep each yielded SSE frame observable end-to-end."""
+    return {
+        "Cache-Control": "no-cache, no-transform",
+        "Pragma": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+        # Compression middleware and some reverse proxies otherwise wait for a
+        # larger body before forwarding the first small event.
+        "Content-Encoding": "identity",
+        "X-Content-Type-Options": "nosniff",
+    }
 
 
 def _now_iso() -> str:
@@ -203,8 +218,8 @@ def _durable_turn_stream(
                     "message": turn.error_message or ("本次生成已停止" if turn.status == "cancelled" else "视频 Agent 暂时没有完成回答"),
                 })
                 return
-        if time.monotonic() - last_keepalive >= 15:
-            yield ": keep-alive\n\n"
+        if time.monotonic() - last_keepalive >= _SSE_HEARTBEAT_SECONDS:
+            yield f": heartbeat {int(time.time())}\n\n"
             last_keepalive = time.monotonic()
         # Persist first, then follow at low latency. The browser still applies
         # frame-level backpressure, so faster discovery does not create one
@@ -672,11 +687,7 @@ def stream_agent_message(
         return StreamingResponse(
             _durable_turn_stream(turn.id, str(current_user.id)),
             media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache, no-transform",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
+            headers=_sse_headers(),
         )
 
     user_id = str(current_user.id)
@@ -822,9 +833,9 @@ def stream_agent_message(
         })
         while True:
             try:
-                event = events.get(timeout=15)
+                event = events.get(timeout=_SSE_HEARTBEAT_SECONDS)
             except queue.Empty:
-                yield ": keep-alive\n\n"
+                yield f": heartbeat {int(time.time())}\n\n"
                 continue
             if event is None:
                 break
@@ -833,11 +844,7 @@ def stream_agent_message(
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+        headers=_sse_headers(),
     )
 
 
@@ -887,7 +894,7 @@ def resume_agent_turn_stream(
             initial_after_seq=after_seq,
         ),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
+        headers=_sse_headers(),
     )
 
 

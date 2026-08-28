@@ -260,7 +260,7 @@ fi
 
 echo "=== [5/6] 验证四份渠道清单 ==="
 cd "$ROOT"
-node scripts/verify-release-manifests.mjs
+node scripts/verify-release-manifests.mjs --platform=android
 
 echo "=== [6/6] 记录发行物 ==="
 if [[ "$PUBLISH" == "1" ]]; then

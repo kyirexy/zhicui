@@ -5,6 +5,13 @@ import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const platformArgument = process.argv.find((value) => value.startsWith('--platform='));
+const requestedPlatform = platformArgument?.slice('--platform='.length) || 'all';
+if (!['all', 'android', 'windows'].includes(requestedPlatform)) {
+  throw new Error('--platform 仅支持 all、android 或 windows');
+}
+const verifyAndroidArtifact = requestedPlatform !== 'windows';
+const verifyWindowsArtifact = requestedPlatform !== 'android';
 const downloadRoot = resolve(root, 'frontend/public/download');
 const durableDownloadRoot = process.env.ZHICUI_DOWNLOAD_ROOT
   ? resolve(process.env.ZHICUI_DOWNLOAD_ROOT)
@@ -83,7 +90,7 @@ for (const path of channelPaths) {
 }
 
 // 所有 available Windows 清单都必须能逐字节对应持久二进制与 Electron feed。
-for (const channel of ['beta', 'stable']) {
+for (const channel of verifyWindowsArtifact ? ['beta', 'stable'] : []) {
   const manifest = manifests.get(`windows:${channel}`);
   if (manifest.availability !== 'available') continue;
   const artifactName = basename(new URL(manifest.download_url).pathname);
@@ -114,18 +121,22 @@ for (const channel of ['beta', 'stable']) {
 // 当前仓库内 Android beta 产物必须与清单逐字节一致。
 const androidBeta = manifests.get('android:beta');
 const apkPath = resolve(downloadRoot, 'zhicui.apk');
-const apkStat = await stat(apkPath);
-assert(apkStat.size === androidBeta.size_bytes, 'Android beta size_bytes 与 APK 不一致');
-assert(await sha256(apkPath) === androidBeta.sha256.toLowerCase(), 'Android beta SHA-256 与 APK 不一致');
+if (verifyAndroidArtifact) {
+  const apkStat = await stat(apkPath);
+  assert(apkStat.size === androidBeta.size_bytes, 'Android beta size_bytes 与 APK 不一致');
+  assert(await sha256(apkPath) === androidBeta.sha256.toLowerCase(), 'Android beta SHA-256 与 APK 不一致');
+}
 
 // 旧清单是 beta 的兼容别名，禁止误指 stable。
 const legacyAndroid = await readJson('latest.json');
 const legacyWindows = await readJson('desktop-latest.json');
-const compatibilityAliases = [
-  [legacyAndroid, androidBeta, 'Android'],
-];
+const compatibilityAliases = verifyAndroidArtifact
+  ? [[legacyAndroid, androidBeta, 'Android']]
+  : [];
 // 持久 Windows 通道可独立于 Web runtime 发布；仅本地仓库校验旧 beta 别名。
-if (!durableDownloadRoot) compatibilityAliases.push([legacyWindows, manifests.get('windows:beta'), 'Windows']);
+if (verifyWindowsArtifact && !durableDownloadRoot) {
+  compatibilityAliases.push([legacyWindows, manifests.get('windows:beta'), 'Windows']);
+}
 for (const [legacy, current, label] of compatibilityAliases) {
   assert(legacy.channel === 'beta', `${label} 旧清单必须明确标记 beta`);
   assert(legacy.version === current.version, `${label} 旧清单版本与 beta 不一致`);

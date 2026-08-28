@@ -333,25 +333,25 @@ def extract_library_item(
                 try:
                     if item.get("provider") == "desktop-local":
                         media_url = normalize_ephemeral_media_url(ephemeral_media_url)
-                        if not media_url:
-                            video_info = video_extractor.parse_video_info(
-                                item["source_url"]
+                        if media_url:
+                            request_headers = {
+                                "Referer": "https://www.douyin.com/",
+                                "User-Agent": (
+                                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                    "Chrome/124.0.0.0 Safari/537.36"
+                                ),
+                            }
+                        else:
+                            # The local catalog stores stable metadata only.
+                            # Reuse the user's bound session instead of hitting
+                            # the risk-controlled public page for every item.
+                            media_url = douyin_library.companion_media_url(
+                                item["aweme_id"]
                             )
-                            media_url = str(
-                                video_info.get("download_url")
-                                or video_info.get("url")
-                                or ""
-                            ).strip()
-                        if not media_url:
-                            raise RuntimeError("抖音作品播放地址暂时无法解析")
-                        request_headers = {
-                            "Referer": "https://www.douyin.com/",
-                            "User-Agent": (
-                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                "Chrome/124.0.0.0 Safari/537.36"
-                            ),
-                        }
+                            request_headers = douyin_library.companion_headers(
+                                session_scope,
+                            )
                     else:
                         media_url = douyin_library.companion_media_url(
                             item["aweme_id"]

@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Link2, Loader2, AlertCircle, X, LogIn } from 'lucide-react';
+import { normalizeSingleLinkSubmission } from '@/lib/singleLinkImport';
 
 interface InputBarProps {
   onSubmit: (url: string) => void;
@@ -59,9 +60,9 @@ export default function InputBar({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmed = url.trim();
-    if (trimmed && !isLoading) {
-      onSubmit(trimmed);
+    const submittedValue = normalizeSingleLinkSubmission(url);
+    if (submittedValue && !isLoading) {
+      onSubmit(submittedValue);
     }
   };
 

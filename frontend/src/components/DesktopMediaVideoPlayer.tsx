@@ -26,7 +26,7 @@ interface DesktopMediaVideoPlayerProps {
   coverUrl: string;
   title: string;
   sourceUrl: string;
-  onRefreshMedia: () => Promise<void> | void;
+  onRefreshMedia: () => Promise<string | void> | string | void;
 }
 
 type MediaOrientation = 'unknown' | 'portrait' | 'square' | 'landscape';
@@ -55,6 +55,7 @@ export default function DesktopMediaVideoPlayer({
 }: DesktopMediaVideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const startedRef = useRef(false);
+  const automaticRetryRef = useRef(false);
   const videoDimensionsKnownRef = useRef(false);
   const [requested, setRequested] = useState(false);
   const [started, setStarted] = useState(false);
@@ -100,6 +101,7 @@ export default function DesktopMediaVideoPlayer({
     setRequested(false);
     setStarted(false);
     startedRef.current = false;
+    automaticRetryRef.current = false;
     videoDimensionsKnownRef.current = false;
     setFailed(false);
     setConfirmingRemove(false);
@@ -135,7 +137,13 @@ export default function DesktopMediaVideoPlayer({
       active = false;
       unsubscribe();
     };
-  }, [applyAsset, awemeId, mediaUrl]);
+  }, [applyAsset, awemeId]);
+
+  useEffect(() => {
+    if (asset.status !== 'cached' && !startedRef.current) {
+      setActiveMediaUrl(mediaUrl);
+    }
+  }, [asset.status, mediaUrl]);
 
   const saveToLocal = useCallback(async () => {
     const bridge = window.zhicuiDesktop;
@@ -186,6 +194,26 @@ export default function DesktopMediaVideoPlayer({
     }
   }, [applyAsset, awemeId, choosingDownload, coverUrl, mediaUrl, saveToLocal, title]);
 
+  const playResolvedUrl = (value: string) => {
+    setActiveMediaUrl(value);
+    window.setTimeout(() => {
+      const video = videoRef.current;
+      if (!video) return;
+      // Update the DOM source before load/play as well as React state.  This
+      // avoids a race where a zero-delay timer still sees the expired src
+      // while React is committing the refreshed capability.
+      video.src = value;
+      video.load();
+      const playback = video.play();
+      if (playback) {
+        void playback.catch(() => {
+          setRequested(false);
+          setFailed(true);
+        });
+      }
+    }, 0);
+  };
+
   const startPlayback = () => {
     if (requested) return;
     setRequested(true);
@@ -198,26 +226,45 @@ export default function DesktopMediaVideoPlayer({
     ) {
       void saveToLocal();
     }
+    // Keep play() synchronously inside the click so browser user activation is
+    // preserved. If the page has outlived the capability, onError refreshes it.
     const playback = videoRef.current?.play();
     if (playback) {
       void playback.catch(() => {
-        // onError handles network failures; browser policy failures keep the
-        // native control available for a second user gesture.
+        setRequested(false);
+        setFailed(true);
       });
     }
   };
 
-  const retryPlayback = async () => {
+  const retryPlayback = async (automatic = false, resumePlayback = true) => {
+    if (!automatic) automaticRetryRef.current = false;
     setRefreshing(true);
     setFailed(false);
     setRequested(false);
     setStarted(false);
     startedRef.current = false;
-    setActiveMediaUrl(asset.status === 'cached' && asset.videoUrl
-      ? asset.videoUrl
-      : mediaUrl);
     try {
-      await onRefreshMedia();
+      if (asset.status === 'cached' && asset.videoUrl) {
+        if (resumePlayback) {
+          setRequested(true);
+          playResolvedUrl(asset.videoUrl);
+        } else {
+          setActiveMediaUrl(asset.videoUrl);
+        }
+        return;
+      }
+      const refreshedUrl = await onRefreshMedia();
+      if (!refreshedUrl) {
+        setFailed(true);
+        return;
+      }
+      if (resumePlayback) {
+        setRequested(true);
+        playResolvedUrl(refreshedUrl);
+      } else {
+        setActiveMediaUrl(refreshedUrl);
+      }
     } finally {
       setRefreshing(false);
     }
@@ -246,6 +293,9 @@ export default function DesktopMediaVideoPlayer({
     ? asset.coverUrl
     : coverUrl;
   const isLocalPlayback = activeMediaUrl.startsWith('zhicui-media://');
+  const isDouyinSource = /(^|\.)douyin\.com\//i.test(
+    sourceUrl.replace(/^https?:\/\//i, ''),
+  ) || /(^|\.)iesdouyin\.com\//i.test(sourceUrl.replace(/^https?:\/\//i, ''));
   const progress = Math.max(0, Math.min(100, asset.percent || 0));
 
   return (
@@ -277,6 +327,17 @@ export default function DesktopMediaVideoPlayer({
               videoRef.current?.load();
               return;
             }
+            if (!automaticRetryRef.current) {
+              automaticRetryRef.current = true;
+              // Metadata preload can fail before the user presses play. In
+              // that case refresh silently without triggering autoplay; when
+              // playback had actually been requested, resume it once.
+              void retryPlayback(true, requested || startedRef.current);
+              return;
+            }
+            setRequested(false);
+            setStarted(false);
+            startedRef.current = false;
             setFailed(true);
           }}
           aria-label={`播放视频：${title}`}
@@ -336,12 +397,16 @@ export default function DesktopMediaVideoPlayer({
             <span>
               <WarningCircle size={21} weight="duotone" />
               <strong>视频暂时没有加载出来</strong>
-              <small>可以重新获取播放地址，知识文案和计划不会受影响。</small>
+              <small>
+                {isDouyinSource
+                  ? '可以重新读取；若仍失败，请到“同步视频”重新验证抖音账号。知识文案和计划不会受影响。'
+                  : '可以重新获取播放地址，知识文案和计划不会受影响。'}
+              </small>
               <span className={styles.failureActions}>
                 <button
                   type="button"
                   disabled={refreshing}
-                  onClick={() => void retryPlayback()}
+                  onClick={() => void retryPlayback(false, true)}
                 >
                   {refreshing ? (
                     <SpinnerGap size={14} className={styles.spin} />

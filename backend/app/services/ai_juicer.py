@@ -4939,7 +4939,52 @@ def extract_video_frames(
     import tempfile
     import os
 
+    scoped_video_path = ""
     try:
+        has_sidecar_scope = any(
+            str(key).lower() == "x-zhicui-scope"
+            for key in (request_headers or {})
+        )
+        if has_sidecar_scope:
+            # FFmpeg may forward custom headers across HTTP redirects. Materialize
+            # a bounded temporary input through a redirect-disabled loopback
+            # request so the per-user sidecar scope can never reach a CDN.
+            import requests
+            from app.services import douyin_library
+
+            if not douyin_library.is_trusted_companion_url(video_url_or_path):
+                return []
+            file_descriptor, scoped_video_path = tempfile.mkstemp(
+                prefix="zhicui-visual-",
+                suffix=".mp4",
+            )
+            os.close(file_descriptor)
+            total_bytes = 0
+            with requests.Session() as session:
+                session.trust_env = False
+                with session.get(
+                    video_url_or_path,
+                    headers=request_headers,
+                    stream=True,
+                    timeout=(10, 300),
+                    allow_redirects=False,
+                ) as response:
+                    if response.is_redirect or response.is_permanent_redirect:
+                        return []
+                    response.raise_for_status()
+                    with open(scoped_video_path, "wb") as output:
+                        for chunk in response.iter_content(chunk_size=1024 * 1024):
+                            if not chunk:
+                                continue
+                            total_bytes += len(chunk)
+                            if total_bytes > 800 * 1024 * 1024:
+                                return []
+                            output.write(chunk)
+            if total_bytes <= 0:
+                return []
+            video_url_or_path = scoped_video_path
+            request_headers = None
+
         bounded_frames = max(1, min(int(max_frames or 1), 8))
         header_blob = "".join(
             f"{key}: {value}\r\n"
@@ -4983,6 +5028,12 @@ def extract_video_frames(
         return frames
     except Exception:
         return []
+    finally:
+        if scoped_video_path:
+            try:
+                os.unlink(scoped_video_path)
+            except OSError:
+                pass
 
 
 _VISUAL_CHAT_SYSTEM_PROMPT = """\

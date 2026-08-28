@@ -170,7 +170,7 @@ class PlatformLibraryImportTests(unittest.TestCase):
         self.assertIn("完整内容", transcript)
         self.assertEqual(meta["transcript_source"], "cloud-asr")
         self.assertTrue(meta["speech_ready"])
-        self.assertEqual(meta["media_url"], "")
+        self.assertNotIn("media_url", meta)
 
     def test_bilibili_caption_only_result_is_not_published_as_complete(self) -> None:
         info, _transcript, meta = self.bili_result()
@@ -312,6 +312,7 @@ class PlatformLibraryImportTests(unittest.TestCase):
         self.assertIn("这是视频里说的话", transcript)
         self.assertEqual(meta["transcript_source"], "cloud-asr")
         self.assertTrue(meta["speech_ready"])
+        self.assertNotIn("media_url", meta)
 
     def test_xhs_sidecar_fallback_is_explicitly_degraded(self) -> None:
         fallback = {

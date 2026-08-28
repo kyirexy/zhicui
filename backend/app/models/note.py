@@ -9,6 +9,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.core.media_reference import sanitized_source_meta, stable_note_source
 
 
 def _utcnow() -> datetime:
@@ -73,17 +74,20 @@ class Note(Base):
                 ai = json.loads(self.ai_summary)
             except (json.JSONDecodeError, TypeError):
                 ai = {}
-        source_meta = ai.get("source_meta")
-        if not isinstance(source_meta, dict):
-            source_meta = {}
+        source_meta = sanitized_source_meta(ai.get("source_meta"))
+        stable_source_url = stable_note_source(
+            video_id=self.video_id,
+            video_url=self.video_url,
+            source_meta=source_meta,
+        )
 
         return {
             "id": self.id,
             "video_id": self.video_id,
             "title": self.video_title,
             "video_title": self.video_title,
-            "video_url": self.video_url,
-            "source_url": source_meta.get("source_url") or self.video_url,
+            "video_url": stable_source_url,
+            "source_url": stable_source_url,
             "cover_url": source_meta.get("cover_url") or "",
             "author_name": source_meta.get("author_name") or "",
             "platform": source_meta.get("platform") or "",
@@ -94,7 +98,9 @@ class Note(Base):
             "caption": source_meta.get("caption") or "",
             "tags": source_meta.get("tags") or [],
             "media_type": source_meta.get("media_type") or "",
-            "media_url": source_meta.get("media_url") or "",
+            # Upstream play URLs are never a durable Note field. Authenticated
+            # workspace responses mint a short-lived same-origin capability.
+            "media_url": "",
             "transcript_source": source_meta.get("transcript_source") or "",
             "speech_ready": bool(source_meta.get("speech_ready")),
             "degraded": bool(source_meta.get("degraded")),

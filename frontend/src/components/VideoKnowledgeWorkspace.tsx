@@ -144,28 +144,33 @@ export default function VideoKnowledgeWorkspace() {
     }));
   }, [routeAgentThreadId]);
 
-  const loadWorkspace = useCallback(async (refreshMedia = false) => {
+  const loadWorkspace = useCallback(async (
+    refreshMedia = false,
+  ): Promise<string | undefined> => {
     const requestId = workspaceRequestRef.current + 1;
     workspaceRequestRef.current = requestId;
     if (!awemeId && !importedNoteId) {
-      if (requestId !== workspaceRequestRef.current) return;
+      if (requestId !== workspaceRequestRef.current) return undefined;
       setError('缺少视频标识，请从视频资料重新打开。');
       setLoading(false);
-      return;
+      return undefined;
     }
-    setLoading(true);
+    if (!refreshMedia) setLoading(true);
     setError('');
     const response = importedNoteId
       ? await getPlatformLibraryItem(importedNoteId, refreshMedia)
       : await getDouyinLibraryItem(awemeId);
-    if (requestId !== workspaceRequestRef.current) return;
+    if (requestId !== workspaceRequestRef.current) return undefined;
     if (response.success && response.data) {
       setWorkspace(response.data);
+      if (!refreshMedia) setLoading(false);
+      return response.data.item.media_url || undefined;
     } else {
-      setWorkspace(null);
+      if (!refreshMedia) setWorkspace(null);
       setError(response.error || '这个视频暂时无法打开');
     }
-    setLoading(false);
+    if (!refreshMedia) setLoading(false);
+    return undefined;
   }, [awemeId, importedNoteId]);
 
   useEffect(() => {
@@ -365,7 +370,7 @@ export default function VideoKnowledgeWorkspace() {
               />
             ) : item.media_url ? (
               <DesktopMediaVideoPlayer
-                key={item.media_url}
+                key={`${item.platform || 'video'}:${item.aweme_id}`}
                 awemeId={item.aweme_id}
                 mediaUrl={item.media_url}
                 coverUrl={item.cover_proxy_url || item.cover_url}
@@ -609,7 +614,9 @@ export default function VideoKnowledgeWorkspace() {
                       noteId={note.id}
                       hasSummary={note.ai_initialized && !summaryGenerationFailed}
                       existing={note.detailed_video_analysis}
-                      onCompleted={loadWorkspace}
+                      onCompleted={async () => {
+                        await loadWorkspace();
+                      }}
                     />
                   )}
               </section>

@@ -15,7 +15,7 @@ import secrets
 import time
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import requests
 
@@ -105,7 +105,44 @@ def _connector_error_from_response(
 
 
 def _base_url() -> str:
-    return settings.DOUYIN_DOWNLOADER_URL.strip().rstrip("/")
+    value = settings.DOUYIN_DOWNLOADER_URL.strip().rstrip("/")
+    if not value:
+        return ""
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as exc:
+        raise DouyinLibraryError("抖音收藏连接器地址无效") from exc
+    if (
+        parsed.scheme != "http"
+        or (parsed.hostname or "").lower() not in {"127.0.0.1", "::1"}
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or port is None
+    ):
+        raise DouyinLibraryError("抖音收藏连接器必须使用本机回环地址")
+    return value
+
+
+def is_trusted_companion_url(value: object) -> bool:
+    """Return whether a request target belongs to the configured loopback sidecar."""
+    try:
+        base = urlsplit(_base_url())
+        target = urlsplit(str(value or "").strip())
+        base_port = base.port
+        target_port = target.port
+    except (DouyinLibraryError, ValueError):
+        return False
+    return bool(
+        target.scheme == base.scheme == "http"
+        and (target.hostname or "").lower() == (base.hostname or "").lower()
+        and target_port == base_port
+        and not target.username
+        and not target.password
+        and not target.fragment
+    )
 
 
 def _scope_headers(session_scope: str) -> dict[str, str]:
@@ -139,7 +176,13 @@ def _request(
                     else None
                 ),
                 timeout=timeout,
+                allow_redirects=False,
             )
+            if response.is_redirect or response.is_permanent_redirect:
+                raise DouyinLibraryError(
+                    "抖音收藏连接器返回了不安全的重定向",
+                    code="connector_error",
+                )
             if not response.ok:
                 try:
                     payload = response.json()
@@ -174,7 +217,10 @@ def _request_qr(path: str, session_scope: str) -> dict[str, Any]:
                 f"{base_url}{path}",
                 headers=_scope_headers(session_scope),
                 timeout=8.0,
+                allow_redirects=False,
             )
+            if response.is_redirect or response.is_permanent_redirect:
+                raise DouyinLibraryError("抖音登录连接器返回了不安全的重定向")
             response.raise_for_status()
             content_type = response.headers.get("content-type", "").split(";", 1)[0]
             if content_type != "image/png":
@@ -431,7 +477,11 @@ def gallery_image_data_urls(
                     headers=headers,
                     stream=True,
                     timeout=(5, 20),
+                    allow_redirects=False,
                 )
+                if response.is_redirect or response.is_permanent_redirect:
+                    response.close()
+                    raise DouyinLibraryError("抖音图文连接器返回了不安全的重定向")
                 response.raise_for_status()
                 content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
                 if content_type not in {
@@ -472,8 +522,23 @@ def gallery_image_data_urls(
     return images
 
 
-def _media_signature(aweme_id: str, binding_ref: str, expires: int) -> str:
-    payload = f"{aweme_id}:{binding_ref}:{expires}".encode("utf-8")
+def _capability_signature(
+    kind: str,
+    aweme_id: str,
+    binding_ref: str,
+    expires: int,
+    *,
+    image_index: int | None = None,
+) -> str:
+    """Sign one exact resource class so a cover token cannot open a video."""
+    clean_kind = str(kind or "").strip().lower()
+    if clean_kind not in {"media", "cover", "gallery"}:
+        raise DouyinLibraryError("抖音媒体能力类型无效")
+    index_part = str(max(0, int(image_index))) if clean_kind == "gallery" else "-"
+    payload = (
+        f"douyin-capability:{clean_kind}:{aweme_id}:{binding_ref}:"
+        f"{index_part}:{expires}"
+    ).encode("utf-8")
     return hmac.new(
         settings.JWT_SECRET.encode("utf-8"),
         payload,
@@ -487,7 +552,9 @@ def public_media_url(aweme_id: str, binding_ref: str) -> str:
     clean_binding_ref = str(binding_ref or "").strip()
     if not _BINDING_REF_PATTERN.fullmatch(clean_binding_ref):
         raise DouyinLibraryError("抖音账号绑定标识无效")
-    signature = _media_signature(aweme_id, clean_binding_ref, expires)
+    signature = _capability_signature(
+        "media", aweme_id, clean_binding_ref, expires,
+    )
     return (
         f"/api/library/douyin/media/{quote(aweme_id, safe='')}"
         f"?binding={quote(clean_binding_ref, safe='')}"
@@ -501,7 +568,9 @@ def public_cover_url(aweme_id: str, binding_ref: str) -> str:
     clean_binding_ref = str(binding_ref or "").strip()
     if not _BINDING_REF_PATTERN.fullmatch(clean_binding_ref):
         raise DouyinLibraryError("抖音账号绑定标识无效")
-    signature = _media_signature(aweme_id, clean_binding_ref, expires)
+    signature = _capability_signature(
+        "cover", aweme_id, clean_binding_ref, expires,
+    )
     return (
         f"/api/library/douyin/cover/{quote(aweme_id, safe='')}"
         f"?binding={quote(clean_binding_ref, safe='')}"
@@ -519,10 +588,17 @@ def public_gallery_image_url(
     clean_binding_ref = str(binding_ref or "").strip()
     if not _BINDING_REF_PATTERN.fullmatch(clean_binding_ref):
         raise DouyinLibraryError("抖音账号绑定标识无效")
-    signature = _media_signature(aweme_id, clean_binding_ref, expires)
+    safe_image_index = max(0, int(image_index))
+    signature = _capability_signature(
+        "gallery",
+        aweme_id,
+        clean_binding_ref,
+        expires,
+        image_index=safe_image_index,
+    )
     return (
         f"/api/library/douyin/gallery/{quote(aweme_id, safe='')}"
-        f"/{max(0, int(image_index))}"
+        f"/{safe_image_index}"
         f"?binding={quote(clean_binding_ref, safe='')}"
         f"&expires={expires}&signature={signature}"
     )
@@ -533,18 +609,54 @@ def verify_media_signature(
     binding_ref: str,
     expires: int,
     signature: str,
-    *,
-    allow_expired: bool = False,
 ) -> bool:
     now = int(time.time())
-    if (
-        (not allow_expired and expires < now)
-        or expires > now + _MEDIA_URL_TTL_SECONDS + 60
-    ):
+    if expires < now or expires > now + _MEDIA_URL_TTL_SECONDS + 60:
         return False
     if not _BINDING_REF_PATTERN.fullmatch(str(binding_ref or "").strip()):
         return False
-    expected = _media_signature(aweme_id, binding_ref, expires)
+    expected = _capability_signature(
+        "media", aweme_id, binding_ref, expires,
+    )
+    return hmac.compare_digest(expected, signature)
+
+
+def verify_cover_signature(
+    aweme_id: str,
+    binding_ref: str,
+    expires: int,
+    signature: str,
+) -> bool:
+    now = int(time.time())
+    if expires < now or expires > now + _MEDIA_URL_TTL_SECONDS + 60:
+        return False
+    if not _BINDING_REF_PATTERN.fullmatch(str(binding_ref or "").strip()):
+        return False
+    expected = _capability_signature(
+        "cover", aweme_id, binding_ref, expires,
+    )
+    return hmac.compare_digest(expected, signature)
+
+
+def verify_gallery_signature(
+    aweme_id: str,
+    binding_ref: str,
+    image_index: int,
+    expires: int,
+    signature: str,
+) -> bool:
+    now = int(time.time())
+    if expires < now or expires > now + _MEDIA_URL_TTL_SECONDS + 60:
+        return False
+    if not _BINDING_REF_PATTERN.fullmatch(str(binding_ref or "").strip()):
+        return False
+    expected = _capability_signature(
+        "gallery",
+        aweme_id,
+        binding_ref,
+        expires,
+        image_index=image_index,
+    )
     return hmac.compare_digest(expected, signature)
 
 

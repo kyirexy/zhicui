@@ -1,6 +1,48 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildBilibiliEmbedUrl, buildVideoDetailHref, shouldOpenExtractedVideo } from './singleLinkImport.ts';
+import {
+  buildBilibiliEmbedUrl,
+  buildVideoDetailHref,
+  normalizeSingleLinkSubmission,
+  shouldOpenExtractedVideo,
+} from './singleLinkImport.ts';
+
+test('submits a plain video URL without changing it', () => {
+  const url = 'https://www.douyin.com/video/7672579366093622537?from=copy';
+  assert.equal(normalizeSingleLinkSubmission(`  ${url}  `), url);
+});
+
+test('extracts the first URL from a complete Douyin share message', () => {
+  assert.equal(
+    normalizeSingleLinkSubmission('3.81 复制打开抖音，看看【作者的作品】 https://v.douyin.com/AbCdEf12/ 复制此链接'),
+    'https://v.douyin.com/AbCdEf12/',
+  );
+});
+
+test('removes share punctuation immediately after the URL', () => {
+  assert.equal(
+    normalizeSingleLinkSubmission('作品链接：https://v.douyin.com/AbCdEf12/，'),
+    'https://v.douyin.com/AbCdEf12/',
+  );
+});
+
+test('uses the first URL when a share message contains more than one', () => {
+  assert.equal(
+    normalizeSingleLinkSubmission('先看 https://v.douyin.com/first/ 再看 https://v.douyin.com/second/'),
+    'https://v.douyin.com/first/',
+  );
+});
+
+test('prefers the supported video URL when unrelated links appear first', () => {
+  assert.equal(
+    normalizeSingleLinkSubmission('帮助页 https://example.com/help 作品 https://v.douyin.com/AbCdEf12/'),
+    'https://v.douyin.com/AbCdEf12/',
+  );
+});
+
+test('preserves non-URL input for the backend friendly validation response', () => {
+  assert.equal(normalizeSingleLinkSubmission('  这是一段没有链接的分享文案  '), '这是一段没有链接的分享文案');
+});
 
 test('builds an encoded video detail route from the saved note id', () => {
   assert.equal(buildVideoDetailHref(' note / 42 '), '/library/detail?note=note%20%2F%2042');

@@ -62,11 +62,11 @@ class SingleLinkStreamPreviewTests(unittest.TestCase):
         self.assertEqual(result["id"], "note-1")
         self.assertFalse(plan_created)
         source_meta = captured["ai_result"]["source_meta"]
-        self.assertEqual(source_meta["media_url"], video_info["download_url"])
+        self.assertNotIn("media_url", source_meta)
         self.assertEqual(source_meta["source_url"], video_info["source_url"])
         self.assertEqual(source_meta["author_name"], "作者")
 
-    def test_legacy_note_media_falls_back_to_stored_video_url(self) -> None:
+    def test_legacy_note_never_returns_the_stored_cdn_url(self) -> None:
         note = SimpleNamespace(
             id="note-legacy",
             video_id="123",
@@ -80,7 +80,9 @@ class SingleLinkStreamPreviewTests(unittest.TestCase):
             to_dict=lambda: {"created_at": "", "card_type": "general"},
         )
         item = serialize_item(note)
-        self.assertEqual(item["media_url"], note.video_url)
+        self.assertEqual(item["media_url"], "")
+        self.assertEqual(item["source_url"], "")
+        self.assertNotIn(note.video_url, str(item))
 
 
 if __name__ == "__main__":

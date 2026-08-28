@@ -13,7 +13,7 @@ import uuid
 import wave
 from datetime import datetime, timezone
 from typing import Any, Literal
-from urllib.parse import unquote, urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.auth import get_current_user, get_current_user_optional, get_current_admin
+from app.core.media_reference import sanitized_source_meta
 from app.models.note import Note
 from app.models.user import (
     User as UserModel,
@@ -84,10 +85,112 @@ def _safe_extraction_video_preview(
         "video_id": str(video_info.get("video_id") or ""),
         "platform": platform,
         "source_url": source_url,
-        "media_url": str(video_info.get("download_url") or video_info.get("url") or ""),
-        "cover_url": str(video_info.get("cover_url") or video_info.get("thumbnail") or ""),
+        "media_url": str(
+            video_info.get("preview_media_url")
+            or video_info.get("download_url")
+            or video_info.get("url")
+            or ""
+        ),
+        "cover_url": str(
+            video_info.get("preview_cover_url")
+            or video_info.get("cover_url")
+            or video_info.get("thumbnail")
+            or ""
+        ),
         "author_name": str(video_info.get("author_name") or video_info.get("author") or ""),
     }
+
+
+def _safe_video_parse_error(exc: Exception) -> str:
+    """Map connector failures to messages that do not expose internals."""
+    if isinstance(exc, (video_extractor.VideoExtractionError, NotImplementedError)):
+        return str(exc)
+    return "视频链接暂时无法解析，请检查链接是否正确，稍后重试。"
+
+
+def _recover_bound_douyin_video(
+    db: Session,
+    *,
+    user_id: str,
+    error: video_extractor.VideoMetadataUnavailableError,
+) -> tuple[dict[str, Any], str, dict[str, str]] | None:
+    """Recover one public-page failure through the user's existing sidecar.
+
+    Only stable metadata and signed same-origin preview capabilities leave this
+    helper. The loopback media URL and scoped header stay request-local and are
+    passed directly to ASR; neither is added to ``source_meta`` or persisted.
+    """
+    aweme_id = str(getattr(error, "item_id", "") or "").strip()
+    if not aweme_id.isdigit() or not 8 <= len(aweme_id) <= 32:
+        return None
+    binding = douyin_binding_service.get_by_user(db, user_id)
+    if (
+        binding is None
+        or str(binding.status or "") != "connected"
+        or int(binding.cookie_count or 0) <= 0
+    ):
+        return None
+
+    manifest_item: dict[str, Any] | None = None
+    try:
+        manifest_item = douyin_library.get_item(
+            binding.session_scope,
+            binding.id,
+            aweme_id,
+        )
+    except douyin_library.DouyinLibraryError:
+        # A work need not have been synchronized into the manifest. The media
+        # endpoint can still resolve it with this user's bound session.
+        manifest_item = None
+    if str((manifest_item or {}).get("media_type") or "video") == "gallery":
+        return None
+
+    caption = str((manifest_item or {}).get("caption") or "").strip()
+    title = str((manifest_item or {}).get("title") or "").strip()
+    if not title:
+        title = caption.splitlines()[0].strip() if caption else f"抖音作品 {aweme_id}"
+    video_info: dict[str, Any] = {
+        "video_id": aweme_id,
+        "title": title[:512],
+        "platform": "douyin",
+        "source_url": f"https://www.douyin.com/video/{aweme_id}",
+        "author_name": str((manifest_item or {}).get("author_name") or "").strip(),
+        "preview_media_url": douyin_library.public_media_url(
+            aweme_id,
+            binding.id,
+        ),
+        "preview_cover_url": douyin_library.public_cover_url(
+            aweme_id,
+            binding.id,
+        ),
+    }
+    return (
+        video_info,
+        douyin_library.companion_media_url(aweme_id),
+        douyin_library.companion_headers(binding.session_scope),
+    )
+
+
+def _mint_douyin_item_capabilities(
+    item: dict[str, Any],
+    binding_ref: str,
+) -> dict[str, Any]:
+    """Attach fresh response-only capabilities for one Douyin catalog item."""
+    aweme_id = str(item.get("aweme_id") or item.get("id") or "").strip()
+    if not aweme_id:
+        return item
+    if str(item.get("media_type") or "video") != "gallery":
+        item["media_url"] = douyin_library.public_media_url(
+            aweme_id,
+            binding_ref,
+        )
+    # The sidecar resolves a fresh cover by aweme id.  Older local snapshots
+    # therefore get a usable cover even when they never stored an upstream URL.
+    item["cover_proxy_url"] = douyin_library.public_cover_url(
+        aweme_id,
+        binding_ref,
+    )
+    return item
 
 
 def _transcript_progress_payload(
@@ -147,72 +250,99 @@ def _cover_placeholder_response() -> Response:
     )
 
 
-def _proxy_douyin_image(target_url: str, session_scope: str) -> Response:
-    """Read one loopback image proxy with bounded buffering and browser caching."""
-    cache_key = f"{session_scope}:{target_url}"
-    cached = image_memory_cache.get(cache_key)
-    if cached is not None:
-        return Response(
-            content=cached.content,
-            media_type=cached.content_type,
-            headers={
-                "Cache-Control": "private, max-age=1800, stale-while-revalidate=60",
-                "X-Content-Type-Options": "nosniff",
-                "X-Zhicui-Image-Cache": "hit",
-            },
-        )
-    try:
-        response = http_requests.get(
-            target_url,
-            headers={
-                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-                "Accept-Encoding": "identity",
-                "Referer": "https://www.douyin.com/",
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-                **douyin_library.companion_headers(session_scope),
-            },
-            stream=True,
-            timeout=(5, 45),
-        )
-        response.raise_for_status()
-    except Exception:
-        return _cover_placeholder_response()
+def _proxy_douyin_image(
+    target_url: str,
+    session_scope: str,
+    *,
+    fallback_url: str = "",
+) -> Response:
+    """Try the fresh loopback cover, then an allowlisted public CDN hint.
 
-    content_type = response.headers.get("Content-Type", "image/jpeg")
-    if not content_type.lower().startswith("image/"):
-        response.close()
-        return _cover_placeholder_response()
-    try:
-        chunks: list[bytes] = []
-        total = 0
-        for chunk in response.iter_content(chunk_size=64 * 1024):
-            if not chunk:
+    The scoped sidecar header is attached only to the exact configured
+    loopback origin. Redirects are never followed, so it cannot escape to an
+    upstream CDN. The persisted CDN URL is intentionally credential-free.
+    """
+    for candidate in dict.fromkeys((target_url, fallback_url)):
+        if not candidate:
+            continue
+        trusted_loopback = douyin_library.is_trusted_companion_url(candidate)
+        if (
+            not trusted_loopback
+            and not platform_library_service.validated_douyin_image_target(candidate)
+        ):
+            continue
+        cache_key = (
+            f"douyin-sidecar:{session_scope}:{candidate}"
+            if trusted_loopback
+            else f"douyin-public:{candidate}"
+        )
+        cached = image_memory_cache.get(cache_key)
+        if cached is not None:
+            return Response(
+                content=cached.content,
+                media_type=cached.content_type,
+                headers={
+                    "Cache-Control": "private, max-age=1800, stale-while-revalidate=60",
+                    "X-Content-Type-Options": "nosniff",
+                    "X-Zhicui-Image-Cache": "hit",
+                },
+            )
+        headers = {
+            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+            "Accept-Encoding": "identity",
+            "Referer": "https://www.douyin.com/",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+        }
+        if trusted_loopback:
+            headers.update(douyin_library.companion_headers(session_scope))
+        response = None
+        try:
+            response = http_requests.get(
+                candidate,
+                headers=headers,
+                stream=True,
+                timeout=(5, 45),
+                allow_redirects=False,
+            )
+            if response.is_redirect or response.is_permanent_redirect:
                 continue
-            total += len(chunk)
-            if total > _COVER_MAX_BYTES:
-                return _cover_placeholder_response()
-            chunks.append(chunk)
-        image_bytes = b"".join(chunks)
-    except Exception:
-        return _cover_placeholder_response()
-    finally:
-        response.close()
-    if not image_bytes:
-        return _cover_placeholder_response()
-    image_memory_cache.put(cache_key, content_type, image_bytes)
-    return Response(
-        content=image_bytes,
-        media_type=content_type,
-        headers={
-            "Cache-Control": "private, max-age=1800, stale-while-revalidate=60",
-            "X-Content-Type-Options": "nosniff",
-            "X-Zhicui-Image-Cache": "miss",
-        },
-    )
+            response.raise_for_status()
+            content_type = response.headers.get("Content-Type", "image/jpeg").split(";", 1)[0]
+            if not content_type.lower().startswith("image/"):
+                continue
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > _COVER_MAX_BYTES:
+                    chunks = []
+                    break
+                chunks.append(chunk)
+            image_bytes = b"".join(chunks)
+            if not image_bytes:
+                continue
+            image_memory_cache.put(cache_key, content_type, image_bytes)
+            return Response(
+                content=image_bytes,
+                media_type=content_type,
+                headers={
+                    "Cache-Control": "private, max-age=1800, stale-while-revalidate=60",
+                    "X-Content-Type-Options": "nosniff",
+                    "X-Zhicui-Image-Cache": "miss",
+                },
+            )
+        except Exception:
+            continue
+        finally:
+            if response is not None:
+                response.close()
+    return _cover_placeholder_response()
 
 
 def _proxy_bilibili_image(target_url: str) -> Response:
@@ -286,6 +416,94 @@ def _proxy_bilibili_image(target_url: str) -> Response:
             "X-Content-Type-Options": "nosniff",
             "X-Zhicui-Image-Cache": "miss",
         },
+    )
+
+
+def _proxy_short_lived_media(
+    request: Request,
+    target_url: str,
+    request_headers: dict[str, str],
+    *,
+    platform: str,
+    trusted_loopback: bool = False,
+) -> StreamingResponse:
+    """Stream one freshly resolved target without exposing or persisting it."""
+    headers = {
+        "Accept": "*/*",
+        "Accept-Encoding": "identity",
+        **request_headers,
+    }
+    range_header = request.headers.get("range")
+    if range_header:
+        headers["Range"] = range_header
+
+    current_url = target_url
+    response = None
+    try:
+        for _ in range(4):
+            if trusted_loopback:
+                if not douyin_library.is_trusted_companion_url(current_url):
+                    raise RuntimeError("unexpected media proxy target")
+            elif not platform_library_service.validated_media_target(
+                current_url,
+                platform,
+            ):
+                raise RuntimeError("unsupported media target")
+            response = http_requests.get(
+                current_url,
+                headers=headers,
+                stream=True,
+                timeout=(10, 600),
+                allow_redirects=False,
+            )
+            if response.status_code not in {301, 302, 303, 307, 308}:
+                break
+            location = response.headers.get("Location", "")
+            response.close()
+            response = None
+            # Loopback companions must stream the bytes themselves. External
+            # redirects are followed only while every hop stays allowlisted.
+            if trusted_loopback or not location:
+                raise RuntimeError("unexpected media redirect")
+            current_url = urljoin(current_url, location)
+        if response is None:
+            raise RuntimeError("media response unavailable")
+        response.raise_for_status()
+        content_type = response.headers.get("Content-Type", "video/mp4").split(";", 1)[0]
+        if not content_type.startswith(("video/", "audio/")) and content_type != "application/octet-stream":
+            raise RuntimeError("unexpected media content type")
+    except Exception as exc:
+        if response is not None:
+            response.close()
+        raise HTTPException(
+            status_code=502,
+            detail="视频临时流读取失败，请重新获取播放地址",
+        ) from exc
+
+    response_headers = {
+        "Cache-Control": "private, no-store",
+        "Accept-Ranges": response.headers.get("Accept-Ranges", "bytes"),
+        "X-Accel-Buffering": "no",
+        "X-Content-Type-Options": "nosniff",
+    }
+    for name in ("Content-Length", "Content-Range"):
+        value = response.headers.get(name)
+        if value:
+            response_headers[name] = value
+
+    def body():
+        try:
+            for chunk in response.iter_content(chunk_size=256 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            response.close()
+
+    return StreamingResponse(
+        body(),
+        status_code=response.status_code,
+        media_type=content_type,
+        headers=response_headers,
     )
 
 
@@ -614,25 +832,24 @@ def _save_generated_note(
 ) -> tuple[dict[str, Any], bool]:
     """Persist one generated note and its optional plan in a single code path."""
     ai_result = dict(ai_result)
-    existing_source_meta = ai_result.get("source_meta")
-    if not isinstance(existing_source_meta, dict):
-        existing_source_meta = {}
+    existing_source_meta = sanitized_source_meta(ai_result.get("source_meta"))
     platform = str(video_info.get("platform") or "").strip()
-    media_url = str(video_info.get("download_url") or video_info.get("url") or "").strip()
     ai_result["source_meta"] = {
         "source_kind": "single-link",
         "platform": platform,
         "source_url": str(video_info.get("source_url") or "").strip(),
-        "media_url": media_url,
-        "media_type": "video",
+        "media_type": str(video_info.get("media_type") or "video").strip(),
         "cover_url": str(video_info.get("cover_url") or video_info.get("thumbnail") or "").strip(),
         "author_name": str(video_info.get("author_name") or video_info.get("author") or "").strip(),
         "source_mode": "import",
         **existing_source_meta,
     }
+    durable_video_info = dict(video_info)
+    durable_video_info.pop("preview_media_url", None)
+    durable_video_info.pop("preview_cover_url", None)
     note = note_service.create_note(
         db,
-        video_info,
+        durable_video_info,
         transcript,
         ai_result,
         user_id,
@@ -980,10 +1197,13 @@ def get_video_info(
 ) -> dict:
     """Parse a video link and return metadata without downloading."""
     try:
-        info = video_extractor.parse_video_info(body.url)
+        source_url = video_extractor.normalize_share_url(body.url)
+        info = video_extractor.parse_video_info(source_url)
         return _ok(info)
     except Exception as exc:
-        return _err(f"解析视频链接失败: {exc}")
+        if not isinstance(exc, (video_extractor.VideoExtractionError, NotImplementedError)):
+            traceback.print_exc()
+        return _err(_safe_video_parse_error(exc))
 
 
 @router.post("/api/extract")
@@ -994,21 +1214,24 @@ def extract(
 ) -> dict:
     """Full pipeline: parse -> transcribe -> AI -> save -> return note."""
     try:
-        platform = _detect_platform(body.url)
+        source_url = video_extractor.normalize_share_url(body.url)
+        platform = _detect_platform(source_url)
 
         # ── Xiaohongshu path: note content IS the transcript ──────────────
         if platform == "xiaohongshu":
             from app.services.xhs_extractor import parse_xhs_note, extract_xhs_content
             import os as _os
             cookie = _os.environ.get('XHS_COOKIE', '')
-            note_data = parse_xhs_note(body.url, cookie=cookie)
+            note_data = parse_xhs_note(source_url, cookie=cookie)
             video_info = {
                 "video_id": note_data.get("note_id", ""),
                 "title": note_data.get("title", "小红书笔记"),
                 "download_url": "",
+                "source_url": source_url,
+                "media_type": note_data.get("type") or "image",
                 "platform": "xiaohongshu",
             }
-            transcript = extract_xhs_content(body.url, cookie=cookie)
+            transcript = extract_xhs_content(source_url, cookie=cookie)
 
             if not transcript or not transcript.strip():
                 return _err("未能从小红书笔记中提取到文本内容。")
@@ -1037,11 +1260,12 @@ def extract(
 
         # ── WeChat path: article content IS the transcript ──────────────
         if platform == "wechat":
-            article = extract_wechat_article(body.url)
+            article = extract_wechat_article(source_url)
             video_info = {
                 "video_id": article["video_id"],
                 "title": article["title"],
                 "download_url": article["download_url"],
+                "source_url": source_url,
                 "platform": "wechat",
             }
             transcript = article["content"]
@@ -1073,8 +1297,24 @@ def extract(
 
         # ── Video path (Douyin / Bilibili) ──────────────────────────────
         # 1. Parse video metadata
-        video_info = video_extractor.parse_video_info(body.url)
-        video_info["source_url"] = body.url
+        sidecar_media_url = ""
+        sidecar_media_headers: dict[str, str] | None = None
+        try:
+            video_info = video_extractor.parse_video_info(source_url)
+        except video_extractor.VideoMetadataUnavailableError as exc:
+            recovery = (
+                _recover_bound_douyin_video(
+                    db,
+                    user_id=current_user.id,
+                    error=exc,
+                )
+                if platform == "douyin"
+                else None
+            )
+            if recovery is None:
+                raise
+            video_info, sidecar_media_url, sidecar_media_headers = recovery
+        video_info.setdefault("source_url", source_url)
         video_info.setdefault("platform", platform)
 
         # 2. Extract transcript (with fallback)
@@ -1082,22 +1322,41 @@ def extract(
 
         # Try primary ASR (SiliconFlow/DashScope) — config from DB (admin-tunable)
         asr_cfg = settings_service.get_asr_config(db)
-        if asr_cfg["api_key"]:
+        if sidecar_media_url:
             try:
-                transcript = video_extractor.extract_transcript(
-                    body.url,
+                transcript = video_extractor.extract_media_url_transcript(
+                    sidecar_media_url,
                     asr_cfg["api_key"],
                     asr_cfg["api_base_url"],
                     asr_cfg["model"],
+                    request_headers=sidecar_media_headers,
+                )
+            except Exception:
+                traceback.print_exc()
+                return _err(
+                    "已通过绑定账号找到该作品，但视频流暂时无法读取。"
+                    "请稍后重试，暂时不要连续解析。"
+                )
+        elif asr_cfg["api_key"]:
+            try:
+                transcript = video_extractor.extract_transcript(
+                    source_url,
+                    asr_cfg["api_key"],
+                    asr_cfg["api_base_url"],
+                    asr_cfg["model"],
+                    video_info=video_info,
                 )
             except Exception:
                 traceback.print_exc()
                 # Fall through to local ASR
 
         # Fallback: local yt-dlp + faster-whisper
-        if not transcript or not transcript.strip():
+        if not sidecar_media_url and (not transcript or not transcript.strip()):
             try:
-                transcript = video_extractor.fallback_local_asr(body.url)
+                transcript = video_extractor.fallback_local_asr(
+                    source_url,
+                    video_info=video_info,
+                )
             except Exception:
                 traceback.print_exc()
                 return _err("语音识别失败，请稍后重试或检查视频链接。")
@@ -1146,12 +1405,12 @@ def extract(
         )
         return _ok(result)
 
-    except NotImplementedError as exc:
+    except (video_extractor.VideoExtractionError, NotImplementedError) as exc:
         return _err(str(exc))
-    except Exception as exc:
+    except Exception:
         # Log the full traceback on the server for debugging.
         traceback.print_exc()
-        return _err(f"处理失败: {exc}")
+        return _err("处理暂时失败，请稍后重试。")
 
 
 @router.get("/api/extract/stream")
@@ -1189,7 +1448,8 @@ def extract_stream(
             return _event(step, message, status, event_data)
 
         try:
-            platform = _detect_platform(url)
+            source_url = video_extractor.normalize_share_url(url)
+            platform = _detect_platform(source_url)
             yield _progress(
                 "parse",
                 f"已识别平台：{_PLATFORM_LABELS.get(platform, platform)}",
@@ -1200,11 +1460,12 @@ def extract_stream(
             # ═══ WeChat path: article content IS the transcript ═══════════
             if platform == "wechat":
                 yield _event("parse", "正在获取微信公众号文章...", "active")
-                article = extract_wechat_article(url)
+                article = extract_wechat_article(source_url)
                 video_info = {
                     "video_id": article["video_id"],
                     "title": article["title"],
                     "download_url": article["download_url"],
+                    "source_url": source_url,
                     "platform": "wechat",
                 }
                 transcript = article["content"]
@@ -1265,32 +1526,61 @@ def extract_stream(
                 "active",
                 {"phase": "parse_start", "platform": platform},
             )
+            sidecar_media_url = ""
+            sidecar_media_headers: dict[str, str] | None = None
+            recovered_from_binding = False
             try:
-                video_info = video_extractor.parse_video_info(url)
-                video_info["source_url"] = url
+                try:
+                    video_info = video_extractor.parse_video_info(source_url)
+                except video_extractor.VideoMetadataUnavailableError as exc:
+                    recovery = (
+                        _recover_bound_douyin_video(
+                            db,
+                            user_id=current_user.id,
+                            error=exc,
+                        )
+                        if platform == "douyin"
+                        else None
+                    )
+                    if recovery is None:
+                        raise
+                    video_info, sidecar_media_url, sidecar_media_headers = recovery
+                    recovered_from_binding = True
+                video_info.setdefault("source_url", source_url)
                 video_info.setdefault("platform", platform)
                 yield _progress(
                     "parse",
-                    f"解析完成：{video_info.get('title', '未知标题')}",
+                    (
+                        f"已通过绑定的抖音账号读取：{video_info.get('title', '未知标题')}"
+                        if recovered_from_binding
+                        else f"解析完成：{video_info.get('title', '未知标题')}"
+                    ),
                     "done",
                     {
                         "phase": "parse_done",
                         "platform": platform,
+                        "source": (
+                            "douyin-sidecar"
+                            if recovered_from_binding
+                            else "public-page"
+                        ),
                         "video": _safe_extraction_video_preview(
                             video_info,
-                            source_url=url,
+                            source_url=source_url,
                             platform=platform,
                         ),
                     },
                 )
-            except NotImplementedError as exc:
-                yield _progress("parse", f"解析失败: {exc}", "error", {"phase": "parse_error", "platform": platform})
-                yield _progress("error", str(exc), "error", {"phase": "fatal_error", "platform": platform})
+            except (video_extractor.VideoExtractionError, NotImplementedError) as exc:
+                message = _safe_video_parse_error(exc)
+                yield _progress("parse", message, "error", {"phase": "parse_error", "platform": platform})
+                yield _progress("error", message, "error", {"phase": "fatal_error", "platform": platform})
                 return
-            except Exception as exc:
+            except Exception:
                 traceback.print_exc()
-                yield _progress("parse", f"解析失败: {exc}", "error", {"phase": "parse_error", "platform": platform})
-                yield _progress("error", str(exc), "error", {"phase": "fatal_error", "platform": platform})
+                message = "视频链接暂时无法解析，请检查链接是否正确，稍后重试。"
+                yield _progress("parse", message, "error", {"phase": "parse_error", "platform": platform})
+                yield _progress("error", message, "error", {"phase": "fatal_error", "platform": platform})
                 return
 
             # Step 2: Extract transcript
@@ -1304,7 +1594,63 @@ def extract_stream(
 
             asr_cfg = settings_service.get_asr_config(db)
             remote_asr_started = time.monotonic()
-            if asr_cfg["api_key"]:
+            if sidecar_media_url:
+                try:
+                    yield _progress(
+                        "transcribe",
+                        "正在通过已绑定的抖音账号读取视频并提取文案...",
+                        "active",
+                        {
+                            "phase": "sidecar_asr_start",
+                            "platform": platform,
+                            "provider": "douyin-sidecar",
+                        },
+                    )
+                    transcript = video_extractor.extract_media_url_transcript(
+                        sidecar_media_url,
+                        asr_cfg["api_key"],
+                        asr_cfg["api_base_url"],
+                        asr_cfg["model"],
+                        request_headers=sidecar_media_headers,
+                    )
+                    yield _progress(
+                        "transcribe",
+                        f"文案提取完成，共 {len(transcript or '')} 字",
+                        "active",
+                        {
+                            "phase": "sidecar_asr_done",
+                            "platform": platform,
+                            "provider": "douyin-sidecar",
+                            "duration_ms": int(
+                                (time.monotonic() - remote_asr_started) * 1000
+                            ),
+                            "transcript_chars": len(transcript or ""),
+                        },
+                    )
+                except Exception:
+                    traceback.print_exc()
+                    message = (
+                        "已通过绑定账号找到该作品，但视频流暂时无法读取。"
+                        "请稍后重试，暂时不要连续解析。"
+                    )
+                    yield _progress(
+                        "transcribe",
+                        message,
+                        "error",
+                        {
+                            "phase": "sidecar_asr_error",
+                            "platform": platform,
+                            "provider": "douyin-sidecar",
+                        },
+                    )
+                    yield _progress(
+                        "error",
+                        message,
+                        "error",
+                        {"phase": "fatal_error", "platform": platform},
+                    )
+                    return
+            elif asr_cfg["api_key"]:
                 try:
                     yield _progress(
                         "transcribe",
@@ -1318,10 +1664,11 @@ def extract_stream(
                         },
                     )
                     transcript = video_extractor.extract_transcript(
-                        url,
+                        source_url,
                         asr_cfg["api_key"],
                         asr_cfg["api_base_url"],
                         asr_cfg["model"],
+                        video_info=video_info,
                     )
                     if transcript and transcript.strip():
                         yield _progress(
@@ -1378,7 +1725,7 @@ def extract_stream(
                     },
                 )
 
-            if not transcript or not transcript.strip():
+            if not sidecar_media_url and (not transcript or not transcript.strip()):
                 try:
                     local_asr_started = time.monotonic()
                     yield _progress(
@@ -1392,7 +1739,10 @@ def extract_stream(
                             "fallback": True,
                         },
                     )
-                    transcript = video_extractor.fallback_local_asr(url)
+                    transcript = video_extractor.fallback_local_asr(
+                        source_url,
+                        video_info=video_info,
+                    )
                     if transcript and transcript.strip():
                         yield _progress(
                             "transcribe",
@@ -1507,9 +1857,11 @@ def extract_stream(
 
             yield _event("done", "提取完成", "done", result)
 
-        except Exception as exc:
+        except (video_extractor.VideoExtractionError, NotImplementedError) as exc:
+            yield _event("error", _safe_video_parse_error(exc), "error")
+        except Exception:
             traceback.print_exc()
-            yield _event("error", f"处理失败: {exc}", "error")
+            yield _event("error", "处理暂时失败，请稍后重试。", "error")
 
     return StreamingResponse(
         _generate(),
@@ -1570,32 +1922,67 @@ def stream_platform_library_cover(
     db: Session = Depends(get_db),
 ):
     """Serve an imported Bilibili cover without exposing upstream hotlinking."""
-    signature_is_current = platform_library_service.verify_cover_signature(
-        note_id,
-        expires,
-        signature,
-    )
-    signature_is_authentic = (
-        signature_is_current
-        or platform_library_service.verify_cover_signature(
-            note_id,
-            expires,
-            signature,
-            allow_expired=True,
-        )
-    )
-    if not signature_is_authentic:
+    if not platform_library_service.verify_cover_signature(
+        note_id, expires, signature,
+    ):
         raise HTTPException(status_code=403, detail="视频封面地址已失效，请刷新页面")
     target_url = platform_library_service.cover_target(db, note_id)
     if not target_url:
         raise HTTPException(status_code=404, detail="视频封面不存在")
-    if not signature_is_current:
-        return RedirectResponse(
-            url=platform_library_service.public_cover_url(note_id),
-            status_code=307,
-            headers={"Cache-Control": "private, no-store"},
-        )
     return _proxy_bilibili_image(target_url)
+
+
+@router.get("/api/library/imports/{note_id}/media", include_in_schema=False)
+def stream_platform_library_media(
+    request: Request,
+    note_id: str = Path(..., min_length=1, max_length=128),
+    expires: int = Query(..., ge=1),
+    signature: str = Query(..., min_length=64, max_length=64),
+    db: Session = Depends(get_db),
+):
+    """Serve a short-lived owned-Note capability usable by a native <video>."""
+    if not platform_library_service.verify_media_signature(
+        note_id,
+        expires,
+        signature,
+    ):
+        raise HTTPException(status_code=403, detail="视频播放地址已失效，请重新读取")
+    note = db.query(Note).filter(Note.id == note_id).first()
+    if note is None:
+        raise HTTPException(status_code=404, detail="视频资料不存在")
+    platform = platform_library_service.media_platform(note)
+    if platform == "douyin":
+        binding = douyin_binding_service.get_by_user(db, note.user_id)
+        if binding is not None:
+            try:
+                return _proxy_short_lived_media(
+                    request,
+                    douyin_library.companion_media_url(note.video_id),
+                    douyin_library.companion_headers(binding.session_scope),
+                    platform="douyin",
+                    trusted_loopback=True,
+                )
+            except HTTPException as exc:
+                if exc.status_code != 502:
+                    raise
+                # Bound account metadata remains useful even if its local
+                # companion restarted. Fall back to a fresh public resolver.
+                pass
+    try:
+        target_url, media_headers = platform_library_service.resolve_media_target(note)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="视频播放地址暂时无法刷新，请稍后重试",
+        ) from exc
+    if not target_url:
+        raise HTTPException(status_code=404, detail="这个作品暂时没有可播放的视频")
+    return _proxy_short_lived_media(
+        request,
+        target_url,
+        media_headers,
+        platform=platform,
+    )
 
 
 @router.get("/api/library/imports/{note_id}")
@@ -2170,51 +2557,12 @@ def stream_douyin_library_media(
     account_binding = douyin_binding_service.get_by_id(db, binding)
     if account_binding is None:
         raise HTTPException(status_code=404, detail="抖音账号绑定不存在")
-    target_url = douyin_library.companion_media_url(aweme_id)
-    request_headers = {
-        "Accept": "*/*",
-        "Accept-Encoding": "identity",
-        **douyin_library.companion_headers(account_binding.session_scope),
-    }
-    range_header = request.headers.get("range")
-    if range_header:
-        request_headers["Range"] = range_header
-    try:
-        response = http_requests.get(
-            target_url,
-            headers=request_headers,
-            stream=True,
-            timeout=(10, 600),
-        )
-        response.raise_for_status()
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"视频临时流读取失败：{exc}") from exc
-
-    response_headers = {
-        "Cache-Control": "private, no-store",
-        "Accept-Ranges": response.headers.get("Accept-Ranges", "bytes"),
-    }
-    for source, target in (
-        ("Content-Length", "Content-Length"),
-        ("Content-Range", "Content-Range"),
-    ):
-        value = response.headers.get(source)
-        if value:
-            response_headers[target] = value
-
-    def body():
-        try:
-            for chunk in response.iter_content(chunk_size=256 * 1024):
-                if chunk:
-                    yield chunk
-        finally:
-            response.close()
-
-    return StreamingResponse(
-        body(),
-        status_code=response.status_code,
-        media_type=response.headers.get("Content-Type", "video/mp4"),
-        headers=response_headers,
+    return _proxy_short_lived_media(
+        request,
+        douyin_library.companion_media_url(aweme_id),
+        douyin_library.companion_headers(account_binding.session_scope),
+        platform="douyin",
+        trusted_loopback=True,
     )
 
 
@@ -2237,44 +2585,26 @@ def stream_douyin_library_cover(
     db: Session = Depends(get_db),
 ):
     """Proxy a cover image without exposing loopback URLs or storing files."""
-    signature_is_current = douyin_library.verify_media_signature(
+    if not douyin_library.verify_cover_signature(
         aweme_id,
         binding,
         expires,
         signature,
-    )
-    signature_is_authentic = signature_is_current or douyin_library.verify_media_signature(
-        aweme_id,
-        binding,
-        expires,
-        signature,
-        allow_expired=True,
-    )
-    if not signature_is_authentic:
+    ):
         raise HTTPException(status_code=403, detail="视频封面地址已失效，请刷新页面")
     account_binding = douyin_binding_service.get_by_id(db, binding)
     if account_binding is None:
         raise HTTPException(status_code=404, detail="抖音账号绑定不存在")
-    if not signature_is_current:
-        # An <img> cannot attach the JWT stored by the SPA. A valid old signed
-        # capability is therefore renewed here and followed transparently by
-        # the browser instead of leaving a long-open page with a permanent 403.
-        return RedirectResponse(
-            url=douyin_library.public_cover_url(aweme_id, binding),
-            status_code=307,
-            headers={"Cache-Control": "private, no-store"},
-        )
     target_url = douyin_library.companion_cover_url(aweme_id)
     local_cover_url = local_douyin_library_service.get_cover_url(
         db,
         user_id=account_binding.user_id,
         video_id=aweme_id,
     )
-    if local_cover_url:
-        target_url = local_cover_url
     return _proxy_douyin_image(
         target_url,
         account_binding.session_scope,
+        fallback_url=local_cover_url,
     )
 
 
@@ -2298,9 +2628,10 @@ def stream_douyin_library_gallery_image(
     db: Session = Depends(get_db),
 ):
     """Proxy one gallery image without exposing the loopback sidecar."""
-    if not douyin_library.verify_media_signature(
+    if not douyin_library.verify_gallery_signature(
         aweme_id,
         binding,
+        image_index,
         expires,
         signature,
     ):
@@ -2380,12 +2711,10 @@ def list_douyin_library_items(
             continue
         sidecar_item = sidecar_by_id.get(aweme_id)
         if sidecar_item is None:
-            merged = dict(local_item)
-            if merged.get("cover_url"):
-                merged["cover_proxy_url"] = douyin_library.public_cover_url(
-                    aweme_id,
-                    binding.id,
-                )
+            merged = _mint_douyin_item_capabilities(
+                dict(local_item),
+                binding.id,
+            )
         else:
             # Keep the sidecar media capability when it exists, while using
             # the newest public metadata and ordering captured on the device.
@@ -2634,6 +2963,7 @@ def get_douyin_library_item(
         )
     if item is None:
         raise HTTPException(status_code=404, detail="视频不存在或尚未同步")
+    item = _mint_douyin_item_capabilities(dict(item), binding.id)
 
     note = note_service.get_note_by_video_id(
         db,
@@ -2729,25 +3059,12 @@ def ask_douyin_library_visual_item(
                 max_images=8,
             )
         elif item.get("provider") == "desktop-local":
-            video_info = video_extractor.parse_video_info(item["source_url"])
-            media_url = str(
-                video_info.get("download_url")
-                or video_info.get("url")
-                or ""
-            ).strip()
-            if not media_url:
-                raise ValueError("当前作品暂时无法解析播放地址，请稍后重试")
             images = ai_juicer.extract_video_frames(
-                media_url,
+                douyin_library.companion_media_url(aweme_id),
                 max_frames=8,
-                request_headers={
-                    "Referer": "https://www.douyin.com/",
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/124.0.0.0 Safari/537.36"
-                    ),
-                },
+                request_headers=douyin_library.companion_headers(
+                    binding.session_scope
+                ),
             )
         else:
             images = ai_juicer.extract_video_frames(
@@ -2817,7 +3134,7 @@ def extract_douyin_library_item(
         traceback.print_exc()
         raise HTTPException(
             status_code=502,
-            detail=f"视频文案提取失败：{exc}",
+            detail="视频文案提取暂时失败，请稍后重试",
         ) from exc
 
 
@@ -4136,77 +4453,13 @@ def delete_plan(plan_id: str, db: Session = Depends(get_db),
 
 @router.get("/api/video/proxy")
 def proxy_video(
-    url: str = Query(..., min_length=1, description="Douyin video play URL"),
-    note_id: str = Query("", description="Optional note ID to refresh expired URL"),
-    db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ):
-    """Proxy a video stream with Douyin-required headers.
-
-    If ``note_id`` is provided and the stored video URL has expired, we re-parse
-    the share link to get a fresh play URL (requires a source_url to be saved).
-
-    Returns a ``video/mp4`` stream suitable for a ``<video>`` element.
-    """
-    target_url = unquote(url)
-
-    # Try to refresh the URL if a note_id is given and the URL looks expired.
-    if note_id:
-        note = note_service.get_note(db, note_id, user_id=current_user.id)
-        if note is not None:
-            # Re-extract a fresh video URL from the source share link.
-            try:
-                fresh_info = video_extractor.parse_video_info(
-                    f"https://www.douyin.com/video/{note.video_id}"
-                )
-                fresh_url = fresh_info.get("download_url") or fresh_info.get("url", "")
-                if fresh_url:
-                    target_url = fresh_url
-            except Exception:
-                pass  # use the original target_url
-
-    VIDEO_HEADERS = {
-        "User-Agent": (
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) "
-            "AppleWebKit/605.1.15 (KHTML, like Gecko) EdgiOS/121.0.2277.107 "
-            "Version/17.0 Mobile/15E148 Safari/604.1"
-        ),
-        "Referer": "https://www.douyin.com/",
-        "Accept": "*/*",
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-        "Accept-Encoding": "identity",
-    }
-
-    try:
-        resp = http_requests.get(
-            target_url,
-            headers=VIDEO_HEADERS,
-            stream=True,
-            timeout=30,
-            allow_redirects=True,
-        )
-        resp.raise_for_status()
-
-        content_length = resp.headers.get("content-length", "")
-        headers = {
-            "Content-Type": "video/mp4",
-            "Cache-Control": "public, max-age=86400",
-        }
-        if content_length:
-            headers["Content-Length"] = content_length
-
-        def _iter():
-            for chunk in resp.iter_content(chunk_size=8192):
-                if chunk:
-                    yield chunk
-
-        return StreamingResponse(
-            _iter(),
-            media_type="video/mp4",
-            headers=headers,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"视频代理失败: {exc}")
+    """Retired: accepting an arbitrary upstream URL was an SSRF primitive."""
+    raise HTTPException(
+        status_code=410,
+        detail="旧视频代理已停用，请从视频资料重新打开以获取短时播放地址",
+    )
 
 
 # ---------------------------------------------------------------------------

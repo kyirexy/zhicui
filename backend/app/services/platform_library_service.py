@@ -6,14 +6,21 @@ import json
 import re
 import hashlib
 import hmac
+import ipaddress
+import socket
 import time
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.media_reference import (
+    platform_from_source_url,
+    sanitized_source_meta,
+    stable_note_source,
+)
 from app.models.note import Note
 from app.models.plan import Plan
 from app.services import ai_juicer, note_service, plan_service, settings_service, video_extractor
@@ -26,6 +33,7 @@ SOURCE_KIND = "platform-import"
 SUPPORTED_PLATFORMS = {"bilibili", "xiaohongshu"}
 MAX_IMPORT_URLS = 10
 _COVER_URL_TTL_SECONDS = 6 * 60 * 60
+_MEDIA_URL_TTL_SECONDS = 5 * 60
 
 _URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _XHS_MEDIA_HEADERS = {
@@ -37,6 +45,23 @@ _XHS_MEDIA_HEADERS = {
     "Referer": "https://www.xiaohongshu.com/",
 }
 _BILIBILI_PLACEHOLDER_TITLES = {"", "B站视频", "未命名视频"}
+_DOUYIN_MEDIA_DOMAINS = (
+    "douyinvod.com",
+    "douyin.com",
+    "iesdouyin.com",
+    "bytecdn.cn",
+    "bytecdn.com",
+    "ibytedtos.com",
+    "pstatp.com",
+    "snssdk.com",
+    "zjcdn.com",
+    "volccdn.com",
+)
+_DOUYIN_IMAGE_DOMAINS = (
+    "douyinpic.com",
+    "byteimg.com",
+    "ibytedtos.com",
+)
 
 
 def _utcnow() -> str:
@@ -86,16 +111,162 @@ def verify_cover_signature(
     note_id: str,
     expires: int,
     signature: str,
-    *,
-    allow_expired: bool = False,
 ) -> bool:
     now = int(time.time())
-    if (
-        (not allow_expired and expires < now)
-        or expires > now + _COVER_URL_TTL_SECONDS + 60
-    ):
+    if expires < now or expires > now + _COVER_URL_TTL_SECONDS + 60:
         return False
     return hmac.compare_digest(_cover_signature(note_id, expires), signature)
+
+
+def _media_signature(note_id: str, expires: int) -> str:
+    payload = f"platform-media:{note_id}:{expires}".encode("utf-8")
+    return hmac.new(
+        settings.JWT_SECRET.encode("utf-8"),
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def public_media_url(note_id: str) -> str:
+    """Mint a short-lived same-origin play capability for one owned Note."""
+    expires = int(time.time()) + _MEDIA_URL_TTL_SECONDS
+    signature = _media_signature(note_id, expires)
+    return (
+        f"/api/library/imports/{quote(note_id, safe='')}/media"
+        f"?expires={expires}&signature={signature}"
+    )
+
+
+def verify_media_signature(note_id: str, expires: int, signature: str) -> bool:
+    now = int(time.time())
+    if expires < now or expires > now + _MEDIA_URL_TTL_SECONDS + 60:
+        return False
+    return hmac.compare_digest(_media_signature(note_id, expires), signature)
+
+
+def media_platform(note: Note) -> str:
+    meta = _source_meta(note)
+    source_url = stable_note_source(
+        video_id=note.video_id,
+        video_url=note.video_url,
+        source_meta=meta,
+    )
+    return str(meta.get("platform") or platform_from_source_url(source_url) or "").strip()
+
+
+def validated_media_target(value: object, platform: str) -> str:
+    target = str(value or "").strip()
+    try:
+        parsed = urlsplit(target)
+    except ValueError:
+        return ""
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if parsed.scheme != "https" or not hostname or hostname in {"localhost", "localhost.localdomain"}:
+        return ""
+    if platform == "douyin" and not any(
+        hostname == domain or hostname.endswith(f".{domain}")
+        for domain in _DOUYIN_MEDIA_DOMAINS
+    ):
+        return ""
+    if platform == "xiaohongshu" and not (
+        hostname == "xhscdn.com" or hostname.endswith(".xhscdn.com")
+    ):
+        return ""
+    try:
+        addresses = {
+            item[4][0]
+            for item in socket.getaddrinfo(
+                hostname,
+                443,
+                type=socket.SOCK_STREAM,
+            )
+        }
+    except OSError:
+        return ""
+    if not addresses:
+        return ""
+    for address in addresses:
+        try:
+            if not ipaddress.ip_address(address).is_global:
+                return ""
+        except ValueError:
+            return ""
+    return target
+
+
+def validated_douyin_image_target(value: object) -> str:
+    """Accept only public HTTPS Douyin image CDN targets."""
+    target = str(value or "").strip()
+    try:
+        parsed = urlsplit(target)
+        port = parsed.port
+    except ValueError:
+        return ""
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if (
+        parsed.scheme != "https"
+        or not hostname
+        or parsed.username
+        or parsed.password
+        or port not in (None, 443)
+        or not any(
+            hostname == domain or hostname.endswith(f".{domain}")
+            for domain in _DOUYIN_IMAGE_DOMAINS
+        )
+    ):
+        return ""
+    try:
+        addresses = {
+            item[4][0]
+            for item in socket.getaddrinfo(
+                hostname,
+                443,
+                type=socket.SOCK_STREAM,
+            )
+        }
+    except OSError:
+        return ""
+    if not addresses:
+        return ""
+    for address in addresses:
+        try:
+            if not ipaddress.ip_address(address).is_global:
+                return ""
+        except ValueError:
+            return ""
+    return target
+
+
+def resolve_media_target(note: Note) -> tuple[str, dict[str, str]]:
+    """Resolve a fresh upstream URL in memory; never write it to the Note."""
+    meta = _source_meta(note)
+    platform = media_platform(note)
+    source_url = stable_note_source(
+        video_id=note.video_id,
+        video_url=note.video_url,
+        source_meta=meta,
+        platform=platform,
+    )
+    if not source_url or str(meta.get("media_type") or "video") != "video":
+        return "", {}
+    if platform == "xiaohongshu":
+        info = fetch_xhs_detail(source_url, cookie=settings.XHS_COOKIE)
+        target = validated_media_target(info.get("media_url"), platform)
+        return target, dict(_XHS_MEDIA_HEADERS) if target else {}
+    if platform == "douyin":
+        info = video_extractor.parse_video_info(source_url)
+        target = validated_media_target(
+            info.get("download_url") or info.get("url"),
+            platform,
+        )
+        return target, {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+            ),
+            "Referer": "https://www.douyin.com/",
+        } if target else {}
+    return "", {}
 
 
 def cover_target(db: Session, note_id: str) -> str:
@@ -248,7 +419,6 @@ def _extract_bilibili(url: str, db: Session) -> tuple[dict[str, Any], str, dict[
         "caption": info.get("description") or "",
         "tags": tags,
         "media_type": "video",
-        "media_url": info.get("media_url") or "",
         "published_at": info.get("published_at") or "",
         "recorded_at": _utcnow(),
         "source_synced_at": _utcnow(),
@@ -327,7 +497,6 @@ def _extract_xiaohongshu(url: str, db: Session) -> tuple[dict[str, Any], str, di
         "caption": info.get("desc") or "",
         "tags": tags,
         "media_type": info.get("type") or "image",
-        "media_url": info.get("media_url") or "",
         "published_at": info.get("published_at") or "",
         "recorded_at": _utcnow(),
         "source_synced_at": _utcnow(),
@@ -351,17 +520,25 @@ def _save_or_refresh(
     video_id = str(info.get("video_id") or info.get("note_id") or "").strip()
     if not video_id:
         raise RuntimeError("平台没有返回可用的作品标识")
+    source_meta = sanitized_source_meta(source_meta)
+    stable_source_url = stable_note_source(
+        video_id=video_id,
+        video_url="",
+        source_meta=source_meta,
+        platform=platform,
+    )
+    if stable_source_url:
+        source_meta["source_url"] = stable_source_url
     existing = _find_existing(
         db, user_id=user_id, platform=platform, video_id=video_id,
     )
-    media_url = str(source_meta.get("media_url") or source_meta.get("source_url") or "")
     if existing is None:
         note = note_service.create_transcript_note(
             db,
             video_info={
                 "video_id": video_id,
                 "title": info.get("title") or "未命名视频",
-                "download_url": media_url,
+                "source_url": stable_source_url,
                 "platform": platform,
             },
             transcript=transcript,
@@ -371,14 +548,14 @@ def _save_or_refresh(
         return note, False
 
     payload = _load_payload(existing)
-    previous_meta = payload.get("source_meta") if isinstance(payload.get("source_meta"), dict) else {}
+    previous_meta = sanitized_source_meta(payload.get("source_meta"))
     payload["source_meta"] = {
         **previous_meta,
         **source_meta,
         "first_seen_at": previous_meta.get("first_seen_at") or existing.created_at.isoformat(),
     }
     existing.video_title = str(info.get("title") or existing.video_title)
-    existing.video_url = media_url or existing.video_url
+    existing.video_url = stable_source_url
     if transcript and len(transcript) >= len(existing.transcript_raw or ""):
         existing.transcript_raw = transcript
     existing.ai_summary = json.dumps(payload, ensure_ascii=False)
@@ -500,6 +677,14 @@ def list_notes(db: Session, *, user_id: str, platform: str = "all") -> list[Note
 def serialize_item(note: Note) -> dict[str, Any]:
     data = note.to_dict()
     meta = _source_meta(note)
+    platform = str(meta.get("platform") or media_platform(note) or "").strip()
+    source_url = stable_note_source(
+        video_id=note.video_id,
+        video_url=note.video_url,
+        source_meta=meta,
+        platform=platform,
+    )
+    media_type = str(meta.get("media_type") or "video")
     raw_cover_url = str(meta.get("cover_url") or "").strip()
     display_cover_url = (
         public_cover_url(note.id)
@@ -510,13 +695,17 @@ def serialize_item(note: Note) -> dict[str, Any]:
         "id": note.id,
         "video_id": note.video_id,
         "title": note.video_title,
-        "platform": meta.get("platform") or "",
+        "platform": platform,
         "caption": meta.get("caption") or "",
         "author_name": meta.get("author_name") or "",
         "cover_url": display_cover_url,
-        "source_url": meta.get("source_url") or note.video_url,
-        "media_url": meta.get("media_url") or note.video_url or "",
-        "media_type": meta.get("media_type") or "video",
+        "source_url": source_url,
+        "media_url": (
+            public_media_url(note.id)
+            if platform in {"douyin", "xiaohongshu"} and media_type == "video"
+            else ""
+        ),
+        "media_type": media_type,
         "tags": meta.get("tags") or [],
         "published_at": meta.get("published_at") or "",
         "imported_at": meta.get("first_seen_at") or data.get("created_at") or "",
@@ -524,7 +713,7 @@ def serialize_item(note: Note) -> dict[str, Any]:
         "transcript_source": meta.get("transcript_source") or "caption-only",
         "speech_ready": bool(meta.get("speech_ready")),
         "metadata_complete": (
-            meta.get("platform") != "bilibili"
+            platform != "bilibili"
             or _is_complete_bilibili_note(note)
         ),
         "degraded": bool(meta.get("degraded")),
@@ -554,36 +743,9 @@ def get_workspace(
     note = note_service.get_note(db, note_id, user_id=user_id)
     if note is None:
         return None
-    if refresh_media and note.video_id:
-        current_meta = _source_meta(note)
-        platform = str(current_meta.get("platform") or "douyin").strip()
-        if platform == "douyin":
-            source_url = str(
-                current_meta.get("source_url")
-                or f"https://www.douyin.com/video/{note.video_id}"
-            ).strip()
-            info = video_extractor.parse_video_info(source_url)
-            refreshed_media = str(info.get("download_url") or info.get("url") or "").strip()
-            if refreshed_media:
-                note.video_url = refreshed_media
-                summary = json.loads(note.ai_summary or "{}")
-                source_meta = summary.get("source_meta")
-                if not isinstance(source_meta, dict):
-                    source_meta = {}
-                source_meta.update({
-                    "source_kind": source_meta.get("source_kind") or "single-link",
-                    "platform": "douyin",
-                    "source_url": source_url,
-                    "media_url": refreshed_media,
-                    "cover_url": str(info.get("cover_url") or info.get("thumbnail") or source_meta.get("cover_url") or ""),
-                    "author_name": str(info.get("author_name") or info.get("author") or source_meta.get("author_name") or ""),
-                    "media_type": "video",
-                    "source_mode": source_meta.get("source_mode") or "import",
-                })
-                summary["source_meta"] = source_meta
-                note.ai_summary = json.dumps(summary, ensure_ascii=False)
-                db.commit()
-                db.refresh(note)
+    # Old rows may still contain an expired CDN URL. Clean it on read; a new
+    # response capability is minted below regardless of ``refresh_media``.
+    note_service.scrub_note_ephemeral_media(db, note)
     item = serialize_item(note)
     source_meta = _source_meta(note)
     source_kind = str(source_meta.get("source_kind") or "note").strip() or "note"
@@ -639,7 +801,7 @@ def initialize_ai(db: Session, *, user_id: str, note_id: str) -> tuple[Note, boo
         content_type=intent["card_type"],
         video_title=note.video_title,
     )
-    source_meta = _source_meta(note)
+    source_meta = sanitized_source_meta(_source_meta(note))
     ai_result["source_meta"] = source_meta
     plan_data = ai_juicer.generate_plan(transcript) if intent.get("is_plan") else None
     if plan_data:

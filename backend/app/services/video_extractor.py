@@ -8,14 +8,18 @@ backend can parse Douyin share links, download videos, and extract transcripts.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import json
+from collections.abc import Mapping
 from datetime import datetime, timezone
+from html import unescape
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urljoin, urlsplit
 
 
 def _patch_ffmpeg_path():
@@ -68,24 +72,361 @@ if str(_SCRIPTS_DIR) not in sys.path:
 
 from douyin_downloader import DouyinProcessor  # noqa: E402
 
-import re
-
 
 # ---------------------------------------------------------------------------
 # Platform detection and Bilibili helpers
 # ---------------------------------------------------------------------------
 
-def _detect_platform(url: str) -> str:
-    """Return platform identifier based on URL host."""
-    if 'bilibili.com' in url or 'b23.tv' in url:
+_SHARE_URL_PATTERN = re.compile(r"https?://[^\s<>{}\[\]\"']+", re.IGNORECASE)
+_TRAILING_SHARE_PUNCTUATION = ".,!?;:，。！？；：、）)]}>」』】\"'"
+_DOUYIN_INFO_UNAVAILABLE = (
+    "抖音暂时未返回该作品的公开信息，可能是分享链接失效、作品不可访问，"
+    "或平台临时限制了读取。请确认原视频可以正常打开；如果仍可访问，"
+    "请先在“同步视频”中连接或重新验证抖音账号，再回来重试。"
+)
+_DOUYIN_ROUTER_MAX_BYTES = 2 * 1024 * 1024
+_DOUYIN_ROUTER_CONNECT_TIMEOUT = 5
+_DOUYIN_ROUTER_READ_TIMEOUT = 10
+_DOUYIN_ROUTER_MAX_REDIRECTS = 4
+
+
+class VideoExtractionError(RuntimeError):
+    """An expected extraction failure whose message is safe for end users."""
+
+
+class VideoMetadataUnavailableError(VideoExtractionError):
+    """The platform did not expose enough public metadata for extraction."""
+
+    def __init__(self, message: str, *, item_id: str = "") -> None:
+        super().__init__(message)
+        clean_id = str(item_id or "").strip()
+        self.item_id = clean_id if re.fullmatch(r"\d{8,32}", clean_id) else ""
+
+
+def _host_matches(hostname: str, domain: str) -> bool:
+    return hostname == domain or hostname.endswith(f".{domain}")
+
+
+def _platform_from_url(url: str) -> str:
+    try:
+        hostname = (urlsplit(url).hostname or "").lower().rstrip(".")
+    except ValueError:
+        hostname = ""
+    if _host_matches(hostname, "bilibili.com") or _host_matches(hostname, "b23.tv"):
         return 'bilibili'
-    if 'douyin.com' in url or 'iesdouyin.com' in url:
+    if _host_matches(hostname, "douyin.com") or _host_matches(hostname, "iesdouyin.com"):
         return 'douyin'
-    if 'mp.weixin.qq.com' in url:
+    if hostname == 'mp.weixin.qq.com':
         return 'wechat'
-    if 'xiaohongshu.com' in url or 'rednote.com' in url or 'xhslink.com' in url:
+    if any(
+        _host_matches(hostname, domain)
+        for domain in ("xiaohongshu.com", "rednote.com", "xhslink.com")
+    ):
         return 'xiaohongshu'
     return 'unknown'
+
+
+def _trusted_douyin_page_url(url: str) -> bool:
+    """Accept only ordinary HTTPS pages on official Douyin hosts."""
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return False
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    return bool(
+        parsed.scheme.lower() == "https"
+        and not parsed.username
+        and not parsed.password
+        and port in (None, 443)
+        and (
+            _host_matches(hostname, "douyin.com")
+            or _host_matches(hostname, "iesdouyin.com")
+        )
+    )
+
+
+def normalize_share_url(value: str) -> str:
+    """Extract one supported HTTP(S) URL from a copied platform share message.
+
+    Mobile share actions commonly copy a caption, hashtags and an URL as one
+    string. Downstream connectors must receive only the URL. Prefer a supported
+    platform URL when several links are present.
+    """
+    raw = unescape(str(value or "")).strip()
+    if not raw:
+        return ""
+
+    candidates: list[str] = []
+    for match in _SHARE_URL_PATTERN.finditer(raw):
+        candidate = match.group(0).rstrip(_TRAILING_SHARE_PUNCTUATION)
+        if candidate:
+            candidates.append(candidate)
+    if not candidates:
+        return raw
+
+    for candidate in candidates:
+        if _platform_from_url(candidate) != "unknown":
+            return candidate
+    return candidates[0]
+
+
+def _detect_platform(value: str) -> str:
+    """Return a platform identifier after normalizing copied share text."""
+    return _platform_from_url(normalize_share_url(value))
+
+
+def _first_http_url(value: object) -> str:
+    if isinstance(value, str) and value.startswith(("http://", "https://")):
+        return value
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            found = _first_http_url(item)
+            if found:
+                return found
+    if isinstance(value, Mapping):
+        for key in ("url_list", "url", "uri"):
+            found = _first_http_url(value.get(key))
+            if found:
+                return found
+    return ""
+
+
+def _probe_douyin_item(payload: object, *, depth: int = 0) -> Mapping[str, Any] | None:
+    """Find a Douyin item in normalized or loader-data shaped output."""
+    if depth > 5:
+        return None
+    if isinstance(payload, Mapping):
+        has_id = any(payload.get(key) for key in ("video_id", "aweme_id", "id"))
+        if has_id and (
+            payload.get("url")
+            or payload.get("download_url")
+            or isinstance(payload.get("video"), Mapping)
+        ):
+            return payload
+        item_list = payload.get("item_list") or payload.get("aweme_list")
+        if isinstance(item_list, list):
+            for item in item_list[:5]:
+                found = _probe_douyin_item(item, depth=depth + 1)
+                if found is not None:
+                    return found
+        for key in ("videoInfoRes", "aweme_detail", "data", "loaderData"):
+            found = _probe_douyin_item(payload.get(key), depth=depth + 1)
+            if found is not None:
+                return found
+        if depth <= 2:
+            for item in list(payload.values())[:30]:
+                found = _probe_douyin_item(item, depth=depth + 1)
+                if found is not None:
+                    return found
+    elif isinstance(payload, list):
+        for item in payload[:10]:
+            found = _probe_douyin_item(item, depth=depth + 1)
+            if found is not None:
+                return found
+    return None
+
+
+def _normalize_douyin_info(payload: object) -> dict[str, Any]:
+    item = _probe_douyin_item(payload)
+    if item is None:
+        raise VideoMetadataUnavailableError(_DOUYIN_INFO_UNAVAILABLE)
+
+    video = item.get("video") if isinstance(item.get("video"), Mapping) else {}
+    play = (
+        video.get("play_addr")
+        or video.get("play_addr_h264")
+        or video.get("play_addr_265")
+        or {}
+    )
+    video_id = str(
+        item.get("video_id") or item.get("aweme_id") or item.get("id") or ""
+    ).strip()
+    media_url = _first_http_url(
+        item.get("url") or item.get("download_url") or item.get("play_url") or play
+    )
+    if not video_id or not media_url:
+        raise VideoMetadataUnavailableError(_DOUYIN_INFO_UNAVAILABLE)
+    media_url = media_url.replace("playwm", "play")
+
+    author = item.get("author") if isinstance(item.get("author"), Mapping) else {}
+    cover = video.get("cover") or video.get("origin_cover") or item.get("cover_url")
+    normalized = dict(item)
+    normalized.update({
+        "video_id": video_id,
+        "title": str(item.get("title") or item.get("desc") or "抖音作品").strip(),
+        "url": media_url,
+        "cover_url": _first_http_url(cover),
+        "author_name": str(
+            item.get("author_name") or author.get("nickname") or ""
+        ).strip(),
+    })
+    return normalized
+
+
+def _read_douyin_router_payload(response: Any) -> Mapping[str, Any] | None:
+    try:
+        declared_size = int(response.headers.get("Content-Length") or 0)
+    except (TypeError, ValueError):
+        declared_size = 0
+    if declared_size > _DOUYIN_ROUTER_MAX_BYTES:
+        return None
+
+    body = bytearray()
+    for chunk in response.iter_content(chunk_size=64 * 1024):
+        if not chunk:
+            continue
+        body.extend(chunk)
+        if len(body) > _DOUYIN_ROUTER_MAX_BYTES:
+            return None
+    html = bytes(body).decode("utf-8", errors="replace")
+    match = re.search(
+        r"window\._ROUTER_DATA\s*=\s*(.*?)</script>",
+        html,
+        flags=re.DOTALL,
+    )
+    if not match:
+        return None
+    raw_json = match.group(1).strip().removesuffix(";").strip()
+    try:
+        payload = json.loads(raw_json)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, Mapping) else None
+
+
+def _douyin_aweme_id_from_url(value: str) -> str:
+    if not _trusted_douyin_page_url(value):
+        return ""
+    match = re.search(
+        r"/(?:share/)?(?:video|note)/(\d{8,32})(?:[/?#]|$)",
+        value,
+    )
+    return match.group(1) if match else ""
+
+
+def _fetch_douyin_router_page(
+    value: str,
+) -> tuple[str, Mapping[str, Any] | None]:
+    """Fetch bounded official HTML and recover its router payload.
+
+    Redirects are followed manually so every hop is checked against the same
+    strict Douyin hostname allowlist. No cookies or user credentials are sent.
+    """
+    import requests
+
+    initial_url = normalize_share_url(value)
+    if not _trusted_douyin_page_url(initial_url):
+        return "", None
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+            "Mobile/15E148 Safari/604.1"
+        ),
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Encoding": "identity",
+    }
+    candidates = [initial_url]
+    visited: set[str] = set()
+    resolved_id = _douyin_aweme_id_from_url(initial_url)
+    session = requests.Session()
+    session.trust_env = False
+    try:
+        while candidates:
+            current = candidates.pop(0)
+            for _redirect in range(_DOUYIN_ROUTER_MAX_REDIRECTS + 1):
+                if current in visited or not _trusted_douyin_page_url(current):
+                    break
+                visited.add(current)
+                response = None
+                try:
+                    response = session.get(
+                        current,
+                        headers=headers,
+                        timeout=(
+                            _DOUYIN_ROUTER_CONNECT_TIMEOUT,
+                            _DOUYIN_ROUTER_READ_TIMEOUT,
+                        ),
+                        allow_redirects=False,
+                        stream=True,
+                    )
+                    if response.status_code in {301, 302, 303, 307, 308}:
+                        location = str(response.headers.get("Location") or "").strip()
+                        redirected = urljoin(current, location)
+                        if not location or not _trusted_douyin_page_url(redirected):
+                            break
+                        resolved_id = (
+                            _douyin_aweme_id_from_url(redirected) or resolved_id
+                        )
+                        current = redirected
+                        continue
+                    response.raise_for_status()
+                    final_url = str(getattr(response, "url", "") or current)
+                    if not _trusted_douyin_page_url(final_url):
+                        break
+                    resolved_id = _douyin_aweme_id_from_url(final_url) or resolved_id
+                    payload = _read_douyin_router_payload(response)
+                    if payload is not None and _probe_douyin_item(payload) is not None:
+                        item = _probe_douyin_item(payload)
+                        payload_id = str(
+                            (item or {}).get("video_id")
+                            or (item or {}).get("aweme_id")
+                            or (item or {}).get("id")
+                            or ""
+                        ).strip()
+                        if re.fullmatch(r"\d{8,32}", payload_id):
+                            resolved_id = payload_id
+                        return resolved_id, payload
+                    if resolved_id:
+                        canonical = (
+                            "https://www.iesdouyin.com/share/video/"
+                            f"{resolved_id}"
+                        )
+                        if canonical not in visited and canonical not in candidates:
+                            candidates.append(canonical)
+                    break
+                except requests.RequestException:
+                    break
+                finally:
+                    if response is not None:
+                        response.close()
+        return resolved_id, None
+    finally:
+        session.close()
+
+
+def _fetch_douyin_router_payload(value: str) -> Mapping[str, Any] | None:
+    """Compatibility wrapper returning only usable router metadata."""
+    return _fetch_douyin_router_page(value)[1]
+
+
+def resolve_douyin_aweme_id(value: str) -> str:
+    """Resolve a public Douyin URL to a validated numeric work identifier."""
+    clean_url = normalize_share_url(value)
+    direct = _douyin_aweme_id_from_url(clean_url)
+    if direct:
+        return direct
+    resolved_id, _payload = _fetch_douyin_router_page(clean_url)
+    return resolved_id
+
+
+def _parse_douyin_share_info(processor: DouyinProcessor, value: str) -> dict[str, Any]:
+    clean_url = normalize_share_url(value)
+    try:
+        payload = processor.parse_share_url(clean_url)
+    except KeyError:
+        # The upstream connector historically indexed ``videoInfoRes``
+        # directly. Probe the bounded official page before giving up.
+        resolved_id, payload = _fetch_douyin_router_page(clean_url)
+        if payload is None:
+            raise VideoMetadataUnavailableError(
+                _DOUYIN_INFO_UNAVAILABLE,
+                item_id=resolved_id,
+            ) from None
+    except (IndexError, TypeError):
+        raise VideoMetadataUnavailableError(_DOUYIN_INFO_UNAVAILABLE) from None
+    return _normalize_douyin_info(payload)
 
 
 _BILI_HEADERS = [
@@ -675,6 +1016,7 @@ def parse_video_info(url: str) -> dict[str, Any]:
     Supports Douyin (抖音) and Bilibili (B站).
     Does NOT require an API key -- only fetches metadata.
     """
+    url = normalize_share_url(url)
     platform = _detect_platform(url)
 
     if platform == 'bilibili':
@@ -704,16 +1046,20 @@ def parse_video_info(url: str) -> dict[str, Any]:
 
     if platform == 'unknown':
         raise NotImplementedError(
-            f"暂不支持该平台的视频链接。当前支持: 抖音、B站、微信公众号、小红书。链接: {url[:80]}..."
+            "暂不支持该平台的视频链接。当前支持：抖音、B站、微信公众号、小红书。"
         )
 
     # Douyin path
     processor = DouyinProcessor(api_key="")
-    info: dict = processor.parse_share_url(url)
+    info = _parse_douyin_share_info(processor, url)
     return {
         "video_id": info["video_id"],
         "title": info["title"],
         "download_url": info["url"],
+        "cover_url": info.get("cover_url", ""),
+        "author_name": info.get("author_name", ""),
+        "platform": "douyin",
+        "source_url": url,
     }
 
 
@@ -722,6 +1068,8 @@ def extract_transcript(
     api_key: str,
     api_base_url: str | None = None,
     model: str | None = None,
+    *,
+    video_info: Mapping[str, Any] | None = None,
 ) -> str:
     """Full pipeline: parse -> download -> extract audio -> transcribe.
 
@@ -743,6 +1091,7 @@ def extract_transcript(
     str
         The transcribed text.
     """
+    url = normalize_share_url(url)
     platform = _detect_platform(url)
 
     if platform == 'wechat':
@@ -789,10 +1138,14 @@ def extract_transcript(
         api_base_url=api_base_url,
         model=model,
     )
-    video_info = processor.parse_share_url(url)
+    resolved_video_info = (
+        _normalize_douyin_info(video_info)
+        if video_info is not None
+        else _parse_douyin_share_info(processor, url)
+    )
 
     # Download video to temp dir
-    video_path = processor.download_video(video_info, show_progress=False)
+    video_path = processor.download_video(resolved_video_info, show_progress=False)
 
     # Extract audio
     audio_path = processor.extract_audio(video_path, show_progress=False)
@@ -826,6 +1179,19 @@ def extract_media_url_transcript(
     clean_url = media_url.strip()
     if not clean_url.startswith(("http://", "https://")):
         raise ValueError("媒体地址无效")
+    has_sidecar_scope = any(
+        str(name).lower() == "x-zhicui-scope"
+        for name in (request_headers or {})
+    )
+    if has_sidecar_scope:
+        parsed_media_url = urlsplit(clean_url)
+        if (
+            parsed_media_url.scheme != "http"
+            or (parsed_media_url.hostname or "").lower() not in {"127.0.0.1", "::1"}
+            or parsed_media_url.username
+            or parsed_media_url.password
+        ):
+            raise ValueError("抖音连接器媒体地址不在本机回环范围内")
 
     temp_dir = Path(tempfile.mkdtemp(prefix="zhicui-library-"))
     audio_path = temp_dir / "audio.mp3"
@@ -866,7 +1232,12 @@ def extract_media_url_transcript(
                     headers=request_headers or None,
                     stream=True,
                     timeout=(10, 300),
+                    allow_redirects=not has_sidecar_scope,
                 ) as response:
+                    if has_sidecar_scope and (
+                        response.is_redirect or response.is_permanent_redirect
+                    ):
+                        raise RuntimeError("抖音连接器返回了不安全的媒体重定向")
                     response.raise_for_status()
                     content_length = int(response.headers.get("Content-Length") or 0)
                     if content_length > max_bytes:
@@ -939,7 +1310,11 @@ def extract_media_url_transcript(
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def fallback_local_asr(url: str) -> str:
+def fallback_local_asr(
+    url: str,
+    *,
+    video_info: Mapping[str, Any] | None = None,
+) -> str:
     """Offline ASR fallback using FunASR (Alibaba DAMO Academy).
 
     Supports Douyin (抖音), Bilibili (B站), 微信公众号 (WeChat), and 小红书 (Xiaohongshu).
@@ -954,6 +1329,7 @@ def fallback_local_asr(url: str) -> str:
 
     from app.services.local_asr import transcribe_file, transcribe_with_whisper
 
+    url = normalize_share_url(url)
     platform = _detect_platform(url)
 
     if platform == 'wechat':
@@ -1005,8 +1381,12 @@ def fallback_local_asr(url: str) -> str:
 
     # Step 1: Extract video info to get the download URL
     processor = DouyinProcessor(api_key="")
-    video_info = processor.parse_share_url(url)
-    video_url = video_info["url"]
+    resolved_video_info = (
+        _normalize_douyin_info(video_info)
+        if video_info is not None
+        else _parse_douyin_share_info(processor, url)
+    )
+    video_url = resolved_video_info["url"]
 
     # Step 2: Download video and extract audio
     temp_dir = _Path(_tempfile.mkdtemp())

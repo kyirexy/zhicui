@@ -15,7 +15,13 @@ from typing import Any
 
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
+from app.core.media_reference import (
+    canonical_source_url,
+    sanitized_source_meta,
+    stable_note_source,
+)
 from app.models.note import Note
 from app.models.plan import Plan
 
@@ -78,28 +84,45 @@ def create_note(
         Structured card output from ``ai_juicer.generate_card``.
     """
     video_title: str = video_info.get("title", "未知标题")
-    card_type: str = ai_result.get("card_type", "general")
-
-    # video_extractor.parse_video_info returns the no-watermark mp4 link as
-    # `download_url`; older callers pass it as `url`. Accept both.
-    video_url: str = (
-        video_info.get("download_url")
-        or video_info.get("url")
-        or ""
+    ai_payload = dict(ai_result)
+    for transient_key in ("download_url", "fetch_url", "media_url", "play_url", "signed_url"):
+        ai_payload.pop(transient_key, None)
+    card_type: str = ai_payload.get("card_type", "general")
+    video_id = str(video_info.get("video_id") or "").strip()
+    raw_meta = ai_payload.get("source_meta")
+    source_meta = sanitized_source_meta(raw_meta)
+    platform = str(
+        source_meta.get("platform") or video_info.get("platform") or ""
+    ).strip().lower()
+    video_url = canonical_source_url(
+        video_id=video_id,
+        platform=platform,
+        candidates=(
+            str(source_meta.get("source_url") or ""),
+            str(video_info.get("source_url") or ""),
+            str(video_info.get("url") or ""),
+            str(video_info.get("download_url") or ""),
+        ),
     )
+    if video_url:
+        source_meta["source_url"] = video_url
+    if platform:
+        source_meta["platform"] = platform
+    if source_meta or isinstance(raw_meta, dict):
+        ai_payload["source_meta"] = source_meta
 
     note = Note(
         id=str(uuid.uuid4()),
         user_id=user_id,
-        video_id=video_info.get("video_id", ""),
+        video_id=video_id,
         video_title=video_title,
         video_url=video_url,
         transcript_raw=transcript,
-        ai_summary=json.dumps(ai_result, ensure_ascii=False),
+        ai_summary=json.dumps(ai_payload, ensure_ascii=False),
         ai_initialized=ai_initialized,
         card_type=card_type,
         seo_title=generate_seo_title(video_title),
-        seo_slug=generate_slug(video_info.get("video_id", "")),
+        seo_slug=generate_slug(video_id),
         seo_meta=_generate_seo_meta(video_title, card_type),
         pitfall_rating=int(ai_result.get("pitfall_rating", 3)),
         created_at=datetime.now(timezone.utc),
@@ -110,6 +133,64 @@ def create_note(
     db.commit()
     db.refresh(note)
     return note
+
+
+def scrub_note_ephemeral_media(
+    db: Session,
+    note: Note,
+    *,
+    commit: bool = True,
+) -> bool:
+    """Clean one legacy Note without touching its knowledge content."""
+    try:
+        payload = json.loads(note.ai_summary or "{}")
+    except (json.JSONDecodeError, TypeError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    raw_meta = payload.get("source_meta")
+    source_meta = sanitized_source_meta(raw_meta)
+    stable_url = stable_note_source(
+        video_id=note.video_id,
+        video_url=note.video_url,
+        source_meta=source_meta,
+    )
+    changed = note.video_url != stable_url
+    if changed:
+        note.video_url = stable_url
+    if stable_url and source_meta.get("source_url") != stable_url:
+        source_meta["source_url"] = stable_url
+        changed = True
+    if isinstance(raw_meta, dict) and raw_meta != source_meta:
+        changed = True
+    if changed:
+        if isinstance(raw_meta, dict) or source_meta:
+            payload["source_meta"] = source_meta
+        note.ai_summary = json.dumps(payload, ensure_ascii=False)
+        # Cleaning a storage detail must not make old knowledge appear newly
+        # updated in the user's library ordering.
+        flag_modified(note, "updated_at")
+        if commit:
+            db.commit()
+            db.refresh(note)
+    return changed
+
+
+def scrub_legacy_ephemeral_media(db: Session) -> int:
+    """Remove persisted upstream play URLs from rows made by older builds.
+
+    The migration is deliberately idempotent and retains every transcript and
+    generated card.  A public work URL is reconstructed from source metadata
+    or the stable platform identifier whenever possible.
+    """
+    changed = sum(
+        1
+        for note in db.query(Note).yield_per(200)
+        if scrub_note_ephemeral_media(db, note, commit=False)
+    )
+    if changed:
+        db.commit()
+    return changed
 
 
 def create_transcript_note(
@@ -204,9 +285,7 @@ def merge_library_source_meta(
         payload = {}
     if not isinstance(payload, dict):
         payload = {}
-    previous = payload.get("source_meta")
-    if not isinstance(previous, dict):
-        previous = {}
+    previous = sanitized_source_meta(payload.get("source_meta"))
     synced_at = (
         str(item.get("source_synced_at") or "").strip()
         or str(item.get("recorded_at") or "").strip()
@@ -357,7 +436,7 @@ def update_note_ai(db: Session, note: Note, ai_result: dict[str, Any]) -> Note:
             previous_payload = json.loads(note.ai_summary)
             candidate = previous_payload.get("source_meta")
             if isinstance(candidate, dict):
-                previous_source_meta = candidate
+                previous_source_meta = sanitized_source_meta(candidate)
             detailed = previous_payload.get("detailed_video_analysis")
             if isinstance(detailed, dict):
                 previous_detailed_analysis = detailed
@@ -366,7 +445,10 @@ def update_note_ai(db: Session, note: Note, ai_result: dict[str, Any]) -> Note:
     initialized_result = {**ai_result, "ai_initialized": True}
     new_source_meta = initialized_result.get("source_meta")
     if isinstance(new_source_meta, dict):
-        merged_source_meta = {**previous_source_meta, **new_source_meta}
+        merged_source_meta = {
+            **previous_source_meta,
+            **sanitized_source_meta(new_source_meta),
+        }
         if previous_source_meta.get("first_seen_at"):
             merged_source_meta["first_seen_at"] = previous_source_meta["first_seen_at"]
         initialized_result["source_meta"] = merged_source_meta

@@ -106,6 +106,17 @@ function normalizePlatformLibraryItem(item: PlatformLibraryItem): PlatformLibrar
   return {
     ...item,
     cover_url: apiAssetUrl(item.cover_url || ''),
+    media_url: apiAssetUrl(item.media_url || ''),
+  };
+}
+
+function normalizeDouyinLibraryItem(item: DouyinLibraryItem): DouyinLibraryItem {
+  return {
+    ...item,
+    cover_url: apiAssetUrl(item.cover_url || ''),
+    cover_proxy_url: apiAssetUrl(item.cover_proxy_url || ''),
+    media_url: apiAssetUrl(item.media_url || ''),
+    gallery_images: item.gallery_images?.map((value) => apiAssetUrl(value)),
   };
 }
 
@@ -720,10 +731,7 @@ export async function getPlatformLibraryItem(
     ...response,
     data: {
       ...response.data,
-      item: {
-        ...response.data.item,
-        cover_url: apiAssetUrl(response.data.item.cover_url || ''),
-      },
+      item: normalizeDouyinLibraryItem(response.data.item),
     },
   };
 }
@@ -881,17 +889,33 @@ export async function listDouyinLibraryItems(
   if (mode) params.set('mode', mode);
   params.set('sort', sort);
   if (refreshOrder) params.set('refresh_order', 'true');
-  return request<DouyinLibraryListResult>(
+  const response = await request<DouyinLibraryListResult>(
     `/api/library/douyin/items?${params.toString()}`,
   );
+  if (!response.data) return response;
+  return {
+    ...response,
+    data: {
+      ...response.data,
+      items: response.data.items.map(normalizeDouyinLibraryItem),
+    },
+  };
 }
 
 export async function getDouyinLibraryItem(
   awemeId: string,
 ): Promise<ApiResponse<DouyinVideoWorkspace>> {
-  return request<DouyinVideoWorkspace>(
+  const response = await request<DouyinVideoWorkspace>(
     `/api/library/douyin/items/${encodeURIComponent(awemeId)}`,
   );
+  if (!response.data) return response;
+  return {
+    ...response,
+    data: {
+      ...response.data,
+      item: normalizeDouyinLibraryItem(response.data.item),
+    },
+  };
 }
 
 export async function collectDouyinLibrary(

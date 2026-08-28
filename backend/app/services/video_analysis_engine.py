@@ -931,6 +931,19 @@ def _download_request_to_workspace(
     byte_count = 0
     current_url = request.url
     current_headers = dict(request.headers)
+    has_sidecar_scope = any(
+        str(key).lower() == "x-zhicui-scope"
+        for key in current_headers
+    )
+    if has_sidecar_scope:
+        scoped_target = urlparse(current_url)
+        if (
+            scoped_target.scheme != "http"
+            or (scoped_target.hostname or "").lower() not in {"127.0.0.1", "::1"}
+            or scoped_target.username
+            or scoped_target.password
+        ):
+            raise MediaDownloadError("抖音连接器媒体地址不在本机回环范围内")
 
     try:
         with requests.Session() as session:
@@ -947,6 +960,8 @@ def _download_request_to_workspace(
                 if response.is_redirect or response.is_permanent_redirect:
                     location = response.headers.get("Location")
                     response.close()
+                    if has_sidecar_scope:
+                        raise MediaDownloadError("抖音连接器返回了不安全的媒体重定向")
                     if not location or redirect_count >= 5:
                         raise MediaDownloadError("媒体下载重定向无效")
                     next_url = urljoin(current_url, location)
@@ -955,7 +970,9 @@ def _download_request_to_workspace(
                         current_headers = {
                             key: value
                             for key, value in current_headers.items()
-                            if key.lower() not in {"authorization", "cookie", "x-session-scope"}
+                            if key.lower() not in {
+                                "authorization", "cookie", "x-session-scope", "x-zhicui-scope",
+                            }
                         }
                     current_url = next_url
                     continue

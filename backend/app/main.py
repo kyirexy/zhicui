@@ -90,6 +90,7 @@ from app.services import (
     creator_sync_worker,
     chat_model_catalog_service,
     error_log_service,
+    note_service,
     ops_monitor_runner,
     video_analysis_catalog_service,
     video_analysis_service,
@@ -255,6 +256,7 @@ def create_app() -> FastAPI:
         _migrate_db()
         creator_catalog_quality_migration.ensure_schema(engine)
         with SessionLocal() as db:
+            note_service.scrub_legacy_ephemeral_media(db)
             agent_service.mark_stale_threads(db)
             video_analysis_catalog_service.ensure_default_drafts(db)
             chat_model_catalog_service.ensure_default_offering(db)

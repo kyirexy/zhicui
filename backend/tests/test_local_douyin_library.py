@@ -240,8 +240,9 @@ class LocalDouyinLibraryTests(unittest.TestCase):
         self.assertEqual(item["author_name"], "测试作者")
         self.assertEqual(item["cover_url"], "https://p3.douyinpic.com/example.jpg")
 
-    def test_local_item_uses_canonical_url_for_transcript_extraction(self) -> None:
+    def test_local_item_uses_bound_sidecar_for_transcript_extraction(self) -> None:
         item = self.item()
+        session_scope = "s" * 32
         local_douyin_library_service.ingest_items(
             self.db,
             user_id=self.user_a.id,
@@ -254,7 +255,7 @@ class LocalDouyinLibraryTests(unittest.TestCase):
             patch.object(
                 library_extraction_service.douyin_binding_service,
                 "get_or_create",
-                return_value=SimpleNamespace(id="binding", session_scope="scope"),
+                return_value=SimpleNamespace(id="binding", session_scope=session_scope),
             ),
             patch.object(
                 library_extraction_service.douyin_library,
@@ -269,7 +270,6 @@ class LocalDouyinLibraryTests(unittest.TestCase):
             patch.object(
                 library_extraction_service.video_extractor,
                 "parse_video_info",
-                return_value={"download_url": "https://media.example/video.mp4"},
             ) as parse_video,
             patch.object(
                 library_extraction_service.video_extractor,
@@ -283,8 +283,17 @@ class LocalDouyinLibraryTests(unittest.TestCase):
                 operation="transcript",
             )
 
-        parse_video.assert_called_once_with(item["source_url"])
-        self.assertEqual(transcribe.call_args.args[0], "https://media.example/video.mp4")
+        parse_video.assert_not_called()
+        self.assertEqual(
+            transcribe.call_args.args[0],
+            library_extraction_service.douyin_library.companion_media_url(
+                item["video_id"]
+            ),
+        )
+        self.assertEqual(
+            transcribe.call_args.kwargs["request_headers"],
+            library_extraction_service.douyin_library.companion_headers(session_scope),
+        )
         self.assertEqual(result["transcript_raw"], "这是从视频语音提取出的完整文案")
 
     def test_ephemeral_media_is_used_without_public_page_resolution(self) -> None:

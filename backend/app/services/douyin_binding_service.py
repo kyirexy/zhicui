@@ -72,6 +72,17 @@ def get_by_id(
     )
 
 
+def get_by_user(
+    db: Session,
+    user_id: str,
+) -> DouyinAccountBinding | None:
+    return (
+        db.query(DouyinAccountBinding)
+        .filter(DouyinAccountBinding.user_id == user_id)
+        .first()
+    )
+
+
 def mark_login_pending(
     db: Session,
     binding: DouyinAccountBinding,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -8,7 +10,55 @@ ROOT = Path(__file__).resolve().parents[2]
 BACKUP = ROOT / "deploy" / "backup"
 
 
+def _find_usable_bash() -> str | None:
+    candidates: list[Path] = []
+    discovered = shutil.which("bash")
+    if discovered:
+        candidates.append(Path(discovered))
+    git = shutil.which("git")
+    if git:
+        git_root = Path(git).resolve().parents[1]
+        candidates.extend((git_root / "bin" / "bash.exe", git_root / "usr" / "bin" / "bash.exe"))
+    candidates.extend(
+        (
+            Path(r"C:\Program Files\Git\bin\bash.exe"),
+            Path(r"C:\Program Files (x86)\Git\bin\bash.exe"),
+        )
+    )
+    for candidate in dict.fromkeys(candidates):
+        if not candidate.is_file():
+            continue
+        probe = subprocess.run(
+            [str(candidate), "--version"],
+            check=False,
+            capture_output=True,
+        )
+        if probe.returncode == 0:
+            return str(candidate)
+    return None
+
+
 class BackupOffsiteAssetTests(unittest.TestCase):
+    def test_offsite_script_contract_self_test_executes(self) -> None:
+        bash = _find_usable_bash()
+        if bash is None:
+            self.skipTest("bash is required to execute the production backup contract")
+        result = subprocess.run(
+            [
+                bash,
+                "-lc",
+                "bash ./deploy/backup/postgres-offsite-replicate.sh --contract-test",
+            ],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        self.assertIn("contract self-test passed", result.stdout)
+
     def test_offsite_replication_is_required_and_does_not_upload_plaintext_key(self) -> None:
         script = (BACKUP / "postgres-offsite-replicate.sh").read_text(encoding="utf-8")
         env_template = (BACKUP / "backup.env.example").read_text(encoding="utf-8")

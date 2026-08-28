@@ -29,6 +29,23 @@ is_true() {
   case "${1,,}" in 1|true|yes|on) return 0 ;; *) return 1 ;; esac
 }
 
+is_private_mode() {
+  local mode="$1" group_digit other_digit
+  [[ "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+  mode="${mode: -3}"
+  group_digit="${mode:1:1}"
+  other_digit="${mode:2:1}"
+  (( (10#$group_digit & 2) == 0 && 10#$other_digit == 0 ))
+}
+
+assert_private_file() {
+  local path="$1" label="$2" mode
+  [[ -r "$path" && -f "$path" && ! -L "$path" ]] || fail "$label 不可读、不是普通文件或是符号链接"
+  mode="$(stat -c '%a' "$path")"
+  is_private_mode "$mode" ||
+    fail "$label 权限过宽；必须禁止 group 写入及 other 全部访问"
+}
+
 write_status() {
   local outcome="$1" detail="$2" artifact="${3:-}" checksum="${4:-}" provider="${5:-}"
   local recovery_checksum="${6:-}" verified_at="${7:-}"
@@ -55,16 +72,6 @@ payload = {
     "remote_verified": outcome == "success",
     "detail": detail[:240],
 }
-
-assert_private_file() {
-  local path="$1" label="$2" mode
-  [[ -r "$path" && -f "$path" && ! -L "$path" ]] || fail "$label 不可读、不是普通文件或是符号链接"
-  mode="$(stat -c '%a' "$path")"
-  [[ "$mode" =~ ^[0-7]{3,4}$ ]] || fail "$label 权限格式不可识别"
-  mode="${mode: -3}"
-  (( 10#${mode:1:1} < 6 && 10#${mode:2:1} == 0 )) ||
-    fail "$label 权限过宽；必须禁止 group 写入及 other 全部访问"
-}
 temporary = f"{path}.tmp-{os.getpid()}"
 with open(temporary, "w", encoding="utf-8") as handle:
     json.dump(payload, handle, ensure_ascii=False, indent=2)
@@ -73,6 +80,43 @@ os.chmod(temporary, 0o640)
 os.replace(temporary, path)
 PY
 }
+
+run_contract_self_test() {
+  local test_dir private_file
+  for command_name in python3 stat mktemp; do
+    command -v "$command_name" >/dev/null 2>&1 || fail "契约测试缺少命令：$command_name"
+  done
+  test_dir="$(mktemp -d)"
+  private_file="$test_dir/private-material.enc"
+  STATUS_FILE="$test_dir/status.json"
+  printf 'Salted__contract-test-material' >"$private_file"
+  chmod 0600 "$private_file"
+  assert_private_file "$private_file" "契约测试私密文件"
+  is_private_mode 0600 || fail "权限检查错误拒绝 0600"
+  for unsafe_mode in 0620 0630 0660 0644; do
+    if is_private_mode "$unsafe_mode"; then
+      rm -rf -- "$test_dir"
+      fail "权限检查错误接受 $unsafe_mode"
+    fi
+  done
+  write_status "success" "contract test" "artifact.dump.enc" \
+    "0123456789abcdef" "contract" "fedcba9876543210" "$STARTED_AT"
+  python3 - "$STATUS_FILE" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+if payload.get("status") != "success" or payload.get("remote_verified") is not True:
+    raise SystemExit("status contract mismatch")
+PY
+  rm -rf -- "$test_dir"
+  log "contract self-test passed"
+}
+
+if [[ "${1:-}" == "--contract-test" ]]; then
+  run_contract_self_test
+  exit 0
+fi
 
 cleanup() {
   local status=$?

@@ -6,7 +6,7 @@ After=network.target videocapsule-backend.service
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=/opt/zhicui/frontend
+WorkingDirectory=/opt/zhicui-runtime/current/frontend
 Environment=NODE_ENV=production
 Environment=HOSTNAME=127.0.0.1
 Environment=PORT=3000

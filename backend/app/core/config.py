@@ -73,6 +73,24 @@ class Settings(BaseSettings):
     SMTP_USE_SSL: bool = False
     SMTP_TIMEOUT_SECONDS: int = 15
     PUBLIC_APP_URL: str = "https://luxai.cn"
+    # Optional operations notification endpoint. Only HTTPS is accepted by
+    # the alert service and payloads never include secrets or user content.
+    ALERT_WEBHOOK_URL: str = ""
+    ALERT_WEBHOOK_COOLDOWN_SECONDS: int = 900
+    OPS_MONITOR_ENABLED: bool = False
+    OPS_MONITOR_POLL_SECONDS: int = 60
+    READINESS_CACHE_SECONDS: int = 5
+    # Written by the PostgreSQL backup timer. Readiness only checks the safe
+    # summary; backup archives and encryption keys remain outside the app.
+    BACKUP_STATUS_FILE: str = "/var/lib/zhicui-backups/latest.json"
+    BACKUP_MAX_AGE_HOURS: int = 36
+    # Production release readiness fails closed until an encrypted backup and
+    # its separately encrypted recovery material are verified in another
+    # failure domain. SQLite development remains not_applicable.
+    BACKUP_OFFSITE_REQUIRED: bool = True
+    # Comma-separated reverse-proxy addresses that may supply X-Real-IP.
+    TRUSTED_PROXY_IPS: str = "127.0.0.1,::1"
+    RATE_LIMIT_ENABLED: bool = False
     # Keep outbound delivery opt-in until the deployment has an approved
     # sender domain and account-email verification policy.
     EMAIL_DELIVERY_ENABLED: bool = False

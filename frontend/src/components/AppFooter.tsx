@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import { ArrowUpRight, DownloadSimple, ShieldCheck } from '@phosphor-icons/react';
 import { isNativeAndroidApp } from '@/lib/douyinNative';
 import { useAuth } from '@/lib/hooks/AuthContext';
+import { PUBLIC_INFORMATION_LINKS } from '@/lib/legalDocuments';
 import styles from './MarketingFooter.module.css';
 
 export default function AppFooter() {
@@ -44,6 +45,9 @@ export default function AppFooter() {
                 <ArrowUpRight size={15} weight="light" />
               </Link>
             )}
+            {PUBLIC_INFORMATION_LINKS.map((item) => (
+              <Link key={item.href} href={item.href}>{item.label}</Link>
+            ))}
           </nav>
           <p>© 2026 知萃</p>
         </div>
@@ -62,7 +66,13 @@ export default function AppFooter() {
           <img src="/logo.png" alt="知萃 Logo" className="h-5 w-5 object-contain" />
           <span>知萃 · 把收藏变成行动</span>
         </p>
-        <p className="text-foreground-muted/60">你的个人视频知识工作台</p>
+        <nav className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2" aria-label="法律与支持">
+          {PUBLIC_INFORMATION_LINKS.map((item) => (
+            <Link key={item.href} href={item.href} className="min-h-11 inline-flex items-center hover:text-foreground">
+              {item.label}
+            </Link>
+          ))}
+        </nav>
       </div>
     </footer>
   );

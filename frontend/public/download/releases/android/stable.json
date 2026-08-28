@@ -1,0 +1,7 @@
+{
+  "schema_version": 2,
+  "channel": "stable",
+  "availability": "unavailable",
+  "platform": "android",
+  "reason": "尚未配置长期 Android Release keystore 与允许的证书指纹，正式通道不会发布 Debug APK。"
+}

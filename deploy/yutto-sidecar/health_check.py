@@ -12,6 +12,9 @@ from websockets.asyncio.client import connect
 
 
 EXPECTED_VERSION = "2.2.0"
+REQUIRED_CAPABILITIES = {
+    "resolve.start", "task.subscribe", "task.get", "task.cancel",
+}
 URL = "ws://127.0.0.1:11223"
 TOKEN_FILE = Path("/opt/yutto-sidecar/server.token")
 
@@ -44,7 +47,7 @@ async def main() -> None:
     healthy = (
         auth.get("authenticated") is True
         and info.get("version") == EXPECTED_VERSION
-        and "resolve.start" in (info.get("capabilities") or [])
+        and REQUIRED_CAPABILITIES.issubset(set(info.get("capabilities") or []))
     )
     print(json.dumps({"healthy": healthy, "version": info.get("version")}, ensure_ascii=False))
     if not healthy:

@@ -239,6 +239,10 @@ class CreatorSourceItem(Base):
             "source_id", "is_available", "published_at", "external_id",
         ),
         Index("ix_creator_items_source_state", "source_id", "state", "note_id"),
+        Index(
+            "ix_creator_items_quality",
+            "metadata_quality", "transcription_blocked", "source_id",
+        ),
     )
 
     id: Mapped[str] = mapped_column(
@@ -275,6 +279,20 @@ class CreatorSourceItem(Base):
     )
     state: Mapped[str] = mapped_column(String(24), nullable=False, default="discovered")
     error_code: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    metadata_quality: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="unknown"
+    )
+    quality_issues_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    needs_enrichment: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    transcription_blocked: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    quality_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    quarantined_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
@@ -286,10 +304,27 @@ class CreatorSourceItem(Base):
     def safe_parts(self) -> list[dict[str, Any]]:
         return _safe_parts(self.parts_json)
 
+    def safe_quality_issues(self) -> list[str]:
+        try:
+            value = json.loads(self.quality_issues_json or "[]")
+        except (TypeError, json.JSONDecodeError):
+            return []
+        if not isinstance(value, list):
+            return []
+        allowed = {
+            "missing_title", "placeholder_title", "missing_cover",
+            "missing_author", "missing_published_at", "missing_description",
+            "invalid_source_url", "short_transcript",
+        }
+        return [str(issue) for issue in value if str(issue) in allowed]
+
     def to_dict(self) -> dict[str, Any]:
         if self.removed_at is not None or self.state == "removed":
             availability_status = "removed"
             transcript_status = "removed"
+        elif self.metadata_quality == "quarantined":
+            availability_status = "available" if self.is_available else "unavailable"
+            transcript_status = "needs_action"
         else:
             availability_status = "available" if self.is_available else "unavailable"
             if self.note_id:
@@ -324,7 +359,19 @@ class CreatorSourceItem(Base):
                 and self.removed_at is None
                 and self.state != "removed"
                 and not self.note_id
+                and not self.transcription_blocked
+                and self.metadata_quality != "quarantined"
             ),
+            "metadata_quality": self.metadata_quality or "unknown",
+            "quality_issues": self.safe_quality_issues(),
+            "needs_enrichment": bool(self.needs_enrichment),
+            "transcription_eligibility": (
+                "blocked"
+                if self.transcription_blocked or self.metadata_quality == "quarantined"
+                else "ready"
+            ),
+            "quality_checked_at": _iso(self.quality_checked_at),
+            "quarantined_at": _iso(self.quarantined_at),
             "state": self.state,
             "error_code": self.error_code,
             "first_seen_at": _iso(self.first_seen_at),
@@ -539,4 +586,155 @@ class CreatorSyncRunItem(Base):
             "next_retry_at": _iso(self.next_retry_at),
             "created_at": _iso(self.created_at),
             "updated_at": _iso(self.updated_at),
+        }
+
+
+class CreatorCatalogQualityRun(Base):
+    """Durable, admin-triggered audit/repair batch for catalog metadata."""
+
+    __tablename__ = "creator_catalog_quality_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "requested_by_id", "idempotency_key",
+            name="uq_creator_quality_run_request_key",
+        ),
+        CheckConstraint(
+            "mode IN ('backfill','quarantine')",
+            name="ck_creator_quality_run_mode",
+        ),
+        CheckConstraint(
+            "status IN ('queued','running','completed','failed','cancelled')",
+            name="ck_creator_quality_run_status",
+        ),
+        Index("ix_creator_quality_runs_status_next", "status", "next_batch_at"),
+        Index("ix_creator_quality_runs_lease", "status", "lease_expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(48), primary_key=True, default=lambda: _uuid("quality-run")
+    )
+    requested_by_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+        index=True,
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(96), nullable=False)
+    mode: Mapped[str] = mapped_column(String(24), nullable=False)
+    platform: Mapped[str] = mapped_column(String(24), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued")
+    batch_size: Mapped[int] = mapped_column(Integer, nullable=False, default=50)
+    cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    cursor: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    scanned_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    eligible_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    quarantined_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    skipped_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    summary_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    cancellation_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    next_batch_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    lease_token: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
+    )
+
+    def safe_summary(self) -> dict[str, Any]:
+        return _json_dict(self.summary_json)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "mode": self.mode,
+            "platform": self.platform or None,
+            "status": self.status,
+            "batch_size": self.batch_size,
+            "cooldown_seconds": self.cooldown_seconds,
+            "scanned_count": self.scanned_count,
+            "eligible_count": self.eligible_count,
+            "updated_count": self.updated_count,
+            "quarantined_count": self.quarantined_count,
+            "skipped_count": self.skipped_count,
+            "failed_count": self.failed_count,
+            "summary": self.safe_summary(),
+            "cancellation_requested": self.cancellation_requested,
+            "next_batch_at": _iso(self.next_batch_at),
+            "lease_expires_at": _iso(self.lease_expires_at),
+            "started_at": _iso(self.started_at),
+            "finished_at": _iso(self.finished_at),
+            "created_at": _iso(self.created_at),
+            "updated_at": _iso(self.updated_at),
+        }
+
+
+class CreatorCatalogQualityRunItem(Base):
+    __tablename__ = "creator_catalog_quality_run_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id", "source_item_id", name="uq_creator_quality_run_item"
+        ),
+        Index("ix_creator_quality_run_items_run_status", "run_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(48), primary_key=True, default=lambda: _uuid("quality-item")
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(48), ForeignKey("creator_catalog_quality_runs.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    source_item_id: Mapped[str | None] = mapped_column(
+        String(48), ForeignKey("creator_source_items.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False,
+        index=True,
+    )
+    source_id: Mapped[str] = mapped_column(
+        String(48), ForeignKey("creator_sources.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    platform: Mapped[str] = mapped_column(String(24), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(192), nullable=False)
+    action: Mapped[str] = mapped_column(String(24), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="skipped")
+    issues_before_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    issues_after_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    error_code: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        def issues(value: str) -> list[str]:
+            try:
+                raw = json.loads(value or "[]")
+            except (TypeError, json.JSONDecodeError):
+                return []
+            return [str(item)[:64] for item in raw[:12]] if isinstance(raw, list) else []
+
+        return {
+            "id": self.id,
+            "run_id": self.run_id,
+            "source_item_id": self.source_item_id,
+            "platform": self.platform,
+            "external_id": self.external_id,
+            "action": self.action,
+            "status": self.status,
+            "issues_before": issues(self.issues_before_json),
+            "issues_after": issues(self.issues_after_json),
+            "error_code": self.error_code,
+            "created_at": _iso(self.created_at),
         }

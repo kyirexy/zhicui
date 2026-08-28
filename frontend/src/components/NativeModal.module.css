@@ -17,9 +17,16 @@
 .close { display: grid; width: 44px; height: 44px; border: 0; border-radius: 9px; place-items: center; color: var(--foreground-muted); background: transparent; }
 .close:hover { color: var(--foreground); background: var(--background-secondary); }
 .close:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
-.content { overflow-y: auto; max-height: calc(85dvh - 58px); padding: 6px 20px 20px; }
+.content {
+  overflow-y: auto;
+  max-height: calc(85dvh - 58px);
+  padding: 6px 20px max(20px, env(safe-area-inset-bottom, 0px));
+}
 
 @media (max-width: 640px) {
   .dialog { width: 100%; max-height: 88dvh; margin: auto 0 0; border-right: 0; border-bottom: 0; border-left: 0; border-radius: 12px 12px 0 0; }
-  .content { max-height: calc(88dvh - 58px); }
+  .content {
+    max-height: calc(88dvh - 58px);
+    padding-inline: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px));
+  }
 }

@@ -240,6 +240,65 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<ApiR
   }
 }
 
+export type ZhicuiClientType = 'web' | 'windows' | 'android';
+
+export interface AccountDeletionPreparation {
+  confirmation_token: string;
+  expires_at: string;
+  confirmation_phrase: string;
+  impact: string[];
+}
+
+export async function downloadPersonalDataArchive(body: {
+  password: string;
+  client_type: ZhicuiClientType;
+}): Promise<ApiResponse<{ blob: Blob; filename: string }>> {
+  try {
+    const response = await fetch(`${API_BASE}/api/account/data-export`, {
+      method: 'POST',
+      headers: authHeaders(undefined, true),
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      return {
+        success: false,
+        error: await responseErrorMessage(response),
+        status: response.status,
+      };
+    }
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1]
+      || 'zhicui-personal-data.zip';
+    return {
+      success: true,
+      data: { blob: await response.blob(), filename },
+      status: response.status,
+    };
+  } catch (error) {
+    return { success: false, error: requestFailureMessage(error) };
+  }
+}
+
+export async function prepareAccountDeletion(body: {
+  password: string;
+  client_type: ZhicuiClientType;
+}): Promise<ApiResponse<AccountDeletionPreparation>> {
+  return request<AccountDeletionPreparation>('/api/account/deletion/prepare', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function confirmAccountDeletion(body: {
+  confirmation_token: string;
+  confirmation_phrase: string;
+}): Promise<ApiResponse<{ deleted: boolean; audit_event_id: string }>> {
+  return request<{ deleted: boolean; audit_event_id: string }>(
+    '/api/account/deletion/confirm',
+    { method: 'POST', body: JSON.stringify(body) },
+  );
+}
+
 export async function extractVideo(url: string): Promise<ApiResponse<CardData>> {
   return request<CardData>('/api/extract', {
     method: 'POST',
@@ -2691,6 +2750,48 @@ export interface AdminOps {
 
 export async function getAdminOps(): Promise<ApiResponse<AdminOps>> {
   return request<AdminOps>('/api/admin/ops');
+}
+
+export type ReadinessCheckStatus = 'ready' | 'degraded' | 'not_ready' | 'disabled' | 'not_applicable';
+
+export interface AdminReadinessCheck {
+  status: ReadinessCheckStatus;
+  [key: string]: unknown;
+}
+
+export interface AdminReadiness {
+  status: 'ready' | 'degraded' | 'not_ready';
+  checked_at: string | null;
+  checks: Record<string, AdminReadinessCheck>;
+}
+
+export interface OperationalAlert {
+  id: string;
+  category: string;
+  severity: 'warning' | 'error' | 'critical' | string;
+  title: string;
+  message: string;
+  status: 'open' | 'acknowledged' | 'resolved';
+  occurrence_count: number;
+  metadata: Record<string, unknown>;
+  first_seen_at: string;
+  last_seen_at: string;
+  acknowledged_at: string | null;
+  resolved_at: string | null;
+}
+
+export async function getAdminReadiness(refresh = false): Promise<ApiResponse<AdminReadiness>> {
+  return request<AdminReadiness>(`/api/admin/readiness${refresh ? '?refresh=true' : ''}`);
+}
+
+export async function getOperationalAlerts(refresh = false): Promise<ApiResponse<{ items: OperationalAlert[] }>> {
+  return request<{ items: OperationalAlert[] }>(`/api/admin/operational-alerts${refresh ? '?refresh=true' : ''}`);
+}
+
+export async function acknowledgeOperationalAlert(alertId: string): Promise<ApiResponse<{ acknowledged: boolean }>> {
+  return request<{ acknowledged: boolean }>(`/api/admin/operational-alerts/${encodeURIComponent(alertId)}/acknowledge`, {
+    method: 'POST',
+  });
 }
 
 export type KnowledgeView = 'pages' | 'inbox';

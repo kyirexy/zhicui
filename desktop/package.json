@@ -1,6 +1,7 @@
 {
   "name": "zhicui-desktop",
-  "version": "1.0.9",
+  "version": "1.0.10",
+  "releaseChannel": "beta",
   "description": "知萃 Windows 桌面应用",
   "main": "dist/main.js",
   "author": "知萃",
@@ -64,6 +65,12 @@
       }
     ],
     "win": {
+      "signtoolOptions": {
+        "signingHashAlgorithms": [
+          "sha256"
+        ]
+      },
+      "verifyUpdateCodeSignature": true,
       "target": [
         {
           "target": "nsis",
@@ -86,7 +93,7 @@
       {
         "provider": "generic",
         "url": "https://luxai.cn/download/windows/",
-        "channel": "latest"
+        "channel": "beta"
       }
     ]
   }

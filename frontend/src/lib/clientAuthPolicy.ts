@@ -1,5 +1,12 @@
 const BROWSER_PUBLIC = ['/', '/style'];
-const ALWAYS_PUBLIC = ['/login'];
+const ALWAYS_PUBLIC = [
+  '/login',
+  '/download',
+  '/legal/terms',
+  '/legal/privacy',
+  '/support',
+  '/platform-limits',
+];
 const CLIENT_ONLY_PATHS = [
   '/harness',
   '/extract',

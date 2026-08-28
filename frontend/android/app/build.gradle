@@ -8,11 +8,32 @@ if (!releaseManifestFile.exists()) {
 }
 
 def releaseManifest = new JsonSlurper().parse(releaseManifestFile)
-def releaseVersion = releaseManifest.version?.toString()
-def releaseBuild = releaseManifest.build
+def releaseVersion = System.getenv('ZHICUI_ANDROID_VERSION') ?: releaseManifest.version?.toString()
+def releaseBuildValue = System.getenv('ZHICUI_ANDROID_BUILD') ?: releaseManifest.build
+def releaseBuild = releaseBuildValue instanceof Number
+    ? releaseBuildValue.intValue()
+    : releaseBuildValue?.toString()?.toInteger()
 if (!releaseVersion || !(releaseBuild instanceof Number) || releaseBuild.intValue() < 1) {
     throw new GradleException('Android release manifest must contain a version and positive integer build')
 }
+
+def signingValue = { String environmentName, String propertyName ->
+    def environmentValue = System.getenv(environmentName)
+    if (environmentValue != null && !environmentValue.trim().isEmpty()) {
+        return environmentValue
+    }
+    return project.findProperty(propertyName)?.toString()
+}
+def releaseKeystorePath = signingValue('ZHICUI_ANDROID_KEYSTORE_PATH', 'zhicuiReleaseKeystorePath')
+def releaseKeystorePassword = signingValue('ZHICUI_ANDROID_KEYSTORE_PASSWORD', 'zhicuiReleaseKeystorePassword')
+def releaseKeyAlias = signingValue('ZHICUI_ANDROID_KEY_ALIAS', 'zhicuiReleaseKeyAlias')
+def releaseKeyPassword = signingValue('ZHICUI_ANDROID_KEY_PASSWORD', 'zhicuiReleaseKeyPassword')
+def releaseSigningConfigured = [
+    releaseKeystorePath,
+    releaseKeystorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+].every { it != null && !it.trim().isEmpty() }
 
 android {
     namespace = "com.videocapsule.app"
@@ -30,11 +51,48 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            release {
+                storeFile file(releaseKeystorePath)
+                storePassword releaseKeystorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+                enableV1Signing true
+                enableV2Signing true
+            }
+        }
+    }
     buildTypes {
+        debug {
+            debuggable true
+        }
         release {
+            debuggable false
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (releaseSigningConfigured) {
+                signingConfig signingConfigs.release
+            }
         }
+    }
+}
+
+gradle.taskGraph.whenReady { graph ->
+    def requestsReleaseArtifact = graph.allTasks.any { task ->
+        task.path == ':app:assembleRelease' ||
+            task.path == ':app:bundleRelease' ||
+            task.path.endsWith(':packageRelease')
+    }
+    if (requestsReleaseArtifact && !releaseSigningConfigured) {
+        throw new GradleException(
+            'Android Release 构建缺少 ZHICUI_ANDROID_KEYSTORE_PATH、' +
+            'ZHICUI_ANDROID_KEYSTORE_PASSWORD、ZHICUI_ANDROID_KEY_ALIAS、' +
+            'ZHICUI_ANDROID_KEY_PASSWORD。未输出任何秘密值。'
+        )
+    }
+    if (releaseSigningConfigured && !file(releaseKeystorePath).isFile()) {
+        throw new GradleException('Android Release keystore 路径不存在或不是文件')
     }
 }
 

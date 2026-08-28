@@ -30,7 +30,12 @@ interface AuthState {
   error: string | null;
   enterDevelopmentSession: () => Promise<AuthUser | null>;
   login: (email: string, password: string) => Promise<AuthUser | null>;
-  register: (email: string, password: string, username: string) => Promise<AuthUser | null>;
+  register: (
+    email: string,
+    password: string,
+    username: string,
+    consent: { termsVersion: string; privacyVersion: string },
+  ) => Promise<AuthUser | null>;
   logout: () => void;
   clearError: () => void;
 }
@@ -68,6 +73,12 @@ const AUTH_REQUEST_TIMEOUT_MS = 10_000;
 const AUTH_RESTORE_TIMEOUT_MS = 6_000;
 const DEV_SESSION_TIMEOUT_MS = 5_000;
 const DEV_SESSION_RETRY_DELAYS_MS = [0, 300, 800] as const;
+
+function currentClientType(): 'web' | 'windows' | 'android' {
+  if (typeof window === 'undefined') return 'web';
+  if (window.zhicuiDesktop) return 'windows';
+  return /Android/i.test(window.navigator.userAgent) ? 'android' : 'web';
+}
 
 function wait(delay: number, signal: AbortSignal): Promise<boolean> {
   return new Promise((resolve) => {
@@ -364,12 +375,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return null;
   }, [applySession]);
 
-  const register = useCallback(async (email: string, password: string, username: string) => {
+  const register = useCallback(async (
+    email: string,
+    password: string,
+    username: string,
+    consent: { termsVersion: string; privacyVersion: string },
+  ) => {
     setError(null);
     const response = await authRequest<AuthSession>('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, username }),
+      body: JSON.stringify({
+        email,
+        password,
+        username,
+        accepted_terms: true,
+        accepted_privacy: true,
+        terms_version: consent.termsVersion,
+        privacy_version: consent.privacyVersion,
+        client_type: currentClientType(),
+      }),
     });
     if (response.success && response.data) {
       applySession(response.data);

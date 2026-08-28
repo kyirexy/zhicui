@@ -1,7 +1,9 @@
 export type ClientPlatform = 'android' | 'windows';
+export type ClientReleaseChannel = 'beta' | 'stable';
 
 export interface ClientRelease {
   platform: ClientPlatform;
+  channel: ClientReleaseChannel;
   version: string;
   downloadUrl: string;
   sizeBytes: number;
@@ -21,28 +23,31 @@ export function countedClientDownloadUrl(platform: ClientPlatform): string {
   return `/api/client-downloads/${platform}`;
 }
 
-const ANDROID_MANIFEST_URL = '/download/latest.json';
-const WINDOWS_MANIFEST_URL = '/download/desktop-latest.json';
+const CHANNEL_MANIFEST_ROOT = '/download/releases';
+const LEGACY_ANDROID_MANIFEST_URL = '/download/latest.json';
+const LEGACY_WINDOWS_MANIFEST_URL = '/download/desktop-latest.json';
 
 export const CLIENT_RELEASE_FALLBACKS: ClientReleaseCatalog = {
   android: {
     platform: 'android',
+    channel: 'beta',
     version: '1.2.7',
     build: 19,
     downloadUrl: 'https://luxai.cn/download/zhicui.apk',
     sizeBytes: 9_878_245,
     publishedAt: '2026-08-28T04:32:18.9888176Z',
-    releaseStatus: 'public_download',
+    releaseStatus: 'beta_download',
   },
   windows: {
     platform: 'windows',
-    version: '1.0.5',
+    channel: 'beta',
+    version: '1.0.9',
     architecture: 'x64',
-    downloadUrl: 'https://luxai.cn/download/windows/Zhicui-Setup-latest-x64.exe',
-    sizeBytes: 93_527_494,
-    publishedAt: '2026-08-26T03:52:26.6691323Z',
+    downloadUrl: 'https://luxai.cn/download/windows/Zhicui-Setup-1.0.9-x64.exe',
+    sizeBytes: 93_530_247,
+    publishedAt: '2026-08-28T02:37:35.3912274Z',
     codeSigned: false,
-    releaseStatus: 'public_download',
+    releaseStatus: 'beta_download',
   },
 };
 
@@ -90,12 +95,13 @@ function parseAndroidRelease(value: unknown): ClientRelease {
   const build = readPositiveNumber(value.build);
   return {
     platform: 'android',
+    channel: value.channel === 'stable' ? 'stable' : 'beta',
     version,
     build: build ? Math.trunc(build) : fallback.build,
     downloadUrl: safeDownloadUrl(value.download_url, fallback.downloadUrl),
     sizeBytes,
     publishedAt,
-    releaseStatus: 'public_download',
+    releaseStatus: value.channel === 'stable' ? 'stable_download' : 'beta_download',
   };
 }
 
@@ -110,6 +116,7 @@ function parseWindowsRelease(value: unknown): ClientRelease {
 
   return {
     platform: 'windows',
+    channel: value.channel === 'stable' ? 'stable' : 'beta',
     version,
     architecture: readRequiredString(value.architecture) || fallback.architecture,
     downloadUrl: safeDownloadUrl(
@@ -139,11 +146,32 @@ async function fetchManifest(path: string, signal?: AbortSignal): Promise<unknow
 
 export async function loadClientReleaseCatalog(
   signal?: AbortSignal,
+  channel: ClientReleaseChannel = 'beta',
 ): Promise<ClientReleaseCatalog> {
+  const loadChannel = async (platform: ClientPlatform, legacyPath: string) => {
+    try {
+      const value = await fetchManifest(
+        `${CHANNEL_MANIFEST_ROOT}/${platform}/${channel}.json`,
+        signal,
+      );
+      if (isRecord(value) && value.availability === 'available') return value;
+      throw new Error(`${platform} ${channel} channel unavailable`);
+    } catch (error) {
+      if (channel !== 'beta') throw error;
+      return fetchManifest(legacyPath, signal);
+    }
+  };
   const [androidResult, windowsResult] = await Promise.allSettled([
-    fetchManifest(ANDROID_MANIFEST_URL, signal),
-    fetchManifest(WINDOWS_MANIFEST_URL, signal),
+    loadChannel('android', LEGACY_ANDROID_MANIFEST_URL),
+    loadChannel('windows', LEGACY_WINDOWS_MANIFEST_URL),
   ]);
+
+  if (
+    channel === 'stable'
+    && (androidResult.status === 'rejected' || windowsResult.status === 'rejected')
+  ) {
+    throw new Error('正式版发行尚未开放，拒绝回退到公测安装包');
+  }
 
   return {
     android: androidResult.status === 'fulfilled'

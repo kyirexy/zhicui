@@ -2,16 +2,25 @@ import { App } from '@capacitor/app';
 import { Browser } from '@capacitor/browser';
 import { Capacitor } from '@capacitor/core';
 import { API_BASE } from './api';
+import {
+  CLIENT_RELEASE_CHANNEL,
+  type ClientReleaseChannel,
+} from './releaseChannel';
 
 export interface AndroidReleaseManifest {
-  schema_version: 1;
+  schema_version: 1 | 2;
+  channel: ClientReleaseChannel;
+  availability: 'available';
   platform: 'android';
+  artifact_kind: 'debug' | 'release';
   version: string;
   build: number;
   published_at: string;
   download_url: string;
   size_bytes: number;
   mandatory: boolean;
+  sha256?: string;
+  debuggable?: boolean;
   release_notes: string[];
 }
 
@@ -31,6 +40,13 @@ export type AndroidUpdateCheck =
       status: 'current' | 'update-available';
       installed: RuntimeAppInfo;
       release: AndroidReleaseManifest;
+    }
+  | {
+      status: 'release-unavailable';
+      installed: RuntimeAppInfo;
+      release: null;
+      channel: ClientReleaseChannel;
+      reason: string;
     };
 
 type UnknownRecord = Record<string, unknown>;
@@ -43,7 +59,7 @@ function isRecord(value: unknown): value is UnknownRecord {
 
 function releaseEndpoint(): string {
   const base = API_BASE.replace(/\/+$/, '');
-  return `${base}/api/app/releases/latest`;
+  return `${base}/download/releases/android/${CLIENT_RELEASE_CHANNEL}.json`;
 }
 
 export function isTrustedApkUrl(value: string): boolean {
@@ -55,7 +71,10 @@ export function isTrustedApkUrl(value: string): boolean {
       && url.port === ''
       && url.username === ''
       && url.password === ''
-      && url.pathname === '/download/zhicui.apk'
+      && (
+        url.pathname === '/download/zhicui.apk'
+        || /^\/download\/android\/[A-Za-z0-9._-]+\.apk$/.test(url.pathname)
+      )
     );
   } catch {
     return false;
@@ -77,7 +96,8 @@ export function parseAndroidReleaseManifest(
   const downloadUrl = value.download_url;
 
   const valid = (
-    value.schema_version === 1
+    (value.schema_version === 1 || value.schema_version === 2)
+    && (value.availability === undefined || value.availability === 'available')
     && value.platform === 'android'
     && typeof version === 'string'
     && VERSION_PATTERN.test(version)
@@ -104,14 +124,19 @@ export function parseAndroidReleaseManifest(
   }
 
   return {
-    schema_version: 1,
+    schema_version: value.schema_version as 1 | 2,
+    channel: value.channel === 'stable' ? 'stable' : 'beta',
+    availability: 'available',
     platform: 'android',
+    artifact_kind: value.artifact_kind === 'release' ? 'release' : 'debug',
     version,
     build: Number(build),
     published_at: publishedAt,
     download_url: downloadUrl,
     size_bytes: Number(sizeBytes),
     mandatory: value.mandatory === true,
+    sha256: typeof value.sha256 === 'string' ? value.sha256 : undefined,
+    debuggable: typeof value.debuggable === 'boolean' ? value.debuggable : undefined,
     release_notes: Array.from(
       new Set((notes as string[]).map((note) => note.trim())),
     ),
@@ -164,10 +189,10 @@ export async function fetchLatestAndroidRelease(): Promise<AndroidReleaseManifes
   }
 
   const payload: unknown = await response.json();
-  if (!isRecord(payload) || payload.success !== true) {
-    throw new Error('暂时无法读取线上版本信息');
-  }
-  return parseAndroidReleaseManifest(payload.data);
+  const manifest = isRecord(payload) && payload.success === true
+    ? payload.data
+    : payload;
+  return parseAndroidReleaseManifest(manifest);
 }
 
 export async function checkAndroidAppUpdate(): Promise<AndroidUpdateCheck> {
@@ -175,7 +200,31 @@ export async function checkAndroidAppUpdate(): Promise<AndroidUpdateCheck> {
   if (!installed.nativeAndroid) {
     return { status: 'unsupported', installed, release: null };
   }
-  const release = await fetchLatestAndroidRelease();
+  let release: AndroidReleaseManifest;
+  try {
+    release = await fetchLatestAndroidRelease();
+  } catch (error) {
+    const response = await fetch(`${releaseEndpoint()}?availability=${Date.now()}`, {
+      cache: 'no-store',
+      credentials: 'omit',
+      headers: { Accept: 'application/json' },
+    }).catch(() => null);
+    const payload = response?.ok ? await response.json().catch(() => null) : null;
+    if (
+      isRecord(payload)
+      && payload.availability === 'unavailable'
+      && typeof payload.reason === 'string'
+    ) {
+      return {
+        status: 'release-unavailable',
+        installed,
+        release: null,
+        channel: CLIENT_RELEASE_CHANNEL,
+        reason: payload.reason,
+      };
+    }
+    throw error;
+  }
   return {
     status: hasNewerBuild(installed.build, release.build)
       ? 'update-available'

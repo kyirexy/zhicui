@@ -1,4 +1,4 @@
-export type DesktopBuildChannel = 'development' | 'stable';
+export type DesktopBuildChannel = 'development' | 'beta' | 'stable';
 
 export interface DesktopBuildIdentity {
   channel: DesktopBuildChannel;
@@ -6,8 +6,18 @@ export interface DesktopBuildIdentity {
   windowTitle: string;
 }
 
-export function desktopBuildIdentity(packaged: boolean): DesktopBuildIdentity {
+export function desktopBuildIdentity(
+  packaged: boolean,
+  packagedChannel: 'beta' | 'stable' = 'beta',
+): DesktopBuildIdentity {
   if (packaged) {
+    if (packagedChannel === 'beta') {
+      return {
+        channel: 'beta',
+        displayName: '知萃公测版',
+        windowTitle: '知萃 · 公测版',
+      };
+    }
     return {
       channel: 'stable',
       displayName: '知萃',

@@ -24,6 +24,10 @@ import {
   type DesktopRuntimeInfo,
   type DesktopUpdateResult,
 } from '@/lib/desktopRuntime';
+import {
+  CLIENT_RELEASE_CHANNEL,
+  releaseChannelLabel,
+} from '@/lib/releaseChannel';
 
 type RuntimeMode = 'loading' | 'web' | 'android' | 'desktop';
 
@@ -152,6 +156,7 @@ export default function AppUpdateSettingsCard() {
 
   const androidHasUpdate = androidResult?.status === 'update-available';
   const androidCurrent = androidResult?.status === 'current';
+  const androidUnavailable = androidResult?.status === 'release-unavailable';
   const desktopCurrent = desktopUpdate?.status === 'current';
   const desktopDownloaded = desktopUpdate?.status === 'downloaded';
   const desktopDownloading = desktopUpdate?.status === 'downloading';
@@ -181,10 +186,10 @@ export default function AppUpdateSettingsCard() {
           <h2 className="text-base font-semibold text-foreground text-balance">{title}</h2>
           <p className="mt-1 text-sm leading-6 text-foreground-muted text-pretty">
             {mode === 'desktop'
-              ? `当前安装 ${desktopInfo?.version || desktopUpdate?.installedVersion || '未知版本'}。网页功能刷新即可更新；Windows 程序更新会在后台下载，完成后由你决定何时重启安装。`
+              ? `当前安装 ${desktopInfo?.version || desktopUpdate?.installedVersion || '未知版本'} · ${desktopInfo?.channel === 'stable' ? '正式版' : desktopInfo?.channel === 'beta' ? '公测版' : '开发版'}。网页功能刷新即可更新；Windows 程序更新会在后台下载，完成后由你决定何时重启安装。`
               : mode === 'android'
                 ? androidResult
-                  ? `当前安装 ${androidResult.installed.version} (${androidResult.installed.build})，启动时自动检查新版。`
+                  ? `当前安装 ${androidResult.installed.version} (${androidResult.installed.build}) · ${releaseChannelLabel(androidResult.release?.channel || CLIENT_RELEASE_CHANNEL)}。启动时只检查同一渠道的新版。`
                   : '正在读取设备版本…'
                 : mode === 'web'
                   ? '网页会自动使用线上最新版；需要本机扫码或独立使用时，可安装对应客户端。'
@@ -222,12 +227,23 @@ export default function AppUpdateSettingsCard() {
         </div>
       )}
 
+      {androidUnavailable && (
+        <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/5 p-4" role="status">
+          <p className="font-semibold text-foreground">
+            {releaseChannelLabel(androidResult.channel)}暂未开放下载
+          </p>
+          <p className="mt-1 text-sm leading-6 text-foreground-muted text-pretty">
+            {androidResult.reason} 当前安装仍可继续使用。
+          </p>
+        </div>
+      )}
+
       {androidResult?.release && (
         <div className="mt-4 border-t border-card-border pt-4">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <div>
               <p className="text-xs text-foreground-muted">
-                {androidHasUpdate ? '发现新版本' : '当前版本更新日志'}
+                {releaseChannelLabel(androidResult.release.channel)} · {androidHasUpdate ? '发现新版本' : '当前版本更新日志'}
               </p>
               <p className="mt-0.5 text-lg font-semibold text-foreground tabular-nums">
                 {androidResult.release.version} ({androidResult.release.build})
@@ -312,6 +328,11 @@ export default function AppUpdateSettingsCard() {
           </>
         )}
       </div>
+      {mode === 'android' && androidResult?.release && (
+        <p className="mt-3 text-xs leading-5 text-foreground-muted text-pretty">
+          点击下载后会离开知萃并打开系统浏览器；下载完成仍需 Android 系统安装器确认，知萃不会静默安装或删除当前资料。
+        </p>
+      )}
     </section>
   );
 }

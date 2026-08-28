@@ -14,6 +14,7 @@ import {
   MagnifyingGlass,
   PaintBrushBroad,
   SignOut,
+  ShieldCheck,
   UserCircle,
   X,
   type Icon as PhosphorIcon,
@@ -25,6 +26,7 @@ import {
   Rows4,
 } from 'lucide-react';
 import AppUpdateSettingsCard from '@/components/AppUpdateSettingsCard';
+import AccountDataSettingsCard from '@/components/AccountDataSettingsCard';
 import AgentSourceLimitSettingsCard from '@/components/AgentSourceLimitSettingsCard';
 import AutoSyncSettingsCard from '@/components/AutoSyncSettingsCard';
 import DesktopMediaSettingsCard from '@/components/DesktopMediaSettingsCard';
@@ -33,6 +35,7 @@ import QuickSyncSettingsCard from '@/components/QuickSyncSettingsCard';
 import UserAIProviderSettingsCard from '@/components/UserAIProviderSettingsCard';
 import UserCustomModelsSettingsCard from '@/components/UserCustomModelsSettingsCard';
 import UserVisionProviderSettingsCard from '@/components/UserVisionProviderSettingsCard';
+import ClientCapabilitySettingsCard from '@/components/ClientCapabilitySettingsCard';
 import { useDesktopApp } from '@/components/DesktopAppFrame';
 import ThemeSelector from '@/components/theme/ThemeSelector';
 import { isNativeAndroidApp } from '@/lib/douyinNative';
@@ -44,7 +47,7 @@ import styles from './SettingsWorkspace.module.css';
 
 const WEB_APP_VERSION = '1.1.10';
 
-type SettingsSectionId = 'general' | 'appearance' | 'storage' | 'sync' | 'models' | 'ai' | 'about';
+type SettingsSectionId = 'general' | 'account' | 'appearance' | 'storage' | 'sync' | 'models' | 'ai' | 'about';
 
 interface SettingsSection {
   id: SettingsSectionId;
@@ -61,6 +64,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     description: '当前设备和账号同步状态',
     keywords: '应用 设备 连接 版本 桌面端 网页端',
     icon: GearSix,
+  },
+  {
+    id: 'account',
+    label: '账号与数据',
+    description: '导出个人数据、法律信息和账号注销',
+    keywords: '账号 隐私 协议 数据 导出 下载 注销 删除 投诉 支持',
+    icon: ShieldCheck,
   },
   {
     id: 'appearance',
@@ -255,6 +265,8 @@ function SettingsWorkspace() {
                   </div>
                 </section>
 
+                <ClientCapabilitySettingsCard />
+
                 <section className={styles.mobileActions} aria-label="账号与帮助">
                   <div className={styles.mobileAccount}>
                     <span aria-hidden="true"><UserCircle size={22} /></span>
@@ -287,6 +299,10 @@ function SettingsWorkspace() {
                   </button>
                 </section>
               </>
+            )}
+
+            {activeSection.id === 'account' && (
+              <AccountDataSettingsCard />
             )}
 
             {activeSection.id === 'appearance' && (

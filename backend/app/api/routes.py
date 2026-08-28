@@ -57,6 +57,7 @@ from app.services import (
     omniroute_workspace_service,
     platform_library_service,
     plan_service,
+    privacy_account_service,
     settings_service,
     user_ai_provider_service,
     video_source_ledger_service,
@@ -574,6 +575,11 @@ class RegisterRequest(BaseModel):
     email: str = Field(..., min_length=5, max_length=128)
     password: str = Field(..., min_length=6, max_length=128)
     username: str = Field(..., min_length=2, max_length=128)
+    accepted_terms: bool = False
+    accepted_privacy: bool = False
+    terms_version: str = Field(default="", max_length=24)
+    privacy_version: str = Field(default="", max_length=24)
+    client_type: Literal["web", "windows", "android"] = "web"
 
 
 class LoginRequest(BaseModel):
@@ -716,7 +722,17 @@ def auth_register(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict:
-    user, error = auth_service.register(db, body.email, body.password, body.username)
+    user, error = privacy_account_service.register_with_consent(
+        db,
+        email=body.email,
+        password=body.password,
+        username=body.username,
+        accepted_terms=body.accepted_terms,
+        accepted_privacy=body.accepted_privacy,
+        terms_version=body.terms_version,
+        privacy_version=body.privacy_version,
+        client_type=body.client_type,
+    )
     if error:
         activity_service.log_activity_safely(
             user_id=None,

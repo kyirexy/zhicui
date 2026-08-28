@@ -11,6 +11,7 @@ WorkingDirectory=/opt/yutto-sidecar
 Environment=PYTHONUTF8=1
 Environment=PYTHONIOENCODING=utf-8
 Environment=HOME=/opt/yutto-sidecar
+ExecStartPre=/opt/yutto-sidecar/.venv/bin/python /opt/yutto-sidecar/preflight.py
 ExecStart=/opt/yutto-sidecar/.venv/bin/yutto serve --host 127.0.0.1 --port 11223 --token-file /opt/yutto-sidecar/server.token --download-root /opt/yutto-sidecar/blocked-downloads --tmp-root /opt/yutto-sidecar/tmp --max-fetch-workers 16 --max-download-workers 8 --task-limit 64 --jobs 1
 Restart=on-failure
 RestartSec=5
@@ -23,7 +24,14 @@ ProtectSystem=strict
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadOnlyPaths=/opt/yutto-sidecar/server.token /opt/yutto-sidecar/source /opt/yutto-sidecar/LICENSE.yutto-GPL-3.0 /opt/yutto-sidecar/SOURCE-NOTICE.md
+ReadWritePaths=/opt/yutto-sidecar/tmp /opt/yutto-sidecar/blocked-downloads
 UMask=0077
 
 [Install]

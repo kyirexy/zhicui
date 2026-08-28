@@ -34,7 +34,9 @@ class _FakeYuttoWebSocket:
             result = {
                 "version": "2.2.0",
                 "protocol_version": 1,
-                "capabilities": ["resolve.start", "task.get", "task.cancel"],
+                "capabilities": [
+                    "resolve.start", "task.subscribe", "task.get", "task.cancel",
+                ],
             }
         elif method == "resolve.start":
             result = {"task_id": "resolve-task-1", "state": "queued"}

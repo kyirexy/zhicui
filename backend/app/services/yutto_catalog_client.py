@@ -45,6 +45,12 @@ _BILIBILI_COVER_HOSTS = {
     "i2.hdslb.com",
     "archive.biliimg.com",
 }
+_REQUIRED_PROTOCOL_CAPABILITIES = {
+    "resolve.start",
+    "task.subscribe",
+    "task.get",
+    "task.cancel",
+}
 
 
 class YuttoCatalogError(RuntimeError):
@@ -375,7 +381,10 @@ async def _discover_async(
                 raise YuttoCatalogError("connector_auth_failed", "yutto 连接器认证失败")
             info = await _send_rpc(websocket, 2, "server.info", {}, handle_event, timeout=8)
             capabilities = info.get("capabilities") or []
-            if info.get("version") != YUTTO_VERSION or "resolve.start" not in capabilities:
+            if (
+                info.get("version") != YUTTO_VERSION
+                or not _REQUIRED_PROTOCOL_CAPABILITIES.issubset(set(capabilities))
+            ):
                 raise YuttoCatalogError("connector_version_mismatch", "yutto 连接器版本或能力不匹配")
 
             started = await _send_rpc(
@@ -555,7 +564,12 @@ def cancel_task(task_id: str) -> bool:
 def health() -> dict[str, Any]:
     """Return a safe deployment readiness summary without exposing the token."""
     if not _enabled():
-        return {"enabled": False, "healthy": False, "version": YUTTO_VERSION}
+        return {
+            "enabled": False,
+            "healthy": False,
+            "version": YUTTO_VERSION,
+            "error_code": "connector_disabled",
+        }
 
     async def probe() -> dict[str, Any]:
         if _websocket_connect is None:
@@ -585,13 +599,18 @@ def health() -> dict[str, Any]:
 
     try:
         info = asyncio.run(probe())
+        healthy = (
+            info.get("version") == YUTTO_VERSION
+            and _REQUIRED_PROTOCOL_CAPABILITIES.issubset(
+                set(info.get("capabilities") or [])
+            )
+        )
         return {
             "enabled": True,
-            "healthy": (
-                info.get("version") == YUTTO_VERSION
-                and "resolve.start" in (info.get("capabilities") or [])
-            ),
+            "healthy": healthy,
             "version": _clean_text(info.get("version"), 32),
+            "protocol_version": int(info.get("protocol_version") or 0),
+            "error_code": None if healthy else "connector_version_mismatch",
         }
     except YuttoCatalogError as exc:
         return {

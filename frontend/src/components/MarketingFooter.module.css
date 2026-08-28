@@ -19,6 +19,7 @@
 
 .identity {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 0.9rem;
 }
@@ -32,6 +33,7 @@
 
 .identity div {
   display: flex;
+  min-width: 0;
   flex-direction: column;
 }
 
@@ -44,6 +46,7 @@
   margin-top: 0.26rem;
   color: var(--accent-sky);
   font-size: 0.72rem;
+  overflow-wrap: anywhere;
 }
 
 .inner nav {

@@ -50,6 +50,8 @@ _ACTIVE_CATALOG_CANCELS: dict[str, Callable[[], bool]] = {}
 _ACTIVE_CATALOG_CANCELS_LOCK = threading.Lock()
 _BILIBILI_CATALOG_LIMIT = 50_000
 _BILIBILI_VIDEO_ID = re.compile(r"^BV[0-9A-Za-z]{8,16}$", re.IGNORECASE)
+_HEALTH_STATE_LOCK = threading.Lock()
+_HEALTH_STATE: dict[str, dict[str, str | None]] = {}
 
 
 def _register_catalog_cancel(run_id: str, cancel: Callable[[], bool]) -> None:
@@ -325,7 +327,10 @@ def _discover_bilibili_catalog_fallback(
         item = {
             "external_id": external_id,
             "source_url": f"https://www.bilibili.com/video/{external_id}",
-            "title": f"B站作品 {external_id}",
+            # A stable BVID is useful for a later enrichment attempt, but it is
+            # not a trustworthy title.  Persist it as pending metadata instead
+            # of manufacturing a card-looking placeholder.
+            "title": "",
             "cover_url": "",
             "description": "",
             "author_name": _safe_catalog_text(
@@ -350,6 +355,7 @@ def _discover_bilibili_catalog_fallback(
         "total_count": len(items),
         "failures": [],
         "connector": "yt-dlp-metadata-fallback",
+        "metadata_quality": "degraded",
     }
 
 
@@ -503,7 +509,7 @@ def _normalize_douyin_catalog_item(
     return {
         "external_id": external_id,
         "source_url": f"https://www.douyin.com/video/{external_id}",
-        "title": title or f"抖音作品 {external_id}",
+        "title": title,
         # Douyin CDN cover addresses are usually signed and short-lived.  They
         # must never be persisted by CreatorSourceItem, so the durable catalog
         # deliberately leaves this blank until a stable proxy is introduced.
@@ -735,17 +741,43 @@ def catalog_health(
     *,
     douyin_session_scope: str = "",
 ) -> dict[str, Any]:
-    """Return a credential-free readiness summary for catalog capability."""
+    """Return a credential-free *live protocol* readiness summary.
+
+    Administrative enablement is intentionally evaluated by the caller.  This
+    function only reports whether the configured sidecar is enabled at its own
+    boundary and whether an authenticated protocol probe succeeded now.
+    """
+    checked_at = datetime.now(timezone.utc).isoformat()
+
+    def finalize(result: dict[str, Any]) -> dict[str, Any]:
+        ready = bool(result.get("enabled")) and bool(result.get("probe_ready"))
+        result["healthy"] = ready
+        result["supports_catalog_all"] = ready
+        result["status"] = (
+            "ready" if ready else "disabled" if not result.get("enabled") else "unhealthy"
+        )
+        result["checked_at"] = checked_at
+        with _HEALTH_STATE_LOCK:
+            previous = _HEALTH_STATE.get(platform, {})
+            last_success = checked_at if ready else previous.get("last_success_at")
+            _HEALTH_STATE[platform] = {
+                "last_success_at": last_success,
+                "last_error_code": str(result.get("error_code") or "") or None,
+            }
+        result["last_success_at"] = last_success
+        return result
+
     if platform == "bilibili":
         state = yutto_catalog_client.health()
-        return {
+        probe_ready = bool(state.get("healthy"))
+        return finalize({
             "platform": platform,
             "enabled": bool(state.get("enabled")),
-            "healthy": bool(state.get("healthy")),
-            "supports_catalog_all": bool(state.get("healthy")),
+            "probe_ready": probe_ready,
             "version": _safe_catalog_text(state.get("version"), 32),
             "error_code": _safe_catalog_text(state.get("error_code"), 96) or None,
-        }
+            "degraded_source": None if probe_ready else "yt-dlp-metadata-fallback",
+        })
     if platform == "douyin":
         try:
             raw = douyin_library._request("GET", "/api/v1/health", timeout=3.0)
@@ -763,30 +795,30 @@ def catalog_health(
             if douyin_session_scope:
                 session_state = douyin_library.connection_status(douyin_session_scope)
                 session_ready = bool(session_state.get("cookie_valid"))
-            healthy = connected and storage_mode == "metadata_only" and supports_catalog
-            return {
+            probe_ready = connected and storage_mode == "metadata_only" and supports_catalog
+            return finalize({
                 "platform": platform,
                 "enabled": connected,
-                "healthy": healthy,
-                "supports_catalog_all": healthy,
+                "probe_ready": probe_ready,
                 "storage_mode": storage_mode or "unknown",
                 "session_ready": session_ready,
-                "error_code": None if healthy else "catalog_capability_unavailable",
-            }
+                "error_code": None if probe_ready else "catalog_capability_unavailable",
+                "degraded_source": None,
+            })
         except douyin_library.DouyinLibraryError:
-            return {
+            return finalize({
                 "platform": platform,
                 "enabled": False,
-                "healthy": False,
-                "supports_catalog_all": False,
+                "probe_ready": False,
                 "storage_mode": "unknown",
                 "session_ready": False if douyin_session_scope else None,
                 "error_code": "connector_unavailable",
-            }
-    return {
+                "degraded_source": None,
+            })
+    return finalize({
         "platform": platform,
         "enabled": False,
-        "healthy": False,
-        "supports_catalog_all": False,
+        "probe_ready": False,
         "error_code": "catalog_not_supported",
-    }
+        "degraded_source": None,
+    })

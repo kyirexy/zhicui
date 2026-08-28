@@ -33,6 +33,7 @@ from app.models.creator_sync import (
 from app.models.note import Note
 from app.services import (
     creator_connectors,
+    creator_item_quality,
     douyin_binding_service,
     douyin_library,
     library_extraction_service,
@@ -420,13 +421,16 @@ def _require_catalog_health(
         )
     health_check = getattr(creator_connectors, "catalog_health", None)
     if not callable(health_check):
-        return
+        raise CreatorSyncError(
+            "catalog_connector_unhealthy", "全部作品连接器缺少真实健康探测", 503,
+        )
     health = health_check(
         source.platform,
         douyin_session_scope=credentials.get("douyin_session_scope", ""),
     )
-    if isinstance(health, dict) and not bool(
-        health.get("supports_catalog_all", health.get("available", True))
+    if not isinstance(health, dict) or not (
+        health.get("probe_ready") is True
+        and health.get("supports_catalog_all") is True
     ):
         raise CreatorSyncError(
             "catalog_connector_unhealthy", "全部作品连接器尚未通过健康检查", 503,
@@ -475,6 +479,18 @@ def create_run(
             for item in selected_items
         ):
             raise CreatorSyncError("selection_unavailable", "选择中包含已移除或当前不可用的作品", 422)
+        blocked = [
+            item
+            for item in selected_items
+            if item.transcription_blocked
+            or item.metadata_quality in {"needs_action", "quarantined"}
+        ]
+        if blocked:
+            raise CreatorSyncError(
+                "selection_needs_enrichment",
+                "选择中包含资料待补全的作品，请刷新目录后再准备文稿",
+                422,
+            )
 
     target_count = (
         len(selected_items) if normalized == "selected_transcript"
@@ -976,6 +992,8 @@ def _upsert_source_item(
         )
         db.add(item)
         db.flush()
+    was_quarantined = item.metadata_quality == "quarantined"
+    previous_quality_issues = set(item.safe_quality_issues())
     newly_seen = item.last_seen_run_id != run.id
     if "source_url" in work:
         source_url = _canonical_page_url(work.get("source_url"), run.platform)
@@ -1010,6 +1028,33 @@ def _upsert_source_item(
     if item.removed_at is None and item.state != "removed":
         item.is_available = True
         item.unavailable_at = None
+    if (run.operation or "recent_transcript") == "catalog_all":
+        quality = creator_item_quality.assess_catalog_metadata(item)
+        short_transcript_quarantine = (
+            was_quarantined and "short_transcript" in previous_quality_issues
+        )
+        remains_quarantined = was_quarantined and bool(
+            quality["transcription_blocked"] or short_transcript_quarantine
+        )
+        quality_issues = list(quality["quality_issues"])
+        if short_transcript_quarantine:
+            quality_issues.append("short_transcript")
+            quality_issues = list(dict.fromkeys(quality_issues))
+        item.metadata_quality = (
+            "quarantined" if remains_quarantined else str(quality["metadata_quality"])
+        )
+        item.quality_issues_json = json.dumps(
+            quality_issues, ensure_ascii=True, separators=(",", ":"),
+        )
+        item.needs_enrichment = bool(quality_issues)
+        item.transcription_blocked = bool(
+            quality["transcription_blocked"] or short_transcript_quarantine
+        )
+        item.quality_checked_at = now
+        if remains_quarantined:
+            item.transcription_blocked = True
+        else:
+            item.quarantined_at = None
     return item, newly_seen
 
 
@@ -1385,7 +1430,7 @@ def _import_work(
             safe_item = {
                 "aweme_id": str(work["external_id"])[:192],
                 "can_extract": True,
-                "title": str(work.get("title") or "抖音作品")[:512],
+                "title": str(work.get("title") or "")[:512],
                 "source_url": _canonical_page_url(work.get("source_url"), "douyin"),
                 "cover_url": _safe_cover_url(work.get("cover_url")),
                 "author_name": str(work.get("author_name") or "")[:160],
@@ -1598,6 +1643,21 @@ def _process_transcript_run(
                 continue
             if item.note_id:
                 item.note_id = None
+            if (
+                item.metadata_quality == "quarantined"
+                or item.transcription_blocked
+            ):
+                item.needs_enrichment = True
+                item.transcription_blocked = True
+                item.quality_checked_at = _utcnow()
+                _mark_item_result(
+                    db, run, run_item, item,
+                    state="failed",
+                    error_code="metadata_needs_enrichment",
+                    error_message="作品元数据待补全，暂不准备文稿",
+                )
+                db.commit()
+                continue
             run_item.state = "importing"
             run_item.attempt_count += 1
             run_item.next_retry_at = None

@@ -69,3 +69,12 @@ videos/
 # 打包文件
 zhicui.tar.gz
 *.tar.gz
+
+# Client signing credentials are injected locally/through CI only.
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.cer
+*.crt
+*.pem

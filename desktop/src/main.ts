@@ -18,6 +18,7 @@ import type {
   PlatformAccountStatus,
 } from './contract';
 import { desktopBuildIdentity } from './build-identity';
+import { readPackagedReleaseChannel } from './release-channel';
 import { DouyinDesktopLogin } from './douyin-login';
 import { DesktopMediaLibrary } from './media-library';
 import { PlatformAccountConnector } from './platform-account';
@@ -41,7 +42,11 @@ import {
 } from './updater';
 
 const DEEP_LINK_PREFIX = 'zhicui://';
-const BUILD_IDENTITY = desktopBuildIdentity(app.isPackaged);
+const PACKAGED_RELEASE_CHANNEL = readPackagedReleaseChannel(app.getAppPath());
+const BUILD_IDENTITY = desktopBuildIdentity(
+  app.isPackaged,
+  PACKAGED_RELEASE_CHANNEL,
+);
 app.setName(BUILD_IDENTITY.displayName);
 let mainWindow: BrowserWindow | null = null;
 let pendingDeepLink: string | null = null;
@@ -384,7 +389,7 @@ app.whenReady().then(() => {
     'zhicui-media',
     (request) => mediaLibrary!.handleProtocolRequest(request),
   );
-  initializeDesktopUpdater(emitUpdateStatus);
+  initializeDesktopUpdater(emitUpdateStatus, PACKAGED_RELEASE_CHANNEL);
   registerProtocol();
   registerIpc();
   pendingDeepLink = findDeepLink(process.argv);

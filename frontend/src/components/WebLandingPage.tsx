@@ -14,6 +14,7 @@ import {
   Target,
 } from '@phosphor-icons/react';
 import { QRCodeSVG } from 'qrcode.react';
+import Link from 'next/link';
 import {
   CLIENT_RELEASE_FALLBACKS,
   countedClientDownloadUrl,
@@ -121,7 +122,7 @@ export default function WebLandingPage() {
             <span>变成能问、能用的知识。</span>
           </h1>
           <p className={styles.heroLead}>
-            自动整理完整文案，基于视频资料提问，再把有用结论保存为知识或行动计划。
+            手动选择要整理的视频，获得完整文案并基于资料提问，再把有用结论保存为知识或行动计划。
           </p>
 
           <div className={styles.heroActions}>
@@ -186,7 +187,7 @@ export default function WebLandingPage() {
         <header className={styles.sectionHeading} data-reveal>
           <p>客户端下载</p>
           <h2 id="download-title">在电脑整理，在手机继续</h2>
-          <span>同一账号，文案、问答和计划自动同步。</span>
+          <span>同一账号，文案、问答和计划跨端同步；平台账号采集由 Windows 手动发起。</span>
         </header>
 
         <div className={styles.platformGrid}>
@@ -204,7 +205,7 @@ export default function WebLandingPage() {
             <h3>Windows 桌面端</h3>
             <p>批量同步视频、整理完整文案并进行深度提问。</p>
             <div className={styles.releaseMeta} aria-label="Windows 版本信息">
-              <span>v{releases.windows.version} 公测</span>
+              <span>v{releases.windows.version} · beta 公测</span>
               <span>{windowsSize}</span>
               <span>Windows 10/11 {releases.windows.architecture || 'x64'}</span>
             </div>
@@ -232,9 +233,9 @@ export default function WebLandingPage() {
               </span>
             </div>
             <h3>Android 移动端</h3>
-            <p>随时阅读完整文案、向视频提问并执行每日计划。</p>
+            <p>粘贴分享链接、阅读完整文案、向视频提问并执行每日计划；账号采集需 Windows。</p>
             <div className={styles.releaseMeta} aria-label="Android 版本信息">
-              <span>v{releases.android.version}</span>
+              <span>v{releases.android.version} · beta 公测</span>
               <span>{androidSize}</span>
               <span>APK</span>
             </div>
@@ -262,6 +263,10 @@ export default function WebLandingPage() {
             </div>
           </article>
         </div>
+        <p className={styles.releaseNotice}>
+          平台访问可能受登录状态和平台规则影响；已有资料不会因临时限制而丢失。
+          <Link href="/platform-limits">查看平台与客户端限制</Link>
+        </p>
       </section>
     </div>
   );

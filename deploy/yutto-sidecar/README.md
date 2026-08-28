@@ -9,6 +9,8 @@ Cookie 或原始响应写入知萃数据库。
 - 监听：`ws://127.0.0.1:11223`，不得经 Nginx 或防火墙暴露
 - 鉴权：`/opt/yutto-sidecar/server.token`，普通文件、`ubuntu:ubuntu`、`0600`
 - 隔离：独立 venv、systemd 和源码目录；运行时 `/opt/yutto-sidecar` 只读，不链接进 FastAPI
+- 启动闸门：`preflight.py` 校验固定版本、token 所有者/0600、许可证与运行目录；
+  readiness 再执行带鉴权的 `server.info` 并要求完整 resolve/task 协议能力。
 
 注意：已核验 PyPI 官方 `yutto-2.2.0-py3-none-any.whl` 的 SHA256 为
 `d4a60283f88d64939c6828cef6ab2dfdd9d7ca33899524c0c33bef2d6b5eaeba`，但该

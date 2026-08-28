@@ -12,7 +12,7 @@ export interface DesktopRuntimeInfo {
   platform: NodeJS.Platform;
   version: string;
   packaged: boolean;
-  channel: 'development' | 'stable';
+  channel: 'development' | 'beta' | 'stable';
   displayName: string;
 }
 

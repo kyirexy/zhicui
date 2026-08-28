@@ -55,6 +55,9 @@ import {
   getNote,
   getPlan,
   getAdminOps,
+  getAdminReadiness,
+  getOperationalAlerts,
+  acknowledgeOperationalAlert,
   getUserActivity,
   listAdminChatModels,
   type ApiResponse,
@@ -72,6 +75,9 @@ import {
   type SystemInfo,
   type AdminUserDetail,
   type AdminOps,
+  type AdminReadiness,
+  type AdminReadinessCheck,
+  type OperationalAlert,
   type UserActivityItem,
 } from '@/lib/api';
 import { getPlanProgress, type NoteDetail, type PlanData } from '@/lib/types';
@@ -141,6 +147,43 @@ const CARD_TYPE_OPTIONS = [
 
 const ACTION_LABELS = ADMIN_ACTION_LABELS;
 
+const READINESS_LABELS: Record<string, string> = {
+  database: '数据库',
+  ai_configuration: 'AI 与语音配置',
+  queues: '后台任务队列',
+  creator_connectors: '博主同步连接器',
+  backup: '数据库备份',
+};
+
+const READINESS_STATUS_LABELS: Record<string, string> = {
+  ready: '正常',
+  degraded: '需关注',
+  not_ready: '未就绪',
+  disabled: '未启用',
+  not_applicable: '不适用',
+};
+
+function readinessDetails(name: string, check: AdminReadinessCheck): string {
+  if (name === 'database' && typeof check.latency_ms === 'number') return `${check.latency_ms} ms`;
+  if (name === 'ai_configuration') {
+    return `LLM ${check.llm_configured ? '已配置' : '未配置'} · ASR ${check.asr_configured ? '已配置' : '未配置'}`;
+  }
+  if (name === 'queues') {
+    return `Agent 滞留 ${Number(check.stale_agent_turns || 0)} · 博主租约过期 ${Number(check.expired_creator_leases || 0)}`;
+  }
+  if (name === 'creator_connectors') {
+    if (!check.enabled) return '功能未开放';
+    const catalog = check.catalog as Record<string, { status?: string }> | undefined;
+    return `抖音 ${READINESS_STATUS_LABELS[catalog?.douyin?.status || 'disabled'] || '未知'} · B站 ${READINESS_STATUS_LABELS[catalog?.bilibili?.status || 'disabled'] || '未知'}`;
+  }
+  if (name === 'backup') {
+    if (check.status === 'not_applicable') return '当前数据库无需此检查';
+    const age = typeof check.age_hours === 'number' ? `${check.age_hours} 小时前` : '时间未知';
+    return `${age} · 校验 ${check.checksum_verified ? '通过' : '未通过'} · 恢复演练 ${check.restore_verified ? '通过' : '未通过'}`;
+  }
+  return '';
+}
+
 export default function AdminPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
@@ -190,6 +233,9 @@ export default function AdminPage() {
   // 系统
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
   const [ops, setOps] = useState<AdminOps | null>(null);
+  const [readiness, setReadiness] = useState<AdminReadiness | null>(null);
+  const [operationalAlerts, setOperationalAlerts] = useState<OperationalAlert[]>([]);
+  const [opsRefreshing, setOpsRefreshing] = useState(false);
 
   // 运营概览增强：模型状态 + 最近用户任务
   const [recentUserTasks, setRecentUserTasks] = useState<UserActivityItem[]>([]);
@@ -233,7 +279,7 @@ export default function AdminPage() {
       if (!creatorSyncConfig) refreshCreatorSyncConfig();
       if (!agentV2Config) refreshAgentV2Config();
     }
-    if (tab === 'ops') refreshOps();
+    if (tab === 'ops') refreshOperations(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
@@ -278,6 +324,31 @@ export default function AdminPage() {
     if (result.success && result.data) setAgentV2Config(result.data);
   }
   async function refreshOps() { const r = await getAdminOps(); if (r.success && r.data) setOps(r.data); }
+  async function refreshOperations(force = false) {
+    setOpsRefreshing(true);
+    const [opsResult, readinessResult, alertsResult] = await Promise.all([
+      getAdminOps(),
+      getAdminReadiness(force),
+      getOperationalAlerts(force),
+    ]);
+    if (opsResult.success && opsResult.data) setOps(opsResult.data);
+    if (readinessResult.success && readinessResult.data) setReadiness(readinessResult.data);
+    if (alertsResult.success && alertsResult.data) setOperationalAlerts(alertsResult.data.items);
+    const failure = [opsResult, readinessResult, alertsResult].find((result) => !result.success);
+    if (failure) setErr(failure.error || '运维状态刷新失败');
+    setOpsRefreshing(false);
+  }
+  async function acknowledgeAlert(alertId: string) {
+    const result = await acknowledgeOperationalAlert(alertId);
+    if (!result.success) {
+      setErr(result.error || '确认告警失败');
+      return;
+    }
+    setOperationalAlerts((items) => items.map((item) => (
+      item.id === alertId ? { ...item, status: 'acknowledged' } : item
+    )));
+    flash('告警已确认');
+  }
   async function refreshDashboardExtras() {
     const [tasksResult, modelsResult, llmResult, asrResult, extractionResult] = await Promise.all([
       getUserActivity(7, 1, 8),
@@ -949,7 +1020,98 @@ export default function AdminPage() {
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-bold text-foreground">系统运维</h1>
-                <button onClick={() => refreshOps()} className="text-xs px-3 py-1.5 rounded-lg bg-[var(--admin-surface-2)] hover:brightness-95">刷新</button>
+                <button
+                  type="button"
+                  onClick={() => void refreshOperations(true)}
+                  disabled={opsRefreshing}
+                  className="min-h-11 px-4 rounded-xl bg-[var(--admin-surface-2)] text-sm font-medium hover:brightness-95 disabled:opacity-60"
+                >
+                  {opsRefreshing ? '正在检查…' : '重新检查'}
+                </button>
+              </div>
+              {readiness && (
+                <div className="admin-panel p-5">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                    <div>
+                      <h2 className="text-base font-semibold text-foreground">正式环境就绪状态</h2>
+                      <p className="mt-1 text-xs text-foreground-muted">
+                        {readiness.checked_at ? `检查于 ${new Date(readiness.checked_at).toLocaleString('zh-CN')}` : '尚未完成检查'}
+                      </p>
+                    </div>
+                    <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                      readiness.status === 'ready'
+                        ? 'bg-emerald-500/10 text-emerald-600'
+                        : readiness.status === 'degraded'
+                          ? 'bg-amber-500/10 text-amber-600'
+                          : 'bg-red-500/10 text-red-600'
+                    }`}>
+                      {readiness.status === 'ready' ? '可以对外服务' : readiness.status === 'degraded' ? '服务降级' : '暂不应发布'}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {Object.entries(readiness.checks).map(([name, check]) => {
+                      const healthy = ['ready', 'disabled', 'not_applicable'].includes(check.status);
+                      const detail = readinessDetails(name, check);
+                      return (
+                        <div key={name} className="rounded-xl border border-[var(--admin-border)] bg-[var(--admin-surface-2)] p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <strong className="text-sm text-foreground">{READINESS_LABELS[name] || name}</strong>
+                            <span className={`text-xs font-medium ${healthy ? 'text-emerald-600' : check.status === 'degraded' ? 'text-amber-600' : 'text-red-600'}`}>
+                              {READINESS_STATUS_LABELS[check.status] || check.status}
+                            </span>
+                          </div>
+                          {detail && <p className="mt-2 text-xs leading-5 text-foreground-muted">{detail}</p>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              <div className="admin-panel p-5">
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <h2 className="text-base font-semibold text-foreground">运行告警</h2>
+                  <span className="text-xs text-foreground-muted">
+                    {operationalAlerts.filter((item) => item.status !== 'resolved').length} 条待处理
+                  </span>
+                </div>
+                {operationalAlerts.length === 0 ? (
+                  <div className="rounded-xl bg-emerald-500/5 px-4 py-3 text-sm text-emerald-700">当前没有运行告警</div>
+                ) : (
+                  <div className="space-y-3">
+                    {operationalAlerts.slice(0, 20).map((alert) => (
+                      <div key={alert.id} className="rounded-xl border border-[var(--admin-border)] bg-[var(--admin-surface-2)] p-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <strong className="text-sm text-foreground">{alert.title}</strong>
+                              <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                                alert.status === 'resolved'
+                                  ? 'bg-emerald-500/10 text-emerald-600'
+                                  : alert.status === 'acknowledged'
+                                    ? 'bg-amber-500/10 text-amber-600'
+                                    : 'bg-red-500/10 text-red-600'
+                              }`}>
+                                {alert.status === 'resolved' ? '已恢复' : alert.status === 'acknowledged' ? '已确认' : '待处理'}
+                              </span>
+                              {alert.occurrence_count > 1 && <span className="text-xs text-foreground-muted">累计 {alert.occurrence_count} 次</span>}
+                            </div>
+                            <p className="mt-1 text-xs leading-5 text-foreground-muted">{alert.message}</p>
+                            <p className="mt-1 text-[11px] text-foreground-muted">最近发生：{new Date(alert.last_seen_at).toLocaleString('zh-CN')}</p>
+                          </div>
+                          {alert.status === 'open' && (
+                            <button
+                              type="button"
+                              onClick={() => void acknowledgeAlert(alert.id)}
+                              className="min-h-11 shrink-0 rounded-xl border border-[var(--admin-border)] px-4 text-sm font-medium text-foreground hover:bg-[var(--admin-surface-3)]"
+                            >
+                              确认已知
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="admin-panel p-5">
                 <h2 className="text-base font-semibold text-foreground mb-3">数据库表行数</h2>

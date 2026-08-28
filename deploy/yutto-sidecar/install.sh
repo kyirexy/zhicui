@@ -17,6 +17,7 @@ CATALOG_PATCH="${DEPLOY_ROOT}/zhicui-catalog-fields.patch"
 
 test -f "${DEPLOY_ROOT}/zhicui-yutto-sidecar.service"
 test -f "${DEPLOY_ROOT}/health_check.py"
+test -f "${DEPLOY_ROOT}/preflight.py"
 test -f "${DEPLOY_ROOT}/SOURCE-NOTICE.md"
 test -f "${CATALOG_PATCH}"
 
@@ -136,6 +137,11 @@ install -o root -g root -m 0644 \
 install -o root -g root -m 0755 \
   "${DEPLOY_ROOT}/health_check.py" \
   "${APP_ROOT}/health_check.py"
+install -o ubuntu -g ubuntu -m 0755 \
+  "${DEPLOY_ROOT}/preflight.py" \
+  "${APP_ROOT}/preflight.py"
+
+sudo -u ubuntu "${APP_ROOT}/.venv/bin/python" "${APP_ROOT}/preflight.py"
 
 systemctl daemon-reload
 

@@ -24,6 +24,7 @@ import {
   type RuntimeAppInfo,
 } from '@/lib/appUpdate';
 import { useAuth } from '@/lib/hooks/AuthContext';
+import { releaseChannelLabel } from '@/lib/releaseChannel';
 
 const DISMISSED_BUILD_KEY = 'zhicui_update_dismissed_build';
 const PERIODIC_UPDATE_CHECK_MS = 60 * 60_000;
@@ -208,7 +209,9 @@ export default function AppUpdatePrompt() {
               <RefreshCw size={22} />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="app-update-eyebrow">发现新版本</p>
+              <p className="app-update-eyebrow">
+                {releaseChannelLabel(available.release.channel)} · 发现新版本
+              </p>
               <h2 id="app-update-title" className="text-balance">
                 知萃 {available.release.version} 可以更新
               </h2>
@@ -224,11 +227,15 @@ export default function AppUpdatePrompt() {
           </header>
 
           <p id="app-update-description" className="app-update-description text-pretty">
-            更新后即可使用本次新增功能。安装过程由系统浏览器和 Android
-            安全确认完成。
+            更新后即可使用本次新增功能。知萃会先打开系统浏览器下载安装包，
+            再由 Android 系统安装器请你确认；不会静默安装，账号和资料不会丢失。
           </p>
 
           <dl className="app-update-meta">
+            <div>
+              <dt>发行渠道</dt>
+              <dd>{releaseChannelLabel(available.release.channel)}</dd>
+            </div>
             <div>
               <dt>当前版本</dt>
               <dd className="tabular-nums">
@@ -269,7 +276,9 @@ export default function AppUpdatePrompt() {
           <div className="app-update-safety">
             <ShieldCheck size={17} aria-hidden="true" />
             <p className="text-pretty">
-              下载地址仅限 luxai.cn，不会在知萃数据库中保存安装包。
+              下载地址仅限 luxai.cn；{available.release.channel === 'beta'
+                ? '当前为公测渠道，可能包含仍在验证的功能。'
+                : '正式渠道只接受固定 Release 签名身份。'}
             </p>
           </div>
 

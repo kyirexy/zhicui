@@ -1,0 +1,8 @@
+{
+  "schema_version": 2,
+  "channel": "stable",
+  "availability": "unavailable",
+  "platform": "windows",
+  "architecture": "x64",
+  "reason": "尚未配置受信任的 Windows Authenticode 证书和发布者身份，正式通道不会发布未签名安装包。"
+}

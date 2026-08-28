@@ -1606,6 +1606,8 @@ body:has(.admin-workspace-root) .app-main {
    Capacitor app keep their own application shells and are not affected. */
 html:not([data-desktop-app="true"]):not([data-capacitor="true"]) body:has(.marketing-home) {
   background: #ffffff;
+  max-width: 100%;
+  overflow-x: clip;
 }
 
 html:not([data-desktop-app="true"]):not([data-capacitor="true"]) body:has(.marketing-home) .app-main {

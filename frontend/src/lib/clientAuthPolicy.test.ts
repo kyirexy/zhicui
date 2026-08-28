@@ -52,6 +52,26 @@ test('login remains public in every runtime', () => {
   assert.equal(policy.browserClientGate, false);
 });
 
+test('法律、支持、平台限制与下载入口在所有客户端无需登录', () => {
+  for (const pathname of [
+    '/legal/terms',
+    '/legal/privacy',
+    '/support',
+    '/platform-limits',
+    '/download',
+  ]) {
+    for (const runtime of [
+      { desktop: false, nativeAndroid: false, development: false },
+      { desktop: true, nativeAndroid: false, development: false },
+      { desktop: false, nativeAndroid: true, development: false },
+    ]) {
+      const policy = resolveClientAuthPolicy(pathname, runtime);
+      assert.equal(policy.publicRoute, true, `${pathname} 应在所有客户端公开`);
+      assert.equal(policy.browserClientGate, false);
+    }
+  }
+});
+
 test('desktop development discards a legacy implicit dev account by default', () => {
   assert.equal(shouldDiscardDevelopmentSession(
     { email: 'dev@zhicui.local' },

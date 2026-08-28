@@ -20,6 +20,11 @@ from fastapi.responses import JSONResponse
 from app.api.routes import router
 from app.api.agent_routes import router as agent_router
 from app.api.video_analysis_routes import router as video_analysis_router
+from app.api.ops_routes import router as ops_router
+from app.api.privacy_account_routes import router as privacy_account_router
+from app.api.catalog_quality_routes import router as catalog_quality_router
+from app.core.rate_limit import RateLimitMiddleware
+from app.core.security_headers import SecurityHeadersMiddleware
 from app.core.database import Base, SessionLocal, engine
 from sqlalchemy import inspect, text
 
@@ -32,6 +37,12 @@ from app.models.admin_audit_log import AdminAuditLog  # noqa: F401
 from app.models.llm_usage_log import LlmUsageLog  # noqa: F401
 from app.models.user_activity_log import UserActivityLog  # noqa: F401
 from app.models.application_error_log import ApplicationErrorLog  # noqa: F401
+from app.models.operational_alert import OperationalAlert  # noqa: F401
+from app.models.privacy_account import (  # noqa: F401
+    AccountActionGrant,
+    AccountPrivacyAuditEvent,
+    UserLegalConsent,
+)
 from app.models.client_download_daily import ClientDownloadDaily  # noqa: F401
 from app.models.feedback import Feedback  # noqa: F401
 from app.models.library_hidden_item import LibraryHiddenItem  # noqa: F401
@@ -44,6 +55,8 @@ from app.models.creator_sync import (  # noqa: F401
     CreatorSourceItem,
     CreatorSyncRun,
     CreatorSyncRunItem,
+    CreatorCatalogQualityRun,
+    CreatorCatalogQualityRunItem,
 )
 from app.models.agent_thread import AgentMessage, AgentThread  # noqa: F401
 from app.models.agent_runtime import (  # noqa: F401
@@ -72,9 +85,12 @@ from app.services import (
     agent_runtime_worker,
     auth_service,
     automation_runner,
+    creator_catalog_quality_migration,
+    creator_catalog_quality_worker,
     creator_sync_worker,
     chat_model_catalog_service,
     error_log_service,
+    ops_monitor_runner,
     video_analysis_catalog_service,
     video_analysis_service,
     video_analysis_worker,
@@ -104,6 +120,8 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(RateLimitMiddleware)
 
     def request_log_context(request: Request) -> dict:
         route = request.scope.get("route")
@@ -226,12 +244,16 @@ def create_app() -> FastAPI:
     app.include_router(router)
     app.include_router(agent_router)
     app.include_router(video_analysis_router)
+    app.include_router(ops_router)
+    app.include_router(privacy_account_router)
+    app.include_router(catalog_quality_router)
 
     # Create database tables on startup
     @app.on_event("startup")
     def on_startup() -> None:
         Base.metadata.create_all(bind=engine)
         _migrate_db()
+        creator_catalog_quality_migration.ensure_schema(engine)
         with SessionLocal() as db:
             agent_service.mark_stale_threads(db)
             video_analysis_catalog_service.ensure_default_drafts(db)
@@ -242,6 +264,7 @@ def create_app() -> FastAPI:
         )
         video_analysis_worker.runner.start()
         creator_sync_worker.runner.start()
+        creator_catalog_quality_worker.runner.start()
         agent_runtime_worker.runner.start()
         threading.Thread(
             target=_reconcile_video_analysis_agent_runs,
@@ -249,10 +272,13 @@ def create_app() -> FastAPI:
             daemon=True,
         ).start()
         automation_runner.runner.start()
+        ops_monitor_runner.runner.start()
 
     @app.on_event("shutdown")
     def on_shutdown() -> None:
+        ops_monitor_runner.runner.stop()
         agent_runtime_worker.runner.stop()
+        creator_catalog_quality_worker.runner.stop()
         creator_sync_worker.runner.stop()
         automation_runner.runner.stop()
         video_analysis_worker.runner.stop()
@@ -560,10 +586,53 @@ def _migrate_creator_sync(conn, insp) -> None:
             })
 
 
+def _migrate_admin_audit_logs(conn, insp, dialect_name: str) -> None:
+    if not insp.has_table("admin_audit_logs"):
+        return
+    audit_columns = {
+        column["name"]: column
+        for column in insp.get_columns("admin_audit_logs")
+    }
+    admin_subject = audit_columns.get("admin_user_id")
+    if not admin_subject or admin_subject.get("nullable", True):
+        return
+    if dialect_name == "postgresql":
+        conn.execute(text(
+            "ALTER TABLE admin_audit_logs "
+            "ALTER COLUMN admin_user_id DROP NOT NULL"
+        ))
+        return
+    if dialect_name != "sqlite":
+        raise RuntimeError(
+            "admin_audit_logs.admin_user_id 仍为 NOT NULL，"
+            f"尚未实现 {dialect_name} 的安全迁移"
+        )
+
+    # SQLite cannot drop NOT NULL in place. Rebuild this small, append-only
+    # table before account deletion can anonymize an administrator without
+    # erasing the audit history.
+    legacy_name = "admin_audit_logs_pre_nullable"
+    conn.execute(text(f"DROP TABLE IF EXISTS {legacy_name}"))
+    conn.execute(text(
+        f"ALTER TABLE admin_audit_logs RENAME TO {legacy_name}"
+    ))
+    AdminAuditLog.__table__.create(bind=conn)
+    column_names = (
+        "id, admin_user_id, action, target_type, target_id, "
+        "detail, ip, created_at"
+    )
+    conn.execute(text(
+        f"INSERT INTO admin_audit_logs ({column_names}) "
+        f"SELECT {column_names} FROM {legacy_name}"
+    ))
+    conn.execute(text(f"DROP TABLE {legacy_name}"))
+
+
 def _migrate_db() -> None:
     """Apply small cross-dialect additive migrations without Alembic."""
     insp = inspect(engine)
     with engine.begin() as conn:
+        _migrate_admin_audit_logs(conn, insp, engine.dialect.name)
         _migrate_knowledge_entries(conn, insp, engine.dialect.name)
         _migrate_creator_sync(conn, insp)
         # Older local SQLite builds ran with foreign_keys disabled. Remove

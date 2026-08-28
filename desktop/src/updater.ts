@@ -2,6 +2,7 @@ import { app, type BrowserWindow } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import type { DesktopUpdateResult } from './contract';
 import { nativeUpdateCheckDisposition } from './update-policy';
+import type { PackagedReleaseChannel } from './release-channel';
 
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
@@ -47,10 +48,15 @@ export function getDesktopUpdateState(): DesktopUpdateResult {
   return updateState;
 }
 
-export function initializeDesktopUpdater(publisher: UpdatePublisher): void {
+export function initializeDesktopUpdater(
+  publisher: UpdatePublisher,
+  channel: PackagedReleaseChannel,
+): void {
   publishUpdate = publisher;
   if (updaterReady) return;
   updaterReady = true;
+  // electron-updater 会读取同名 `<channel>.yml`。旧 latest.yml 仅保留给历史 beta。
+  autoUpdater.channel = channel;
 
   autoUpdater.on('checking-for-update', () => {
     setUpdateState({ status: 'checking' });

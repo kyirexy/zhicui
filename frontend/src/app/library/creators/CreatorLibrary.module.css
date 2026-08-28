@@ -245,6 +245,7 @@
 @media (max-width: 520px) {
   .pageHeader h1 { font-size: 1.35rem; }
   .catalogPane { padding: 12px; }
+  .removeButton { width: 44px; min-width: 44px; padding: 0; justify-content: center; }
   .removeButton span { display: none; }
   .runActions > div { grid-template-columns: repeat(3, 1fr); }
   .runActions > div > span { grid-column: 1 / -1; }

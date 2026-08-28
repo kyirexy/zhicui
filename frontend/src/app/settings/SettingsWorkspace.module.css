@@ -278,7 +278,7 @@
     overflow: visible;
   }
 
-  .contentInner { padding: 22px 20px 80px; }
+  .contentInner { padding: 22px 20px calc(80px + env(safe-area-inset-bottom, 0px)); }
 }
 
 @media (max-width: 560px) {

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Image from 'next/image';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   ArrowRight,
@@ -21,6 +22,7 @@ import {
 import { useAuth } from '@/lib/hooks/AuthContext';
 import { API_BASE } from '@/lib/api';
 import type { DesktopZhicuiLoginStatus } from '@/lib/desktopRuntime';
+import { CURRENT_LEGAL_VERSIONS } from '@/lib/legalDocuments';
 
 const IS_DEV = process.env.NODE_ENV === 'development';
 const DEV_AUTH_AUTO = IS_DEV && process.env.NEXT_PUBLIC_DEV_AUTH_AUTO === 'true';
@@ -60,6 +62,7 @@ export default function LoginPage() {
   const [showStandardAuth, setShowStandardAuth] = useState(!DEV_AUTH_AUTO);
   const [submitting, setSubmitting] = useState(false);
   const [fieldError, setFieldError] = useState('');
+  const [legalAccepted, setLegalAccepted] = useState(false);
 
   // 桌面端 ↔ Web 联动登录
   const [desktopSession, setDesktopSession] = useState<string | null>(null);
@@ -149,6 +152,7 @@ export default function LoginPage() {
     if (!password) return '请输入密码';
     if (mode === 'register' && password.length < 6) return '密码至少需要 6 位字符';
     if (mode === 'register' && username.trim().length < 2) return '请输入用户名（至少 2 个字符）';
+    if (mode === 'register' && !legalAccepted) return '请先阅读并同意《用户协议》和《隐私政策》';
     return '';
   };
 
@@ -171,7 +175,10 @@ export default function LoginPage() {
     if (mode === 'login') {
       await login(email, password);
     } else {
-      await register(email, password, username);
+      await register(email, password, username, {
+        termsVersion: CURRENT_LEGAL_VERSIONS.terms,
+        privacyVersion: CURRENT_LEGAL_VERSIONS.privacy,
+      });
     }
     setSubmitting(false);
   };
@@ -556,6 +563,32 @@ export default function LoginPage() {
                       className="w-full rounded-xl border border-card-border bg-background py-3 pl-10 pr-4 text-sm text-foreground outline-none transition-colors duration-150 placeholder:text-foreground-muted/50 focus:border-accent-brand/50 focus:ring-[3px] focus:ring-accent-brand/10"
                       autoComplete="username"
                     />
+                  </div>
+                )}
+
+                {mode === 'register' && (
+                  <div className="flex min-h-11 items-start gap-1 rounded-xl bg-background-secondary/60 px-2 py-2">
+                    <label htmlFor="legal-consent" className="grid size-11 shrink-0 cursor-pointer place-items-center">
+                      <input
+                        id="legal-consent"
+                        type="checkbox"
+                        checked={legalAccepted}
+                        aria-describedby="legal-consent-copy"
+                        onChange={(event) => {
+                          setLegalAccepted(event.target.checked);
+                          setFieldError('');
+                          clearError();
+                        }}
+                        className="size-5 accent-[var(--accent-brand)]"
+                      />
+                      <span className="sr-only">同意用户协议和隐私政策</span>
+                    </label>
+                    <p id="legal-consent-copy" className="min-w-0 py-0.5 text-pretty text-xs leading-5 text-foreground-muted">
+                      我已阅读并同意
+                      <Link className="mx-1 text-accent-brand underline-offset-2 hover:underline" href="/legal/terms">《用户协议》</Link>
+                      和
+                      <Link className="ml-1 text-accent-brand underline-offset-2 hover:underline" href="/legal/privacy">《隐私政策》</Link>
+                    </p>
                   </div>
                 )}
 

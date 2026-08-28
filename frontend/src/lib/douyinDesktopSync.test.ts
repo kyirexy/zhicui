@@ -11,13 +11,15 @@ import {
 test('local Douyin connector is gated to the compatible desktop version', () => {
   assert.equal(supportsLocalDouyinRuntime('1.0.6'), false);
   assert.equal(supportsLocalDouyinRuntime('1.0.7'), false);
-  assert.equal(supportsLocalDouyinRuntime('1.0.8'), true);
+  assert.equal(supportsLocalDouyinRuntime('1.0.8'), false);
+  assert.equal(supportsLocalDouyinRuntime('1.0.9'), true);
   assert.equal(supportsLocalDouyinRuntime('1.1.0'), true);
   assert.equal(supportsLocalDouyinRuntime('2.0.0'), true);
   assert.equal(requiresLocalDouyinDesktopUpdate(''), false);
   assert.equal(requiresLocalDouyinDesktopUpdate('1.0.6'), true);
   assert.equal(requiresLocalDouyinDesktopUpdate('1.0.7'), true);
-  assert.equal(requiresLocalDouyinDesktopUpdate('1.0.8'), false);
+  assert.equal(requiresLocalDouyinDesktopUpdate('1.0.8'), true);
+  assert.equal(requiresLocalDouyinDesktopUpdate('1.0.9'), false);
 });
 
 test('desktop result is reduced to the public server metadata contract', () => {

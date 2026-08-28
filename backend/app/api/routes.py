@@ -1990,6 +1990,8 @@ def ingest_local_douyin_library(
             "accepted": result["accepted"],
             "created": result["created"],
             "reused": result["reused"],
+            "ready": result["ready"],
+            "quarantined": result["quarantined"],
             "client_version": body.client_version,
             "channel": "desktop-local",
         },
@@ -2338,6 +2340,16 @@ def list_douyin_library_items(
         # A locally discovered snapshot remains useful when the historical
         # cloud sidecar is unavailable or risk-controlled. Never discard it.
         catalog_warning = str(exc)
+
+    # The legacy companion may still contain old title-only manifest rows.
+    # Apply the same durable public-metadata contract as the desktop channel
+    # before the two catalogs are merged, otherwise a quarantined local row
+    # would immediately reappear through the fallback channel.
+    sidecar_items = [
+        item
+        for item in sidecar_items
+        if local_douyin_library_service.is_displayable_snapshot(item)
+    ]
 
     sidecar_by_id = {
         str(item.get("aweme_id") or "").strip(): dict(item)

@@ -163,6 +163,83 @@ class LocalDouyinLibraryTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in recovered], [recovered_id])
         self.assertEqual(recovered[0]["title"], "测试作品")
 
+    def test_title_only_dom_snapshot_is_quarantined_until_metadata_recovers(self) -> None:
+        video_id = "7672579366093622511"
+        first = local_douyin_library_service.ingest_items(
+            self.db,
+            user_id=self.user_a.id,
+            source_mode="like",
+            items=[self.item(
+                video_id=video_id,
+                title="真实但只有 DOM 能看到的作品标题",
+                caption="真实但只有 DOM 能看到的作品标题",
+                author_name="",
+                cover_url="",
+                published_at="",
+                duration_seconds=0,
+            )],
+        )
+
+        self.assertEqual(first["ready"], 0)
+        self.assertEqual(first["quarantined"], 1)
+        self.assertEqual(local_douyin_library_service.list_items(
+            self.db,
+            user_id=self.user_a.id,
+            source_mode="like",
+        ), [])
+
+        recovered = local_douyin_library_service.ingest_items(
+            self.db,
+            user_id=self.user_a.id,
+            source_mode="like",
+            items=[self.item(video_id=video_id)],
+        )
+        items = local_douyin_library_service.list_items(
+            self.db,
+            user_id=self.user_a.id,
+            source_mode="like",
+        )
+
+        self.assertEqual(recovered["ready"], 1)
+        self.assertEqual(recovered["quarantined"], 0)
+        self.assertEqual([item["id"] for item in items], [video_id])
+        self.assertEqual(items[0]["author_name"], "测试作者")
+        self.assertEqual(items[0]["cover_url"], "https://p3.douyinpic.com/example.jpg")
+
+    def test_lower_quality_retry_cannot_regress_complete_snapshot(self) -> None:
+        video_id = "7672579366093622512"
+        local_douyin_library_service.ingest_items(
+            self.db,
+            user_id=self.user_a.id,
+            source_mode="collect",
+            items=[self.item(video_id=video_id)],
+        )
+        local_douyin_library_service.ingest_items(
+            self.db,
+            user_id=self.user_a.id,
+            source_mode="collect",
+            items=[self.item(
+                video_id=video_id,
+                title="DOM 兜底标题",
+                caption="DOM 兜底标题",
+                author_name="",
+                cover_url="",
+                published_at="",
+                duration_seconds=0,
+            )],
+        )
+
+        item = local_douyin_library_service.get_item(
+            self.db,
+            user_id=self.user_a.id,
+            video_id=video_id,
+        )
+        self.assertIsNotNone(item)
+        self.assertEqual(item["title"], "测试作品")
+        self.assertEqual(item["caption"], "这是一段用于测试的作品发布文案")
+        self.assertEqual(item["author_name"], "测试作者")
+        self.assertEqual(item["cover_url"], "https://p3.douyinpic.com/example.jpg")
+
     def test_local_item_uses_canonical_url_for_transcript_extraction(self) -> None:
         item = self.item()
         local_douyin_library_service.ingest_items(

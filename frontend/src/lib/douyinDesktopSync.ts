@@ -1,7 +1,7 @@
 import type { PlatformAccountItem } from '@/lib/desktopRuntime';
 import type { DouyinLocalSyncItem } from '@/lib/types';
 
-export const MIN_LOCAL_DOUYIN_DESKTOP_VERSION = '1.0.8';
+export const MIN_LOCAL_DOUYIN_DESKTOP_VERSION = '1.0.9';
 
 const EPHEMERAL_MEDIA_TTL_MS = 6 * 60 * 60 * 1000;
 const ephemeralMedia = new Map<string, { mediaUrl: string; capturedAt: number }>();
@@ -11,7 +11,7 @@ export function supportsLocalDouyinRuntime(version: string): boolean {
     .split('.')
     .slice(0, 3)
     .map((value) => Number.parseInt(value, 10) || 0);
-  return major > 1 || (major === 1 && (minor > 0 || patch >= 8));
+  return major > 1 || (major === 1 && (minor > 0 || patch >= 9));
 }
 
 export function requiresLocalDouyinDesktopUpdate(version: string): boolean {

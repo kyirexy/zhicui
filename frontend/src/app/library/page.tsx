@@ -63,10 +63,12 @@ import {
   disconnectDouyinLibrary,
   getDouyinBatchExtraction,
   getDouyinCollectionJob,
+  getDouyinLibraryItem,
   getDouyinLibraryStatus,
   getDouyinLoginQr,
   getDouyinLoginStatus,
   initializePlatformLibraryItem,
+  getPlatformLibraryItem,
   ingestLocalDouyinLibrary,
   listDouyinLibraryItems,
   listPermanentlyHiddenDouyinItems,
@@ -104,6 +106,7 @@ import {
   readLibraryQuickSyncPreferences,
   saveLibraryQuickSyncPreferences,
 } from '@/lib/libraryQuickSync';
+import { findNewLibraryItems } from '@/lib/librarySyncDiff';
 import type {
   DouyinCollectionJob,
   DouyinBatchExtractionJob,
@@ -1728,6 +1731,43 @@ export default function VideoLibraryPage() {
     }
   };
 
+  const refreshDouyinCover = useCallback(async (item: DouyinLibraryItem) => {
+    const response = await getDouyinLibraryItem(item.aweme_id);
+    if (!response.success || !response.data) {
+      return [item.cover_proxy_url, item.cover_url];
+    }
+    const refreshed = response.data.item;
+    setItems((current) => current.map((candidate) => (
+      candidate.aweme_id === item.aweme_id
+        ? { ...candidate, ...refreshed }
+        : candidate
+    )));
+    return [
+      refreshed.cover_proxy_url,
+      refreshed.cover_url,
+      item.cover_proxy_url,
+      item.cover_url,
+    ];
+  }, []);
+
+  const refreshPlatformCover = useCallback(async (item: PlatformLibraryItem) => {
+    const response = await getPlatformLibraryItem(item.id);
+    if (!response.success || !response.data) return [item.cover_url];
+    const refreshed = response.data.item;
+    setPlatformItems((current) => current.map((candidate) => (
+      candidate.id === item.id
+        ? { ...candidate, cover_url: refreshed.cover_url }
+        : candidate
+    )));
+    return [refreshed.cover_url, item.cover_url];
+  }, []);
+
+  const refreshPreviewCover = useCallback(async (selection: LibraryPreviewSelection) => (
+    selection.kind === 'douyin'
+      ? refreshDouyinCover(selection.item)
+      : refreshPlatformCover(selection.item)
+  ), [refreshDouyinCover, refreshPlatformCover]);
+
   const installDesktopUpdateForDouyin = async () => {
     const bridge = window.zhicuiDesktop;
     if (!bridge || !desktopDouyinUpdateRequired || desktopUpdateInstalling) return;
@@ -2003,8 +2043,8 @@ export default function VideoLibraryPage() {
         url: 'desktop-local',
         status: 'success',
         total: ingested.data.accepted,
-        success: ingested.data.accepted,
-        failed: 0,
+        success: ingested.data.ready,
+        failed: ingested.data.quarantined,
         skipped: 0,
         target: requestedCount,
         processed: ingested.data.accepted,
@@ -2013,12 +2053,15 @@ export default function VideoLibraryPage() {
         channel: 'browser',
         fallback_attempted: false,
       };
+      if (ingested.data.quarantined > 0) {
+        publishSourceManagerNotice(
+          `已读取 ${ingested.data.accepted} 条${requestedSourceLabel}，其中 ${ingested.data.quarantined} 条公开资料不完整，已安全隔离；请完成桌面端更新后重新同步`,
+        );
+      }
       return {
         requestedMode,
         refreshed,
-        newlyVisible: baselineKnown
-          ? refreshed.filter((item) => !previousIds.has(item.aweme_id))
-          : [],
+        newlyVisible: findNewLibraryItems(refreshed, previousIds),
         overview: refreshedResponse.data,
         finalJob: localJob,
         error: '',
@@ -2137,9 +2180,7 @@ export default function VideoLibraryPage() {
     }
     const refreshedResult = refreshedResponse.data;
     const refreshed = refreshedResult.items || [];
-    const newlyVisible = baselineKnown
-      ? refreshed.filter((item) => !previousIds.has(item.aweme_id))
-      : [];
+    const newlyVisible = findNewLibraryItems(refreshed, previousIds);
     return {
       requestedMode,
       refreshed,
@@ -2253,23 +2294,42 @@ export default function VideoLibraryPage() {
     }
     if (modes.length === 1) {
       const result = successful[0];
-      if (result) publishSourceManagerNotice(
-        formatCollectionSyncMessage({
-          ...result.finalJob!,
-          sourceLabel: SOURCE_MODES.find((mode) => mode.value === result.requestedMode)?.label || '视频',
-          requestedCount,
-        }),
-      );
+      if (result) {
+        const sourceLabel = SOURCE_MODES.find(
+          (mode) => mode.value === result.requestedMode,
+        )?.label || '视频';
+        const quarantined = result.finalJob?.url === 'desktop-local'
+          ? nonNegativeInteger(result.finalJob.failed)
+          : 0;
+        publishSourceManagerNotice(quarantined > 0
+          ? `已读取 ${nonNegativeInteger(result.finalJob?.total)} 条${sourceLabel}，完整 ${nonNegativeInteger(result.finalJob?.success)} 条；另有 ${quarantined} 条公开资料不完整，已安全隔离，请更新桌面端后重新同步`
+          : formatCollectionSyncMessage({
+              ...result.finalJob!,
+              sourceLabel,
+              requestedCount,
+            }));
+      }
     } else {
-      publishSourceManagerNotice(
-        formatMultiSourceSyncSummary(results.map((result) => ({
+      const summary = formatMultiSourceSyncSummary(results.map((result) => ({
           sourceLabel: SOURCE_MODES.find(
             (mode) => mode.value === result.requestedMode,
           )?.label || '该来源',
           checked: result.finalJob?.success || result.finalJob?.total || 0,
           newlyVisible: result.newlyVisible.length,
           error: result.error || undefined,
-        }))),
+        })));
+      const quarantined = successful.reduce(
+        (total, result) => total + (
+          result.finalJob?.url === 'desktop-local'
+            ? nonNegativeInteger(result.finalJob.failed)
+            : 0
+        ),
+        0,
+      );
+      publishSourceManagerNotice(
+        quarantined > 0
+          ? `${summary}；另有 ${quarantined} 条公开资料不完整，已安全隔离`
+          : summary,
       );
     }
 
@@ -3878,6 +3938,7 @@ export default function VideoLibraryPage() {
                         extractError={extractProgress[item.aweme_id]?.error}
                         onToggle={toggleSelection}
                         selectionDisabled={batchExtracting}
+                        onRefreshCover={refreshDouyinCover}
                       />
                     ))}
                   </div>
@@ -3899,6 +3960,7 @@ export default function VideoLibraryPage() {
                     })}
                     onInitialize={initializePlatformSummary}
                     onToggleSelection={togglePlatformSelection}
+                    onRefreshCover={refreshPlatformCover}
                   />
                 ))}
                 </div>
@@ -3909,7 +3971,10 @@ export default function VideoLibraryPage() {
 
         <div className={styles.previewColumn}>
           {previewSelection ? (
-            <LibraryPreviewPane selection={previewSelection} />
+            <LibraryPreviewPane
+              selection={previewSelection}
+              onRefreshCover={refreshPreviewCover}
+            />
           ) : (
             <aside className={styles.emptyPreview} aria-label="当前资料预览">
               <FileText size={24} />

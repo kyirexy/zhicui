@@ -2,43 +2,80 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { ImageOff } from 'lucide-react';
+import {
+  normalizeCoverSources,
+  type CoverSource,
+  withCoverRetryToken,
+} from '@/lib/libraryCoverSources';
 
 interface LibraryCoverImageProps {
   src?: string | null;
+  sources?: CoverSource[];
   fallbackClassName: string;
   fallbackLabel?: string;
   iconSize?: number;
   alt?: string;
   retryable?: boolean;
+  onRefreshSources?: () => Promise<CoverSource[] | void> | CoverSource[] | void;
 }
 
 export default function LibraryCoverImage({
   src,
+  sources = [],
   fallbackClassName,
   fallbackLabel,
   iconSize = 22,
   alt = '',
   retryable = true,
+  onRefreshSources,
 }: LibraryCoverImageProps) {
   const [failed, setFailed] = useState(false);
-  const [attempt, setAttempt] = useState(0);
+  const [sourceIndex, setSourceIndex] = useState(0);
   const [retrySeed, setRetrySeed] = useState(0);
+  const [refreshedSources, setRefreshedSources] = useState<string[] | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const initialSources = useMemo(
+    () => normalizeCoverSources(src, ...sources),
+    [sources, src],
+  );
+  const initialSourceKey = initialSources.join('\n');
+  const candidates = refreshedSources ?? initialSources;
+  const canRetry = retryable && (candidates.length > 0 || Boolean(onRefreshSources));
 
   useEffect(() => {
     setFailed(false);
-    setAttempt(0);
+    setSourceIndex(0);
     setRetrySeed(0);
-  }, [src]);
+    setRefreshedSources(null);
+    setRefreshing(false);
+  }, [initialSourceKey]);
 
   const displaySrc = useMemo(() => {
-    if (!src || !retrySeed) return src;
-    return `${src}${src.includes('?') ? '&' : '?'}zhicui_retry=${retrySeed}`;
-  }, [retrySeed, src]);
+    const current = candidates[sourceIndex] || '';
+    return withCoverRetryToken(current, retrySeed);
+  }, [candidates, retrySeed, sourceIndex]);
 
-  const retry = () => {
-    setFailed(false);
-    setAttempt((value) => value + 1);
-    setRetrySeed(Date.now());
+  const retry = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const refreshed = await onRefreshSources?.();
+      const nextSources = normalizeCoverSources(...(refreshed || []), ...initialSources);
+      setRefreshedSources(nextSources.length > 0 ? nextSources : null);
+      setSourceIndex(0);
+      setFailed(false);
+      setRetrySeed(Date.now());
+    } catch {
+      // A metadata refresh can fail independently of the image CDN. Still give
+      // the existing candidates one clean browser request instead of leaving
+      // the control stuck in its loading state.
+      setSourceIndex(0);
+      setFailed(false);
+      setRetrySeed(Date.now());
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   if (!displaySrc || failed) {
@@ -46,11 +83,11 @@ export default function LibraryCoverImage({
       <>
         <ImageOff size={iconSize} aria-hidden="true" />
         {fallbackLabel && (
-          <small>{retryable ? `${fallbackLabel} · 点击重试` : fallbackLabel}</small>
+          <small>{canRetry ? `${fallbackLabel} · 点击重试` : fallbackLabel}</small>
         )}
       </>
     );
-    if (!retryable || !src) {
+    if (!canRetry) {
       return (
         <span
           className={`${fallbackClassName} library-cover-image-fallback`}
@@ -64,11 +101,12 @@ export default function LibraryCoverImage({
       <button
         type="button"
         className={`${fallbackClassName} library-cover-image-fallback is-retryable`}
-        aria-label="重新加载视频封面"
+        aria-label={refreshing ? '正在重新获取视频封面' : '重新获取视频封面'}
+        disabled={refreshing}
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          retry();
+          void retry();
         }}
       >
         {content}
@@ -84,8 +122,9 @@ export default function LibraryCoverImage({
       decoding="async"
       referrerPolicy="no-referrer"
       onError={() => {
-        if (attempt === 0) {
-          retry();
+        if (sourceIndex + 1 < candidates.length) {
+          setSourceIndex((value) => value + 1);
+          setRetrySeed(0);
           return;
         }
         setFailed(true);

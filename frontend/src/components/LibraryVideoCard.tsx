@@ -32,6 +32,7 @@ interface LibraryVideoCardProps {
   extractState?: LibraryExtractState;
   extractError?: string;
   onToggle: (awemeId: string) => void;
+  onRefreshCover?: (item: DouyinLibraryItem) => Promise<Array<string | null | undefined> | void>;
 }
 
 export default function LibraryVideoCard({
@@ -41,6 +42,7 @@ export default function LibraryVideoCard({
   extractState = 'idle',
   extractError,
   onToggle,
+  onRefreshCover,
 }: LibraryVideoCardProps) {
   const isWorking = ['queued', 'extracting', 'transcribing', 'analyzing'].includes(extractState);
   const isExtracted = item.extracted || extractState === 'done';
@@ -94,6 +96,8 @@ export default function LibraryVideoCard({
         <LibraryCoverImage
           key={item.cover_proxy_url || item.cover_url || item.aweme_id}
           src={item.cover_proxy_url || item.cover_url}
+          sources={[item.cover_proxy_url, item.cover_url]}
+          onRefreshSources={onRefreshCover ? () => onRefreshCover(item) : undefined}
           fallbackClassName="library-video-cover-fallback"
           fallbackLabel="封面暂不可用"
           iconSize={24}

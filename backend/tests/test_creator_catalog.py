@@ -515,7 +515,14 @@ class CreatorCatalogServiceTests(unittest.TestCase):
             return (
                 {"video_id": f"temporary-{page}", "title": f"part {page}"},
                 f"文稿 {page}",
-                {"source_url": url, "platform": "bilibili"},
+                {
+                    "source_url": url,
+                    "platform": "bilibili",
+                    "cover_url": "https://i0.hdslb.com/cover.jpg",
+                    "author_name": "测试 UP",
+                    "transcript_source": "manual-subtitle",
+                    "speech_ready": True,
+                },
             )
 
         saved: dict[str, object] = {}
@@ -565,7 +572,14 @@ class CreatorCatalogServiceTests(unittest.TestCase):
             return (
                 {"video_id": "temporary", "title": "P1"},
                 "P1 文稿",
-                {"source_url": url, "platform": "bilibili"},
+                {
+                    "source_url": url,
+                    "platform": "bilibili",
+                    "cover_url": "https://i0.hdslb.com/cover.jpg",
+                    "author_name": "测试 UP",
+                    "transcript_source": "manual-subtitle",
+                    "speech_ready": True,
+                },
             )
 
         with (
@@ -638,7 +652,14 @@ class CreatorCatalogServiceTests(unittest.TestCase):
             return (
                 {"video_id": "temporary", "title": "P1"},
                 "已完成的 P1 文稿",
-                {"source_url": url, "platform": "bilibili"},
+                {
+                    "source_url": url,
+                    "platform": "bilibili",
+                    "cover_url": "https://i0.hdslb.com/cover.jpg",
+                    "author_name": "测试 UP",
+                    "transcript_source": "manual-subtitle",
+                    "speech_ready": True,
+                },
             )
 
         def save(_db, **kwargs):

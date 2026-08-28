@@ -20,6 +20,9 @@ export type LibraryPreviewSelection =
 
 export interface LibraryPreviewPaneProps {
   selection: LibraryPreviewSelection;
+  onRefreshCover?: (
+    selection: LibraryPreviewSelection,
+  ) => Promise<Array<string | null | undefined> | void>;
 }
 
 interface NormalizedPreview {
@@ -117,7 +120,7 @@ function normalizeSelection(selection: LibraryPreviewSelection): NormalizedPrevi
   };
 }
 
-export default function LibraryPreviewPane({ selection }: LibraryPreviewPaneProps) {
+export default function LibraryPreviewPane({ selection, onRefreshCover }: LibraryPreviewPaneProps) {
   const preview = normalizeSelection(selection);
   const displayDate = formatDate(preview.date);
   const canAskAi = Boolean(preview.noteId && preview.transcriptChars > 0);
@@ -131,6 +134,10 @@ export default function LibraryPreviewPane({ selection }: LibraryPreviewPaneProp
         <LibraryCoverImage
           key={preview.coverUrl || preview.title}
           src={preview.coverUrl}
+          sources={selection.kind === 'douyin'
+            ? [selection.item.cover_proxy_url, selection.item.cover_url]
+            : [selection.item.cover_url]}
+          onRefreshSources={onRefreshCover ? () => onRefreshCover(selection) : undefined}
           fallbackClassName={styles.previewPaneCoverFallback}
           fallbackLabel="封面暂不可用"
           alt={`${preview.title}的封面`}

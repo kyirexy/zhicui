@@ -157,21 +157,48 @@ def _discard_repeated_page_metadata(items: list[dict[str, Any]]) -> None:
 
 
 def _is_displayable_snapshot(value: dict[str, Any] | DouyinLocalLibraryItem) -> bool:
-    """Keep empty discovery placeholders out of the user's visible library."""
+    """Return whether one desktop snapshot is complete enough for the library.
+
+    The desktop connector has two discovery paths: a JSON response containing
+    the real work record, and a DOM-only fallback containing little more than
+    an id/title.  Treating a DOM title as a complete record is what created the
+    user-visible ``未知作者 / 无封面 / 待整理`` cards.  Keep those discovery
+    placeholders recoverable in the database, but do not publish them until a
+    later sync supplies both identity and cover metadata.
+    """
     if isinstance(value, dict):
         read = value.get
     else:
         read = lambda key, default=None: getattr(value, key, default)
     title = _bounded_text(read("title"), 500)
     caption = _bounded_text(read("caption"), 20_000)
-    has_meaningful_title = bool(title and title != "抖音作品")
-    has_public_metadata = bool(
-        _bounded_text(read("cover_url"), 2048)
-        or _bounded_text(read("author_name"), 200)
-        or _bounded_text(read("published_at"), 64)
-        or int(read("duration_seconds", 0) or 0) > 0
+    has_meaningful_text = bool(caption or (title and title != "抖音作品"))
+    has_cover = bool(_bounded_text(read("cover_url"), 2048))
+    has_author = bool(_bounded_text(read("author_name"), 200))
+    return bool(has_meaningful_text and has_cover and has_author)
+
+
+def _snapshot_quality(value: dict[str, Any] | DouyinLocalLibraryItem) -> int:
+    """Score durable public metadata so a later DOM fallback cannot regress it."""
+    if isinstance(value, dict):
+        read = value.get
+    else:
+        read = lambda key, default=None: getattr(value, key, default)
+    title = _bounded_text(read("title"), 500)
+    caption = _bounded_text(read("caption"), 20_000)
+    return (
+        (8 if _bounded_text(read("author_name"), 200) else 0)
+        + (8 if _bounded_text(read("cover_url"), 2048) else 0)
+        + (4 if _bounded_text(read("published_at"), 64) else 0)
+        + (4 if int(read("duration_seconds", 0) or 0) > 0 else 0)
+        + (2 if caption else 0)
+        + (1 if title and title != "抖音作品" else 0)
     )
-    return bool(caption or has_meaningful_title or has_public_metadata)
+
+
+def is_displayable_snapshot(value: dict[str, Any] | DouyinLocalLibraryItem) -> bool:
+    """Shared quality gate for desktop and legacy-sidecar catalog records."""
+    return _is_displayable_snapshot(value)
 
 
 def ingest_items(
@@ -214,6 +241,7 @@ def ingest_items(
     )
     now = _utcnow()
     created = 0
+    ready = 0
     try:
         for item in normalized:
             row = existing_by_id.get(item["video_id"])
@@ -235,20 +263,31 @@ def ingest_items(
                 db.add(row)
                 created += 1
             else:
+                existing_quality = _snapshot_quality(row)
+                incoming_quality = _snapshot_quality(item)
                 if item["metadata_degraded"]:
                     if row.title == item.get("discarded_title"):
                         row.title = "抖音作品"
                     if row.caption == item.get("discarded_caption"):
                         row.caption = ""
-                else:
+                elif incoming_quality >= existing_quality:
                     row.title = item["title"]
                     row.caption = item["caption"] or row.caption
+                else:
+                    # A DOM-only retry may still discover the same id/title,
+                    # but it must never erase a richer record captured earlier.
+                    if row.title == "抖音作品" and item["title"] != "抖音作品":
+                        row.title = item["title"]
+                    if not row.caption and item["caption"]:
+                        row.caption = item["caption"]
                 row.source_url = item["source_url"]
                 row.cover_url = item["cover_url"] or row.cover_url
                 row.author_name = item["author_name"] or row.author_name
                 row.published_at = item["published_at"] or row.published_at
                 row.duration_seconds = item["duration_seconds"] or row.duration_seconds
                 row.available = _is_displayable_snapshot(row)
+            if row.available:
+                ready += 1
             row.last_seen_at = now
             row.updated_at = now
             note = note_map.get(item["video_id"])
@@ -271,6 +310,8 @@ def ingest_items(
         "accepted": len(normalized),
         "created": created,
         "reused": len(normalized) - created,
+        "ready": ready,
+        "quarantined": len(normalized) - ready,
         "source_mode": mode,
         "source_synced_at": now.isoformat().replace("+00:00", "Z"),
         "video_ids": [item["video_id"] for item in normalized],

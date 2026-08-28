@@ -5,6 +5,7 @@ import {
   chromium,
   type BrowserContext,
   type Page,
+  type Response,
 } from 'playwright-core';
 import type {
   PlatformAccountCollectRequest,
@@ -69,13 +70,27 @@ function firstText(...values: unknown[]): string {
 }
 
 function firstUrl(value: unknown): string {
-  if (typeof value === 'string') return /^https:\/\//i.test(value) ? value : '';
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    if (/^https:\/\//i.test(raw)) return raw;
+    if (/^http:\/\//i.test(raw)) return `https://${raw.slice('http://'.length)}`;
+    if (/^\/\//.test(raw)) return `https:${raw}`;
+    return '';
+  }
   const payload = record(value);
   for (const candidate of list(payload.url_list)) {
     const url = firstUrl(candidate);
     if (url) return url;
   }
   return firstUrl(payload.url || payload.uri);
+}
+
+function firstUrlOf(...values: unknown[]): string {
+  for (const value of values) {
+    const url = firstUrl(value);
+    if (url) return url;
+  }
+  return '';
 }
 
 function firstDouyinMediaUrl(video: Record<string, unknown>): string {
@@ -106,7 +121,7 @@ function douyinItemQuality(item: PlatformAccountItem): number {
   );
 }
 
-function mergeDouyinItem(
+export function mergeDouyinItem(
   target: Map<string, PlatformAccountItem>,
   item: PlatformAccountItem,
   limit: number,
@@ -116,12 +131,41 @@ function mergeDouyinItem(
     if (target.size < limit) target.set(item.videoId, item);
     return;
   }
-  if (douyinItemQuality(item) <= douyinItemQuality(existing)) return;
-  target.set(item.videoId, {
+  const merged: PlatformAccountItem = {
     ...existing,
     ...item,
+    title: item.title && item.title !== '抖音作品' ? item.title : existing.title,
+    caption: item.caption || existing.caption,
+    authorName: item.authorName || existing.authorName,
+    coverUrl: item.coverUrl || existing.coverUrl,
+    publishedAt: item.publishedAt || existing.publishedAt,
+    durationSeconds: item.durationSeconds > 0
+      ? item.durationSeconds
+      : existing.durationSeconds,
+    ephemeralMediaUrl: item.ephemeralMediaUrl || existing.ephemeralMediaUrl,
     sourceRank: existing.sourceRank,
-  });
+  };
+  if (douyinItemQuality(merged) <= douyinItemQuality(existing)) return;
+  target.set(item.videoId, merged);
+}
+
+type DouyinResponse = Pick<Response, 'url' | 'allHeaders' | 'json'>;
+
+export async function readDouyinMetadataPayload(
+  response: DouyinResponse,
+): Promise<unknown | null> {
+  const url = response.url();
+  if (!/douyin\.com/i.test(url) || !/(aweme|favorite|collection|post|user|feed|detail|like)/i.test(url)) {
+    return null;
+  }
+  try {
+    const headers = await response.allHeaders();
+    const contentType = String(headers['content-type'] || '');
+    if (contentType && !/(?:json|javascript)/i.test(contentType)) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
 }
 
 export function normalizeDouyinRecord(
@@ -151,7 +195,12 @@ export function normalizeDouyinRecord(
     title,
     caption,
     authorName: firstText(author.nickname, author.unique_id, payload.author_name).slice(0, 200),
-    coverUrl: firstUrl(video.cover || video.origin_cover || payload.cover).slice(0, 2048),
+    coverUrl: firstUrlOf(
+      video.cover,
+      video.origin_cover,
+      video.dynamic_cover,
+      payload.cover,
+    ).slice(0, 2048),
     publishedAt: createdAt > 0 ? new Date(createdAt * 1000).toISOString() : '',
     durationSeconds: rawDuration > 1000
       ? Math.round(rawDuration / 1000)
@@ -635,7 +684,11 @@ export class PlatformAccountConnector {
     limit: number,
     depth = 0,
   ): void {
-    if (depth > 7 || (target.size >= limit && depth > 2)) return;
+    // Even after the visible card list reaches the requested limit, keep
+    // walking bounded response payloads so richer author/cover/media records
+    // can upgrade those same IDs. mergeDouyinItem still refuses new IDs once
+    // the limit is full.
+    if (depth > 7) return;
     if (Array.isArray(value)) {
       for (const entry of value.slice(0, 500)) {
         this.collectDouyinRecords(entry, target, limit, depth + 1);
@@ -681,7 +734,7 @@ export class PlatformAccountConnector {
       if (target.size >= limit) break;
       const sourceUrl = normalizeDouyinUrl(value.href);
       const match = sourceUrl?.match(/\/video\/(\d{5,32})$/);
-      if (!sourceUrl || !match || target.has(match[1])) continue;
+      if (!sourceUrl || !match) continue;
       const caption = firstText(value.imageAlt, value.ariaLabel, value.text).slice(0, 500);
       mergeDouyinItem(target, {
         videoId: match[1],
@@ -748,16 +801,11 @@ export class PlatformAccountConnector {
     const page = context.pages()[0] || await context.newPage();
     const items = new Map<string, PlatformAccountItem>();
     const pending = new Set<Promise<void>>();
-    const onResponse = (response: { url(): string; headers(): Record<string, string>; json(): Promise<unknown> }): void => {
-      const url = response.url();
-      if (!/douyin\.com/i.test(url) || !/(aweme|favorite|collection|post|user)/i.test(url)) {
-        return;
-      }
-      const contentType = String(response.headers()['content-type'] || '');
-      if (!/json/i.test(contentType)) return;
-      const work = response.json()
-        .then((payload) => this.collectDouyinRecords(payload, items, limit))
-        .catch(() => undefined)
+    const onResponse = (response: Response): void => {
+      const work = readDouyinMetadataPayload(response)
+        .then((payload) => {
+          if (payload !== null) this.collectDouyinRecords(payload, items, limit);
+        })
         .then(() => undefined);
       pending.add(work);
       void work.finally(() => pending.delete(work));

@@ -172,6 +172,75 @@ class PlatformLibraryImportTests(unittest.TestCase):
         self.assertTrue(meta["speech_ready"])
         self.assertEqual(meta["media_url"], "")
 
+    def test_bilibili_caption_only_result_is_not_published_as_complete(self) -> None:
+        info, _transcript, meta = self.bili_result()
+        incomplete = {
+            **meta,
+            "cover_url": "",
+            "author_name": "",
+            "transcript_source": "caption-only",
+            "speech_ready": False,
+        }
+        with patch.object(
+            platform_library_service,
+            "_extract_bilibili",
+            return_value=(info, "【发布文案】\n只有标题和简介", incomplete),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "不会作为已完成资料入库"):
+                platform_library_service.import_one(
+                    self.db,
+                    user_id=self.user_a.id,
+                    value="https://www.bilibili.com/video/BV1TEST",
+                )
+
+        self.assertEqual(platform_library_service.list_notes(
+            self.db,
+            user_id=self.user_a.id,
+            platform="bilibili",
+        ), [])
+
+    def test_legacy_incomplete_bilibili_note_is_hidden_until_full_refresh(self) -> None:
+        info, transcript, meta = self.bili_result()
+        incomplete_meta = {
+            **meta,
+            "cover_url": "",
+            "author_name": "",
+            "transcript_source": "caption-only",
+            "speech_ready": False,
+        }
+        legacy, reused = platform_library_service._save_or_refresh(
+            self.db,
+            user_id=self.user_a.id,
+            platform="bilibili",
+            info=info,
+            transcript="【发布文案】\n只有标题和简介",
+            source_meta=incomplete_meta,
+        )
+        self.assertFalse(reused)
+        self.assertEqual(platform_library_service.list_notes(
+            self.db,
+            user_id=self.user_a.id,
+            platform="bilibili",
+        ), [])
+
+        refreshed, reused = platform_library_service._save_or_refresh(
+            self.db,
+            user_id=self.user_a.id,
+            platform="bilibili",
+            info=info,
+            transcript=transcript,
+            source_meta=meta,
+        )
+        visible = platform_library_service.list_notes(
+            self.db,
+            user_id=self.user_a.id,
+            platform="bilibili",
+        )
+        self.assertTrue(reused)
+        self.assertEqual(refreshed.id, legacy.id)
+        self.assertEqual([note.id for note in visible], [legacy.id])
+        self.assertTrue(platform_library_service.serialize_item(legacy)["metadata_complete"])
+
     def test_partial_batch_failure_does_not_discard_success(self) -> None:
         with patch.object(
             platform_library_service,

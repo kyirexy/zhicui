@@ -29,6 +29,8 @@ ACTION_LABELS: dict[str, str] = {
     "douyin_sync": "发起抖音同步",
     "douyin_sync_completed": "抖音同步完成",
     "douyin_sync_failed": "抖音同步失败",
+    "douyin_local_sync": "桌面端抖音同步",
+    "douyin_local_sync_failed": "桌面端抖音同步失败",
     "library_extract": "生成视频文案与知识卡",
     "library_batch_extract": "批量生成视频文案与知识卡",
     "library_remove": "从视频资料库移除",
@@ -80,6 +82,13 @@ _DETAIL_KEYS = {
     "source_count",
     "delivery_status",
     "trigger",
+    "accepted",
+    "created",
+    "reused",
+    "ready",
+    "quarantined",
+    "client_version",
+    "channel",
 }
 _DETAIL_INTEGER_KEYS = {
     "requested_count",
@@ -89,6 +98,11 @@ _DETAIL_INTEGER_KEYS = {
     "skipped",
     "temporary_restored",
     "source_count",
+    "accepted",
+    "created",
+    "reused",
+    "ready",
+    "quarantined",
 }
 _DETAIL_STRING_LIMITS = {
     "outcome": 24,
@@ -98,6 +112,8 @@ _DETAIL_STRING_LIMITS = {
     "binding_method": 32,
     "delivery_status": 32,
     "trigger": 24,
+    "client_version": 32,
+    "channel": 32,
 }
 _SOURCE_MODE_LABELS = {
     "like": "喜欢",
@@ -239,6 +255,15 @@ def summarize_detail(action: str, detail: dict[str, Any]) -> str:
         result = f"{source} · 共 {total} 条，成功 {success}，失败 {failed}"
         if skipped:
             result += f"，跳过 {skipped}"
+        return result
+    if action in {"douyin_local_sync", "douyin_local_sync_failed"}:
+        accepted = int(detail.get("accepted") or detail.get("requested_count") or 0)
+        ready = int(detail.get("ready") or 0)
+        quarantined = int(detail.get("quarantined") or 0)
+        version = str(detail.get("client_version") or "未知版本")
+        result = f"{source} · 客户端 {version} · 读取 {accepted} 条"
+        if ready or quarantined:
+            result += f"，完整 {ready}，隔离 {quarantined}"
         return result
     return outcome
 

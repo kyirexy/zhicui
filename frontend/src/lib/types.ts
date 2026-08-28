@@ -769,6 +769,8 @@ export interface DouyinLocalSyncResult {
   accepted: number;
   created: number;
   reused: number;
+  ready: number;
+  quarantined: number;
   source_mode: DouyinSourceMode;
   source_synced_at: string;
   video_ids: string[];

@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import {
   boundedPlatformUrls,
   hasPlatformAuthCookie,
+  mergeDouyinItem,
   normalizeDouyinRecord,
+  readDouyinMetadataPayload,
 } from '../dist/platform-account.js';
 import {
   validatePlatformAccountCollectRequest,
@@ -35,6 +37,50 @@ assert.equal(
   normalizedDouyin?.ephemeralMediaUrl,
   'https://v3-web.douyinvod.com/video.mp4?token=short-lived',
 );
+
+const asyncHeaderPayload = await readDouyinMetadataPayload({
+  url: () => 'https://www.douyin.com/aweme/v1/web/aweme/detail/',
+  allHeaders: async () => ({ 'content-type': 'application/json; charset=utf-8' }),
+  json: async () => ({ aweme_detail: { aweme_id: '7672579366093622537' } }),
+});
+assert.equal(asyncHeaderPayload?.aweme_detail?.aweme_id, '7672579366093622537');
+
+const mergedItems = new Map();
+mergeDouyinItem(mergedItems, {
+  videoId: '7672579366093622537',
+  sourceUrl: 'https://www.douyin.com/video/7672579366093622537',
+  title: 'DOM 中的真实标题',
+  caption: 'DOM 中的真实标题',
+  authorName: '',
+  coverUrl: 'https://p3.douyinpic.com/dom-cover.jpg',
+  publishedAt: '',
+  durationSeconds: 0,
+  sourceRank: 0,
+}, 50);
+mergeDouyinItem(mergedItems, {
+  videoId: '7672579366093622537',
+  sourceUrl: 'https://www.douyin.com/video/7672579366093622537',
+  title: '抖音作品',
+  caption: '',
+  authorName: '接口作者',
+  coverUrl: '',
+  publishedAt: '2026-08-27T00:00:00.000Z',
+  durationSeconds: 25,
+  sourceRank: 1,
+  ephemeralMediaUrl: 'https://v3-web.douyinvod.com/video.mp4?token=temporary',
+}, 50);
+assert.deepEqual(mergedItems.get('7672579366093622537'), {
+  videoId: '7672579366093622537',
+  sourceUrl: 'https://www.douyin.com/video/7672579366093622537',
+  title: 'DOM 中的真实标题',
+  caption: 'DOM 中的真实标题',
+  authorName: '接口作者',
+  coverUrl: 'https://p3.douyinpic.com/dom-cover.jpg',
+  publishedAt: '2026-08-27T00:00:00.000Z',
+  durationSeconds: 25,
+  sourceRank: 0,
+  ephemeralMediaUrl: 'https://v3-web.douyinvod.com/video.mp4?token=temporary',
+});
 
 assert.throws(
   () => validatePlatformAccountRequest({

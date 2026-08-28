@@ -27,6 +27,7 @@ export interface CrossPlatformLibraryRowProps {
   onActivate: (item: PlatformLibraryItem) => void;
   onInitialize: (item: PlatformLibraryItem) => void | Promise<void>;
   onToggleSelection?: (item: PlatformLibraryItem) => void;
+  onRefreshCover?: (item: PlatformLibraryItem) => Promise<Array<string | null | undefined> | void>;
 }
 
 function formatDate(value: string): string {
@@ -68,6 +69,7 @@ export default function CrossPlatformLibraryRow({
   onActivate,
   onInitialize,
   onToggleSelection,
+  onRefreshCover,
 }: CrossPlatformLibraryRowProps) {
   const detailHref = `/library/detail?note=${encodeURIComponent(item.id)}`;
   const summaryHref = `/notes?id=${encodeURIComponent(item.id)}`;
@@ -92,6 +94,8 @@ export default function CrossPlatformLibraryRow({
       <div className={styles.crossRowCover}>
         <LibraryCoverImage
           src={item.cover_url}
+          sources={[item.cover_url]}
+          onRefreshSources={onRefreshCover ? () => onRefreshCover(item) : undefined}
           fallbackClassName={styles.crossRowCoverFallback}
           fallbackLabel="封面暂不可用"
           alt={`${item.title}的封面`}

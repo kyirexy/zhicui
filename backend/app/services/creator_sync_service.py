@@ -1324,6 +1324,11 @@ def _import_bilibili_parts(
                 info, transcript, source_meta = platform_library_service._extract_bilibili(
                     page_url, item_db,
                 )
+                platform_library_service.ensure_bilibili_result_ready(
+                    info,
+                    transcript,
+                    source_meta,
+                )
             except _RunCancelled:
                 raise
             except Exception:

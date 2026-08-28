@@ -36,6 +36,7 @@ _XHS_MEDIA_HEADERS = {
     ),
     "Referer": "https://www.xiaohongshu.com/",
 }
+_BILIBILI_PLACEHOLDER_TITLES = {"", "B站视频", "未命名视频"}
 
 
 def _utcnow() -> str:
@@ -145,6 +146,60 @@ def _combine_spoken_text(caption: str, spoken: str, spoken_label: str) -> str:
     if spoken.strip():
         sections.append(f"【{spoken_label}】\n" + spoken.strip())
     return "\n\n".join(sections)
+
+
+def bilibili_result_issues(
+    info: dict[str, Any],
+    transcript: str,
+    source_meta: dict[str, Any],
+) -> list[str]:
+    """Describe why a Bilibili result is not ready for the video library.
+
+    A title-only/caption-only result is useful diagnostic evidence, but it is
+    not the complete video document promised by account sync.  Persisting it
+    as a ready Note made legacy rows look successful even though their cover,
+    creator identity, or spoken transcript had never been obtained.
+    """
+    issues: list[str] = []
+    title = str(info.get("title") or "").strip()
+    if title in _BILIBILI_PLACEHOLDER_TITLES:
+        issues.append("标题")
+    if not str(source_meta.get("cover_url") or "").strip():
+        issues.append("封面")
+    if not str(source_meta.get("author_name") or "").strip():
+        issues.append("作者")
+    transcript_source = str(source_meta.get("transcript_source") or "").strip()
+    if (
+        not bool(source_meta.get("speech_ready"))
+        or transcript_source in {"", "caption-only"}
+        or not str(transcript or "").strip()
+    ):
+        issues.append("视频文稿")
+    return issues
+
+
+def ensure_bilibili_result_ready(
+    info: dict[str, Any],
+    transcript: str,
+    source_meta: dict[str, Any],
+) -> None:
+    """Reject incomplete Bilibili snapshots instead of publishing fake success."""
+    issues = bilibili_result_issues(info, transcript, source_meta)
+    if issues:
+        raise RuntimeError(
+            "B站视频尚未完整读取（缺少"
+            + "、".join(issues)
+            + "），本次不会作为已完成资料入库，请稍后重试"
+        )
+
+
+def _is_complete_bilibili_note(note: Note) -> bool:
+    meta = _source_meta(note)
+    return not bilibili_result_issues(
+        {"title": note.video_title},
+        note.transcript_raw or "",
+        meta,
+    )
 
 
 def _extract_bilibili(url: str, db: Session) -> tuple[dict[str, Any], str, dict[str, Any]]:
@@ -337,6 +392,9 @@ def _safe_error(platform: str, exc: Exception) -> str:
     if isinstance(exc, ValueError):
         return str(exc)[:160]
     if platform == "bilibili":
+        message = str(exc or "").strip()
+        if message.startswith("B站视频尚未完整读取"):
+            return message[:200]
         return "B站资料导入失败，请检查链接、视频访问权限或 yt-dlp 配置"
     if platform == "xiaohongshu":
         return "小红书资料导入失败，请更新分享链接或检查 Cookie/增强解析服务"
@@ -356,6 +414,7 @@ def import_one(
         raise ValueError("当前导入只支持 B站和小红书链接")
     if platform == "bilibili":
         info, transcript, source_meta = _extract_bilibili(url, db)
+        ensure_bilibili_result_ready(info, transcript, source_meta)
     else:
         info, transcript, source_meta = _extract_xiaohongshu(url, db)
     if source_mode in {"collect", "like", "post"}:
@@ -430,6 +489,10 @@ def list_notes(db: Session, *, user_id: str, platform: str = "all") -> list[Note
             continue
         if platform != "all" and meta.get("platform") != platform:
             continue
+        if meta.get("platform") == "bilibili" and not _is_complete_bilibili_note(note):
+            # Preserve old partial rows for a later retry, but do not present
+            # them as complete video documents in the user's library.
+            continue
         result.append(note)
     return result
 
@@ -460,6 +523,10 @@ def serialize_item(note: Note) -> dict[str, Any]:
         "transcript_chars": len(note.transcript_raw or ""),
         "transcript_source": meta.get("transcript_source") or "caption-only",
         "speech_ready": bool(meta.get("speech_ready")),
+        "metadata_complete": (
+            meta.get("platform") != "bilibili"
+            or _is_complete_bilibili_note(note)
+        ),
         "degraded": bool(meta.get("degraded")),
         "ai_initialized": bool(note.ai_initialized),
         "card_type": note.card_type,

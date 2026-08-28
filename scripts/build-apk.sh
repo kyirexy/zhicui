@@ -70,13 +70,33 @@ LEGACY_MANIFEST="$ROOT/frontend/public/download/latest.json"
 CHANNEL_MANIFEST="$ROOT/frontend/public/download/releases/android/$CHANNEL.json"
 APK_PUBLIC_ROOT="$ROOT/frontend/public/download"
 
+resolve_android_sdk() {
+  local configured="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+  local windows_user="${USERNAME:-${USER:-}}"
+  if [[ -n "$configured" ]] && command -v cygpath >/dev/null 2>&1; then
+    configured="$(cygpath -u "$configured" 2>/dev/null || printf '%s' "$configured")"
+  fi
+  if [[ -z "$configured" && -n "$windows_user" && -d "/c/Users/$windows_user/AppData/Local/Android/Sdk" ]]; then
+    configured="/c/Users/$windows_user/AppData/Local/Android/Sdk"
+  fi
+  [[ -n "$configured" && -d "$configured" ]] || return 1
+  printf '%s' "$configured"
+}
+
+ANDROID_SDK_POSIX="$(resolve_android_sdk)" || {
+  echo '找不到 Android SDK；请配置 ANDROID_SDK_ROOT 或 ANDROID_HOME' >&2
+  exit 1
+}
+ANDROID_SDK_ENV="$ANDROID_SDK_POSIX"
+if command -v cygpath >/dev/null 2>&1; then
+  ANDROID_SDK_ENV="$(cygpath -w "$ANDROID_SDK_POSIX")"
+fi
+export ANDROID_HOME="$ANDROID_SDK_ENV"
+export ANDROID_SDK_ROOT="$ANDROID_SDK_ENV"
+
 find_android_tool() {
   local tool="$1"
-  local sdk="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-  local windows_user="${USERNAME:-${USER:-}}"
-  if [[ -z "$sdk" && -n "$windows_user" && -d "/c/Users/$windows_user/AppData/Local/Android/Sdk" ]]; then
-    sdk="/c/Users/$windows_user/AppData/Local/Android/Sdk"
-  fi
+  local sdk="$ANDROID_SDK_POSIX"
   [[ -n "$sdk" && -d "$sdk/build-tools" ]] || return 1
   find "$sdk/build-tools" -mindepth 2 -maxdepth 2 -type f \
     \( -name "$tool" -o -name "$tool.bat" -o -name "$tool.exe" \) \

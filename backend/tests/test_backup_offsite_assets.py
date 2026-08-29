@@ -77,7 +77,7 @@ class BackupOffsiteAssetTests(unittest.TestCase):
         self.assertIn('postgres-offsite-replicate.sh', restore)
         self.assertIn('offsite.get("artifact") == artifact', restore)
         self.assertIn('offsite.get("sha256", "")', restore)
-        self.assertIn('"offsite_verified": True', restore)
+        self.assertIn('"offsite_verified": bool(offsite_required)', restore)
         self.assertIn('"backup_mode": "offsite" if offsite_required else "local_only"', restore)
         self.assertIn('跳过异地复制', restore)
         self.assertIn('if is_true "$OFFSITE_REQUIRED"', restore)

@@ -205,7 +205,11 @@ for flag in ("RATE_LIMIT_ENABLED", "OPS_MONITOR_ENABLED"):
     if values.get(flag, "").lower() != "true": errors.append(f"{flag} 必须为 true")
 if values.get("BACKUP_STATUS_FILE") != "/var/lib/zhicui-backups/latest.json": errors.append("BACKUP_STATUS_FILE 不安全")
 if values.get("BACKUP_MAX_AGE_HOURS") != "36": errors.append("BACKUP_MAX_AGE_HOURS 必须为 36")
-if values.get("BACKUP_OFFSITE_REQUIRED", "").lower() != "true": errors.append("BACKUP_OFFSITE_REQUIRED 必须为 true")
+offsite_value = values.get("BACKUP_OFFSITE_REQUIRED", "").lower()
+if offsite_value not in {"true", "false"}:
+    errors.append("BACKUP_OFFSITE_REQUIRED 必须明确为 true 或 false")
+elif offsite_value == "false" and values.get("EARLY_STAGE_LOCAL_BACKUP_ACCEPTED", "").lower() != "true":
+    errors.append("本机备份模式必须显式设置 EARLY_STAGE_LOCAL_BACKUP_ACCEPTED=true")
 database_url = values.get("DATABASE_URL", "")
 if not database_url.startswith("postgresql") or "CHANGE_ME" in database_url: errors.append("DATABASE_URL 不是有效生产 PostgreSQL")
 jwt_secret = values.get("JWT_SECRET", "")
@@ -233,7 +237,7 @@ for flag in ("DEV_AUTH_BYPASS", "NEXT_PUBLIC_DEV_AUTH_AUTO"):
     if values.get(flag, "false").lower() in {"1", "true", "yes", "on"}: errors.append(f"{flag} 不得开启")
 if errors: raise SystemExit("；".join(errors))
 PY
-record_gate production_env pass 'CORS、限流、监控、本地备份、异地灾备与秘密配置通过'
+record_gate production_env pass 'CORS、限流、监控、备份模式与秘密配置通过'
 
 [[ -n "${SMOKE_LOGIN_EMAIL:-}" && -n "${SMOKE_PASSWORD_FILE:-}" ]] ||
   err '生产部署必须注入 SMOKE_LOGIN_EMAIL 与 SMOKE_PASSWORD_FILE'
@@ -248,10 +252,18 @@ done
 log '部署前执行加密备份与隔离恢复验证'
 sudo systemctl start zhicui-postgres-backup.service || err 'PostgreSQL 加密备份失败，保持当前版本'
 sudo systemctl start zhicui-postgres-restore-verify.service || err '隔离恢复验证失败，保持当前版本'
-BACKUP_ARTIFACT="$(python3 - "$BACKUP_STATUS_FILE" <<'PY'
+BACKUP_ARTIFACT="$(python3 - "$BACKUP_STATUS_FILE" "$BACKEND_ENV" <<'PY'
 import json, sys
 from datetime import datetime, timezone
 p = json.load(open(sys.argv[1], encoding="utf-8"))
+values = {}
+for raw in open(sys.argv[2], encoding="utf-8"):
+    line = raw.strip()
+    if line and not line.startswith("#") and "=" in line:
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+offsite_required = values.get("BACKUP_OFFSITE_REQUIRED", "").lower() == "true"
+local_accepted = values.get("EARLY_STAGE_LOCAL_BACKUP_ACCEPTED", "").lower() == "true"
 backup_completed_text = str(p.get("backup_completed_at", ""))
 restore_verified_text = str(p.get("restore_verified_at", ""))
 completed = datetime.fromisoformat(backup_completed_text.replace("Z", "+00:00"))
@@ -259,17 +271,33 @@ restored = datetime.fromisoformat(restore_verified_text.replace("Z", "+00:00"))
 if completed.tzinfo is None: completed = completed.replace(tzinfo=timezone.utc)
 if restored.tzinfo is None: restored = restored.replace(tzinfo=timezone.utc)
 age = (datetime.now(timezone.utc) - completed.astimezone(timezone.utc)).total_seconds()
-if (p.get("completed_at") != backup_completed_text or restored < completed or
-    p.get("status") != "ok" or p.get("checksum_verified") is not True or
-    p.get("restore_verified") is not True or p.get("offsite_required") is not True or
-    p.get("offsite_verified") is not True or p.get("recovery_material_verified") is not True or
-    not p.get("offsite_verified_at") or not (0 <= age <= 3600)):
-    raise SystemExit("备份状态不是最近一小时内完成的本地恢复和异地校验")
+common_ok = (
+    p.get("completed_at") == backup_completed_text and restored >= completed
+    and p.get("status") == "ok" and p.get("checksum_verified") is True
+    and p.get("restore_verified") is True and 0 <= age <= 3600
+    and p.get("offsite_required") is offsite_required
+)
+if offsite_required:
+    mode_ok = (
+        p.get("backup_mode") == "offsite"
+        and p.get("offsite_verified") is True
+        and p.get("recovery_material_verified") is True
+        and bool(p.get("offsite_verified_at"))
+    )
+else:
+    mode_ok = (
+        local_accepted and p.get("backup_mode") == "local_only"
+        and p.get("offsite_verified") is False
+        and p.get("recovery_material_verified") is False
+        and not p.get("offsite_verified_at")
+    )
+if not (common_ok and mode_ok):
+    raise SystemExit("备份状态与生产配置模式不一致，或最近一小时恢复证据不完整")
 print(str(p.get("artifact") or ""))
 PY
 )" || err '备份状态文件无效，保持当前版本'
 [[ -n "$BACKUP_ARTIFACT" ]] || err '备份状态缺少归档标识'
-record_gate predeploy_backup pass "$BACKUP_ARTIFACT（含异地回读校验）"
+record_gate predeploy_backup pass "$BACKUP_ARTIFACT（加密备份、校验和、隔离恢复及模式一致性已验证）"
 
 log '获取目标提交并创建不可变 worktree'
 git fetch --prune origin master

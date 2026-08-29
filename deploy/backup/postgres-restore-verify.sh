@@ -12,6 +12,7 @@ READINESS_FILE="${BACKUP_STATUS_FILE:-$STATE_DIR/latest.json}"
 LOCK_FILE="$STATE_DIR/restore-verify.lock"
 OFFSITE_STATUS_FILE="$STATE_DIR/last-offsite.json"
 OFFSITE_SCRIPT="${ZHICUI_OFFSITE_SCRIPT:-/usr/local/lib/zhicui-backup/postgres-offsite-replicate.sh}"
+OFFSITE_REQUIRED="${ZHICUI_OFFSITE_REQUIRED:-true}"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 RESTORE_DATABASE=""
 TEMP_DUMP=""
@@ -19,6 +20,8 @@ BACKUP_FILE=""
 
 log() { printf '[zhicui-restore-verify] %s\n' "$*"; }
 fail() { printf '[zhicui-restore-verify] ERROR: %s\n' "$*" >&2; exit 1; }
+is_true() { [[ "${1,,}" =~ ^(1|true|yes|on)$ ]]; }
+is_false() { [[ "${1,,}" =~ ^(0|false|no|off)$ ]]; }
 
 write_status() {
   local outcome="$1"
@@ -60,27 +63,30 @@ write_readiness_ok() {
   local checksum="$2"
   local counts="$3"
   local backup_completed_at="$4"
-  python3 - "$READINESS_FILE" "$artifact" "$checksum" "$counts" "$backup_completed_at" "$OFFSITE_STATUS_FILE" <<'PY'
+  python3 - "$READINESS_FILE" "$artifact" "$checksum" "$counts" "$backup_completed_at" "$OFFSITE_STATUS_FILE" "$OFFSITE_REQUIRED" <<'PY'
 import json
 import os
 import sys
 from datetime import datetime, timezone
 
-path, artifact, checksum, counts, backup_completed_at, offsite_status_path = sys.argv[1:]
+path, artifact, checksum, counts, backup_completed_at, offsite_status_path, offsite_required_text = sys.argv[1:]
 restore_verified_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-try:
-    offsite = json.load(open(offsite_status_path, encoding="utf-8"))
-except (OSError, json.JSONDecodeError) as exc:
-    raise SystemExit(f"异地副本状态不可读：{exc}")
-if not (
-    offsite.get("status") == "success"
-    and offsite.get("remote_verified") is True
-    and offsite.get("artifact") == artifact
-    and str(offsite.get("sha256", "")).lower() == checksum.lower()
-    and offsite.get("recovery_material_sha256")
-    and offsite.get("remote_verified_at")
-):
-    raise SystemExit("异地副本状态与本次备份不匹配")
+offsite_required = offsite_required_text.lower() in {"1", "true", "yes", "on"}
+offsite = {}
+if offsite_required:
+    try:
+        offsite = json.load(open(offsite_status_path, encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"异地副本状态不可读：{exc}")
+    if not (
+        offsite.get("status") == "success"
+        and offsite.get("remote_verified") is True
+        and offsite.get("artifact") == artifact
+        and str(offsite.get("sha256", "")).lower() == checksum.lower()
+        and offsite.get("recovery_material_sha256")
+        and offsite.get("remote_verified_at")
+    ):
+        raise SystemExit("异地副本状态与本次备份不匹配")
 payload = {
     "schema_version": 1,
     "status": "ok",
@@ -92,11 +98,12 @@ payload = {
     "checksum_verified": True,
     "restore_verified": True,
     "verified_counts": json.loads(counts),
-    "offsite_required": True,
-    "offsite_verified": True,
-    "offsite_verified_at": offsite["remote_verified_at"],
-    "offsite_provider": offsite.get("provider"),
-    "recovery_material_verified": True,
+    "backup_mode": "offsite" if offsite_required else "local_only",
+    "offsite_required": offsite_required,
+    "offsite_verified": bool(offsite_required),
+    "offsite_verified_at": offsite.get("remote_verified_at") if offsite_required else None,
+    "offsite_provider": offsite.get("provider") if offsite_required else None,
+    "recovery_material_verified": bool(offsite_required),
 }
 temporary = f"{path}.tmp-{os.getpid()}"
 with open(temporary, "w", encoding="utf-8") as handle:
@@ -201,9 +208,16 @@ done
 
 COUNTS_JSON="$(printf '{\"users\":%s,\"notes\":%s,\"plans\":%s}' \
   "${COUNTS[users]}" "${COUNTS[notes]}" "${COUNTS[plans]}")"
-[[ -x "$OFFSITE_SCRIPT" ]] || fail "异地副本脚本不可执行：$OFFSITE_SCRIPT"
-log "正在复制并从异地故障域回读校验"
-"$OFFSITE_SCRIPT" "$BACKUP_FILE"
-write_status "success" "隔离恢复、关键表计数与异地副本验证通过" "${BACKUP_FILE##*/}" "$COUNTS_JSON"
+if is_true "$OFFSITE_REQUIRED"; then
+  [[ -x "$OFFSITE_SCRIPT" ]] || fail "异地副本脚本不可执行：$OFFSITE_SCRIPT"
+  log "正在复制并从异地故障域回读校验"
+  "$OFFSITE_SCRIPT" "$BACKUP_FILE"
+  write_status "success" "隔离恢复、关键表计数与异地副本验证通过" "${BACKUP_FILE##*/}" "$COUNTS_JSON"
+elif is_false "$OFFSITE_REQUIRED"; then
+  log "早期阶段本机备份模式：跳过异地复制，保留完整隔离恢复证据"
+  write_status "success" "隔离恢复与关键表计数通过；当前仅有本机加密备份" "${BACKUP_FILE##*/}" "$COUNTS_JSON"
+else
+  fail "ZHICUI_OFFSITE_REQUIRED 必须是明确的 true 或 false"
+fi
 write_readiness_ok "${BACKUP_FILE##*/}" "$VERIFIED_CHECKSUM" "$COUNTS_JSON" "$BACKUP_COMPLETED_AT"
-log "本地恢复与异地副本验证通过：$COUNTS_JSON"
+log "备份保护验证通过（模式：$OFFSITE_REQUIRED）：$COUNTS_JSON"

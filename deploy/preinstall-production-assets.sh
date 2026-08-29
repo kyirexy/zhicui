@@ -89,19 +89,42 @@ systemctl restart videocapsule-backend videocapsule-frontend
 # 资产升级完成前必须产生后端可读取的最新安全备份状态。
 systemctl start zhicui-postgres-backup.service
 systemctl start zhicui-postgres-restore-verify.service
-python3 - /var/lib/zhicui-backups/latest.json <<'PY'
+python3 - /var/lib/zhicui-backups/latest.json "$APP_DIR/backend/.env" <<'PY'
 import json, sys
 p = json.load(open(sys.argv[1], encoding="utf-8"))
-if not (
+values = {}
+for raw in open(sys.argv[2], encoding="utf-8"):
+    line = raw.strip()
+    if line and not line.startswith("#") and "=" in line:
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+offsite_text = values.get("BACKUP_OFFSITE_REQUIRED", "").lower()
+if offsite_text not in {"true", "false"}:
+    raise SystemExit("BACKUP_OFFSITE_REQUIRED 必须明确为 true 或 false")
+offsite_required = offsite_text == "true"
+local_accepted = values.get("EARLY_STAGE_LOCAL_BACKUP_ACCEPTED", "").lower() == "true"
+common_ok = (
     p.get("status") == "ok"
     and p.get("checksum_verified") is True
     and p.get("restore_verified") is True
-    and p.get("offsite_required") is True
-    and p.get("offsite_verified") is True
-    and p.get("recovery_material_verified") is True
-    and p.get("offsite_verified_at")
-):
-    raise SystemExit("本地备份恢复或异地灾备状态未通过；请配置真实外部目标与加密恢复材料")
+    and p.get("offsite_required") is offsite_required
+)
+if offsite_required:
+    mode_ok = (
+        p.get("backup_mode") == "offsite"
+        and p.get("offsite_verified") is True
+        and p.get("recovery_material_verified") is True
+        and bool(p.get("offsite_verified_at"))
+    )
+else:
+    mode_ok = (
+        local_accepted and p.get("backup_mode") == "local_only"
+        and p.get("offsite_verified") is False
+        and p.get("recovery_material_verified") is False
+        and not p.get("offsite_verified_at")
+    )
+if not (common_ok and mode_ok):
+    raise SystemExit("本地备份恢复状态与生产配置模式不一致")
 PY
 
-echo '生产运维资产安装完成；本地恢复与异地灾备均已验证，下一次 deploy.sh 可直接执行。'
+echo '生产运维资产安装完成；加密备份、隔离恢复与配置模式已验证，下一次 deploy.sh 可直接执行。'

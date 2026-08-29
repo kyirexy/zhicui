@@ -1,7 +1,7 @@
 # 生产发布闸门
 
 `deploy/deploy.sh` 不再以“进程存活”代替可发布。它依次要求：生产环境安全配置、
-PostgreSQL 加密备份、SHA-256、隔离库恢复、异地故障域回读校验、Nginx 配置一致、beta/stable 清单一致、
+PostgreSQL 加密备份、SHA-256、隔离库恢复、配置所要求的灾备模式校验、Nginx 配置一致、beta/stable 清单一致、
 `/api/readiness`、法律页、权限边界、桌面登录票据、真实 AI SSE 完整增量与客户端下载哈希。
 任一必需检查失败都会恢复上一版应用产物，并在
 `/var/lib/zhicui-deployments/` 写入不含秘密的 JSON 证据。
@@ -18,9 +18,10 @@ Windows 二进制、Electron feed 和 Windows 渠道清单不跟随 Git 切版�
 1. 以 root 运行 `bash /opt/zhicui/deploy/setup.sh`，安装 systemd timer、Nginx 配置和 sudoers。
    首次尚无证书时先设置 `CERTBOT_EMAIL=运维邮箱`；脚本申请证书后才启用强制 HTTPS/HSTS。
 2. 依据 `deploy/production.env.example` 填写 `/opt/zhicui/backend/.env`；不得使用通配 CORS。
-   同时依据 `deploy/backup/backup.env.example` 配置 `/etc/zhicui/backup.env`：生产必须
+   同时依据 `deploy/backup/backup.env.example` 配置 `/etc/zhicui/backup.env`。默认必须
    使用真实 rclone/S3-compatible 或 SSH 异地目标，以及已经离线加密的恢复材料。
-   外部凭据或恢复材料缺失时 preinstall、readiness 和 deploy 均按设计失败，禁止临时关闭门禁。
+   早期阶段若产品所有者明确接受单机风险，可用双重开关进入 `local_only`；它只跳过远端
+   复制和回读，仍强制加密备份、校验和与隔离恢复。不得把本机模式标记为异地验证成功。
 3. 创建一个**非管理员、仅用于冒烟**的普通账号，用户名必须固定为
    `zhicui_production_smoke`。不要给它放入真实用户资料；部署脚本会临时预置一条带唯一
    哨兵事实的隔离视频文稿，验证回答和引用后立即删除资料与会话。

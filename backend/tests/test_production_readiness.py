@@ -40,6 +40,8 @@ class ProductionReadinessTests(unittest.TestCase):
                 "completed_at": completed_at,
                 "checksum_verified": True,
                 "restore_verified": True,
+                "backup_mode": "offsite",
+                "offsite_required": True,
                 "offsite_verified": True,
                 "offsite_verified_at": completed_at,
                 "offsite_provider": "rclone",
@@ -62,6 +64,8 @@ class ProductionReadinessTests(unittest.TestCase):
                 "completed_at": (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat(),
                 "checksum_verified": True,
                 "restore_verified": True,
+                "backup_mode": "offsite",
+                "offsite_required": True,
                 "offsite_verified": True,
                 "offsite_verified_at": datetime.now(timezone.utc).isoformat(),
                 "recovery_material_verified": True,
@@ -82,6 +86,8 @@ class ProductionReadinessTests(unittest.TestCase):
                 "completed_at": completed_at,
                 "checksum_verified": True,
                 "restore_verified": True,
+                "backup_mode": "offsite",
+                "offsite_required": True,
                 "offsite_verified": False,
                 "offsite_verified_at": None,
                 "recovery_material_verified": False,
@@ -97,6 +103,63 @@ class ProductionReadinessTests(unittest.TestCase):
             self.assertEqual(result["status"], "not_ready")
             self.assertEqual(result["error_code"], "backup_offsite_unverified")
             self.assertFalse(result["offsite_verified"])
+
+    def test_explicit_local_only_mode_is_ready_after_isolated_restore(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            status_file = Path(directory) / "latest.json"
+            completed_at = datetime.now(timezone.utc).isoformat()
+            status_file.write_text(json.dumps({
+                "status": "ok",
+                "completed_at": completed_at,
+                "checksum_verified": True,
+                "restore_verified": True,
+                "backup_mode": "local_only",
+                "offsite_required": False,
+                "offsite_verified": False,
+                "offsite_verified_at": None,
+                "recovery_material_verified": False,
+            }), encoding="utf-8")
+            with patch.object(
+                readiness_service.settings, "DATABASE_URL", "postgresql://example"
+            ), patch.object(
+                readiness_service.settings, "BACKUP_STATUS_FILE", str(status_file)
+            ), patch.object(
+                readiness_service.settings, "BACKUP_OFFSITE_REQUIRED", False
+            ), patch.object(
+                readiness_service.settings, "EARLY_STAGE_LOCAL_BACKUP_ACCEPTED", True
+            ):
+                result = readiness_service._check_backup()
+            self.assertEqual(result["status"], "ready")
+            self.assertEqual(result["backup_mode"], "local_only")
+            self.assertTrue(result["local_risk_accepted"])
+            self.assertFalse(result["offsite_verified"])
+
+    def test_local_only_mode_requires_explicit_risk_acceptance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            status_file = Path(directory) / "latest.json"
+            status_file.write_text(json.dumps({
+                "status": "ok",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "checksum_verified": True,
+                "restore_verified": True,
+                "backup_mode": "local_only",
+                "offsite_required": False,
+                "offsite_verified": False,
+                "offsite_verified_at": None,
+                "recovery_material_verified": False,
+            }), encoding="utf-8")
+            with patch.object(
+                readiness_service.settings, "DATABASE_URL", "postgresql://example"
+            ), patch.object(
+                readiness_service.settings, "BACKUP_STATUS_FILE", str(status_file)
+            ), patch.object(
+                readiness_service.settings, "BACKUP_OFFSITE_REQUIRED", False
+            ), patch.object(
+                readiness_service.settings, "EARLY_STAGE_LOCAL_BACKUP_ACCEPTED", False
+            ):
+                result = readiness_service._check_backup()
+            self.assertEqual(result["status"], "not_ready")
+            self.assertEqual(result["error_code"], "backup_local_mode_not_accepted")
 
     def test_public_readiness_hides_internal_error_codes(self) -> None:
         summary = readiness_service.public_summary({

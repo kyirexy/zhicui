@@ -83,6 +83,7 @@ payload = {
     "checksum_verified": True,
     "restore_verified": False,
     "offsite_required": offsite_required.lower() in {"1", "true", "yes", "on"},
+    "backup_mode": "offsite" if offsite_required.lower() in {"1", "true", "yes", "on"} else "local_only",
     "offsite_verified": False,
     "offsite_verified_at": None,
     "offsite_provider": None,

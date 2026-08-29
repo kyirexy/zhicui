@@ -88,6 +88,9 @@ class Settings(BaseSettings):
     # its separately encrypted recovery material are verified in another
     # failure domain. SQLite development remains not_applicable.
     BACKUP_OFFSITE_REQUIRED: bool = True
+    # Early-stage exception: this must be explicitly accepted before a
+    # PostgreSQL deployment may rely on an encrypted local-only backup.
+    EARLY_STAGE_LOCAL_BACKUP_ACCEPTED: bool = False
     # Comma-separated reverse-proxy addresses that may supply X-Real-IP.
     TRUSTED_PROXY_IPS: str = "127.0.0.1,::1"
     RATE_LIMIT_ENABLED: bool = False

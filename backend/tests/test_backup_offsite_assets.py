@@ -71,24 +71,29 @@ class BackupOffsiteAssetTests(unittest.TestCase):
         self.assertNotIn('copyto --config "$RCLONE_CONFIG" "$KEY_FILE"', script)
         self.assertNotIn('scp "${ssh_options[@]}" -- "$KEY_FILE"', script)
 
-    def test_restore_verification_requires_matching_offsite_status(self) -> None:
+    def test_restore_verification_supports_truthful_local_mode(self) -> None:
         restore = (BACKUP / "postgres-restore-verify.sh").read_text(encoding="utf-8")
         installer = (BACKUP / "install.sh").read_text(encoding="utf-8")
         self.assertIn('postgres-offsite-replicate.sh', restore)
         self.assertIn('offsite.get("artifact") == artifact', restore)
         self.assertIn('offsite.get("sha256", "")', restore)
         self.assertIn('"offsite_verified": True', restore)
+        self.assertIn('"backup_mode": "offsite" if offsite_required else "local_only"', restore)
+        self.assertIn('跳过异地复制', restore)
+        self.assertIn('if is_true "$OFFSITE_REQUIRED"', restore)
         self.assertIn('postgres-offsite-replicate.sh', installer)
 
-    def test_production_gates_require_offsite_readback(self) -> None:
+    def test_production_gates_require_offsite_or_double_opt_in_local_mode(self) -> None:
         deploy = (ROOT / "deploy" / "deploy.sh").read_text(encoding="utf-8")
         preinstall = (ROOT / "deploy" / "preinstall-production-assets.sh").read_text(encoding="utf-8")
         production_env = (ROOT / "deploy" / "production.env.example").read_text(encoding="utf-8")
         self.assertIn('BACKUP_OFFSITE_REQUIRED=true', production_env)
-        self.assertIn('BACKUP_OFFSITE_REQUIRED 必须为 true', deploy)
-        self.assertIn('p.get("offsite_verified") is not True', deploy)
-        self.assertIn('p.get("offsite_verified") is True', preinstall)
-        self.assertIn('p.get("recovery_material_verified") is True', preinstall)
+        self.assertIn('EARLY_STAGE_LOCAL_BACKUP_ACCEPTED=false', production_env)
+        self.assertIn('EARLY_STAGE_LOCAL_BACKUP_ACCEPTED=true', deploy)
+        self.assertIn('p.get("backup_mode") == "local_only"', deploy)
+        self.assertIn('p.get("offsite_verified") is False', deploy)
+        self.assertIn('p.get("backup_mode") == "local_only"', preinstall)
+        self.assertIn('p.get("offsite_verified") is False', preinstall)
 
 
 if __name__ == "__main__":

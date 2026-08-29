@@ -8,11 +8,18 @@ AES-256-CBC + PBKDF2（200,000 次）加密，再生成 SHA-256 校验和。归�
 每日恢复任务会在备份后验证加密归档哈希，解密到受限临时文件，再恢复到名称以
 `zhicui_restore_verify_` 开头的随机隔离数据库。它检查 `users`、`notes`、
 `plans` 表和只读计数后删除隔离库，任何路径都不会覆盖 `zhicui` 生产库。
-随后系统把**已经加密**的数据库归档、SHA-256、非敏感元数据和单独加密的恢复材料
+严格异地模式随后把**已经加密**的数据库归档、SHA-256、非敏感元数据和单独加密的恢复材料
 复制到异地故障域，并从远端重新读取归档和恢复材料计算 SHA-256。只有本地隔离恢复、
 远端存在性、远端内容校验全部通过，`/api/readiness` 才会就绪。
 
-生产不允许关闭 `ZHICUI_OFFSITE_REQUIRED`。支持两种外部目标：
+默认启用 `ZHICUI_OFFSITE_REQUIRED=true`。早期阶段可由产品所有者显式接受单机故障域
+风险：备份环境设 `ZHICUI_OFFSITE_REQUIRED=false`，后端同时设置
+`BACKUP_OFFSITE_REQUIRED=false` 和 `EARLY_STAGE_LOCAL_BACKUP_ACCEPTED=true`。此模式仍会
+完成加密、SHA-256 与隔离恢复，状态显示 `backup_mode=local_only`，且
+`offsite_verified=false`；服务器整机损坏时本机备份也可能丢失。接入真实第二故障域后
+应立即恢复三个开关的严格配置。
+
+异地模式支持两种外部目标：
 
 - `rclone`：推荐用于 S3-compatible/object storage；凭据放在
   `/etc/zhicui/rclone.conf`，不得写入仓库或日志。

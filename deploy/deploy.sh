@@ -380,6 +380,11 @@ npm ci --silent
 npm run build
 [[ -s "$RELEASE_DIR/frontend/.next/BUILD_ID" ]] || err '目标构建缺少 BUILD_ID'
 [[ -f "$RELEASE_DIR/frontend/node_modules/next/package.json" ]] || err '目标构建缺少 Next.js'
+# Nginx only reads versioned public download manifests through the current
+# release symlink.  Keep application source private while granting traversal
+# and read access exclusively to the public asset tree.
+chmod o+x "$RELEASE_DIR" "$RELEASE_DIR/frontend"
+chmod -R o+rX "$RELEASE_DIR/frontend/public"
 BUILD_ID="$(<"$RELEASE_DIR/frontend/.next/BUILD_ID")"
 record_gate frontend_build pass "$BUILD_ID"
 

@@ -337,7 +337,7 @@ for pair in \
   "$RELEASE_DIR/deploy/backup/zhicui-postgres-restore-verify.timer:/etc/systemd/system/zhicui-postgres-restore-verify.timer" \
   "$RELEASE_DIR/deploy/jenkins-videocapsule.sudoers:/etc/sudoers.d/jenkins-videocapsule"; do
   source_file="${pair%%:*}"; installed_file="${pair#*:}"
-  if [[ ! -f "$installed_file" ]] || ! asset_matches "$source_file" "$installed_file"; then
+  if ! asset_matches "$source_file" "$installed_file"; then
     PRESERVE_RELEASE=1
     err "生产运维资产需要升级；执行 sudo bash $RELEASE_DIR/deploy/preinstall-production-assets.sh 后重试"
   fi

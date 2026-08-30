@@ -63,10 +63,35 @@ def _patch_ffmpeg_path():
 _patch_ffmpeg_path()
 
 # ---------------------------------------------------------------------------
-# Make the existing douyin-mcp-server scripts importable
+# Make the existing douyin-mcp-server scripts importable.  Production uses
+# immutable release worktrees, while this reviewed external dependency is
+# provisioned once in the persistent checkout because it is intentionally
+# gitignored.  Keep local development working, but allow releases to resolve
+# the same audited installation without copying it into every worktree.
 # ---------------------------------------------------------------------------
-_SCRIPTS_DIR = Path(__file__).resolve().parents[2] / ".." / "douyin-mcp-server" / "douyin-video" / "scripts"
-_SCRIPTS_DIR = _SCRIPTS_DIR.resolve()
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+_DOUYIN_MCP_CANDIDATES = []
+if configured_root := os.getenv("DOUYIN_MCP_SERVER_ROOT", "").strip():
+    _DOUYIN_MCP_CANDIDATES.append(Path(configured_root))
+_DOUYIN_MCP_CANDIDATES.extend(
+    (
+        (_BACKEND_ROOT / ".." / "douyin-mcp-server").resolve(),
+        Path("/opt/zhicui/douyin-mcp-server"),
+    )
+)
+_SCRIPTS_DIR = next(
+    (
+        root / "douyin-video" / "scripts"
+        for root in _DOUYIN_MCP_CANDIDATES
+        if (root / "douyin-video" / "scripts" / "douyin_downloader.py").is_file()
+    ),
+    None,
+)
+if _SCRIPTS_DIR is None:
+    raise RuntimeError(
+        "douyin-mcp-server 运行依赖缺失；请设置 DOUYIN_MCP_SERVER_ROOT "
+        "或在项目根目录安装固定依赖"
+    )
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 

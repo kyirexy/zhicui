@@ -358,6 +358,16 @@ python3.12 -m venv "$RELEASE_DIR/.venv"
 "$RELEASE_DIR/.venv/bin/pip" install --upgrade pip -q
 "$RELEASE_DIR/.venv/bin/pip" install -r "$RELEASE_DIR/deploy/requirements-server.txt" -q
 "$RELEASE_DIR/.venv/bin/pip" check
+DOUYIN_MCP_ROOT="${DOUYIN_MCP_SERVER_ROOT:-$APP_DIR/douyin-mcp-server}"
+[[ -f "$DOUYIN_MCP_ROOT/douyin-video/scripts/douyin_downloader.py" ]] ||
+  err '生产环境缺少 douyin-mcp-server 运行依赖'
+(
+  cd "$RELEASE_DIR/backend"
+  DOUYIN_MCP_SERVER_ROOT="$DOUYIN_MCP_ROOT" \
+    "$RELEASE_DIR/.venv/bin/python" -c \
+      'from app.services.video_extractor import DouyinProcessor; assert DouyinProcessor is not None'
+)
+record_gate backend_import pass '核心视频解析依赖可导入'
 
 for env_name in .env.local .env.production.local; do
   if [[ -f "$APP_DIR/frontend/$env_name" ]]; then

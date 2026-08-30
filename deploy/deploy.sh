@@ -18,7 +18,7 @@ log() { printf "${G}[%s]${N} %s\n" "$(date +%H:%M:%S)" "$1"; }
 warn() { printf "${Y}[%s] 警告:${N} %s\n" "$(date +%H:%M:%S)" "$1"; }
 err() { printf "${R}[%s] 错误:${N} %s\n" "$(date +%H:%M:%S)" "$1" >&2; exit 1; }
 
-for command_name in flock git npm node curl python3 python3.12 timeout cmp diff realpath readlink sudo; do
+for command_name in flock git npm node curl python3 python3.12 timeout cmp diff realpath readlink sha256sum sudo; do
   command -v "$command_name" >/dev/null 2>&1 || err "服务器缺少命令：$command_name"
 done
 [[ "$APP_DIR" == /opt/zhicui && "$RUNTIME_ROOT" == /opt/zhicui-runtime ]] ||
@@ -76,6 +76,18 @@ esac
 
 record_gate() {
   printf '%s\t%s\t%s\n' "$1" "$2" "$(printf '%s' "${3:-}" | tr '\t\r\n' '   ' | cut -c1-240)" >>"$GATES_FILE"
+}
+
+asset_matches() {
+  local source_file="$1" installed_file="$2"
+  if [[ "$installed_file" == /etc/sudoers.d/jenkins-videocapsule ]]; then
+    local source_sha installed_sha
+    source_sha="$(sha256sum "$source_file" | awk '{print $1}')"
+    installed_sha="$(sudo -n /usr/bin/sha256sum "$installed_file" | awk '{print $1}')" || return 1
+    [[ "$source_sha" == "$installed_sha" ]]
+    return
+  fi
+  cmp -s "$source_file" "$installed_file"
 }
 
 cleanup_smoke_fixture() {
@@ -325,7 +337,7 @@ for pair in \
   "$RELEASE_DIR/deploy/backup/zhicui-postgres-restore-verify.timer:/etc/systemd/system/zhicui-postgres-restore-verify.timer" \
   "$RELEASE_DIR/deploy/jenkins-videocapsule.sudoers:/etc/sudoers.d/jenkins-videocapsule"; do
   source_file="${pair%%:*}"; installed_file="${pair#*:}"
-  if [[ ! -f "$installed_file" ]] || ! cmp -s "$source_file" "$installed_file"; then
+  if [[ ! -f "$installed_file" ]] || ! asset_matches "$source_file" "$installed_file"; then
     PRESERVE_RELEASE=1
     err "生产运维资产需要升级；执行 sudo bash $RELEASE_DIR/deploy/preinstall-production-assets.sh 后重试"
   fi

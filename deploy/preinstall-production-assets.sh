@@ -77,7 +77,8 @@ rm -f /etc/nginx/sites-enabled/default
 if id jenkins >/dev/null 2>&1; then
   usermod -aG ubuntu jenkins
 fi
-install -m 0440 "$SOURCE_ROOT/deploy/jenkins-videocapsule.sudoers" /etc/sudoers.d/jenkins-videocapsule
+install -o root -g ubuntu -m 0440 \
+  "$SOURCE_ROOT/deploy/jenkins-videocapsule.sudoers" /etc/sudoers.d/jenkins-videocapsule
 visudo -cf /etc/sudoers.d/jenkins-videocapsule
 
 systemctl daemon-reload

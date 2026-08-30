@@ -126,7 +126,8 @@ if id jenkins >/dev/null 2>&1; then
 else
   warn "jenkins 用户不存在,装完 Jenkins 后重跑此脚本以配置权限"
 fi
-install -m 0440 "$APP_DIR/deploy/jenkins-videocapsule.sudoers" /etc/sudoers.d/jenkins-videocapsule
+install -o root -g ubuntu -m 0440 \
+  "$APP_DIR/deploy/jenkins-videocapsule.sudoers" /etc/sudoers.d/jenkins-videocapsule
 visudo -cf /etc/sudoers.d/jenkins-videocapsule
 
 log "=== 启动应用服务 ==="

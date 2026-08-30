@@ -304,9 +304,13 @@ export default function WorkspaceActionHome() {
             {welcome.greeting}{displayName ? `，${displayName}` : ''}
           </h1>
         </div>
-        <Link href="/library?sync=1" className={styles.welcomeSync}>
-          <ArrowsClockwise size={16} weight="regular" aria-hidden="true" />
-          同步视频
+        <Link
+          href="/library?sync=1"
+          className={styles.welcomeSync}
+          aria-label="同步抖音和 B站视频"
+        >
+          <ArrowsClockwise size={18} weight="bold" aria-hidden="true" />
+          <span>同步视频</span>
         </Link>
       </header>
 

@@ -255,6 +255,7 @@ def _proxy_douyin_image(
     session_scope: str,
     *,
     fallback_url: str = "",
+    stable_cache_key: str = "",
 ) -> Response:
     """Try the fresh loopback cover, then an allowlisted public CDN hint.
 
@@ -271,7 +272,7 @@ def _proxy_douyin_image(
             and not platform_library_service.validated_douyin_image_target(candidate)
         ):
             continue
-        cache_key = (
+        cache_key = stable_cache_key or (
             f"douyin-sidecar:{session_scope}:{candidate}"
             if trusted_loopback
             else f"douyin-public:{candidate}"
@@ -345,7 +346,7 @@ def _proxy_douyin_image(
     return _cover_placeholder_response()
 
 
-def _proxy_bilibili_image(target_url: str) -> Response:
+def _proxy_bilibili_image(target_url: str, *, stable_cache_key: str = "") -> Response:
     """Proxy one allowlisted Bilibili cover with the required source headers."""
     parsed = urlparse(target_url)
     hostname = (parsed.hostname or "").lower()
@@ -355,7 +356,7 @@ def _proxy_bilibili_image(target_url: str) -> Response:
     if parsed.scheme not in {"http", "https"} or not allowed:
         return _cover_placeholder_response()
 
-    cache_key = f"bilibili:{target_url}"
+    cache_key = stable_cache_key or f"bilibili:{target_url}"
     cached = image_memory_cache.get(cache_key)
     if cached is not None:
         return Response(
@@ -1929,7 +1930,10 @@ def stream_platform_library_cover(
     target_url = platform_library_service.cover_target(db, note_id)
     if not target_url:
         raise HTTPException(status_code=404, detail="视频封面不存在")
-    return _proxy_bilibili_image(target_url)
+    return _proxy_bilibili_image(
+        target_url,
+        stable_cache_key=f"platform-cover:{note_id}",
+    )
 
 
 @router.get("/api/library/imports/{note_id}/media", include_in_schema=False)
@@ -2605,6 +2609,7 @@ def stream_douyin_library_cover(
         target_url,
         account_binding.session_scope,
         fallback_url=local_cover_url,
+        stable_cache_key=f"douyin-cover:{binding}:{aweme_id}",
     )
 
 
@@ -2642,6 +2647,7 @@ def stream_douyin_library_gallery_image(
     return _proxy_douyin_image(
         douyin_library.companion_gallery_image_url(aweme_id, image_index),
         account_binding.session_scope,
+        stable_cache_key=f"douyin-gallery:{binding}:{aweme_id}:{image_index}",
     )
 
 

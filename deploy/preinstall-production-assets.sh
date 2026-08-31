@@ -48,6 +48,7 @@ esac
 
 bash "$SOURCE_ROOT/deploy/backup/install.sh"
 install -d -o ubuntu -g ubuntu -m 0770 /var/lib/zhicui-deployments
+install -d -o ubuntu -g ubuntu -m 0770 /var/lib/zhicui-cover-cache
 
 # Electron 更新源独立于 Git/runtime 生命周期。迁移只补缺，不覆盖已发布版本。
 install -d -o ubuntu -g ubuntu -m 0775 \

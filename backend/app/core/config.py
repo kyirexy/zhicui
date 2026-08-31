@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     # summary; backup archives and encryption keys remain outside the app.
     BACKUP_STATUS_FILE: str = "/var/lib/zhicui-backups/latest.json"
     BACKUP_MAX_AGE_HOURS: int = 36
+    # 成功代理的公开封面可缓存在应用服务器；留空时生产环境使用持久目录，
+    # 开发环境使用仓库内目录。
+    COVER_CACHE_DIR: str = ""
     # Production release readiness fails closed until an encrypted backup and
     # its separately encrypted recovery material are verified in another
     # failure domain. SQLite development remains not_applicable.

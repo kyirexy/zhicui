@@ -93,6 +93,7 @@ systemctl daemon-reload
 systemctl enable videocapsule-backend videocapsule-frontend
 bash "$APP_DIR/deploy/backup/install.sh"
 install -d -o ubuntu -g ubuntu -m 0770 /var/lib/zhicui-deployments
+install -d -o ubuntu -g ubuntu -m 0770 /var/lib/zhicui-cover-cache
 install -d -o ubuntu -g ubuntu -m 0775 \
   /var/lib/zhicui-downloads/windows \
   /var/lib/zhicui-downloads/releases/windows

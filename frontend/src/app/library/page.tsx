@@ -3939,7 +3939,7 @@ export default function VideoLibraryPage() {
                         onToggle={toggleSelection}
                         selectionDisabled={batchExtracting}
                         onRefreshCover={refreshDouyinCover}
-                        coverPriority={index < 6}
+                        coverPriority={index < 3}
                       />
                     ))}
                   </div>
@@ -3962,7 +3962,7 @@ export default function VideoLibraryPage() {
                     onInitialize={initializePlatformSummary}
                     onToggleSelection={togglePlatformSelection}
                     onRefreshCover={refreshPlatformCover}
-                    coverPriority={index < (layoutMode === 'grid' ? 6 : 2)}
+                    coverPriority={index < (layoutMode === 'grid' ? 3 : 1)}
                   />
                 ))}
                 </div>

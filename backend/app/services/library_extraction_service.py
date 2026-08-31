@@ -41,9 +41,14 @@ logger = logging.getLogger(__name__)
 _EPHEMERAL_MEDIA_HOST_SUFFIXES = (
     ".douyinvod.com",
     ".bytecdn.cn",
+    ".bytecdn.com",
     ".snssdk.com",
     ".ibytedtos.com",
     ".douyin.com",
+    ".iesdouyin.com",
+    ".pstatp.com",
+    ".zjcdn.com",
+    ".volccdn.com",
 )
 
 
@@ -85,6 +90,29 @@ def normalize_ephemeral_media_url(value: object) -> str:
     ):
         raise ValueError("临时播放地址不是受信任的抖音媒体地址")
     return raw
+
+
+def optional_ephemeral_media_url(value: object) -> str:
+    """Use a trusted desktop capability or safely fall back to the connector.
+
+    The temporary URL is an optional acceleration hint. A stale desktop build
+    can return a newly introduced CDN hostname, so rejecting the whole batch
+    would turn a recoverable hint mismatch into a user-visible extraction
+    failure. Unknown hosts are never fetched; the bound account connector is
+    used instead.
+    """
+    try:
+        return normalize_ephemeral_media_url(value)
+    except ValueError:
+        try:
+            host = (urlsplit(str(value or "").strip()).hostname or "").lower()
+        except ValueError:
+            host = "invalid"
+        logger.info(
+            "Ignored untrusted optional Douyin media capability host=%s",
+            host[:255] or "missing",
+        )
+        return ""
 
 
 def _has_retryable_ai_failure(note: Any) -> bool:
@@ -332,7 +360,7 @@ def extract_library_item(
                     progress("transcribing")
                 try:
                     if item.get("provider") == "desktop-local":
-                        media_url = normalize_ephemeral_media_url(ephemeral_media_url)
+                        media_url = optional_ephemeral_media_url(ephemeral_media_url)
                         if media_url:
                             request_headers = {
                                 "Referer": "https://www.douyin.com/",
@@ -633,11 +661,14 @@ def create_batch_job(
     if not 1 <= len(clean_ids) <= max_items:
         raise ValueError(f"本次{operation}任务请选择 1–{max_items} 条视频")
     clean_id_set = set(clean_ids)
-    media_sources = {
-        str(aweme_id or "").strip(): normalize_ephemeral_media_url(media_url)
-        for aweme_id, media_url in (ephemeral_media_sources or {}).items()
-        if str(aweme_id or "").strip() in clean_id_set and str(media_url or "").strip()
-    }
+    media_sources: dict[str, str] = {}
+    for aweme_id, media_url in (ephemeral_media_sources or {}).items():
+        clean_aweme_id = str(aweme_id or "").strip()
+        if clean_aweme_id not in clean_id_set or not str(media_url or "").strip():
+            continue
+        trusted_media_url = optional_ephemeral_media_url(media_url)
+        if trusted_media_url:
+            media_sources[clean_aweme_id] = trusted_media_url
     safe_asr = max(
         1,
         min(

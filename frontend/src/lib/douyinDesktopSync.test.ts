@@ -3,10 +3,30 @@ import test from 'node:test';
 
 import {
   getEphemeralDouyinMediaSources,
+  isTrustedEphemeralDouyinMediaUrl,
   requiresLocalDouyinDesktopUpdate,
   supportsLocalDouyinRuntime,
   toLocalDouyinSyncItems,
 } from './douyinDesktopSync.ts';
+
+test('desktop media capability accepts current Douyin CDNs only', () => {
+  assert.equal(
+    isTrustedEphemeralDouyinMediaUrl('https://v5-dy-o-abtest.zjcdn.com/video.mp4?token=temporary'),
+    true,
+  );
+  assert.equal(
+    isTrustedEphemeralDouyinMediaUrl('https://v3-web.volccdn.com/video.mp4?token=temporary'),
+    true,
+  );
+  assert.equal(
+    isTrustedEphemeralDouyinMediaUrl('https://example.com/video.mp4'),
+    false,
+  );
+  assert.equal(
+    isTrustedEphemeralDouyinMediaUrl('http://v3-web.douyinvod.com/video.mp4'),
+    false,
+  );
+});
 
 test('local Douyin connector is gated to the compatible desktop version', () => {
   assert.equal(supportsLocalDouyinRuntime('1.0.6'), false);
@@ -53,4 +73,21 @@ test('desktop result is reduced to the public server metadata contract', () => {
     aweme_id: '7672579366093622537',
     media_url: 'https://v3-web.douyinvod.com/video.mp4?token=temporary',
   }]);
+});
+
+test('untrusted media capability is not forwarded to the server', () => {
+  toLocalDouyinSyncItems([{
+    videoId: '7672579366093622539',
+    sourceUrl: 'https://www.douyin.com/video/7672579366093622539',
+    title: '标题',
+    caption: '文案',
+    authorName: '作者',
+    coverUrl: 'https://p3.douyinpic.com/cover.jpg',
+    publishedAt: '2026-08-27T08:00:00Z',
+    durationSeconds: 20,
+    sourceRank: 0,
+    ephemeralMediaUrl: 'https://example.com/video.mp4',
+  }]);
+
+  assert.deepEqual(getEphemeralDouyinMediaSources(['7672579366093622539']), []);
 });

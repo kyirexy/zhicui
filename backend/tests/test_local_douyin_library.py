@@ -355,6 +355,26 @@ class LocalDouyinLibraryTests(unittest.TestCase):
                 "https://example.com/video.mp4"
             )
 
+    def test_ephemeral_media_accepts_current_official_cdn_hosts(self) -> None:
+        for url in (
+            "https://v5-dy-o-abtest.zjcdn.com/video.mp4?token=temporary",
+            "https://v3-web.volccdn.com/video.mp4?token=temporary",
+            "https://v9-web.bytecdn.com/video.mp4?token=temporary",
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(
+                    library_extraction_service.normalize_ephemeral_media_url(url),
+                    url,
+                )
+
+    def test_optional_untrusted_media_falls_back_without_fetching_it(self) -> None:
+        self.assertEqual(
+            library_extraction_service.optional_ephemeral_media_url(
+                "https://example.com/video.mp4"
+            ),
+            "",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

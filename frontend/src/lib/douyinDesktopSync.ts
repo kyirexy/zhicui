@@ -3,8 +3,36 @@ import type { DouyinLocalSyncItem } from '@/lib/types';
 
 export const MIN_LOCAL_DOUYIN_DESKTOP_VERSION = '1.0.9';
 
-const EPHEMERAL_MEDIA_TTL_MS = 6 * 60 * 60 * 1000;
+const EPHEMERAL_MEDIA_TTL_MS = 15 * 60 * 1000;
+const TRUSTED_DOUYIN_MEDIA_DOMAINS = [
+  'douyinvod.com',
+  'bytecdn.cn',
+  'bytecdn.com',
+  'snssdk.com',
+  'ibytedtos.com',
+  'douyin.com',
+  'iesdouyin.com',
+  'pstatp.com',
+  'zjcdn.com',
+  'volccdn.com',
+] as const;
 const ephemeralMedia = new Map<string, { mediaUrl: string; capturedAt: number }>();
+
+export function isTrustedEphemeralDouyinMediaUrl(value: string): boolean {
+  try {
+    const parsed = new URL(String(value || '').trim());
+    const hostname = parsed.hostname.toLowerCase().replace(/\.$/, '');
+    return parsed.protocol === 'https:'
+      && !parsed.username
+      && !parsed.password
+      && (!parsed.port || parsed.port === '443')
+      && TRUSTED_DOUYIN_MEDIA_DOMAINS.some(
+        (domain) => hostname === domain || hostname.endsWith(`.${domain}`),
+      );
+  } catch {
+    return false;
+  }
+}
 
 export function supportsLocalDouyinRuntime(version: string): boolean {
   const [major = 0, minor = 0, patch = 0] = String(version || '')
@@ -23,8 +51,10 @@ export function toLocalDouyinSyncItems(
 ): DouyinLocalSyncItem[] {
   return items.slice(0, 100).map((item) => {
     const mediaUrl = String(item.ephemeralMediaUrl || '').trim();
-    if (mediaUrl) {
+    if (isTrustedEphemeralDouyinMediaUrl(mediaUrl)) {
       ephemeralMedia.set(item.videoId, { mediaUrl, capturedAt: Date.now() });
+    } else {
+      ephemeralMedia.delete(item.videoId);
     }
     return {
       video_id: item.videoId,

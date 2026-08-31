@@ -101,6 +101,31 @@ cleanup_smoke_fixture() {
   )
 }
 
+prune_reproducible_release_artifacts() {
+  local current_runtime previous_runtime candidate resolved failed=0
+  current_runtime="$(realpath "$CURRENT_LINK")" || return 1
+  previous_runtime="$(realpath "$PREVIOUS_RUNTIME")" || return 1
+  case "$current_runtime" in "$RELEASE_ROOT"/*) ;; *) return 1 ;; esac
+  case "$previous_runtime" in "$APP_DIR"|"$RELEASE_ROOT"/*) ;; *) return 1 ;; esac
+
+  while IFS= read -r -d '' candidate; do
+    resolved="$(realpath "$candidate")" || { failed=1; continue; }
+    case "$resolved" in "$RELEASE_ROOT"/manual-*) ;; *) failed=1; continue ;; esac
+    if [[ "$resolved" == "$current_runtime" || "$resolved" == "$previous_runtime" ]]; then
+      continue
+    fi
+    if ! git -C "$APP_DIR" worktree remove --force "$resolved"; then
+      # A directory left by an older deployment may no longer be registered as
+      # a worktree. It is still safe to remove after the approved-root check.
+      rm -rf -- "$resolved" || failed=1
+    fi
+  done < <(find "$RELEASE_ROOT" -mindepth 1 -maxdepth 1 -type d -name 'manual-*' -print0)
+
+  git -C "$APP_DIR" worktree prune --expire now || failed=1
+  npm cache clean --force >/dev/null 2>&1 || failed=1
+  return "$failed"
+}
+
 atomic_runtime_switch() {
   local target="$1" temporary="$RUNTIME_ROOT/.current-$DEPLOY_ID-$$"
   case "$target" in "$APP_DIR"|"$RELEASE_ROOT"/*) ;; *) return 1 ;; esac
@@ -438,4 +463,10 @@ cd "$APP_DIR"
 git merge --ff-only "$TARGET_COMMIT"
 DEPLOY_SUCCEEDED=1
 record_gate deployment pass "$TARGET_COMMIT"
+if prune_reproducible_release_artifacts; then
+  record_gate release_retention pass '仅保留当前与上一版 runtime，并清理 npm 可再生成缓存'
+else
+  warn '发布已成功，但旧 runtime 或 npm 缓存未能完全清理'
+  record_gate release_retention warning '发布成功；可再生成缓存需要后续人工清理'
+fi
 log '✅ 原子 runtime、备份、readiness、发行与真实用户旅程全部通过'

@@ -380,14 +380,6 @@ export default function WorkspaceActionHome() {
             {welcome.greeting}{displayName ? `，${displayName}` : ''}
           </h1>
         </div>
-        <Link
-          href="/library?sync=1"
-          className={styles.welcomeSync}
-          aria-label="同步抖音和 B站视频"
-        >
-          <ArrowsClockwise size={18} weight="bold" aria-hidden="true" />
-          <span>同步视频</span>
-        </Link>
       </header>
 
       <section className={styles.start} aria-labelledby="workspace-start-title">
@@ -400,18 +392,37 @@ export default function WorkspaceActionHome() {
         </div>
 
         <div className={styles.startAction}>
-          <Link href="/harness?new=1&source_scope=all_ready" className={styles.askEntry}>
-            <span className={styles.askIcon} aria-hidden="true">
-              <ChatCircleDots size={20} weight="duotone" />
-            </span>
-            <span className={styles.askCopy}>
-              <strong>问点什么</strong>
-              <small>基于已同步的视频直接提问</small>
-            </span>
-            <span className={styles.askArrow} aria-hidden="true">
-              <ArrowRight size={16} weight="bold" />
-            </span>
-          </Link>
+          <div className={styles.primaryActions}>
+            <Link
+              href="/library?sync=1"
+              className={styles.syncEntry}
+              aria-label="同步抖音和 B站视频"
+            >
+              <span className={styles.syncIcon} aria-hidden="true">
+                <ArrowsClockwise size={20} weight="bold" />
+              </span>
+              <span className={styles.syncCopy}>
+                <strong>同步视频</strong>
+                <small>更新抖音、B站视频资料</small>
+              </span>
+              <span className={styles.syncArrow} aria-hidden="true">
+                <ArrowRight size={16} weight="bold" />
+              </span>
+            </Link>
+
+            <Link href="/harness?new=1&source_scope=all_ready" className={styles.askEntry}>
+              <span className={styles.askIcon} aria-hidden="true">
+                <ChatCircleDots size={20} weight="duotone" />
+              </span>
+              <span className={styles.askCopy}>
+                <strong>去提问</strong>
+                <small>基于已同步的视频直接提问</small>
+              </span>
+              <span className={styles.askArrow} aria-hidden="true">
+                <ArrowRight size={16} weight="bold" />
+              </span>
+            </Link>
+          </div>
 
           <div className={styles.sourceStatus} data-empty={readyCount === 0} role="status">
             <span aria-hidden="true" />
@@ -525,13 +536,13 @@ export default function WorkspaceActionHome() {
 
       <div className={styles.utilityArea}>
         <nav className={styles.tools} aria-label="常用操作">
-          <Link href="/library?sync=1" className={styles.toolAction}>
+          <Link href="/library" className={styles.toolAction}>
             <span className={styles.toolIcon} aria-hidden="true">
-              <ArrowsClockwise size={19} weight="regular" />
+              <VideoCamera size={19} weight="regular" />
             </span>
             <span>
-              <strong>同步视频</strong>
-              <small>更新渠道与作品</small>
+              <strong>管理资料</strong>
+              <small>查看渠道与视频</small>
             </span>
             <ArrowRight size={15} weight="bold" aria-hidden="true" />
           </Link>

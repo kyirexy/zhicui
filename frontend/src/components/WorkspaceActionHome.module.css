@@ -46,30 +46,6 @@
   text-wrap: balance;
 }
 
-.welcomeSync {
-  display: inline-flex;
-  min-height: 44px;
-  padding: 0 16px;
-  border: 1px solid color-mix(in srgb, var(--home-accent) 82%, var(--home-ink));
-  border-radius: 12px;
-  align-items: center;
-  gap: 7px;
-  color: #fff;
-  background: var(--home-accent);
-  box-shadow:
-    0 8px 18px color-mix(in srgb, var(--home-accent) 24%, transparent),
-    inset 0 1px 0 rgb(255 255 255 / 22%);
-  font-size: 0.8rem;
-  font-weight: 720;
-  text-decoration: none;
-  transition:
-    background-color 180ms ease-out,
-    border-color 180ms ease-out,
-    box-shadow 180ms ease-out,
-    transform 180ms ease-out;
-  -webkit-tap-highlight-color: transparent;
-}
-
 .start {
   position: relative;
   display: grid;
@@ -119,7 +95,15 @@
   text-wrap: pretty;
 }
 
-.askEntry {
+.primaryActions {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.askEntry,
+.syncEntry {
   position: relative;
   z-index: 1;
   display: grid;
@@ -139,21 +123,40 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+.syncEntry {
+  border-color: color-mix(in srgb, var(--home-accent) 80%, var(--home-ink));
+  color: #fff;
+  background: var(--home-accent);
+  box-shadow: 0 7px 16px color-mix(in srgb, var(--home-accent) 24%, transparent);
+}
+
 .askIcon,
-.askArrow {
+.askArrow,
+.syncIcon,
+.syncArrow {
   display: grid;
   place-items: center;
 }
 
-.askIcon {
+.askIcon,
+.syncIcon {
   width: 42px;
   height: 42px;
   border-radius: 11px;
+}
+
+.askIcon {
   color: var(--home-accent);
   background: var(--home-accent-soft);
 }
 
-.askCopy {
+.syncIcon {
+  color: #fff;
+  background: rgb(255 255 255 / 16%);
+}
+
+.askCopy,
+.syncCopy {
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -161,30 +164,51 @@
 }
 
 .askCopy strong,
-.askCopy small {
+.askCopy small,
+.syncCopy strong,
+.syncCopy small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.askCopy strong {
+.askCopy strong,
+.syncCopy strong {
   color: var(--home-ink);
   font-size: 1rem;
   font-weight: 720;
 }
 
-.askCopy small {
+.askCopy small,
+.syncCopy small {
   color: var(--home-faint);
   font-size: 0.72rem;
 }
 
-.askArrow {
+.syncCopy strong {
+  color: #fff;
+}
+
+.syncCopy small {
+  color: rgb(255 255 255 / 78%);
+}
+
+.askArrow,
+.syncArrow {
   width: 42px;
   height: 42px;
   border-radius: 11px;
+  transition: transform 180ms ease-out;
+}
+
+.askArrow {
   color: var(--home-surface);
   background: var(--home-accent);
-  transition: transform 180ms ease-out;
+}
+
+.syncArrow {
+  color: var(--home-accent);
+  background: #fff;
 }
 
 .startAction {
@@ -745,7 +769,7 @@
 }
 
 .askEntry:focus-visible,
-.welcomeSync:focus-visible,
+.syncEntry:focus-visible,
 .toolAction:focus-visible,
 .channelCard:focus-visible,
 .sourceStatus a:focus-visible,
@@ -756,7 +780,7 @@
 }
 
 .askEntry:active,
-.welcomeSync:active,
+.syncEntry:active,
 .toolAction:active,
 .channelCard:active,
 .thread:active,
@@ -771,17 +795,16 @@
     transform: translateY(-2px);
   }
 
-  .welcomeSync:hover {
+  .syncEntry:hover {
     border-color: color-mix(in srgb, var(--home-accent) 68%, var(--home-ink));
     color: #fff;
     background: color-mix(in srgb, var(--home-accent) 90%, var(--home-ink));
-    box-shadow:
-      0 10px 22px color-mix(in srgb, var(--home-accent) 30%, transparent),
-      inset 0 1px 0 rgb(255 255 255 / 24%);
-    transform: translateY(-1px);
+    box-shadow: 0 9px 20px color-mix(in srgb, var(--home-accent) 30%, transparent);
+    transform: translateY(-2px);
   }
 
-  .askEntry:hover .askArrow {
+  .askEntry:hover .askArrow,
+  .syncEntry:hover .syncArrow {
     transform: translateX(2px);
   }
 
@@ -885,11 +908,6 @@
     font-size: 1.5rem;
   }
 
-  .welcomeSync {
-    min-height: 44px;
-    padding: 0 14px;
-  }
-
   .start {
     display: block;
     min-height: 0;
@@ -901,7 +919,13 @@
     display: none;
   }
 
-  .askEntry {
+  .primaryActions {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .askEntry,
+  .syncEntry {
     min-height: 56px;
     margin-top: 0;
     padding: 7px 8px;
@@ -1029,7 +1053,9 @@
 
 @media (prefers-reduced-motion: reduce) {
   .askEntry,
+  .syncEntry,
   .askArrow,
+  .syncArrow,
   .toolAction,
   .channelCard,
   .thread,

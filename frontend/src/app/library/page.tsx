@@ -111,6 +111,10 @@ import {
   writeLibraryListCache,
 } from '@/lib/libraryListCache';
 import { findNewLibraryItems } from '@/lib/librarySyncDiff';
+import {
+  hasReadyTranscript,
+  selectTranscriptPreparationTargets,
+} from '@/lib/libraryTranscriptPreparation';
 import type {
   DouyinCollectionJob,
   DouyinBatchExtractionJob,
@@ -179,6 +183,7 @@ type LibraryLayoutMode = 'list' | 'grid';
 
 const MAX_SELECTION = 50;
 const MAX_SYNC_COUNT = QUICK_SYNC_MAX_COUNT;
+const MAX_TRANSCRIPT_PREPARATION = 100;
 const DEFAULT_SOURCE_SORTS: Record<'like' | 'collect', DouyinLibrarySort> = {
   like: 'collection',
   collect: 'collection',
@@ -225,10 +230,6 @@ function isDouyinSourceMode(value: unknown): value is DouyinSourceMode {
 
 function isLibraryLayoutMode(value: unknown): value is LibraryLayoutMode {
   return value === 'list' || value === 'grid';
-}
-
-function hasReadyTranscript(item: DouyinLibraryItem): boolean {
-  return Boolean(item.extracted_note_id) && item.transcript_chars > 0;
 }
 
 function getCollectionProgress(
@@ -763,6 +764,19 @@ export default function VideoLibraryPage() {
     [platformItems, selectedPlatform],
   );
   const selectedCount = selectedItems.length + selectedPlatformItems.length;
+  const pendingTranscriptTotal = useMemo(
+    () => items.filter(
+      (item) => item.can_extract && !hasReadyTranscript(item),
+    ).length,
+    [items],
+  );
+  const pendingTranscriptItems = useMemo(
+    () => selectTranscriptPreparationTargets(
+      [items],
+      MAX_TRANSCRIPT_PREPARATION,
+    ),
+    [items],
+  );
   const selectedAnalysisNoteIds = useMemo(() => [
     ...selectedItems.flatMap(item => item.extracted_note_id ? [item.extracted_note_id] : []),
     ...selectedPlatformItems.flatMap(item => item.media_type === 'video' ? [item.id] : []),
@@ -1025,9 +1039,9 @@ export default function VideoLibraryPage() {
               ...item,
               extracted: true,
               extracted_note_id: result.note_id || null,
-            transcript_chars: result.transcript_chars,
-            ai_initialized: result.ai_initialized,
-            card_type: result.card_type || item.card_type,
+              transcript_chars: result.transcript_chars,
+              ai_initialized: result.ai_initialized,
+              card_type: result.card_type || item.card_type,
             }
           : item;
       }));
@@ -1055,7 +1069,12 @@ export default function VideoLibraryPage() {
     };
     updateProgressNotice();
     for (let attempt = 0; attempt < 2400 && activeRef.current; attempt += 1) {
-      if (current.status !== 'running') return current;
+      if (current.status !== 'running') {
+        // 任务结束后以数据库为准刷新一次，并同步更新会话缓存，避免重新打开
+        // 页面时又短暂显示旧的“待整理”状态。
+        await loadItems(true);
+        return current;
+      }
       await wait(800);
       const controller = new AbortController();
       const timeoutId = window.setTimeout(
@@ -2378,21 +2397,24 @@ export default function VideoLibraryPage() {
       );
     }
 
-    const transcriptTargets = allRefreshed
-      .flatMap((result) => result.newlyVisible)
-      .slice(0, requestedCount * modes.length)
-      .filter((item) => item.can_extract && !item.extracted);
+    // 手动同步后要补齐当前来源中所有仍缺文案的视频，而不仅是第一次出现的
+    // 条目。否则重新绑定或升级旧版本后，已有视频会永久停在“待整理”。
+    const transcriptTargets = selectTranscriptPreparationTargets(
+      allRefreshed.map((result) => result.refreshed?.slice(0, requestedCount)),
+      MAX_TRANSCRIPT_PREPARATION,
+    );
     if (transcriptTargets.length === 0) return { started: true };
     if (batchExtractingRef.current) {
       publishSourceManagerNotice(
-        `${transcriptTargets.length} 条新视频文案可稍后补提；当前文案任务仍在处理`,
+        `还有 ${transcriptTargets.length} 条视频待准备文案；当前任务完成后可继续`,
       );
       return { started: true };
     }
-    publishSourceManagerNotice(`${transcriptTargets.length} 条新视频文案将在后台准备`);
+    publishSourceManagerNotice(`${transcriptTargets.length} 条待整理视频将在后台准备文案`);
     void (async () => {
-      await wait(700);
-      if (!activeRef.current || batchExtractingRef.current) return;
+      // 立即创建服务端任务；不能先延迟，否则用户在同步完成后马上离开页面时，
+      // 任务可能根本没有提交，重新进入后又全部显示为“待整理”。
+      if (batchExtractingRef.current) return;
       const result = await extractItems(
         transcriptTargets,
         'transcript',
@@ -2410,6 +2432,29 @@ export default function VideoLibraryPage() {
 
   const syncCollectionRef = useRef(syncCollection);
   syncCollectionRef.current = syncCollection;
+
+  const preparePendingTranscripts = async () => {
+    if (pendingTranscriptItems.length === 0 || batchExtractingRef.current) return;
+    if (desktopLocalDouyin) {
+      // 本机播放地址只在内存中短期有效；先由用户明确触发当前来源重读，
+      // 同步完成后会立即把范围内的历史欠账送入文案任务。
+      setNotice(`正在重新读取${sourceLabel}并补齐待整理文案`);
+      await syncCollectionRef.current(
+        [sourceMode],
+        [sourceMode],
+        Math.min(pendingTranscriptTotal, MAX_SYNC_COUNT),
+      );
+      return;
+    }
+    const snapshot = [...pendingTranscriptItems];
+    setNotice(`正在准备 ${snapshot.length} 条待整理视频的完整文案`);
+    const result = await extractItems(snapshot, 'transcript');
+    if (result.status === 'success') {
+      setNotice(`${result.success} 条视频文案已就绪`);
+    } else if (result.status === 'partial') {
+      setNotice(`已完成 ${result.success}/${snapshot.length} 条；失败项可再次重试`);
+    }
+  };
 
   const deleteExtraction = async (item: DouyinLibraryItem): Promise<boolean> => {
     const noteId = item.extracted_note_id;
@@ -3613,6 +3658,22 @@ export default function VideoLibraryPage() {
                 ))}
               </div>
               <small>{sourceLabel}与其他来源分开显示</small>
+              {pendingTranscriptTotal > 0 && (
+                <button
+                  type="button"
+                  className={styles.sourceBacklogAction}
+                  disabled={batchExtracting || refreshing}
+                  onClick={() => void preparePendingTranscripts()}
+                >
+                  {batchExtracting
+                    ? <LoaderCircle size={14} className="animate-spin" aria-hidden="true" />
+                    : <RefreshCw size={14} aria-hidden="true" />}
+                  准备文案{' '}
+                  {pendingTranscriptTotal > pendingTranscriptItems.length
+                    ? `${pendingTranscriptItems.length}/${pendingTranscriptTotal}`
+                    : pendingTranscriptTotal}
+                </button>
+              )}
             </div>
           )}
 

@@ -1741,6 +1741,32 @@
   font-size: 0.6875rem;
 }
 
+.sourceBacklogAction {
+  display: inline-flex;
+  min-height: 44px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent-brand) 28%, var(--card-border));
+  border-radius: 8px;
+  padding: 0 11px;
+  color: color-mix(in srgb, var(--accent-brand) 82%, var(--foreground));
+  background: color-mix(in srgb, var(--accent-brand) 7%, var(--card-bg));
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 750;
+}
+
+.sourceBacklogAction:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent-brand) 48%, var(--card-border));
+  background: color-mix(in srgb, var(--accent-brand) 11%, var(--card-bg));
+}
+
+.sourceBacklogAction:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 .listToolbar {
   display: flex;
   min-width: 0;

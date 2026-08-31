@@ -257,13 +257,12 @@ def _proxy_douyin_image(
     fallback_url: str = "",
     stable_cache_key: str = "",
 ) -> Response:
-    """Try the fresh loopback cover, then an allowlisted public CDN hint.
+    """优先读取已持久化的公开封面，再尝试本机连接器的临时地址。
 
-    The scoped sidecar header is attached only to the exact configured
-    loopback origin. Redirects are never followed, so it cannot escape to an
-    upstream CDN. The persisted CDN URL is intentionally credential-free.
+    连接器凭据只会发送给精确匹配的回环地址，并且不跟随重定向，避免凭据
+    被带到上游 CDN。数据库中的公开 CDN 地址本身不包含任何凭据。
     """
-    for candidate in dict.fromkeys((target_url, fallback_url)):
+    for candidate in dict.fromkeys((fallback_url, target_url)):
         if not candidate:
             continue
         trusted_loopback = douyin_library.is_trusted_companion_url(candidate)
@@ -306,7 +305,7 @@ def _proxy_douyin_image(
                 candidate,
                 headers=headers,
                 stream=True,
-                timeout=(5, 45),
+                timeout=(2, 10) if trusted_loopback else (2, 8),
                 allow_redirects=False,
             )
             if response.is_redirect or response.is_permanent_redirect:
@@ -381,7 +380,7 @@ def _proxy_bilibili_image(target_url: str, *, stable_cache_key: str = "") -> Res
                 "Accept-Encoding": "identity",
             },
             stream=True,
-            timeout=(5, 45),
+            timeout=(2, 10),
         )
         response.raise_for_status()
     except Exception:
@@ -1910,7 +1909,12 @@ def list_platform_library_items(
         db, user_id=current_user.id, platform=platform,
     )
     return _ok({
-        "items": [platform_library_service.serialize_item(note) for note in notes],
+        # 列表首屏只需要封面、标题与处理状态。完整 Note（含文稿和 AI
+        # 结果）在打开详情时按需读取，避免把数十万字节塞进每次资料页请求。
+        "items": [
+            platform_library_service.serialize_item(note, include_note=False)
+            for note in notes
+        ],
         "total": len(notes),
     })
 
@@ -2680,19 +2684,20 @@ def list_douyin_library_items(
     )
     sidecar_items: list[dict[str, Any]] = []
     catalog_warning = ""
-    try:
-        sidecar_items = douyin_library.list_items(
-            binding.session_scope,
-            binding.id,
-            0,
-            mode=mode,
-            sort_by=sort,
-            refresh_order=refresh_order,
-        )
-    except douyin_library.DouyinLibraryError as exc:
-        # A locally discovered snapshot remains useful when the historical
-        # cloud sidecar is unavailable or risk-controlled. Never discard it.
-        catalog_warning = str(exc)
+    # 桌面端快照已经落库，是当前资料页的数据源；有本地数据时不再让首屏
+    # 等待旧连接器最多 15 秒。只有尚无本地快照的旧版云端账号才走兼容回退。
+    if not local_items:
+        try:
+            sidecar_items = douyin_library.list_items(
+                binding.session_scope,
+                binding.id,
+                0,
+                mode=mode,
+                sort_by=sort,
+                refresh_order=refresh_order,
+            )
+        except douyin_library.DouyinLibraryError as exc:
+            catalog_warning = str(exc)
 
     # The legacy companion may still contain old title-only manifest rows.
     # Apply the same durable public-metadata contract as the desktop channel
@@ -3136,6 +3141,12 @@ def extract_douyin_library_item(
         return _ok(result)
     except (ValueError, douyin_library.DouyinLibraryError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except video_extractor.CloudAsrError as exc:
+        raise HTTPException(
+            status_code=503 if exc.retryable else 502,
+            detail=exc.public_message,
+            headers={"Retry-After": "15"} if exc.retryable else None,
+        ) from exc
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(

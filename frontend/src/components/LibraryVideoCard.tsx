@@ -10,6 +10,7 @@ import {
   CircleDashed,
   LoaderCircle,
   Play,
+  RefreshCw,
   Square,
 } from 'lucide-react';
 import LibraryCoverImage from '@/components/LibraryCoverImage';
@@ -33,6 +34,7 @@ interface LibraryVideoCardProps {
   extractError?: string;
   coverPriority?: boolean;
   onToggle: (awemeId: string) => void;
+  onRetryExtraction?: (item: DouyinLibraryItem) => void;
   onRefreshCover?: (item: DouyinLibraryItem) => Promise<Array<string | null | undefined> | void>;
 }
 
@@ -44,6 +46,7 @@ export default function LibraryVideoCard({
   extractError,
   coverPriority = false,
   onToggle,
+  onRetryExtraction,
   onRefreshCover,
 }: LibraryVideoCardProps) {
   const isWorking = ['queued', 'extracting', 'transcribing', 'analyzing'].includes(extractState);
@@ -178,9 +181,22 @@ export default function LibraryVideoCard({
           </div>
         </div>
         {extractState === 'error' && extractError && (
-          <p className="library-video-inline-error" role="alert" title={extractError}>
-            {extractError}
-          </p>
+          <div className="library-video-inline-error" role="alert" title={extractError}>
+            <span>{extractError}</span>
+            {onRetryExtraction && item.can_extract && (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onRetryExtraction(item);
+                }}
+              >
+                <RefreshCw size={12} aria-hidden="true" />
+                重试
+              </button>
+            )}
+          </div>
         )}
         <span className="library-detail-hint" aria-hidden="true">
           打开详情

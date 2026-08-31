@@ -142,6 +142,7 @@ export default function LibraryPreviewPane({ selection, onRefreshCover }: Librar
           fallbackLabel="封面暂不可用"
           alt={`${preview.title}的封面`}
           iconSize={24}
+          priority
         />
         <span className={styles.previewPanePlatform} data-platform={preview.platform}>
           <PlatformBrandIcon platform={preview.platform} size={13} />

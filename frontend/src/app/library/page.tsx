@@ -106,6 +106,10 @@ import {
   readLibraryQuickSyncPreferences,
   saveLibraryQuickSyncPreferences,
 } from '@/lib/libraryQuickSync';
+import {
+  readLibraryListCache,
+  writeLibraryListCache,
+} from '@/lib/libraryListCache';
 import { findNewLibraryItems } from '@/lib/librarySyncDiff';
 import type {
   DouyinCollectionJob,
@@ -351,9 +355,10 @@ export default function VideoLibraryPage() {
   const layoutMode: LibraryLayoutMode = isLibraryLayoutMode(storedLayoutMode)
     ? storedLayoutMode
     : 'grid';
-  const [sourceManagerModes, setSourceManagerModes] = useState<DouyinSourceMode[]>(
-    () => readLibraryQuickSyncPreferences().modes,
-  );
+  const [sourceManagerModes, setSourceManagerModes] = useState<DouyinSourceMode[]>(() => {
+    const preferred = readLibraryQuickSyncPreferences().modes[0];
+    return [isDouyinSourceMode(preferred) ? preferred : 'like'];
+  });
   const [sourceReadability, setSourceReadability] = useState<Partial<
     Record<DouyinSourceMode, SourceReadabilityState>
   >>({});
@@ -481,6 +486,16 @@ export default function VideoLibraryPage() {
       : 'collection';
   const sourceOrderLabel = sourceMode === 'like' ? '最近喜欢' : '最近收藏';
 
+  const applyLibraryListResult = useCallback((result: DouyinLibraryListResult) => {
+    setItems(result.items);
+    setLibraryOverview({
+      sourceTotal: result.source_total,
+      temporaryHidden: result.hidden.temporary,
+      permanentHidden: result.permanent_hidden_total,
+    });
+    setError('');
+  }, []);
+
   const loadItems = useCallback(async (
     silent = false,
     sortOverride?: DouyinLibrarySort,
@@ -502,13 +517,13 @@ export default function VideoLibraryPage() {
     );
     if (response.success && response.data) {
       if (!isCurrentRequest) return response.data;
-      setItems(response.data.items);
-      setLibraryOverview({
-        sourceTotal: response.data.source_total,
-        temporaryHidden: response.data.hidden.temporary,
-        permanentHidden: response.data.permanent_hidden_total,
-      });
-      setError('');
+      applyLibraryListResult(response.data);
+      writeLibraryListCache(
+        user?.id,
+        requestedMode,
+        sortOverride ?? activeSort,
+        response.data,
+      );
       if (!silent) setLoading(false);
       return response.data;
     }
@@ -517,7 +532,7 @@ export default function VideoLibraryPage() {
       setLoading(false);
     }
     return null;
-  }, [activeSort, sourceMode]);
+  }, [activeSort, applyLibraryListResult, sourceMode, user?.id]);
 
   const selectSourceSort = (nextSort: DouyinLibrarySort) => {
     if (refreshing || batchExtracting) return;
@@ -532,40 +547,51 @@ export default function VideoLibraryPage() {
       : '已按视频发布时间从新到旧展示');
   };
 
-  const loadLibrary = useCallback(async () => {
+  const loadLibrary = useCallback(async (keepVisible = false) => {
     const requestedMode = sourceMode;
     const requestId = libraryRequestRef.current + 1;
     libraryRequestRef.current = requestId;
-    setLoading(true);
-    const [statusResponse, itemsResponse] = await Promise.all([
-      getDouyinLibraryStatus(),
-      listDouyinLibraryItems(ALL_LIBRARY_ITEMS, sourceMode, activeSort),
-    ]);
+    if (!keepVisible) setLoading(true);
+    const statusPromise = getDouyinLibraryStatus();
+    const itemsPromise = listDouyinLibraryItems(
+      ALL_LIBRARY_ITEMS,
+      requestedMode,
+      activeSort,
+    );
+
+    void statusPromise.then((statusResponse) => {
+      if (
+        requestId !== libraryRequestRef.current
+        || requestedMode !== sourceModeRef.current
+      ) return;
+      if (statusResponse.success && statusResponse.data) {
+        setStatus(statusResponse.data);
+        setStatusError('');
+      } else {
+        setStatusError(statusResponse.error || '无法检测抖音连接状态');
+      }
+    });
+
+    const itemsResponse = await itemsPromise;
     if (
       requestId !== libraryRequestRef.current
       || requestedMode !== sourceModeRef.current
     ) {
       return;
     }
-    if (statusResponse.success && statusResponse.data) {
-      setStatus(statusResponse.data);
-      setStatusError('');
-    } else {
-      setStatusError(statusResponse.error || '无法检测抖音连接状态');
-    }
     if (itemsResponse.success && itemsResponse.data) {
-      setItems(itemsResponse.data.items);
-      setLibraryOverview({
-        sourceTotal: itemsResponse.data.source_total,
-        temporaryHidden: itemsResponse.data.hidden.temporary,
-        permanentHidden: itemsResponse.data.permanent_hidden_total,
-      });
-      setError('');
+      applyLibraryListResult(itemsResponse.data);
+      writeLibraryListCache(
+        user?.id,
+        requestedMode,
+        activeSort,
+        itemsResponse.data,
+      );
     } else {
       setError(itemsResponse.error || '无法读取视频来源');
     }
     setLoading(false);
-  }, [activeSort, sourceMode]);
+  }, [activeSort, applyLibraryListResult, sourceMode, user?.id]);
 
   useEffect(() => {
     if (!isDouyinSourceMode(storedSourceMode)) {
@@ -581,8 +607,17 @@ export default function VideoLibraryPage() {
 
   useEffect(() => {
     setSelected(new Set());
-    void loadLibrary();
-  }, [loadLibrary]);
+    setPreviewTarget(null);
+    const cached = readLibraryListCache(user?.id, sourceMode, activeSort);
+    if (cached) {
+      applyLibraryListResult(cached);
+      setLoading(false);
+    } else {
+      setItems([]);
+      setLoading(true);
+    }
+    void loadLibrary(Boolean(cached));
+  }, [activeSort, applyLibraryListResult, loadLibrary, sourceMode, user?.id]);
 
   useEffect(() => {
     activeRef.current = true;
@@ -850,6 +885,16 @@ export default function VideoLibraryPage() {
     if (nextFilter === 'all') currentUrl.searchParams.delete('platform');
     else currentUrl.searchParams.set('platform', nextFilter);
     window.history.pushState({}, '', `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
+  };
+
+  const switchDouyinSource = (nextMode: DouyinSourceMode) => {
+    if (batchExtractingRef.current || nextMode === sourceModeRef.current) return;
+    sourceModeRef.current = nextMode;
+    setSourceMode(nextMode);
+    setSelected(new Set());
+    setPreviewTarget(null);
+    setSortMenuOpen(false);
+    setNotice(`已切换到抖音${SOURCE_MODES.find((mode) => mode.value === nextMode)?.label || '视频'}`);
   };
 
   const initializePlatformSummary = async (item: PlatformLibraryItem) => {
@@ -3198,58 +3243,71 @@ export default function VideoLibraryPage() {
               </div>
             </div>
             {loggedIn && (
-              <dl className={styles.sourceAccountSummary} aria-label="抖音账号连接详情">
-                <div>
-                  <dt>账号状态</dt>
-                  <dd data-status="connected">
-                    <CheckCircle2 size={14} aria-hidden="true" />
-                    连接正常
-                  </dd>
-                </div>
-                <div>
-                  <dt>绑定时间</dt>
-                  <dd className={styles.accountTime}>
-                    {desktopLocalDouyin
-                      ? '仅保存在这台电脑'
-                      : formatAccountTime(status?.binding?.bound_at, '本次已连接')}
-                  </dd>
-                </div>
-                <div>
-                  <dt>最近验证</dt>
-                  <dd className={styles.accountTime}>
-                    {desktopLocalDouyin
-                      ? desktopDouyinStage === 'needs-action' ? '需要官方验证' : '本机会话有效'
-                      : formatAccountTime(status?.binding?.last_verified_at, '刚刚验证')}
-                  </dd>
-                </div>
-                <div>
-                  <dt>最近同步</dt>
-                  <dd className={styles.accountTime}>
-                    {desktopLocalDouyin
-                      ? '仅手动触发'
-                      : formatAccountTime(status?.binding?.last_sync_at)}
-                  </dd>
-                </div>
+              <section className={styles.sourceAccountStatus} aria-label="抖音账号连接详情">
+                <header>
+                  <span className={styles.sourceAccountStateIcon} aria-hidden="true">
+                    <CheckCircle2 size={16} />
+                  </span>
+                  <span>
+                    <strong>连接正常</strong>
+                    <small>
+                      {desktopLocalDouyin
+                        ? '账号会话只保存在当前设备'
+                        : '账号连接可用于手动同步'}
+                    </small>
+                  </span>
+                  {desktopLocalDouyin && <b>仅存本机</b>}
+                </header>
+                <dl className={styles.sourceAccountSummary}>
+                  <div>
+                    <dt>{desktopLocalDouyin ? '保存位置' : '绑定时间'}</dt>
+                    <dd className={styles.accountTime}>
+                      {desktopLocalDouyin
+                        ? '这台电脑'
+                        : formatAccountTime(status?.binding?.bound_at, '本次已连接')}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>会话验证</dt>
+                    <dd
+                      className={styles.accountTime}
+                      data-status={desktopDouyinStage === 'needs-action' ? 'attention' : 'connected'}
+                    >
+                      {desktopLocalDouyin
+                        ? desktopDouyinStage === 'needs-action' ? '需要官方验证' : '当前有效'
+                        : formatAccountTime(status?.binding?.last_verified_at, '刚刚验证')}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>{desktopLocalDouyin ? '同步方式' : '最近同步'}</dt>
+                    <dd className={styles.accountTime}>
+                      {desktopLocalDouyin
+                        ? '点击后手动同步'
+                        : formatAccountTime(status?.binding?.last_sync_at)}
+                    </dd>
+                  </div>
+                </dl>
                 {!desktopLocalDouyin && status?.private_list_readiness?.reported && (
-                  <>
-                    <div>
-                      <dt>喜欢读取</dt>
-                      <dd data-status={status.private_list_readiness.like_ready ? 'connected' : 'attention'}>
-                        {status.private_list_readiness.like_ready ? '可以同步' : '需要重新连接'}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>收藏读取</dt>
-                      <dd data-status={status.private_list_readiness.collection_ready ? 'connected' : 'attention'}>
-                        {status.private_list_readiness.collection_ready ? '可以同步' : '登录信息不完整'}
-                      </dd>
-                    </div>
-                  </>
+                  <div className={styles.sourceReadiness} aria-label="抖音来源读取状态">
+                    <span data-status={status.private_list_readiness.like_ready ? 'connected' : 'attention'}>
+                      喜欢 · {status.private_list_readiness.like_ready ? '可以同步' : '需要重新连接'}
+                    </span>
+                    <span data-status={status.private_list_readiness.collection_ready ? 'connected' : 'attention'}>
+                      收藏 · {status.private_list_readiness.collection_ready ? '可以同步' : '登录信息不完整'}
+                    </span>
+                  </div>
                 )}
-              </dl>
+              </section>
             )}
+            <div className={styles.sourcePickerHeader}>
+              <div>
+                <strong>选择同步范围</strong>
+                <span>喜欢、收藏和作品分开同步，降低连续读取风险</span>
+              </div>
+              <small>单选</small>
+            </div>
             <div className="library-source-main">
-              <div className="library-source-modes" role="group" aria-label="选择要同步的抖音来源，可多选">
+              <div className="library-source-modes" role="radiogroup" aria-label="选择一个要同步的抖音来源">
                 {SOURCE_MODES.map(({ value, label, Icon }) => {
                   const active = sourceManagerModes.includes(value);
                   const readinessUnavailable = !desktopLocalDouyin
@@ -3275,17 +3333,13 @@ export default function VideoLibraryPage() {
                     <button
                       type="button"
                       key={value}
+                      role="radio"
                       className={active ? 'is-active' : ''}
                       data-unavailable={sourceUnavailable || undefined}
-                      aria-pressed={active}
+                      aria-checked={active}
                       disabled={refreshing || batchExtracting || desktopDouyinUpdateRequired}
                       onClick={() => {
-                        setSourceManagerModes((current) => {
-                          const next = current.includes(value)
-                            ? current.filter((mode) => mode !== value)
-                            : [...current, value];
-                          return next.length > 0 ? next : current;
-                        });
+                        setSourceManagerModes([value]);
                         setSourceManagerNotice('');
                       }}
                     >
@@ -3539,6 +3593,28 @@ export default function VideoLibraryPage() {
               </button>
             ))}
           </div>
+
+          {showDouyinItems && (
+            <div className={styles.sourceFilterBar}>
+              <span className={styles.sourceFilterLabel}>抖音来源</span>
+              <div className={styles.sourceFilter} role="group" aria-label="按抖音来源筛选视频资料">
+                {SOURCE_MODES.map(({ value, label, Icon }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={sourceMode === value}
+                    data-active={sourceMode === value}
+                    disabled={batchExtracting}
+                    onClick={() => switchDouyinSource(value)}
+                  >
+                    <Icon size={14} aria-hidden="true" />
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <small>{sourceLabel}与其他来源分开显示</small>
+            </div>
+          )}
 
           <div className={`${styles.listToolbar} library-toolbar`}>
             <label className="library-search">
@@ -3806,17 +3882,27 @@ export default function VideoLibraryPage() {
             )}
 
             {visibleListLoading ? (
-              <div className="library-loading">
-                <LoaderCircle size={22} className="animate-spin" />
-                <strong>
+              <div
+                className={styles.listSkeleton}
+                data-layout={layoutMode}
+                role="status"
+                aria-label="正在读取视频资料"
+              >
+                {Array.from({ length: layoutMode === 'grid' ? 6 : 4 }, (_, index) => (
+                  <div key={index} className={styles.listSkeletonItem} aria-hidden="true">
+                    <span />
+                    <div>
+                      <i />
+                      <i />
+                      <i />
+                    </div>
+                  </div>
+                ))}
+                <span className="sr-only">
                   {platformFilter === 'douyin'
                     ? `正在读取${sourceLabel}`
-                    : platformFilter === 'bilibili'
-                      ? '正在读取 B站视频'
-                      : platformFilter === 'xiaohongshu'
-                        ? '正在读取小红书视频'
-                        : '正在读取视频资料'}
-                </strong>
+                    : '正在读取视频资料'}
+                </span>
               </div>
             ) : visibleItemCount === 0 && visibleListError ? (
               <div className="library-empty-state">
@@ -3937,6 +4023,12 @@ export default function VideoLibraryPage() {
                         extractState={extractProgress[item.aweme_id]?.state}
                         extractError={extractProgress[item.aweme_id]?.error}
                         onToggle={toggleSelection}
+                        onRetryExtraction={(target) => {
+                          void extractItems(
+                            [target],
+                            hasReadyTranscript(target) ? 'ai' : 'transcript',
+                          );
+                        }}
                         selectionDisabled={batchExtracting}
                         onRefreshCover={refreshDouyinCover}
                         coverPriority={index < 3}
@@ -3962,7 +4054,10 @@ export default function VideoLibraryPage() {
                     onInitialize={initializePlatformSummary}
                     onToggleSelection={togglePlatformSelection}
                     onRefreshCover={refreshPlatformCover}
-                    coverPriority={index < (layoutMode === 'grid' ? 3 : 1)}
+                    coverPriority={
+                      filteredItems.length === 0
+                      && index < (layoutMode === 'grid' ? 3 : 1)
+                    }
                   />
                 ))}
                 </div>

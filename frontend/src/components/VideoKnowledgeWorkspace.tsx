@@ -723,6 +723,19 @@ export default function VideoKnowledgeWorkspace() {
             <div className="video-knowledge-inline-error" role="alert">
               <CircleAlert size={15} />
               <span>{error}</span>
+              {!hasTranscript && item.can_extract && !importedNoteId && (
+                <button
+                  type="button"
+                  data-primary="true"
+                  onClick={() => void prepareVideo()}
+                  disabled={extracting}
+                >
+                  {extracting
+                    ? <LoaderCircle size={13} className="animate-spin" />
+                    : <RotateCcw size={13} />}
+                  {extracting ? '重试中' : '重新提取'}
+                </button>
+              )}
               <button type="button" onClick={() => setError('')}>关闭</button>
             </div>
           )}

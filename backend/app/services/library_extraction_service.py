@@ -489,6 +489,8 @@ def extract_library_item(
 
 
 def _safe_error(exc: Exception) -> str:
+    if isinstance(exc, video_extractor.CloudAsrError):
+        return exc.public_message[:360]
     if isinstance(exc, KeyError) and "videoInfoRes" in str(exc):
         return "抖音公开页面没有返回播放信息，请在桌面端重新同步后再提取文案"
     message = str(exc).strip()

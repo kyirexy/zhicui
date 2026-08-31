@@ -8981,12 +8981,19 @@ html[data-desktop-app="true"] .plan-focus-task:hover {
 }
 .video-knowledge-inline-error span { min-width: 0; flex: 1; }
 .video-knowledge-inline-error button {
-  min-height: 28px;
-  padding: 0 7px;
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px;
   border-radius: 7px;
   color: inherit;
   background: color-mix(in srgb, var(--accent-rose) 8%, transparent);
-  font-size: 0.58rem;
+  font-size: 0.64rem;
+}
+.video-knowledge-inline-error button[data-primary='true'] {
+  color: #fff;
+  background: var(--accent-rose);
 }
 
 .video-knowledge-loading,

@@ -36,6 +36,10 @@ import type {
   PlatformLibraryItem,
 } from '@/lib/types';
 import { useAuth } from '@/lib/hooks/AuthContext';
+import {
+  readPlatformLibraryCache,
+  writePlatformLibraryCache,
+} from '@/lib/libraryListCache';
 import type {
   PlatformAccountProvider,
   PlatformAccountSourceMode,
@@ -280,6 +284,7 @@ export default function PlatformLibraryPanel({
       const loadedItems = response.data.items;
       setItems(loadedItems);
       onItemsChangeRef.current?.(loadedItems);
+      writePlatformLibraryCache(user?.id, loadedItems);
       setError('');
       onStateChangeRef.current?.({ loading: false, error: '' });
     } else {
@@ -293,8 +298,16 @@ export default function PlatformLibraryPanel({
   }, [user?.id]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    const cached = readPlatformLibraryCache(user?.id);
+    if (cached) {
+      setItems(cached);
+      onItemsChangeRef.current?.(cached);
+      setLoading(false);
+      setError('');
+      onStateChangeRef.current?.({ loading: false, error: '' });
+    }
+    void load(Boolean(cached));
+  }, [load, user?.id]);
 
   const filteredItems = useMemo(() => {
     const keyword = search.trim().toLocaleLowerCase('zh-CN');

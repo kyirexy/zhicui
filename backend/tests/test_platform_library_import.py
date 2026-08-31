@@ -130,6 +130,32 @@ class PlatformLibraryImportTests(unittest.TestCase):
             "https://example.com/cover.jpg",
         )
 
+    def test_list_serialization_can_omit_full_note_payload(self) -> None:
+        with patch.object(
+            platform_library_service,
+            "_extract_bilibili",
+            return_value=self.bili_result(),
+        ):
+            imported = platform_library_service.import_one(
+                self.db,
+                user_id=self.user_a.id,
+                value="https://www.bilibili.com/video/BV1TEST",
+            )
+
+        note = platform_library_service.get_import(
+            self.db,
+            user_id=self.user_a.id,
+            note_id=imported["item"]["id"],
+        )
+        self.assertIsNotNone(note)
+        detail = platform_library_service.serialize_item(note)
+        summary = platform_library_service.serialize_item(note, include_note=False)
+
+        self.assertIn("note", detail)
+        self.assertNotIn("note", summary)
+        self.assertEqual(summary["id"], detail["id"])
+        self.assertEqual(summary["transcript_chars"], detail["transcript_chars"])
+
     def test_bilibili_import_keeps_spoken_text_from_direct_audio_fallback(self) -> None:
         info = self.bili_result()[0] | {
             "bvid": "BV1TEST",

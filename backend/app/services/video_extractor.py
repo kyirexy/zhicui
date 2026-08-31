@@ -14,6 +14,8 @@ import subprocess
 import sys
 import tempfile
 import json
+import random
+import time
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from html import unescape
@@ -473,6 +475,69 @@ _BILI_HTTP_HEADERS = {
 _BILI_API_BASE = "https://api.bilibili.com"
 _BILI_AUDIO_MAX_BYTES = 800 * 1024 * 1024
 _ASR_DIRECT_UPLOAD_MAX_BYTES = 15 * 1024 * 1024
+_ASR_RETRYABLE_HTTP_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+_ASR_MAX_ATTEMPTS = 3
+_ASR_RETRY_DELAYS_SECONDS = (0.75, 1.5)
+_ASR_MAX_RETRY_AFTER_SECONDS = 8.0
+
+
+class CloudAsrError(RuntimeError):
+    """云端 ASR 的安全、可操作错误。
+
+    不保留供应商响应正文，避免网关回显请求标识或内部信息；调用方可以直接
+    展示 ``public_message``，并根据 ``retryable`` 决定是否返回 HTTP 503。
+    """
+
+    def __init__(
+        self,
+        public_message: str,
+        *,
+        retryable: bool,
+        status_code: int | None = None,
+        attempts: int = 1,
+    ) -> None:
+        super().__init__(public_message)
+        self.public_message = public_message
+        self.retryable = retryable
+        self.status_code = status_code
+        self.attempts = max(1, int(attempts))
+
+
+def _cloud_asr_http_message(status_code: int, *, attempts: int) -> str:
+    if status_code in {401, 403}:
+        return "云端语音识别配置无效，请联系管理员检查 ASR 凭据"
+    if status_code == 413:
+        return "音频片段超过云端语音识别服务的大小限制"
+    if status_code == 429:
+        return f"云端语音识别请求过多，已自动尝试 {attempts} 次，请稍后重新提取"
+    if status_code == 503:
+        return f"云端语音识别服务暂时不可用（HTTP 503），已自动尝试 {attempts} 次，请稍后重新提取"
+    if status_code in _ASR_RETRYABLE_HTTP_STATUSES:
+        return f"云端语音识别服务暂时繁忙（HTTP {status_code}），已自动尝试 {attempts} 次，请稍后重新提取"
+    return f"云端语音识别请求失败（HTTP {status_code}），请稍后重新提取"
+
+
+def _cloud_asr_retry_delay(response: Any | None, attempt: int) -> float:
+    """返回有上限的短暂退避时间，并尊重数值型 Retry-After。"""
+    retry_after = ""
+    if response is not None:
+        retry_after = str(response.headers.get("Retry-After") or "").strip()
+    try:
+        provider_delay = float(retry_after)
+    except (TypeError, ValueError):
+        provider_delay = 0.0
+    base_delay = _ASR_RETRY_DELAYS_SECONDS[
+        min(max(attempt - 1, 0), len(_ASR_RETRY_DELAYS_SECONDS) - 1)
+    ]
+    bounded_delay = min(
+        _ASR_MAX_RETRY_AFTER_SECONDS,
+        max(base_delay, provider_delay),
+    )
+    # 少量抖动可避免批量请求在供应商恢复后同时重试，再次形成流量尖峰。
+    return min(
+        _ASR_MAX_RETRY_AFTER_SECONDS,
+        bounded_delay + random.uniform(0.0, min(0.25, bounded_delay * 0.2)),
+    )
 
 
 def _clean_bilibili_url(url: str) -> str:
@@ -967,21 +1032,65 @@ def _asr_single_audio_file(
     api_base_url: str | None = None,
     model: str | None = None,
 ) -> str:
-    """Send one bounded audio file to the configured ASR endpoint."""
+    """发送单个受限大小的音频，仅对临时故障自动重试。"""
     import requests as _req
     api_base_url = api_base_url or "https://api.siliconflow.cn/v1/audio/transcriptions"
     model = model or "FunAudioLLM/SenseVoiceSmall"
 
-    with open(audio_path, 'rb') as f:
-        resp = _req.post(
-            api_base_url,
-            headers={"Authorization": f"Bearer {api_key}"},
-            data={"model": model},
-            files={"file": f},
-            timeout=300,
-        )
-    resp.raise_for_status()
-    return resp.json().get("text", "")
+    for attempt in range(1, _ASR_MAX_ATTEMPTS + 1):
+        response = None
+        try:
+            # 每次重试都重新打开文件；requests 会消费文件流，复用句柄会上传空内容。
+            with open(audio_path, "rb") as source:
+                response = _req.post(
+                    api_base_url,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    data={"model": model},
+                    files={"file": source},
+                    timeout=300,
+                )
+        except (_req.Timeout, _req.ConnectionError) as exc:
+            if attempt < _ASR_MAX_ATTEMPTS:
+                time.sleep(_cloud_asr_retry_delay(None, attempt))
+                continue
+            raise CloudAsrError(
+                f"云端语音识别网络连接暂时失败，已自动尝试 {attempt} 次，请稍后重新提取",
+                retryable=True,
+                attempts=attempt,
+            ) from exc
+
+        status_code = int(response.status_code)
+        retryable = status_code in _ASR_RETRYABLE_HTTP_STATUSES
+        if retryable and attempt < _ASR_MAX_ATTEMPTS:
+            time.sleep(_cloud_asr_retry_delay(response, attempt))
+            continue
+        if status_code >= 400:
+            raise CloudAsrError(
+                _cloud_asr_http_message(status_code, attempts=attempt),
+                retryable=retryable,
+                status_code=status_code,
+                attempts=attempt,
+            )
+
+        try:
+            payload = response.json()
+        except (TypeError, ValueError) as exc:
+            raise CloudAsrError(
+                "云端语音识别返回了无法解析的结果，请稍后重新提取",
+                retryable=False,
+                status_code=status_code,
+                attempts=attempt,
+            ) from exc
+        if not isinstance(payload, dict):
+            raise CloudAsrError(
+                "云端语音识别返回了无法解析的结果，请稍后重新提取",
+                retryable=False,
+                status_code=status_code,
+                attempts=attempt,
+            )
+        return str(payload.get("text") or "")
+
+    raise AssertionError("ASR retry loop exited unexpectedly")
 
 
 def _asr_audio_file(
@@ -1221,6 +1330,7 @@ def extract_media_url_transcript(
     temp_dir = Path(tempfile.mkdtemp(prefix="zhicui-library-"))
     audio_path = temp_dir / "audio.mp3"
     failures: list[str] = []
+    cloud_failure: CloudAsrError | None = None
 
     try:
         ffmpeg_exe = _get_ffmpeg_path()
@@ -1312,8 +1422,12 @@ def extract_media_url_transcript(
                 if transcript and transcript.strip():
                     return transcript.strip()
                 failures.append("云端 ASR 返回空文案")
-            except Exception as exc:
-                failures.append(f"云端 ASR：{exc}")
+            except CloudAsrError as exc:
+                cloud_failure = exc
+                failures.append(exc.public_message)
+            except Exception:
+                # 意外的第三方异常也不暴露供应商地址、临时路径或响应正文。
+                failures.append("云端语音识别调用失败")
 
         try:
             from app.services.local_asr import transcribe_file, transcribe_with_whisper
@@ -1329,6 +1443,8 @@ def extract_media_url_transcript(
         except Exception as exc:
             failures.append(f"本地 ASR：{exc}")
 
+        if cloud_failure is not None:
+            raise cloud_failure
         detail = "；".join(failures[-3:])
         raise RuntimeError(f"视频文案提取失败{f'：{detail}' if detail else ''}")
     finally:

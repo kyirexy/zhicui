@@ -677,8 +677,12 @@ def list_notes(db: Session, *, user_id: str, platform: str = "all") -> list[Note
     return result
 
 
-def serialize_item(note: Note) -> dict[str, Any]:
-    data = note.to_dict()
+def serialize_item(
+    note: Note,
+    *,
+    include_note: bool = True,
+) -> dict[str, Any]:
+    data = note.to_dict() if include_note else None
     meta = _source_meta(note)
     platform = str(meta.get("platform") or media_platform(note) or "").strip()
     source_url = stable_note_source(
@@ -694,7 +698,7 @@ def serialize_item(note: Note) -> dict[str, Any]:
         if raw_cover_url and meta.get("platform") == "bilibili"
         else raw_cover_url
     )
-    return {
+    item = {
         "id": note.id,
         "video_id": note.video_id,
         "title": note.video_title,
@@ -711,7 +715,10 @@ def serialize_item(note: Note) -> dict[str, Any]:
         "media_type": media_type,
         "tags": meta.get("tags") or [],
         "published_at": meta.get("published_at") or "",
-        "imported_at": meta.get("first_seen_at") or data.get("created_at") or "",
+        "imported_at": (
+            meta.get("first_seen_at")
+            or (note.created_at.isoformat() if note.created_at else "")
+        ),
         "transcript_chars": len(note.transcript_raw or ""),
         "transcript_source": meta.get("transcript_source") or "caption-only",
         "speech_ready": bool(meta.get("speech_ready")),
@@ -723,8 +730,11 @@ def serialize_item(note: Note) -> dict[str, Any]:
         "ai_initialized": bool(note.ai_initialized),
         "card_type": note.card_type,
         "source_mode": str(meta.get("source_mode") or "import").strip() or "import",
-        "note": data,
     }
+    if include_note:
+        assert data is not None
+        item["note"] = data
+    return item
 
 
 def get_import(db: Session, *, user_id: str, note_id: str) -> Note | None:

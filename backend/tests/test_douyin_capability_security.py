@@ -14,17 +14,17 @@ AWEME_ID = "7672579366093622537"
 
 
 class DouyinCapabilitySecurityTests(unittest.TestCase):
-    def test_cover_uses_fresh_sidecar_then_public_fallback_without_scope(self) -> None:
+    def test_cover_uses_public_hint_then_scoped_sidecar_fallback(self) -> None:
         failed = MagicMock()
         failed.is_redirect = False
         failed.is_permanent_redirect = False
         failed.raise_for_status.side_effect = RuntimeError("sidecar unavailable")
-        public = MagicMock()
-        public.is_redirect = False
-        public.is_permanent_redirect = False
-        public.headers = {"Content-Type": "image/jpeg"}
-        public.iter_content.return_value = [b"image"]
-        public.raise_for_status.return_value = None
+        companion_response = MagicMock()
+        companion_response.is_redirect = False
+        companion_response.is_permanent_redirect = False
+        companion_response.headers = {"Content-Type": "image/jpeg"}
+        companion_response.iter_content.return_value = [b"image"]
+        companion_response.raise_for_status.return_value = None
 
         companion = "http://127.0.0.1:9000/api/v1/cover/" + AWEME_ID
         fallback = "https://p9.douyinpic.com/old-cover.jpeg"
@@ -39,7 +39,7 @@ class DouyinCapabilitySecurityTests(unittest.TestCase):
             patch.object(
                 routes.http_requests,
                 "get",
-                side_effect=[failed, public],
+                side_effect=[failed, companion_response],
             ) as request_get,
         ):
             response = routes._proxy_douyin_image(
@@ -49,16 +49,16 @@ class DouyinCapabilitySecurityTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(request_get.call_args_list[0].args[0], companion)
-        self.assertEqual(
-            request_get.call_args_list[0].kwargs["headers"]["X-Zhicui-Scope"],
-            SESSION_SCOPE,
-        )
-        self.assertEqual(request_get.call_args_list[0].kwargs["allow_redirects"], False)
-        self.assertEqual(request_get.call_args_list[1].args[0], fallback)
+        self.assertEqual(request_get.call_args_list[0].args[0], fallback)
         self.assertNotIn(
             "X-Zhicui-Scope",
-            request_get.call_args_list[1].kwargs["headers"],
+            request_get.call_args_list[0].kwargs["headers"],
+        )
+        self.assertEqual(request_get.call_args_list[0].kwargs["allow_redirects"], False)
+        self.assertEqual(request_get.call_args_list[1].args[0], companion)
+        self.assertEqual(
+            request_get.call_args_list[1].kwargs["headers"]["X-Zhicui-Scope"],
+            SESSION_SCOPE,
         )
         self.assertEqual(request_get.call_args_list[1].kwargs["allow_redirects"], False)
 

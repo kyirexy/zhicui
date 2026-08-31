@@ -860,7 +860,8 @@ export interface PlatformLibraryItem {
   ai_initialized: boolean;
   card_type?: CardType | null;
   source_mode?: DouyinSourceMode | 'unknown' | 'import';
-  note: NoteDetail;
+  /** 列表请求省略完整文稿；详情和导入响应才携带 Note。 */
+  note?: NoteDetail;
 }
 
 export interface PlatformLibraryListResult {

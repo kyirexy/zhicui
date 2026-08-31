@@ -826,7 +826,7 @@
 
 .sourceTabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(132px, 0.9fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px;
   border-bottom: 1px solid var(--card-border);
   padding: 7px 12px;
@@ -857,17 +857,11 @@
 }
 
 .sourceTabs button[data-source-view='import'] {
-  margin-left: 5px;
+  margin-left: 0;
 }
 
 .sourceTabs button[data-source-view='import']::before {
-  content: '';
-  position: absolute;
-  top: 9px;
-  bottom: 9px;
-  left: -6px;
-  width: 1px;
-  background: var(--card-border);
+  display: none;
 }
 
 .sourceTabs button:not([data-active='true']):hover {
@@ -991,15 +985,71 @@
   font-size: 0.75rem;
 }
 
+.sourceAccountStatus {
+  margin: 0 0 14px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent-brand) 20%, var(--card-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-brand) 3%, var(--card-bg));
+}
+
+.sourceAccountStatus > header {
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.sourceAccountStatus > header > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+
+.sourceAccountStatus > header strong,
+.sourceAccountStatus > header small {
+  display: block;
+}
+
+.sourceAccountStatus > header strong {
+  color: var(--foreground);
+  font-size: 0.8125rem;
+}
+
+.sourceAccountStatus > header small {
+  color: var(--foreground-muted);
+  font-size: 0.6875rem;
+}
+
+.sourceAccountStatus > header > b {
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--accent-brand) 24%, var(--card-border));
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: color-mix(in srgb, var(--accent-brand) 78%, var(--foreground));
+  background: color-mix(in srgb, var(--accent-brand) 7%, transparent);
+  font-size: 0.625rem;
+  font-weight: 750;
+}
+
+.sourceAccountStateIcon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  place-items: center;
+  color: var(--accent-brand);
+  background: color-mix(in srgb, var(--accent-brand) 10%, transparent);
+}
+
 .sourceAccountSummary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1px;
-  margin: 0 0 12px;
-  overflow: hidden;
-  border: 1px solid var(--card-border);
-  border-radius: 10px;
-  background: var(--card-border);
+  margin: 0;
+  border-top: 1px solid var(--card-border);
 }
 
 .sourceAccountSummary > div {
@@ -1007,7 +1057,11 @@
   min-width: 0;
   gap: 4px;
   padding: 10px 12px;
-  background: var(--card-bg);
+  background: transparent;
+}
+
+.sourceAccountSummary > div + div {
+  border-left: 1px solid var(--card-border);
 }
 
 .sourceAccountSummary dt,
@@ -1043,6 +1097,60 @@
 
 .accountTime {
   font-variant-numeric: tabular-nums;
+}
+
+.sourceReadiness {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--card-border);
+  padding: 7px 12px;
+}
+
+.sourceReadiness span {
+  border-radius: 5px;
+  padding: 3px 7px;
+  color: var(--foreground-secondary);
+  background: var(--background-secondary);
+  font-size: 0.6875rem;
+  font-weight: 700;
+}
+
+.sourceReadiness span[data-status='connected'] {
+  color: color-mix(in srgb, var(--accent-brand) 78%, var(--foreground));
+}
+
+.sourceReadiness span[data-status='attention'] {
+  color: var(--accent-amber);
+}
+
+.sourcePickerHeader {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 9px;
+}
+
+.sourcePickerHeader > div {
+  display: grid;
+  gap: 2px;
+}
+
+.sourcePickerHeader strong {
+  color: var(--foreground);
+  font-size: 0.8125rem;
+}
+
+.sourcePickerHeader span,
+.sourcePickerHeader small {
+  color: var(--foreground-muted);
+  font-size: 0.6875rem;
+}
+
+.sourcePickerHeader > small {
+  flex: 0 0 auto;
 }
 
 .sourceLoginAction,
@@ -1575,6 +1683,64 @@
   font-variant-numeric: tabular-nums;
 }
 
+.sourceFilterBar {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--card-border);
+  padding: 6px 14px;
+  background: color-mix(in srgb, var(--background-secondary) 40%, var(--card-bg));
+}
+
+.sourceFilterLabel {
+  flex: 0 0 auto;
+  color: var(--foreground-muted);
+  font-size: 0.6875rem;
+  font-weight: 700;
+}
+
+.sourceFilter {
+  display: inline-flex;
+  min-width: 0;
+  gap: 2px;
+  border: 1px solid var(--library-action-border);
+  border-radius: 8px;
+  padding: 2px;
+  background: var(--library-action-surface);
+}
+
+.sourceFilter button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 10px;
+  color: var(--foreground-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.sourceFilter button:hover:not(:disabled) {
+  color: var(--foreground);
+}
+
+.sourceFilter button[data-active='true'] {
+  color: color-mix(in srgb, var(--accent-brand) 82%, var(--foreground));
+  background: var(--card-bg);
+  box-shadow: inset 0 0 0 1px var(--library-action-border);
+}
+
+.sourceFilterBar > small {
+  margin-left: auto;
+  color: var(--foreground-muted);
+  font-size: 0.6875rem;
+}
+
 .listToolbar {
   display: flex;
   min-width: 0;
@@ -1762,6 +1928,88 @@
 
 .listSurface {
   min-width: 0;
+}
+
+.listSkeleton {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+
+.listSkeleton[data-layout='grid'] {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
+  gap: 12px;
+  padding: 12px;
+}
+
+.listSkeletonItem {
+  display: grid;
+  min-height: 124px;
+  border-bottom: 1px solid var(--card-border);
+  grid-template-columns: 170px minmax(0, 1fr);
+  background: var(--card-bg);
+}
+
+.listSkeleton[data-layout='grid'] .listSkeletonItem {
+  overflow: hidden;
+  min-height: 282px;
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  grid-template-columns: 1fr;
+  grid-template-rows: 148px 1fr;
+}
+
+.listSkeletonItem > span,
+.listSkeletonItem i {
+  display: block;
+  background: linear-gradient(
+    90deg,
+    var(--background-secondary) 0%,
+    color-mix(in srgb, var(--foreground) 7%, var(--background-secondary)) 45%,
+    var(--background-secondary) 100%
+  );
+  background-size: 220% 100%;
+  animation: library-skeleton-shift 1.15s ease-in-out infinite;
+}
+
+.listSkeletonItem > span {
+  margin: 12px 0 12px 12px;
+  border-radius: 7px;
+}
+
+.listSkeleton[data-layout='grid'] .listSkeletonItem > span {
+  margin: 0;
+  border-radius: 0;
+}
+
+.listSkeletonItem > div {
+  display: grid;
+  align-content: center;
+  gap: 10px;
+  padding: 16px;
+}
+
+.listSkeletonItem i {
+  height: 12px;
+  border-radius: 4px;
+}
+
+.listSkeletonItem i:nth-child(1) {
+  width: 42%;
+}
+
+.listSkeletonItem i:nth-child(2) {
+  width: 88%;
+  height: 16px;
+}
+
+.listSkeletonItem i:nth-child(3) {
+  width: 58%;
+}
+
+@keyframes library-skeleton-shift {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
 }
 
 .listSummary {
@@ -2018,13 +2266,40 @@
 }
 
 .unifiedList :global(.library-video-inline-error) {
-  overflow: hidden;
+  position: relative;
+  z-index: 2;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
   margin: 0;
   color: var(--accent-rose);
   font-size: 0.6875rem;
   line-height: 1.45;
+  pointer-events: auto;
+}
+
+.unifiedList :global(.library-video-inline-error > span) {
+  overflow: hidden;
+  min-width: 0;
+  flex: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.unifiedList :global(.library-video-inline-error > button) {
+  display: inline-flex;
+  min-height: 44px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 7px;
+  color: inherit;
+  background: color-mix(in srgb, var(--accent-rose) 7%, transparent);
+  font: inherit;
+  font-weight: 750;
 }
 
 .unifiedList :global(.library-detail-hint) {
@@ -2311,6 +2586,7 @@
 .batchMore > summary:focus-visible,
 .sourceDialogHeader button:focus-visible,
 .sourceTabs button:focus-visible,
+.sourceFilter button:focus-visible,
 .sourceLoginAction:focus-visible,
 .sourceAccountMenu summary:focus-visible,
 .sourceAccountMenu button:focus-visible,
@@ -2394,7 +2670,7 @@
   }
 
   .sourceTabs {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 3px;
     padding: 8px;
   }
@@ -2411,7 +2687,7 @@
   }
 
   .sourceTabs button[data-source-view='import']::before {
-    left: -2px;
+    display: none;
   }
 
   .sourceTabs button small {
@@ -2448,7 +2724,12 @@
   }
 
   .sourceAccountSummary {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
+  }
+
+  .sourceAccountSummary > div + div {
+    border-top: 1px solid var(--card-border);
+    border-left: 0;
   }
 
   .sourceRail :global(.library-source-main) {
@@ -2526,6 +2807,26 @@
   .platformTabs button {
     min-height: 48px;
     padding-inline: 10px;
+  }
+
+  .sourceFilterBar {
+    overflow-x: auto;
+    gap: 7px;
+    padding-inline: 10px;
+    scrollbar-width: none;
+  }
+
+  .sourceFilterBar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .sourceFilterLabel,
+  .sourceFilterBar > small {
+    display: none;
+  }
+
+  .sourceFilter {
+    min-width: max-content;
   }
 
   .listToolbar {
@@ -2779,6 +3080,11 @@
   }
 
   .sourceDialog :global(.animate-spin) {
+    animation: none !important;
+  }
+
+  .listSkeletonItem > span,
+  .listSkeletonItem i {
     animation: none !important;
   }
 }

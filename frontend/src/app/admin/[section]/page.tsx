@@ -1926,7 +1926,7 @@ function ExtractionConcurrencyPanel({
     <section className="admin-panel p-5">
       <h2 className="text-base font-semibold text-foreground">批量文案并发</h2>
       <p className="mt-1 text-xs leading-6 text-foreground-muted">
-        自动转写单批最多 {config.max_batch_items} 条，系统可同时承载最多 {config.max_asr_concurrency} 个 ASR 执行任务，适合多个用户并行使用。AI 初始化单批最多 {config.max_ai_batch_items} 条并独立限流；数据库不保存视频文件。
+        自动转写单批最多 {config.max_batch_items} 条。ASR 并发建议设为 2–8，过高可能触发云端 429/503；系统上限 {config.max_asr_concurrency}。AI 初始化单批最多 {config.max_ai_batch_items} 条并独立限流；数据库不保存视频文件。
       </p>
       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label>

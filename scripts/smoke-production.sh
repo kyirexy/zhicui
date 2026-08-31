@@ -214,7 +214,13 @@ PY
     *) fatal "$platform $channel 下载" '清单 URL 不属于受信官网下载目录' ;;
   esac
   local binary="$WORK_DIR/$platform-$channel.bin"
-  curl -fsS --max-time 300 --retry 2 --retry-all-errors -o "$binary" "$url" || fatal "$platform $channel 下载" '下载失败'
+  local -a download_curl_args=()
+  if [[ "$url" == https://luxai.cn/* ]]; then
+    # 冒烟脚本运行在生产机本身。固定回环解析仍会经过正式 Nginx、TLS、
+    # Host 与下载规则，但避免公网地址回源造成 90MB 安装包反复超时。
+    download_curl_args+=(--resolve luxai.cn:443:127.0.0.1)
+  fi
+  curl -fsS --max-time 300 --retry 2 --retry-all-errors "${download_curl_args[@]}" -o "$binary" "$url" || fatal "$platform $channel 下载" '下载失败'
   local actual_size actual_hash
   actual_size="$(wc -c <"$binary" | tr -d '[:space:]')"
   actual_hash="$(sha256sum "$binary" | awk '{print tolower($1)}')"

@@ -76,6 +76,21 @@ export function writeLibraryListCache(
   }
 }
 
+export function clearLibraryListCache(
+  userId: string | null | undefined,
+): void {
+  if (!userId || typeof window === 'undefined') return;
+  const prefix = `${CACHE_PREFIX}:${encodeURIComponent(userId)}:`;
+  try {
+    for (let index = window.sessionStorage.length - 1; index >= 0; index -= 1) {
+      const key = window.sessionStorage.key(index);
+      if (key?.startsWith(prefix)) window.sessionStorage.removeItem(key);
+    }
+  } catch {
+    // 缓存不可用时无需阻塞任务终态刷新。
+  }
+}
+
 export function readPlatformLibraryCache(
   userId: string | null | undefined,
   now = Date.now(),

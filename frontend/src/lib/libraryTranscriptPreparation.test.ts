@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   hasReadyTranscript,
+  selectSyncedSourceScope,
   selectTranscriptPreparationTargets,
 } from './libraryTranscriptPreparation.ts';
 import type { DouyinLibraryItem } from './types.ts';
@@ -75,4 +76,17 @@ test('skips unavailable videos and respects the batch limit', () => {
   ], 1);
 
   assert.deepEqual(selected.map((entry) => entry.aweme_id), ['first']);
+});
+
+test('uses source rank for the synchronized scope instead of the current display order', () => {
+  const scoped = selectSyncedSourceScope([
+    item('published-newest', { source_rank: 8 }),
+    item('just-liked', { source_rank: 0 }),
+    item('liked-second', { source_rank: 1 }),
+  ], 2);
+
+  assert.deepEqual(scoped.map((entry) => entry.aweme_id), [
+    'just-liked',
+    'liked-second',
+  ]);
 });

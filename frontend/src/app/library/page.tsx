@@ -107,12 +107,14 @@ import {
   saveLibraryQuickSyncPreferences,
 } from '@/lib/libraryQuickSync';
 import {
+  clearLibraryListCache,
   readLibraryListCache,
   writeLibraryListCache,
 } from '@/lib/libraryListCache';
 import { findNewLibraryItems } from '@/lib/librarySyncDiff';
 import {
   hasReadyTranscript,
+  selectSyncedSourceScope,
   selectTranscriptPreparationTargets,
 } from '@/lib/libraryTranscriptPreparation';
 import type {
@@ -1055,6 +1057,31 @@ export default function VideoLibraryPage() {
   ): Promise<DouyinBatchExtractionJob> => {
     let current = initial;
     let consecutiveFailures = 0;
+    const refreshPersistedState = async () => {
+      clearLibraryListCache(user?.id);
+      if (!activeRef.current) return;
+      const requestedMode = sourceModeRef.current;
+      const requestedSort: DouyinLibrarySort = requestedMode === 'post'
+        ? 'published'
+        : sourceSorts[requestedMode] === 'published'
+          ? 'published'
+          : 'collection';
+      const response = await listDouyinLibraryItems(
+        ALL_LIBRARY_ITEMS,
+        requestedMode,
+        requestedSort,
+      );
+      if (!response.success || !response.data) return;
+      writeLibraryListCache(
+        user?.id,
+        requestedMode,
+        requestedSort,
+        response.data,
+      );
+      if (requestedMode === sourceModeRef.current) {
+        applyLibraryListResult(response.data);
+      }
+    };
     applyExtractionJob(current);
     const updateProgressNotice = () => {
       setNotice(
@@ -1072,7 +1099,7 @@ export default function VideoLibraryPage() {
       if (current.status !== 'running') {
         // 任务结束后以数据库为准刷新一次，并同步更新会话缓存，避免重新打开
         // 页面时又短暂显示旧的“待整理”状态。
-        await loadItems(true);
+        await refreshPersistedState();
         return current;
       }
       await wait(800);
@@ -1090,21 +1117,27 @@ export default function VideoLibraryPage() {
           || response.status === 404
           || consecutiveFailures >= 3
         ) {
-          return {
+          const interrupted: DouyinBatchExtractionJob = {
             ...current,
             status: 'failed',
             error: response.status === 404
               ? '文案任务状态已中断，可能是开发服务刚刚重启；已完成的视频会保留，可以稍后补提'
               : response.error || '文案任务进度连接中断，可以稍后补提',
           };
+          await refreshPersistedState();
+          return interrupted;
         }
         continue;
       }
       consecutiveFailures = 0;
       current = response.data;
       if (applyExtractionJob(current)) updateProgressNotice();
-      if (current.status !== 'running') return current;
+      if (current.status !== 'running') {
+        await refreshPersistedState();
+        return current;
+      }
     }
+    await refreshPersistedState();
     return current;
   };
 
@@ -2328,6 +2361,17 @@ export default function VideoLibraryPage() {
           temporaryHidden: overview.hidden.temporary,
           permanentHidden: overview.permanent_hidden_total,
         });
+        const requestedSort: DouyinLibrarySort = requestedMode === 'post'
+          ? 'published'
+          : sourceSorts[requestedMode] === 'published'
+            ? 'published'
+            : 'collection';
+        writeLibraryListCache(
+          user?.id,
+          requestedMode,
+          requestedSort,
+          overview,
+        );
       }
       setSelected(new Set());
       setError('');
@@ -2400,7 +2444,10 @@ export default function VideoLibraryPage() {
     // 手动同步后要补齐当前来源中所有仍缺文案的视频，而不仅是第一次出现的
     // 条目。否则重新绑定或升级旧版本后，已有视频会永久停在“待整理”。
     const transcriptTargets = selectTranscriptPreparationTargets(
-      allRefreshed.map((result) => result.refreshed?.slice(0, requestedCount)),
+      allRefreshed.map((result) => selectSyncedSourceScope(
+        result.refreshed,
+        requestedCount,
+      )),
       MAX_TRANSCRIPT_PREPARATION,
     );
     if (transcriptTargets.length === 0) return { started: true };

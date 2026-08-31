@@ -338,6 +338,8 @@
 }
 
 .workspace :global(.library-video-card) {
+  content-visibility: auto;
+  contain-intrinsic-block-size: 420px;
   border-radius: 12px;
   background: var(--card-bg);
   box-shadow: none;

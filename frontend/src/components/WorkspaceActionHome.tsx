@@ -39,6 +39,15 @@ interface ChannelPreview {
   author: string;
 }
 
+interface WorkspaceHomeCache {
+  savedAt: number;
+  threads: AgentThread[];
+  readyCount: number | null;
+  channelPreviews: Record<ChannelKey, ChannelPreview[]>;
+  channelTotals: Record<ChannelKey, number | null>;
+  activeModes: Record<ChannelPlatform, ChannelMode>;
+}
+
 type ChannelPlatform = 'douyin' | 'bilibili';
 type ChannelMode = 'collect' | 'like' | 'post';
 type ChannelKey = `${ChannelPlatform}_${ChannelMode}`;
@@ -84,6 +93,33 @@ const CHANNEL_KEYS: ChannelKey[] = [
   'bilibili_like',
   'bilibili_post',
 ];
+
+const HOME_CACHE_VERSION = 'v1';
+const HOME_CACHE_MAX_AGE = 5 * 60 * 1000;
+
+function homeCacheKey(userId: string): string {
+  return `zhicui:workspace-home:${HOME_CACHE_VERSION}:${userId}`;
+}
+
+function readHomeCache(userId: string): WorkspaceHomeCache | null {
+  try {
+    const raw = sessionStorage.getItem(homeCacheKey(userId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as WorkspaceHomeCache;
+    if (!parsed.savedAt || Date.now() - parsed.savedAt > HOME_CACHE_MAX_AGE) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeHomeCache(userId: string, value: Omit<WorkspaceHomeCache, 'savedAt'>): void {
+  try {
+    sessionStorage.setItem(homeCacheKey(userId), JSON.stringify({ ...value, savedAt: Date.now() }));
+  } catch {
+    // 缓存只是加速层，存储不可用时不影响主页本身。
+  }
+}
 
 function emptyChannelRecord<T>(value: T): Record<ChannelKey, T> {
   return Object.fromEntries(CHANNEL_KEYS.map((key) => [key, value])) as Record<ChannelKey, T>;
@@ -164,58 +200,82 @@ export default function WorkspaceActionHome() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!user?.id) return;
     let active = true;
-    void Promise.allSettled([
-      listAgentThreads(),
-      listAgentSources('all_ready', '', undefined, [], 500),
-      listDouyinLibraryItems(6, 'collect'),
-      listDouyinLibraryItems(6, 'like'),
-      listDouyinLibraryItems(6, 'post'),
-      listPlatformLibraryItems('bilibili'),
-    ]).then((results) => {
-      if (!active) return;
-      const [threadResult, sourceResult, collectResult, likeResult, postResult, biliResult] = results;
-      const nextPreviews = emptyChannelRecord<ChannelPreview[]>([]);
-      const nextTotals = emptyChannelRecord<number | null>(null);
+    const cached = readHomeCache(user.id);
+    if (cached) {
+      setThreads(cached.threads);
+      setReadyCount(cached.readyCount);
+      setChannelPreviews(cached.channelPreviews);
+      setChannelTotals(cached.channelTotals);
+      setActiveModes(cached.activeModes);
+      setLoading(false);
+    }
 
-      if (threadResult.status === 'fulfilled' && threadResult.value.success) {
-        setThreads((threadResult.value.data?.items || []).slice(0, 3));
+    const nextPreviews = cached?.channelPreviews || emptyChannelRecord<ChannelPreview[]>([]);
+    const nextTotals = cached?.channelTotals || emptyChannelRecord<number | null>(null);
+    let nextThreads = cached?.threads || [];
+    let nextReadyCount = cached?.readyCount ?? null;
+
+    const publishChannels = () => {
+      if (!active) return;
+      setChannelPreviews({ ...nextPreviews });
+      setChannelTotals({ ...nextTotals });
+    };
+
+    const threadRequest = listAgentThreads().then((response) => {
+      if (!active) return response;
+      if (response.success) {
+        nextThreads = (response.data?.items || []).slice(0, 3);
+        setThreads(nextThreads);
       }
-      if (sourceResult.status === 'fulfilled' && sourceResult.value.success) {
-        const sources = sourceResult.value.data;
-        setReadyCount(sources?.ready_count ?? sources?.total ?? 0);
+      setLoading(false);
+      return response;
+    }).catch(() => {
+      if (active) setLoading(false);
+      return null;
+    });
+
+    const sourceRequest = listAgentSources('all_ready', '', undefined, [], 500).then((response) => {
+      if (!active || !response.success) return response;
+      const sources = response.data;
+      nextReadyCount = sources?.ready_count ?? sources?.total ?? 0;
+      setReadyCount(nextReadyCount);
         const bilibiliBuckets: Record<ChannelMode, AgentSource[]> = {
           collect: [],
           like: [],
           post: [],
         };
-        (sources?.items || []).forEach((item) => {
+      (sources?.items || []).forEach((item) => {
           if (item.platform !== 'bilibili') return;
           const mode = item.source_mode === 'collect' || item.source_mode === 'like'
             ? item.source_mode
             : 'post';
           bilibiliBuckets[mode].push(item);
         });
-        (Object.keys(bilibiliBuckets) as ChannelMode[]).forEach((mode) => {
+      (Object.keys(bilibiliBuckets) as ChannelMode[]).forEach((mode) => {
           const key = `bilibili_${mode}` as ChannelKey;
-          nextPreviews[key] = toAgentPreviews(bilibiliBuckets[mode]);
-          nextTotals[key] = bilibiliBuckets[mode].length;
-        });
-      }
-      if (collectResult.status === 'fulfilled' && collectResult.value.success) {
-        nextPreviews.douyin_collect = toDouyinPreviews(collectResult.value.data?.items || []);
-        nextTotals.douyin_collect = collectResult.value.data?.source_total ?? 0;
-      }
-      if (likeResult.status === 'fulfilled' && likeResult.value.success) {
-        nextPreviews.douyin_like = toDouyinPreviews(likeResult.value.data?.items || []);
-        nextTotals.douyin_like = likeResult.value.data?.source_total ?? 0;
-      }
-      if (postResult.status === 'fulfilled' && postResult.value.success) {
-        nextPreviews.douyin_post = toDouyinPreviews(postResult.value.data?.items || []);
-        nextTotals.douyin_post = postResult.value.data?.source_total ?? 0;
-      }
-      if (biliResult.status === 'fulfilled' && biliResult.value.success) {
-        const fallbackItems = biliResult.value.data?.items || [];
+        nextPreviews[key] = toAgentPreviews(bilibiliBuckets[mode]);
+        nextTotals[key] = bilibiliBuckets[mode].length;
+      });
+      publishChannels();
+      return response;
+    }).catch(() => null);
+
+    const douyinRequests = (['collect', 'like', 'post'] as ChannelMode[]).map((mode) => (
+      listDouyinLibraryItems(6, mode).then((response) => {
+        if (!active || !response.success) return response;
+        const key = `douyin_${mode}` as ChannelKey;
+        nextPreviews[key] = toDouyinPreviews(response.data?.items || []);
+        nextTotals[key] = response.data?.source_total ?? 0;
+        publishChannels();
+        return response;
+      }).catch(() => null)
+    ));
+
+    const biliRequest = listPlatformLibraryItems('bilibili').then((response) => {
+      if (!active || !response.success) return response;
+      const fallbackItems = response.data?.items || [];
         if ((nextTotals.bilibili_collect || 0) + (nextTotals.bilibili_like || 0) + (nextTotals.bilibili_post || 0) === 0) {
           const fallbackBuckets: Record<ChannelMode, PlatformLibraryItem[]> = {
             collect: [],
@@ -233,11 +293,19 @@ export default function WorkspaceActionHome() {
             nextPreviews[key] = toPlatformPreviews(fallbackBuckets[mode]);
             nextTotals[key] = fallbackBuckets[mode].length;
           });
-        }
+        publishChannels();
       }
-      setChannelPreviews(nextPreviews);
-      setChannelTotals(nextTotals);
-      setActiveModes({
+      return response;
+    }).catch(() => null);
+
+    void Promise.allSettled([
+      threadRequest,
+      sourceRequest,
+      ...douyinRequests,
+      biliRequest,
+    ]).then(() => {
+      if (!active) return;
+      const nextActiveModes: Record<ChannelPlatform, ChannelMode> = {
         douyin: (nextTotals.douyin_collect || 0) > 0
           ? 'collect'
           : (nextTotals.douyin_like || 0) > 0
@@ -248,11 +316,19 @@ export default function WorkspaceActionHome() {
           : (nextTotals.bilibili_like || 0) > 0
             ? 'like'
             : 'post',
-      });
+      };
+      setActiveModes(nextActiveModes);
       setLoading(false);
+      writeHomeCache(user.id, {
+        threads: nextThreads,
+        readyCount: nextReadyCount,
+        channelPreviews: { ...nextPreviews },
+        channelTotals: { ...nextTotals },
+        activeModes: nextActiveModes,
+      });
     });
     return () => { active = false; };
-  }, []);
+  }, [user?.id]);
 
   const sourceStatus = useMemo(() => {
     if (readyCount === null) return '正在读取资料';
@@ -427,6 +503,7 @@ export default function WorkspaceActionHome() {
                             fallbackLabel="封面暂不可用"
                             iconSize={16}
                             retryable={false}
+                            priority
                           />
                         </span>
                         <span className={styles.channelCardScrim} aria-hidden="true" />

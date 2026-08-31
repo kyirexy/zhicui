@@ -3929,7 +3929,7 @@ export default function VideoLibraryPage() {
                 )}
                 {showDouyinItems && filteredItems.length > 0 && (
                   <div className="library-video-grid">
-                    {filteredItems.map((item) => (
+                    {filteredItems.map((item, index) => (
                       <LibraryVideoCard
                         key={item.aweme_id}
                         item={item}
@@ -3939,11 +3939,12 @@ export default function VideoLibraryPage() {
                         onToggle={toggleSelection}
                         selectionDisabled={batchExtracting}
                         onRefreshCover={refreshDouyinCover}
+                        coverPriority={index < 6}
                       />
                     ))}
                   </div>
                 )}
-                {filteredPlatformItems.map((item) => (
+                {filteredPlatformItems.map((item, index) => (
                   <CrossPlatformLibraryRow
                     key={item.id}
                     item={item}
@@ -3961,6 +3962,7 @@ export default function VideoLibraryPage() {
                     onInitialize={initializePlatformSummary}
                     onToggleSelection={togglePlatformSelection}
                     onRefreshCover={refreshPlatformCover}
+                    coverPriority={index < (layoutMode === 'grid' ? 6 : 2)}
                   />
                 ))}
                 </div>

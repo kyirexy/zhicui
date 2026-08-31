@@ -564,7 +564,11 @@ def public_media_url(aweme_id: str, binding_ref: str) -> str:
 
 def public_cover_url(aweme_id: str, binding_ref: str) -> str:
     """Create a short-lived same-origin URL for a browser-safe cover image."""
-    expires = int(time.time()) + _MEDIA_URL_TTL_SECONDS
+    # Keep the exact URL stable for fifteen minutes so browser image caches can be
+    # reused across home/library navigation instead of downloading the same
+    # cover again on every list refresh.
+    now = int(time.time())
+    expires = (now // 900) * 900 + _MEDIA_URL_TTL_SECONDS
     clean_binding_ref = str(binding_ref or "").strip()
     if not _BINDING_REF_PATTERN.fullmatch(clean_binding_ref):
         raise DouyinLibraryError("抖音账号绑定标识无效")

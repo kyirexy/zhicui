@@ -99,7 +99,10 @@ def _cover_signature(note_id: str, expires: int) -> str:
 
 def public_cover_url(note_id: str) -> str:
     """Create a short-lived same-origin capability for one imported cover."""
-    expires = int(time.time()) + _COVER_URL_TTL_SECONDS
+    # Bucket the expiry so repeated list requests return the same signed URL
+    # for fifteen minutes and the browser can reuse its cached cover bytes.
+    now = int(time.time())
+    expires = (now // 900) * 900 + _COVER_URL_TTL_SECONDS
     signature = _cover_signature(note_id, expires)
     return (
         f"/api/library/imports/{quote(note_id, safe='')}/cover"

@@ -31,6 +31,7 @@ interface LibraryVideoCardProps {
   selectionDisabled?: boolean;
   extractState?: LibraryExtractState;
   extractError?: string;
+  coverPriority?: boolean;
   onToggle: (awemeId: string) => void;
   onRefreshCover?: (item: DouyinLibraryItem) => Promise<Array<string | null | undefined> | void>;
 }
@@ -41,6 +42,7 @@ export default function LibraryVideoCard({
   selectionDisabled = false,
   extractState = 'idle',
   extractError,
+  coverPriority = false,
   onToggle,
   onRefreshCover,
 }: LibraryVideoCardProps) {
@@ -101,6 +103,7 @@ export default function LibraryVideoCard({
           fallbackClassName="library-video-cover-fallback"
           fallbackLabel="封面暂不可用"
           iconSize={24}
+          priority={coverPriority}
         />
         <button
           type="button"

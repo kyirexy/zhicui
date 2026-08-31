@@ -16,6 +16,7 @@ interface LibraryCoverImageProps {
   iconSize?: number;
   alt?: string;
   retryable?: boolean;
+  priority?: boolean;
   onRefreshSources?: () => Promise<CoverSource[] | void> | CoverSource[] | void;
 }
 
@@ -27,6 +28,7 @@ export default function LibraryCoverImage({
   iconSize = 22,
   alt = '',
   retryable = true,
+  priority = false,
   onRefreshSources,
 }: LibraryCoverImageProps) {
   const [failed, setFailed] = useState(false);
@@ -118,7 +120,8 @@ export default function LibraryCoverImage({
     <img
       src={displaySrc}
       alt={alt}
-      loading="lazy"
+      loading={priority ? 'eager' : 'lazy'}
+      fetchPriority={priority ? 'high' : 'auto'}
       decoding="async"
       referrerPolicy="no-referrer"
       onError={() => {

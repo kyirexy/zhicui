@@ -24,6 +24,7 @@ export interface CrossPlatformLibraryRowProps {
   layout?: 'list' | 'grid';
   selected?: boolean;
   selectionDisabled?: boolean;
+  coverPriority?: boolean;
   onActivate: (item: PlatformLibraryItem) => void;
   onInitialize: (item: PlatformLibraryItem) => void | Promise<void>;
   onToggleSelection?: (item: PlatformLibraryItem) => void;
@@ -66,6 +67,7 @@ export default function CrossPlatformLibraryRow({
   layout = 'list',
   selected = false,
   selectionDisabled = false,
+  coverPriority = false,
   onActivate,
   onInitialize,
   onToggleSelection,
@@ -100,6 +102,7 @@ export default function CrossPlatformLibraryRow({
           fallbackLabel="封面暂不可用"
           alt={`${item.title}的封面`}
           iconSize={20}
+          priority={coverPriority}
         />
         <span className={styles.platformMark} data-platform={item.platform}>
           <PlatformBrandIcon platform={item.platform} size={13} />

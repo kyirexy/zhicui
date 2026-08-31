@@ -1,5 +1,7 @@
 .crossRow {
   position: relative;
+  content-visibility: auto;
+  contain-intrinsic-block-size: 180px;
   display: grid;
   grid-template-columns: 156px minmax(0, 1fr) auto;
   min-width: 0;
@@ -20,6 +22,7 @@
 }
 
 .crossRow[data-layout='grid'] {
+  contain-intrinsic-block-size: 420px;
   overflow: hidden;
   min-height: 0;
   grid-template-columns: minmax(0, 1fr);

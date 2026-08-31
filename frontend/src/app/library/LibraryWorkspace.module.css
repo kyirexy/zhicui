@@ -1437,6 +1437,9 @@
 }
 
 .listHeader {
+  position: sticky;
+  z-index: 30;
+  top: 0;
   display: flex;
   min-height: 64px;
   min-width: 0;
@@ -1445,6 +1448,13 @@
   gap: 16px;
   border-bottom: 1px solid var(--card-border);
   padding: 15px 16px;
+  background: var(--card-bg);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--card-shadow) 18%, transparent);
+}
+
+/* 桌面标题栏固定在窗口顶部，资料主操作栏紧贴其下，滚动时仍可同步视频。 */
+:global(html[data-desktop-app='true'][data-desktop-workspace='library']) .listHeader {
+  top: var(--desktop-context-height);
 }
 
 .listHeader > div:first-child {
@@ -2450,7 +2460,7 @@
 .batchBar {
   position: sticky;
   z-index: 9;
-  top: 16px;
+  top: 100px;
   display: flex;
   width: auto;
   min-height: 60px;
@@ -2467,7 +2477,7 @@
 }
 
 :global(html[data-desktop-app='true'][data-desktop-workspace='library']) .batchBar {
-  top: calc(var(--desktop-context-height) + 12px);
+  top: calc(var(--desktop-context-height) + 84px);
 }
 
 .batchCount {

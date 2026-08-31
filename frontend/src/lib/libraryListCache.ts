@@ -5,7 +5,9 @@ import type {
   PlatformLibraryItem,
 } from './types';
 
-const CACHE_PREFIX = 'zhicui-library-list-v2';
+// v3 invalidates pre-transcript-repair snapshots whose cards could remain
+// visually stuck on “待整理” after the database had already been repaired.
+const CACHE_PREFIX = 'zhicui-library-list-v3';
 const PLATFORM_CACHE_PREFIX = 'zhicui-platform-library-list-v1';
 const CACHE_MAX_AGE_MS = 30 * 60 * 1000;
 

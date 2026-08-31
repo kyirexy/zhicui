@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -89,6 +91,24 @@ class CloudAsrRetryTests(unittest.TestCase):
             library_extraction_service._safe_error(raised.exception),
             str(raised.exception),
         )
+
+    def test_retry_after_seconds_is_respected_up_to_the_safety_cap(self) -> None:
+        response = _response(503, retry_after="20")
+        with patch.object(video_extractor.random, "uniform", return_value=0.0):
+            self.assertEqual(video_extractor._cloud_asr_retry_delay(response, 1), 20.0)
+
+        response.headers = {"Retry-After": "120"}
+        with patch.object(video_extractor.random, "uniform", return_value=0.0):
+            self.assertEqual(video_extractor._cloud_asr_retry_delay(response, 1), 30.0)
+
+    def test_retry_after_http_date_is_supported(self) -> None:
+        retry_at = datetime.now(timezone.utc) + timedelta(seconds=20)
+        response = _response(503, retry_after=format_datetime(retry_at, usegmt=True))
+        with patch.object(video_extractor.random, "uniform", return_value=0.0):
+            delay = video_extractor._cloud_asr_retry_delay(response, 1)
+
+        self.assertGreaterEqual(delay, 18.0)
+        self.assertLessEqual(delay, 20.0)
 
 
 if __name__ == "__main__":

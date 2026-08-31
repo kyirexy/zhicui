@@ -18,6 +18,7 @@ import random
 import time
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from html import unescape
 from pathlib import Path
 from typing import Any
@@ -477,8 +478,8 @@ _BILI_AUDIO_MAX_BYTES = 800 * 1024 * 1024
 _ASR_DIRECT_UPLOAD_MAX_BYTES = 15 * 1024 * 1024
 _ASR_RETRYABLE_HTTP_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
 _ASR_MAX_ATTEMPTS = 3
-_ASR_RETRY_DELAYS_SECONDS = (0.75, 1.5)
-_ASR_MAX_RETRY_AFTER_SECONDS = 8.0
+_ASR_RETRY_DELAYS_SECONDS = (2.0, 5.0)
+_ASR_MAX_RETRY_AFTER_SECONDS = 30.0
 
 
 class CloudAsrError(RuntimeError):
@@ -518,7 +519,7 @@ def _cloud_asr_http_message(status_code: int, *, attempts: int) -> str:
 
 
 def _cloud_asr_retry_delay(response: Any | None, attempt: int) -> float:
-    """返回有上限的短暂退避时间，并尊重数值型 Retry-After。"""
+    """返回有上限的退避时间，并尊重秒数或 HTTP-date Retry-After。"""
     retry_after = ""
     if response is not None:
         retry_after = str(response.headers.get("Retry-After") or "").strip()
@@ -526,6 +527,17 @@ def _cloud_asr_retry_delay(response: Any | None, attempt: int) -> float:
         provider_delay = float(retry_after)
     except (TypeError, ValueError):
         provider_delay = 0.0
+        if retry_after:
+            try:
+                retry_at = parsedate_to_datetime(retry_after)
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=timezone.utc)
+                provider_delay = max(
+                    0.0,
+                    (retry_at - datetime.now(timezone.utc)).total_seconds(),
+                )
+            except (TypeError, ValueError, OverflowError):
+                provider_delay = 0.0
     base_delay = _ASR_RETRY_DELAYS_SECONDS[
         min(max(attempt - 1, 0), len(_ASR_RETRY_DELAYS_SECONDS) - 1)
     ]

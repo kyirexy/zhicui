@@ -30,10 +30,18 @@ from app.models.plan import Plan
 # SEO helpers
 # ---------------------------------------------------------------------------
 
+_VIDEO_TITLE_MAX_LENGTH = 512
+_SEO_TITLE_MAX_LENGTH = 256
+_SEO_META_MAX_LENGTH = 512
+
+
 def generate_seo_title(video_title: str) -> str:
     """Produce an SEO-friendly Chinese title for a note card."""
-    clean = video_title.strip()
-    return f"《【视频干货】{clean}的文字笔记与步骤总结》"
+    clean = str(video_title or "").strip() or "未知标题"
+    prefix = "《【视频干货】"
+    suffix = "的文字笔记与步骤总结》"
+    title_budget = _SEO_TITLE_MAX_LENGTH - len(prefix) - len(suffix)
+    return f"{prefix}{clean[:title_budget]}{suffix}"
 
 
 def generate_slug(video_id: str) -> str:
@@ -53,7 +61,7 @@ def _generate_seo_meta(video_title: str, content_type: str) -> str:
     return (
         f"{video_title} - 视频内容笔记，涵盖核心要点与实用建议。"
         f"类型：{content_type}"
-    )
+    )[:_SEO_META_MAX_LENGTH]
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +91,9 @@ def create_note(
     ai_result:
         Structured card output from ``ai_juicer.generate_card``.
     """
-    video_title: str = video_info.get("title", "未知标题")
+    video_title = (
+        str(video_info.get("title") or "未知标题").strip() or "未知标题"
+    )[:_VIDEO_TITLE_MAX_LENGTH]
     ai_payload = dict(ai_result)
     for transient_key in ("download_url", "fetch_url", "media_url", "play_url", "signed_url"):
         ai_payload.pop(transient_key, None)

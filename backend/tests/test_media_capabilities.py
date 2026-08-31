@@ -109,6 +109,25 @@ class MediaCapabilityTests(unittest.TestCase):
             query["signature"][0],
         ))
 
+    def test_create_note_bounds_long_source_title_for_postgres_columns(self) -> None:
+        note = note_service.create_transcript_note(
+            self.db,
+            video_info={
+                "video_id": "7350000000000000099",
+                "title": "很长的抖音标题" * 100,
+                "platform": "douyin",
+                "source_url": "https://www.douyin.com/video/7350000000000000099",
+            },
+            transcript="完整文案",
+            source_meta={"platform": "douyin"},
+            user_id=self.user_a.id,
+        )
+
+        self.assertLessEqual(len(note.video_title), 512)
+        self.assertLessEqual(len(note.seo_title), 256)
+        self.assertLessEqual(len(note.seo_meta), 512)
+        self.assertTrue(note.seo_title.endswith("的文字笔记与步骤总结》"))
+
     def test_owned_workspace_is_the_only_place_that_mints_capability(self) -> None:
         note = note_service.create_note(
             self.db,

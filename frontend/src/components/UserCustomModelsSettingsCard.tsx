@@ -2,13 +2,16 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
+  AlertCircle,
   Check,
+  CheckCircle2,
   CircleDashed,
   Cloud,
   Coins,
   Eye,
   EyeOff,
   KeyRound,
+  LoaderCircle,
   Pencil,
   Plus,
   Server,
@@ -57,35 +60,46 @@ const EMPTY_DRAFT: Draft = {
 export default function UserCustomModelsSettingsCard() {
   const [config, setConfig] = useState<UserAIProviderConfig | null>(null);
   const [catalog, setCatalog] = useState<UserChatModelCatalog | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [customModels, setCustomModels] = useState<UserCustomChatModel[]>([]);
   const [selectedOfferingId, setSelectedOfferingId] = useState('');
   const [draft, setDraft] = useState<Draft | null>(null);
   const [showKey, setShowKey] = useState(false);
   const [busy, setBusy] = useState('');
+  const [pendingDeleteId, setPendingDeleteId] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (showLoading = true) => {
+    if (showLoading) setLoading(true);
+    setLoadError('');
     const [provider, models, custom] = await Promise.all([
       getUserAIProvider(),
       getUserChatModels(),
       listUserCustomChatModels(),
     ]);
+    const failures: string[] = [];
     if (provider.success && provider.data) {
       setConfig(provider.data);
       setCustomModels(provider.data.custom_models ?? []);
     } else if (!provider.success) {
-      setError(provider.error || '无法读取模型配置。');
+      failures.push(provider.error || '无法读取模型配置。');
     }
     if (models.success && models.data) {
       setCatalog(models.data);
       setSelectedOfferingId(models.data.selected_offering_id);
     } else if (!models.success) {
-      setError(models.error || '无法读取可用模型。');
+      setCatalog(null);
+      failures.push(models.error || '无法读取可用模型。');
     }
     if (custom.success && custom.data) {
       setCustomModels(custom.data.items);
+    } else if (!custom.success) {
+      failures.push(custom.error || '无法读取自定义模型。');
     }
+    setLoadError(failures.join('；'));
+    if (showLoading) setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -134,7 +148,7 @@ export default function UserCustomModelsSettingsCard() {
     if (response.success && response.data) {
       setDraft(null);
       setShowKey(false);
-      await load();
+      await load(false);
       setMessage(draft.id ? '模型已更新。' : '模型已保存并设为当前。');
       return response.data;
     }
@@ -147,7 +161,8 @@ export default function UserCustomModelsSettingsCard() {
     const response = await deleteUserCustomChatModel(item.id);
     setBusy('');
     if (response.success) {
-      await load();
+      setPendingDeleteId('');
+      await load(false);
       setMessage(response.data?.selection_reset ? '已删除，当前已切回平台模型。' : '已删除。');
     } else {
       setError(response.error || '删除失败，请稍后重试。');
@@ -160,7 +175,7 @@ export default function UserCustomModelsSettingsCard() {
     setBusy('');
     if (response.success && response.data) {
       setCustomModels(response.data.items);
-      await load();
+      await load(false);
       setMessage(`已切换为「${item.name}」。`);
     } else {
       setError(response.error || '切换失败。');
@@ -175,10 +190,16 @@ export default function UserCustomModelsSettingsCard() {
       setError(response.error || '模型切换失败。');
       return;
     }
-    await selectPlatformChatModel();
+    const modeResponse = await selectPlatformChatModel();
+    if (!modeResponse.success) {
+      setBusy('');
+      await load(false);
+      setError(modeResponse.error || '平台模型已选择，但未能完成模式切换，请重试。');
+      return;
+    }
     setBusy('');
     setSelectedOfferingId(response.data.selected_offering_id);
-    await load();
+    await load(false);
     setMessage('已切换为平台模型。');
   };
 
@@ -206,17 +227,40 @@ export default function UserCustomModelsSettingsCard() {
     return [price, item.description].filter(Boolean).join(' · ');
   };
 
+  const currentModelLabel = config?.mode === 'custom'
+    ? customModels.find(item => item.is_selected)?.name || config.model || '自定义模型'
+    : catalog?.items.find(item => item.id === selectedOfferingId)?.name
+      || config?.selected_offering_name
+      || '知萃平台模型';
+
   return (
     <section id="custom-models" className={styles.card} aria-labelledby="custom-models-title">
       <header className={styles.header}>
         <div className={styles.identity}><Cloud size={20} aria-hidden="true" /></div>
-        <div>
-          <h2 id="custom-models-title" tabIndex={-1}>模型</h2>
-          <p>用平台模型按量计费，或接入你自己的 OpenAI 兼容接口。</p>
+        <div className={styles.headerCopy}>
+          <h2 id="custom-models-title" tabIndex={-1}>回答模型</h2>
+          <p>选择知萃平台模型，或接入你自己的 OpenAI 兼容接口。</p>
         </div>
+        {catalog ? (
+          <div className={styles.currentState} aria-label={`当前使用：${currentModelLabel}`}>
+            <span>当前使用</span>
+            <strong>{currentModelLabel}</strong>
+          </div>
+        ) : null}
       </header>
 
-      {!catalog ? <div className={styles.loading} aria-label="正在读取模型" /> : (
+      {loading ? (
+        <div className={styles.statePanel} role="status">
+          <LoaderCircle size={19} className={styles.spinner} aria-hidden="true" />
+          <span>正在读取回答模型…</span>
+        </div>
+      ) : !catalog ? (
+        <div className={styles.statePanel} data-tone="error" role="alert">
+          <AlertCircle size={19} aria-hidden="true" />
+          <span>{loadError || '回答模型暂时无法读取。'}</span>
+          <button type="button" onClick={() => void load()}>重新加载</button>
+        </div>
+      ) : (
         <>
           <section className={styles.group} aria-labelledby="platform-models-title">
             <header className={styles.groupHeader}>
@@ -228,7 +272,7 @@ export default function UserCustomModelsSettingsCard() {
             </header>
             <div className={styles.list} role="radiogroup" aria-label="平台模型">
               {catalog.items.map((item) => {
-                const selected = selectedOfferingId === item.id;
+                const selected = config?.mode !== 'custom' && selectedOfferingId === item.id;
                 return (
                   <button
                     key={item.id}
@@ -237,7 +281,7 @@ export default function UserCustomModelsSettingsCard() {
                     aria-checked={selected}
                     className={`${styles.platformItem} ${selected ? styles.itemSelected : ''}`}
                     onClick={() => activatePlatform(item.id)}
-                    disabled={busy === 'platform'}
+                    disabled={Boolean(busy)}
                   >
                     <span className={styles.itemIcon} aria-hidden="true">
                       <AIModelIcon modelId={item.icon_key} name={item.name} size={18} />
@@ -263,7 +307,7 @@ export default function UserCustomModelsSettingsCard() {
                 <h3 id="custom-models-group-title"><KeyRound size={15} aria-hidden="true" /> 我的模型</h3>
                 <p>用自己的 API Key 直接调模型，不消耗平台萃点。</p>
               </div>
-              <button type="button" className={styles.addButton} onClick={beginAdd}><Plus size={15} aria-hidden="true" />接入新模型</button>
+              <button type="button" className={styles.addButton} onClick={beginAdd} disabled={Boolean(busy)}><Plus size={15} aria-hidden="true" />接入新模型</button>
             </header>
 
             {draft && (
@@ -305,12 +349,22 @@ export default function UserCustomModelsSettingsCard() {
                         className={styles.keyToggle}
                         onClick={() => setShowKey((value) => !value)}
                         aria-label={showKey ? '隐藏密钥' : '显示密钥'}
-                        tabIndex={-1}
                       >
                         {showKey ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
                       </button>
                     </span>
                   </div>
+                  <label className={`${styles.toggleField} ${styles.wide}`}>
+                    <input
+                      type="checkbox"
+                      checked={draft.enabled}
+                      onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })}
+                    />
+                    <span>
+                      <strong>启用这个模型</strong>
+                      <small>停用后不会出现在对话模型选择中，之后仍可重新启用。</small>
+                    </span>
+                  </label>
                 </div>
                 <div className={styles.formActions}>
                   <button type="button" onClick={cancelDraft}>取消</button>
@@ -344,12 +398,29 @@ export default function UserCustomModelsSettingsCard() {
                         <small className={styles.itemMeta}>{item.model} · {item.api_key_set ? `密钥 ${item.api_key_masked}` : '未设置密钥'}</small>
                       </span>
                       <span className={styles.itemActions}>
-                        <button type="button" className={selected ? styles.currentOn : styles.primaryGhost} onClick={() => activate(item)} disabled={busy === item.id || !item.enabled || selected} title={selected ? '当前使用' : '设为当前'}>
+                        <button type="button" className={selected ? styles.currentOn : styles.primaryGhost} onClick={() => activate(item)} disabled={Boolean(busy) || !item.enabled || selected} title={selected ? '当前使用' : '设为当前'}>
                           {selected ? <><Check size={15} aria-hidden="true" />当前使用</> : '设为当前'}
                         </button>
-                        <button type="button" aria-label="测试连接" title="测试连接" onClick={() => test(item)} disabled={busy === item.id}><TestTube2 size={16} aria-hidden="true" /></button>
+                        <button type="button" aria-label="测试连接" title="测试连接" onClick={() => test(item)} disabled={Boolean(busy)}><TestTube2 size={16} aria-hidden="true" /></button>
                         <button type="button" aria-label="编辑" title="编辑" onClick={() => beginEdit(item)} disabled={Boolean(busy)}><Pencil size={16} aria-hidden="true" /></button>
-                        <button type="button" aria-label="删除" title="删除" className={styles.danger} onClick={() => remove(item)} disabled={busy === item.id}><Trash size={16} aria-hidden="true" /></button>
+                        <button
+                          type="button"
+                          aria-label={pendingDeleteId === item.id ? `确认删除 ${item.name}` : `删除 ${item.name}`}
+                          title={pendingDeleteId === item.id ? '再次点击确认删除' : '删除'}
+                          className={styles.danger}
+                          data-confirming={pendingDeleteId === item.id || undefined}
+                          onClick={() => {
+                            if (pendingDeleteId === item.id) void remove(item);
+                            else {
+                              setPendingDeleteId(item.id);
+                              setMessage('再次点击“确认”即可删除；其他设置不会受影响。');
+                              setError('');
+                            }
+                          }}
+                          disabled={Boolean(busy)}
+                        >
+                          {pendingDeleteId === item.id ? <span>确认</span> : <Trash size={16} aria-hidden="true" />}
+                        </button>
                       </span>
                     </div>
                   );
@@ -358,10 +429,16 @@ export default function UserCustomModelsSettingsCard() {
             )}
           </section>
 
-          {error || message ? (
-            <div className={styles.statusRow}>
-              {error ? <p className={styles.error} role="alert">{error}</p> : null}
-              {message ? <p className={styles.success} role="status">{message}</p> : null}
+          {loadError || error || message ? (
+            <div
+              className={styles.statusRow}
+              data-tone={loadError || error ? 'error' : 'success'}
+              role={loadError || error ? 'alert' : 'status'}
+            >
+              {loadError || error
+                ? <AlertCircle size={17} aria-hidden="true" />
+                : <CheckCircle2 size={17} aria-hidden="true" />}
+              <span>{loadError || error || message}</span>
             </div>
           ) : null}
         </>

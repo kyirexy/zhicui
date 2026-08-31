@@ -313,7 +313,7 @@ const AgentComposer = memo(forwardRef<AgentComposerHandle, AgentComposerProps>(
     const goToModelSettings = () => {
       setModelMenuOpen(false);
       setModelQuery('');
-      router.push('/settings?section=models');
+      router.push('/settings?section=ai');
     };
 
     const closeModelConfig = () => {
@@ -481,7 +481,7 @@ const AgentComposer = memo(forwardRef<AgentComposerHandle, AgentComposerProps>(
                               aria-selected={active}
                               className={active ? 'is-active' : ''}
                               onClick={() => (
-                                option.id === '__custom__' ? openModelConfig() : chooseModel(option.id)
+                                option.id === '__custom__' ? goToModelSettings() : chooseModel(option.id)
                               )}
                             >
                               <span className="video-agent-model-glyph" aria-hidden="true">
@@ -489,7 +489,7 @@ const AgentComposer = memo(forwardRef<AgentComposerHandle, AgentComposerProps>(
                               </span>
                               <span>
                                 <strong>{option.name}</strong>
-                                <small>{isMobile && option.id === '__custom__' ? '点按编辑连接' : option.id === '__custom__' ? '点按编辑连接' : option.detail}</small>
+                                <small>{option.id === '__custom__' ? '前往 AI 能力设置' : option.detail}</small>
                               </span>
                               <em aria-label={option.free ? '已包含额度' : option.points > 0 ? `${option.points} 萃点` : '自定义模型'} title={option.free ? '已包含额度' : undefined}>
                                 {option.free ? <Gift size={15} weight="duotone" aria-hidden="true" /> : option.points > 0 ? `${option.points} 萃点` : '自定义'}

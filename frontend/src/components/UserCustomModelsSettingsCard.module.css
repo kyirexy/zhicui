@@ -1,9 +1,13 @@
 /* 模型（用户端）设置卡 —— 可读字号优先，信息层级：选择态 > 模型名 > 计费方式 */
 .card { scroll-margin-top: 5rem; overflow: hidden; border: 1px solid var(--card-border); border-radius: 12px; background: var(--card-bg); color: var(--foreground); }
-.header { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: .9rem; padding: 1.25rem; border-bottom: 1px solid var(--card-border); }
+.header { display: grid; grid-template-columns: 42px minmax(0, 1fr) minmax(128px, auto); align-items: center; gap: .9rem; padding: 1.25rem; border-bottom: 1px solid var(--card-border); }
 .identity { width: 42px; height: 42px; display: grid; place-items: center; border-radius: .75rem; background: var(--accent-brand-soft); color: var(--accent-brand); }
+.headerCopy { min-width: 0; }
 .header h2 { margin: 0; font-size: 1rem; text-wrap: balance; }
 .header p { max-width: 58rem; margin: .4rem 0 0; color: var(--foreground-muted); font-size: .82rem; line-height: 1.6; text-wrap: pretty; }
+.currentState { display: grid; min-width: 0; justify-items: end; gap: .2rem; text-align: right; }
+.currentState span { color: var(--foreground-muted); font-size: .7rem; }
+.currentState strong { overflow: hidden; max-width: 220px; color: var(--foreground); font-size: .78rem; font-weight: 690; text-overflow: ellipsis; white-space: nowrap; }
 .group { display: grid; gap: .85rem; padding: 1.2rem 1.25rem; border-bottom: 1px solid var(--card-border); }
 .group:last-of-type { border-bottom: 0; }
 .groupHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
@@ -77,6 +81,7 @@
 .itemActions .primaryGhost:hover:not(:disabled) { background: var(--accent-brand-soft); }
 .itemActions .currentOn { color: var(--accent-brand); border-color: transparent; background: var(--accent-brand-soft); }
 .itemActions button.danger:hover:not(:disabled) { border-color: #d34d4d; color: #d34d4d; }
+.itemActions button.danger[data-confirming='true'] { min-width: 52px; border-color: var(--ui-danger); color: #fff; background: var(--ui-danger); font-size: .7rem; font-weight: 700; }
 
 /* 接入按钮 */
 .addButton { min-height: 38px; display: inline-flex; align-items: center; gap: .35rem; padding: .5rem .8rem; border: 1px solid var(--accent-brand); border-radius: .6rem; background: var(--accent-brand-soft); color: var(--accent-brand); font-size: .78rem; font-weight: 650; white-space: nowrap; cursor: pointer; }
@@ -99,6 +104,11 @@
 .field input { width: 100%; min-height: 42px; border: 1px solid var(--card-border); border-radius: .6rem; padding: .6rem .7rem; background: var(--background); color: var(--foreground); font-size: .8rem; }
 .field input:focus { outline: 2px solid var(--accent-brand); outline-offset: 2px; }
 .field input::placeholder { color: color-mix(in srgb, var(--foreground-muted) 88%, transparent); }
+.toggleField { display: flex; min-height: 52px; align-items: center; gap: .7rem; border: 1px solid var(--card-border); border-radius: .68rem; padding: .65rem .75rem; color: var(--foreground); background: color-mix(in srgb, var(--foreground) 2%, var(--card-bg)); cursor: pointer; }
+.toggleField input { width: 18px; height: 18px; flex: 0 0 auto; accent-color: var(--accent-brand); }
+.toggleField span { display: grid; gap: .14rem; }
+.toggleField strong { font-size: .78rem; font-weight: 680; }
+.toggleField small { color: var(--foreground-muted); font-size: .7rem; line-height: 1.4; }
 .inputWrap { position: relative; display: block; }
 .inputWrap input { padding-right: 2.6rem; }
 .keyToggle { position: absolute; top: 50%; right: .45rem; transform: translateY(-50%); width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: .5rem; background: transparent; color: var(--foreground-muted); cursor: pointer; }
@@ -111,21 +121,40 @@
 .formActions button.save:hover:not(:disabled) { background: var(--accent-brand-strong); border-color: var(--accent-brand-strong); }
 .formActions button:disabled { opacity: .55; cursor: not-allowed; }
 
-/* 反馈区：固定一行，随内容出现，避免布局跳动 */
-.statusRow { display: grid; gap: .3rem; padding: 0 1.25rem 1.1rem; }
-.error, .success { margin: 0; font-size: .8rem; line-height: 1.5; }
-.error { color: #d34d4d; }
-.success { color: var(--accent-brand); }
-.loading { min-height: 220px; margin: 1.2rem; border-radius: .8rem; background: color-mix(in srgb, var(--foreground) 5%, transparent); }
+.statusRow { display: grid; min-height: 44px; grid-template-columns: 20px minmax(0, 1fr); align-items: center; gap: .55rem; margin: 0 1.25rem 1.1rem; border: 1px solid color-mix(in srgb, var(--accent-brand) 25%, var(--card-border)); border-radius: .68rem; padding: .65rem .75rem; color: var(--accent-brand); background: color-mix(in srgb, var(--accent-brand) 6%, var(--card-bg)); font-size: .78rem; line-height: 1.45; }
+.statusRow[data-tone='error'] { border-color: color-mix(in srgb, var(--ui-danger) 28%, var(--card-border)); color: var(--ui-danger); background: color-mix(in srgb, var(--ui-danger) 5%, var(--card-bg)); }
+.statePanel { display: flex; min-height: 220px; align-items: center; justify-content: center; flex-wrap: wrap; gap: .65rem; padding: 1.25rem; color: var(--foreground-muted); font-size: .8rem; text-align: center; }
+.statePanel[data-tone='error'] { color: var(--ui-danger); }
+.statePanel button { min-height: 42px; margin-left: .25rem; border: 1px solid var(--card-border); border-radius: .62rem; padding: .6rem .82rem; color: var(--foreground); background: var(--card-bg); cursor: pointer; font: inherit; font-size: .76rem; font-weight: 650; }
+.statePanel button:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 2px; }
+.spinner { animation: custom-model-settings-spin 900ms linear infinite; }
+@keyframes custom-model-settings-spin { to { rotate: 360deg; } }
 
 @media (max-width: 680px) {
-  .header { padding: 1rem; }
+  .header { grid-template-columns: 42px minmax(0, 1fr); padding: 1rem; }
+  .currentState { grid-column: 1 / -1; justify-items: start; padding-left: 56px; text-align: left; }
+  .currentState strong { max-width: 100%; }
   .group { gap: .75rem; padding: 1rem; }
   .groupHeader { flex-direction: column; gap: .6rem; }
   .balance { align-self: flex-start; }
   .customItem { grid-template-columns: 34px minmax(0, 1fr); }
   .itemActions { grid-column: 1 / -1; justify-content: flex-end; }
+  .itemActions button { min-width: 44px; min-height: 44px; justify-content: center; }
+  .addButton { min-height: 44px; }
+  .keyToggle { width: 40px; height: 40px; }
   .formFields { grid-template-columns: minmax(0, 1fr); }
   .field.wide { grid-column: auto; }
   .itemMeta { white-space: normal; }
+  .formActions button { min-height: 48px; }
+  .statusRow { margin-right: 1rem; margin-left: 1rem; }
+}
+
+@media (max-width: 420px) {
+  .currentState { padding-left: 0; }
+  .formActions { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .itemActions { display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, 44px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 1.8s; }
 }

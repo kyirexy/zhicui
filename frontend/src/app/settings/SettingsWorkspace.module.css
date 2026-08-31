@@ -352,9 +352,7 @@
 }
 
 @media (max-width: 767px) {
-  .navButton[data-section-id='appearance'],
-  .navButton[data-section-id='ai'],
-  .technicalSection {
+  .navButton[data-section-id='appearance'] {
     display: none;
   }
 }

@@ -32,7 +32,6 @@ import AutoSyncSettingsCard from '@/components/AutoSyncSettingsCard';
 import DesktopMediaSettingsCard from '@/components/DesktopMediaSettingsCard';
 import LocalDataSettingsCard from '@/components/LocalDataSettingsCard';
 import QuickSyncSettingsCard from '@/components/QuickSyncSettingsCard';
-import UserAIProviderSettingsCard from '@/components/UserAIProviderSettingsCard';
 import UserCustomModelsSettingsCard from '@/components/UserCustomModelsSettingsCard';
 import UserVisionProviderSettingsCard from '@/components/UserVisionProviderSettingsCard';
 import ClientCapabilitySettingsCard from '@/components/ClientCapabilitySettingsCard';
@@ -47,7 +46,7 @@ import styles from './SettingsWorkspace.module.css';
 
 const WEB_APP_VERSION = '1.1.10';
 
-type SettingsSectionId = 'general' | 'account' | 'appearance' | 'storage' | 'sync' | 'models' | 'ai' | 'about';
+type SettingsSectionId = 'general' | 'account' | 'appearance' | 'storage' | 'sync' | 'ai' | 'about';
 
 interface SettingsSection {
   id: SettingsSectionId;
@@ -94,17 +93,10 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     icon: ArrowsClockwise,
   },
   {
-    id: 'models',
-    label: '模型',
-    description: '选择平台模型或接入多条自己的模型',
-    keywords: '模型 自定义 供应商 API Key Base OpenAI DeepSeek 接入',
-    icon: ChatCircleDots,
-  },
-  {
     id: 'ai',
-    label: 'AI 服务',
-    description: '默认即可使用，需要时再接入自己的模型',
-    keywords: '视觉 图片 问答 供应商 API Key Base 基础 AI',
+    label: 'AI 能力',
+    description: '设置回答模型和视频画面识别',
+    keywords: '模型 自定义 视觉 图片 问答 供应商 API Key Base OpenAI DeepSeek 接入 AI',
     icon: Cpu,
   },
   {
@@ -116,7 +108,7 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
   },
 ];
 
-const MOBILE_HIDDEN_SECTIONS = new Set<SettingsSectionId>(['appearance', 'ai']);
+const MOBILE_HIDDEN_SECTIONS = new Set<SettingsSectionId>(['appearance']);
 
 const DENSITY_OPTIONS: Array<{
   value: DesktopLayoutDensity;
@@ -154,6 +146,10 @@ function SettingsWorkspace() {
   }, []);
 
   useEffect(() => {
+    if (sectionParam === 'models') {
+      router.replace('/settings?section=ai', { scroll: false });
+      return;
+    }
     if (isMobile && MOBILE_HIDDEN_SECTIONS.has(sectionParam as SettingsSectionId)) {
       router.replace('/settings?section=general', { scroll: false });
     }
@@ -368,14 +364,9 @@ function SettingsWorkspace() {
                 <AutoSyncSettingsCard />
               </>
             )}
-            {activeSection.id === 'models' && (
+            {activeSection.id === 'ai' && (
               <section className={styles.technicalSection}>
                 <UserCustomModelsSettingsCard />
-              </section>
-            )}
-            {activeSection.id === 'ai' && !isMobile && (
-              <section className={styles.technicalSection}>
-                <UserAIProviderSettingsCard />
                 <UserVisionProviderSettingsCard />
               </section>
             )}

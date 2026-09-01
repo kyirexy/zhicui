@@ -37,6 +37,18 @@ class ReleaseReproducibilityContractTests(unittest.TestCase):
         ):
             self.assertIn(marker, script)
 
+    def test_android_update_manifest_allows_exact_capacitor_origin(self) -> None:
+        nginx = (ROOT / "deploy" / "nginx-windows-updates.conf").read_text(
+            encoding="utf-8"
+        )
+        smoke = (ROOT / "scripts" / "smoke-production.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('Access-Control-Allow-Origin "https://localhost"', nginx)
+        self.assertNotIn('Access-Control-Allow-Origin "*"', nginx)
+        self.assertIn("Origin: https://localhost", smoke)
+        self.assertIn("缺少 Capacitor https://localhost 的精确 ACAO", smoke)
+
     def test_windows_release_and_skip_build_are_commit_scoped(self) -> None:
         script = (ROOT / "scripts" / "release-desktop.ps1").read_text(encoding="utf-8")
         for marker in (

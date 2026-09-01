@@ -189,6 +189,13 @@ verify_download_manifest() {
   local status
   status="$(request GET "/download/releases/$platform/$channel.json" '' "$manifest" "$manifest_headers")"
   [[ "$status" == 200 ]] || fatal "$platform $channel 清单" "HTTP $status"
+  if [[ "$platform" == android ]]; then
+    curl -sS --max-time 15 -D "$manifest_headers" -o /dev/null \
+      -H 'Origin: https://localhost' \
+      "$BASE_URL/download/releases/android/$channel.json"
+    grep -Eiq '^access-control-allow-origin:[[:space:]]*https://localhost' "$manifest_headers" ||
+      fatal "android $channel 清单 CORS" '缺少 Capacitor https://localhost 的精确 ACAO'
+  fi
   assert_json "$manifest" "p.get('schema_version') == 2 and p.get('platform') == '$platform' and p.get('channel') == '$channel' and p.get('availability') in ('available', 'unavailable')" "$platform $channel 清单" || fatal "$platform $channel 清单" '结构无效'
   local availability
   availability="$(python3 - "$manifest" <<'PY'

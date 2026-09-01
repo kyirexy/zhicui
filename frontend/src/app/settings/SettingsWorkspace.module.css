@@ -281,7 +281,7 @@
   .contentInner { padding: 22px 20px calc(80px + env(safe-area-inset-bottom, 0px)); }
 }
 
-@media (max-width: 560px) {
+@media (max-width: 767px) {
   .rail { position: sticky; top: 0; }
   .contentInner { padding-inline: 14px; }
   .summaryRow { padding-right: 14px; padding-left: 14px; gap: 12px; }

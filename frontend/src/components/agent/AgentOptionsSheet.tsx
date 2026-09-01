@@ -60,6 +60,7 @@ function handleRadioKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
 
 export default function AgentOptionsSheet({
   open,
+  variant = 'popover',
   researchMode,
   outputStyle,
   webScope,
@@ -69,6 +70,7 @@ export default function AgentOptionsSheet({
   onWebScopeChange,
 }: {
   open: boolean;
+  variant?: 'popover' | 'sheet';
   researchMode: LibraryResearchMode;
   outputStyle: LibraryOutputStyle;
   webScope: ResearchScope;
@@ -80,11 +82,15 @@ export default function AgentOptionsSheet({
   if (!open) return null;
 
   return (
-    <section className="agent-options-menu" role="dialog" aria-label="回答设置">
-      <header>
+    <section
+      className={`agent-options-menu ${variant === 'sheet' ? 'is-sheet' : ''}`}
+      role={variant === 'popover' ? 'dialog' : undefined}
+      aria-label="回答设置"
+    >
+      {variant === 'popover' && <header>
         <small>本次回答</small>
         <strong>回答设置</strong>
-      </header>
+      </header>}
       <div className="agent-options-menu__body">
         <fieldset>
           <legend>分析深度</legend>

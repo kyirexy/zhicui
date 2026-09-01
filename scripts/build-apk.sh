@@ -118,7 +118,7 @@ if [[ "$CHANNEL" == "stable" ]]; then
   [[ "$BUILD" =~ ^[1-9][0-9]*$ ]] ||
     { echo 'RELEASE_BUILD 必须是正整数' >&2; exit 1; }
 else
-  readarray -t RELEASE_IDENTITY < <(node - "$LEGACY_MANIFEST" <<'NODE'
+  readarray -t CURRENT_RELEASE_IDENTITY < <(node - "$LEGACY_MANIFEST" <<'NODE'
 const fs = require('fs');
 const manifest = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 if (!/^\d+\.\d+\.\d+$/.test(manifest.version || '') || !Number.isInteger(manifest.build)) {
@@ -128,8 +128,23 @@ console.log(manifest.version);
 console.log(manifest.build);
 NODE
   )
-  VERSION="${RELEASE_IDENTITY[0]}"
-  BUILD="${RELEASE_IDENTITY[1]}"
+  CURRENT_VERSION="${CURRENT_RELEASE_IDENTITY[0]}"
+  CURRENT_BUILD="${CURRENT_RELEASE_IDENTITY[1]}"
+  if [[ -n "${RELEASE_VERSION:-}" || -n "${RELEASE_BUILD:-}" ]]; then
+    : "${RELEASE_VERSION:?Beta 指定新版本时需要 RELEASE_VERSION=x.y.z}"
+    : "${RELEASE_BUILD:?Beta 指定新版本时需要 RELEASE_BUILD=正整数}"
+    VERSION="$RELEASE_VERSION"
+    BUILD="$RELEASE_BUILD"
+    [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+      { echo 'RELEASE_VERSION 格式无效' >&2; exit 1; }
+    [[ "$BUILD" =~ ^[1-9][0-9]*$ ]] ||
+      { echo 'RELEASE_BUILD 必须是正整数' >&2; exit 1; }
+    (( BUILD > CURRENT_BUILD )) ||
+      { echo "Beta 新 build 必须大于当前 build $CURRENT_BUILD" >&2; exit 1; }
+  else
+    VERSION="$CURRENT_VERSION"
+    BUILD="$CURRENT_BUILD"
+  fi
 fi
 
 echo "=== [1/6] 构建 Android $CHANNEL $VERSION ($BUILD) ==="
@@ -249,8 +264,8 @@ const fs = require('fs');
 const [channelPath, legacyPath] = process.argv.slice(2);
 const current = JSON.parse(fs.readFileSync(channelPath, 'utf8'));
 const legacy = {
-  schema_version: 1,
   ...current,
+  schema_version: 1,
 };
 const temporary = `${legacyPath}.tmp-${process.pid}`;
 fs.writeFileSync(temporary, `${JSON.stringify(legacy, null, 2)}\n`, 'utf8');

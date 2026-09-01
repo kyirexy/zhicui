@@ -24,6 +24,7 @@ import {
   SlidersHorizontal,
 } from '@phosphor-icons/react';
 import AIModelIcon from '@/components/AIModelIcon';
+import NativeModal from '@/components/NativeModal';
 import AgentModelConfigSheet, {
   type ModelConfigDraft,
   type ModelConfigSaveResult,
@@ -388,7 +389,9 @@ const AgentComposer = memo(forwardRef<AgentComposerHandle, AgentComposerProps>(
     };
 
     useEffect(() => {
-      if (!optionsOpen) return;
+      // 移动端由原生 dialog 负责遮罩点击与 Esc 关闭。若继续监听 document，
+      // dialog 位于触发器容器之外，点击任一选项都会被误判为“点击外部”。
+      if (!optionsOpen || isMobile) return;
       const closeOnOutsideClick = (event: PointerEvent) => {
         if (!optionsPickerRef.current?.contains(event.target as Node)) closeOptions();
       };
@@ -404,7 +407,7 @@ const AgentComposer = memo(forwardRef<AgentComposerHandle, AgentComposerProps>(
         document.removeEventListener('pointerdown', closeOnOutsideClick);
         document.removeEventListener('keydown', closeOnEscape);
       };
-    }, [optionsOpen, draftResearchMode, draftOutputStyle, draftWebScope]);
+    }, [optionsOpen, isMobile, draftResearchMode, draftOutputStyle, draftWebScope]);
 
     return (
       <>
@@ -597,7 +600,7 @@ const AgentComposer = memo(forwardRef<AgentComposerHandle, AgentComposerProps>(
                   onClick={() => optionsOpen ? closeOptions() : openOptions()}
                   aria-haspopup="dialog"
                   aria-expanded={optionsOpen}
-                  aria-controls="video-agent-options-menu"
+                  aria-controls={isMobile ? 'video-agent-options-sheet' : 'video-agent-options-menu'}
                   aria-label={`调整回答方式：${researchLabel}，${outputLabel}，${webLabel}`}
                 >
                   <SlidersHorizontal size={16} aria-hidden="true" />
@@ -605,7 +608,7 @@ const AgentComposer = memo(forwardRef<AgentComposerHandle, AgentComposerProps>(
                   <CaretDown size={11} aria-hidden="true" />
                 </button>
                 <div id="video-agent-options-menu">
-                  <AgentOptionsSheet
+                  {!isMobile && <AgentOptionsSheet
                     open={optionsOpen}
                     researchMode={draftResearchMode}
                     outputStyle={draftOutputStyle}
@@ -614,7 +617,7 @@ const AgentComposer = memo(forwardRef<AgentComposerHandle, AgentComposerProps>(
                     onResearchModeChange={setDraftResearchMode}
                     onOutputStyleChange={setDraftOutputStyle}
                     onWebScopeChange={setDraftWebScope}
-                  />
+                  />}
                 </div>
               </div>
             </div>
@@ -660,6 +663,29 @@ const AgentComposer = memo(forwardRef<AgentComposerHandle, AgentComposerProps>(
           </div>
         </form>
         </footer>
+
+        <NativeModal
+          open={isMobile && optionsOpen}
+          title="回答方式"
+          onClose={closeOptions}
+        >
+          <div id="video-agent-options-sheet">
+            <AgentOptionsSheet
+              open={isMobile && optionsOpen}
+              variant="sheet"
+              researchMode={draftResearchMode}
+              outputStyle={draftOutputStyle}
+              webScope={draftWebScope}
+              disabled={sending || backgroundActive}
+              onResearchModeChange={setDraftResearchMode}
+              onOutputStyleChange={setDraftOutputStyle}
+              onWebScopeChange={setDraftWebScope}
+            />
+            <div className="agent-options-sheet-actions">
+              <button type="button" onClick={closeOptions}>完成</button>
+            </div>
+          </div>
+        </NativeModal>
 
         <AgentModelConfigSheet
           open={modelConfigOpen}

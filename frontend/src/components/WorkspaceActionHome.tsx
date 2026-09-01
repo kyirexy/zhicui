@@ -368,9 +368,19 @@ export default function WorkspaceActionHome() {
           <img src="/icons/icon-192.png" alt="" width={34} height={34} />
           <strong>知萃</strong>
         </Link>
-        <Link href="/settings" className={styles.mobileSettings} aria-label="打开设置">
-          <GearSix size={21} weight="regular" aria-hidden="true" />
-        </Link>
+        <div className={styles.mobileHeaderActions}>
+          <button
+            type="button"
+            className={styles.mobileFeedback}
+            aria-label="意见反馈"
+            onClick={() => window.dispatchEvent(new Event('zhicui:open-feedback'))}
+          >
+            <ChatCircleDots size={21} weight="regular" aria-hidden="true" />
+          </button>
+          <Link href="/settings" className={styles.mobileSettings} aria-label="打开设置">
+            <GearSix size={21} weight="regular" aria-hidden="true" />
+          </Link>
+        </div>
       </div>
 
       <header className={styles.welcome}>

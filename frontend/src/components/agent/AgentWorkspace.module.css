@@ -2766,6 +2766,57 @@
   scrollbar-color: color-mix(in srgb, var(--aw-mint) 28%, transparent) transparent;
 }
 
+.root :global(.agent-options-menu.is-sheet) {
+  position: static;
+  overflow: visible;
+  width: 100%;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  color: var(--foreground);
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  animation: none;
+  transform: none;
+}
+
+.root :global(.agent-options-menu.is-sheet .agent-options-menu__body) {
+  overflow: visible;
+  max-height: none;
+  padding: 0;
+}
+
+.root :global(.agent-options-sheet-actions) {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  padding-top: 10px;
+  background: var(--card-bg);
+}
+
+.root :global(.agent-options-sheet-actions button) {
+  width: 100%;
+  min-height: 48px;
+  border: 0;
+  border-radius: 10px;
+  color: #fff;
+  background: #4176e6;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.root :global(.agent-options-sheet-actions button:hover),
+.root :global(.agent-options-sheet-actions button:focus-visible) {
+  outline: none;
+  background: #3267d4;
+}
+
+.root :global(.agent-options-sheet-actions button:focus-visible) {
+  box-shadow: 0 0 0 3px color-mix(in srgb, #4176e6 24%, transparent);
+}
+
 .root :global(.agent-options-menu fieldset) {
   min-width: 0;
   margin: 0;
@@ -5701,6 +5752,10 @@
     flex: 0 1 auto;
   }
 
+  .root :global(.video-agent-options-picker) {
+    position: static;
+  }
+
   .root :global(.video-agent-options-trigger) {
     width: 100%;
   }
@@ -5715,11 +5770,16 @@
     max-width: 148px;
   }
 
-  .root :global(.agent-options-menu) {
+  .root :global(.agent-options-menu:not(.is-sheet)) {
     right: 0;
-    left: auto;
-    width: min(310px, calc(100vw - 28px));
-    transform-origin: right bottom;
+    left: 0;
+    width: auto;
+    max-height: min(480px, 56dvh);
+    transform-origin: center bottom;
+  }
+
+  .root :global(.agent-options-menu:not(.is-sheet) .agent-options-menu__body) {
+    max-height: calc(min(480px, 56dvh) - 58px);
   }
 
   .root :global(.video-agent-send),

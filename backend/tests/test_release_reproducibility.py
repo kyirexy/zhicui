@@ -27,6 +27,16 @@ class ReleaseReproducibilityContractTests(unittest.TestCase):
             self.assertIn(marker, script)
         self.assertRegex(script, re.compile(r"\^\[0-9a-fA-F\]\{40\}\$"))
 
+    def test_android_beta_release_can_publish_a_strictly_newer_build(self) -> None:
+        script = (ROOT / "scripts" / "build-apk.sh").read_text(encoding="utf-8")
+        for marker in (
+            'Beta 指定新版本时需要 RELEASE_VERSION=x.y.z',
+            'Beta 指定新版本时需要 RELEASE_BUILD=正整数',
+            'Beta 新 build 必须大于当前 build',
+            '...current,\n  schema_version: 1,',
+        ):
+            self.assertIn(marker, script)
+
     def test_windows_release_and_skip_build_are_commit_scoped(self) -> None:
         script = (ROOT / "scripts" / "release-desktop.ps1").read_text(encoding="utf-8")
         for marker in (

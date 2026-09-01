@@ -851,7 +851,7 @@
   }
 }
 
-@media (max-width: 719px) {
+@media (max-width: 767px) {
   .home {
     padding-top: max(8px, env(safe-area-inset-top));
   }
@@ -885,17 +885,44 @@
     letter-spacing: -0.02em;
   }
 
+  .mobileHeaderActions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .mobileFeedback,
   .mobileSettings {
     display: grid;
     width: 44px;
     height: 44px;
-    border: 1px solid var(--home-border);
     border-radius: 12px;
     place-items: center;
+    border: 0;
     color: var(--home-muted);
-    background: #fff;
+    background: transparent;
     text-decoration: none;
     -webkit-tap-highlight-color: transparent;
+  }
+
+  .mobileFeedback {
+    color: var(--home-faint);
+  }
+
+  .mobileSettings {
+    border: 1px solid var(--home-border);
+    background: #fff;
+  }
+
+  .mobileFeedback:active {
+    color: var(--home-muted);
+    background: var(--home-soft);
+  }
+
+  .mobileFeedback:focus-visible,
+  .mobileSettings:focus-visible {
+    outline: 2px solid var(--home-accent);
+    outline-offset: 2px;
   }
 
   .welcome {

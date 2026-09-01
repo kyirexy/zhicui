@@ -40,6 +40,19 @@ test('移动端发送与停止操作具有 44px 触控区域', () => {
   );
 });
 
+test('移动端回答方式使用原生底部弹层而不是相对按钮的桌面浮层', () => {
+  assert.match(composer, /<NativeModal[\s\S]*?title="回答方式"[\s\S]*?variant="sheet"/);
+  assert.match(composer, /if \(!optionsOpen \|\| isMobile\) return/);
+  assert.match(
+    workspaceCss,
+    /\.agent-options-menu\.is-sheet\)[\s\S]*?position:\s*static[\s\S]*?width:\s*100%[\s\S]*?max-height:\s*none/,
+  );
+  assert.match(
+    mobileCss,
+    /\.video-agent-options-picker\)[\s\S]*?position:\s*static/,
+  );
+});
+
 test('生成期间只保留输入框方形停止键', () => {
   assert.doesNotMatch(activityTimeline, /video-agent-turn-action|onCancel|canCancel|cancelling/);
   assert.match(composer, /className="video-agent-send is-stop"/);

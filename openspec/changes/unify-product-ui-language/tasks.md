@@ -29,7 +29,7 @@
 
 ## 5. Marketing and cleanup
 
-- [ ] 5.1 Reduce repeated marketing value statements and calls to action while retaining product evidence, platform, and privacy information
+- [x] 5.1 Reduce repeated marketing value statements and calls to action while retaining product evidence, platform, and privacy information
 - [ ] 5.2 Remove unreachable legacy entry markup and retire migrated route-specific visual tokens and conflicting global overrides
 - [ ] 5.3 Standardize new public icons on one existing icon family and remove mixed icons from shared navigation and common controls
 

@@ -1,0 +1,44 @@
+{
+  "name": "@zhicui/cli",
+  "version": "1.0.0",
+  "description": "知萃普通用户能力的 Agent CLI 与本地 MCP 入口",
+  "license": "UNLICENSED",
+  "homepage": "https://luxai.cn",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kyirexy/zhicui.git",
+    "directory": "cli"
+  },
+  "bugs": {
+    "url": "https://github.com/kyirexy/zhicui/issues"
+  },
+  "type": "module",
+  "bin": {
+    "zhicui": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "README.md",
+    "CHANGELOG.md",
+    "RELEASE.md"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "latest"
+  },
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "build": "npm run clean && tsc -p tsconfig.json && node scripts/make-executable.mjs",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "prepack": "npm run build"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.9.3"
+  }
+}

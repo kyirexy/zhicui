@@ -103,8 +103,11 @@ import { useAuth } from '@/lib/hooks/AuthContext';
 import { useMarqueeSelection } from '@/lib/hooks/useMarqueeSelection';
 import {
   QUICK_SYNC_MAX_COUNT,
+  isQuickSyncModeReady,
+  normalizeQuickSyncModes,
   readLibraryQuickSyncPreferences,
   saveLibraryQuickSyncPreferences,
+  toggleQuickSyncMode,
 } from '@/lib/libraryQuickSync';
 import {
   clearLibraryListCache,
@@ -155,12 +158,19 @@ interface SyncCollectionModeResult {
   overview: DouyinLibraryListResult | null;
   finalJob: DouyinCollectionJob | null;
   error: string;
+  queueMayStillBeRunning?: boolean;
 }
 
 interface CollectionProgressSnapshot {
   current: number;
   target: number;
   percent: number;
+}
+
+interface SourceSyncQueueProgress {
+  current: number;
+  total: number;
+  mode: DouyinSourceMode;
 }
 
 interface SourceReadabilityState {
@@ -344,6 +354,7 @@ export default function VideoLibraryPage() {
   const { user } = useAuth();
   const [status, setStatus] = useState<DouyinLibraryStatus | null>(null);
   const [collectionJob, setCollectionJob] = useState<DouyinCollectionJob | null>(null);
+  const [sourceSyncQueue, setSourceSyncQueue] = useState<SourceSyncQueueProgress | null>(null);
   const [storedSourceMode, setSourceMode] = useLocalStorage<DouyinSourceMode | string>(
     'zhicui-library-source-mode-v1',
     'collect',
@@ -359,8 +370,7 @@ export default function VideoLibraryPage() {
     ? storedLayoutMode
     : 'grid';
   const [sourceManagerModes, setSourceManagerModes] = useState<DouyinSourceMode[]>(() => {
-    const preferred = readLibraryQuickSyncPreferences().modes[0];
-    return [isDouyinSourceMode(preferred) ? preferred : 'like'];
+    return readLibraryQuickSyncPreferences().modes;
   });
   const [sourceReadability, setSourceReadability] = useState<Partial<
     Record<DouyinSourceMode, SourceReadabilityState>
@@ -843,6 +853,9 @@ export default function VideoLibraryPage() {
         .map((value) => SOURCE_MODES.find((mode) => mode.value === value)?.label || '')
         .filter(Boolean)
         .join(' + ');
+  const activeSyncSourceLabel = sourceSyncQueue
+    ? SOURCE_MODES.find((mode) => mode.value === sourceSyncQueue.mode)?.label || '视频'
+    : sourceManagerLabel;
   const collectionReadability = sourceReadability.collect;
   const collectionRetryMinutes = collectionReadability
     ? Math.max(0, Math.ceil((collectionReadability.blockedUntil - Date.now()) / 60_000))
@@ -1733,7 +1746,7 @@ export default function VideoLibraryPage() {
       setNotice('请在抖音官方页面完成扫码登录');
       const result = await desktop.loginPlatformAccount({
         platform: 'douyin',
-        profileKey: user.id,
+        profileKey: user.agent_profile_key || '',
       });
       setScanning(false);
       if (!result.success) {
@@ -1922,10 +1935,10 @@ export default function VideoLibraryPage() {
     const action = sessionAction;
     setSessionPending(true);
     setSessionError('');
-    if (desktopLocalDouyin && user?.id && window.zhicuiDesktop) {
+    if (desktopLocalDouyin && user?.agent_profile_key && window.zhicuiDesktop) {
       const localResult = await window.zhicuiDesktop.disconnectPlatformAccount({
         platform: 'douyin',
-        profileKey: user.id,
+        profileKey: user.agent_profile_key,
       });
       if (!localResult.success) {
         setSessionPending(false);
@@ -2082,7 +2095,7 @@ export default function VideoLibraryPage() {
       publishSourceManagerNotice(`正在本机读取抖音${requestedSourceLabel}…`);
       const collected = await bridge.collectPlatformAccount({
         platform: 'douyin',
-        profileKey: user.id,
+        profileKey: user.agent_profile_key || '',
         mode: requestedMode,
         limit: requestedCount,
       });
@@ -2199,6 +2212,7 @@ export default function VideoLibraryPage() {
         overview: null,
         finalJob: null,
         error: waitResult.error,
+        queueMayStillBeRunning: true,
       };
     }
     const hasFailureDiagnostic = finalJob
@@ -2299,30 +2313,46 @@ export default function VideoLibraryPage() {
       );
       return { started: false };
     }
-    const selectedModes = requestedModes.length > 0
-      ? requestedModes.slice(0, SOURCE_MODES.length)
-      : [sourceModeRef.current];
+    const selectedModes = normalizeQuickSyncModes(
+      requestedModes.length > 0 ? requestedModes : [sourceModeRef.current],
+    );
     const readiness = desktopLocalDouyin
       ? undefined
       : status?.private_list_readiness;
-    const blockedModes = readiness?.reported
-      ? selectedModes.filter((mode) => (
-          mode === 'collect' ? !readiness.collection_ready : !readiness.like_ready
-        ))
+    const readinessBlockedModes = selectedModes.filter(
+      (mode) => !isQuickSyncModeReady(mode, readiness),
+    );
+    const cooldownBlockedModes = !desktopLocalDouyin
+      && sourceReadability.collect
+      && (
+        sourceReadability.collect.needsAction
+        || sourceReadability.collect.blockedUntil > Date.now()
+      )
+      && selectedModes.includes('collect')
+      ? ['collect' as DouyinSourceMode]
       : [];
+    const blockedModes = [...new Set([
+      ...readinessBlockedModes,
+      ...cooldownBlockedModes,
+    ])];
     const modes = selectedModes.filter((mode) => !blockedModes.includes(mode));
     if (blockedModes.length > 0) {
       const blockedLabels = blockedModes.map((mode) => (
         SOURCE_MODES.find((item) => item.value === mode)?.label || '该来源'
       ));
-      publishSourceManagerNotice(
-        `${blockedLabels.join('、')}当前不可读取，请重新连接抖音账号并等待登录确认；其他来源仍可同步。`,
-      );
+      const collectionCooldown = cooldownBlockedModes.includes('collect')
+        ? sourceReadability.collect?.needsAction
+          ? '；收藏需先完成账号验证'
+          : `；收藏约 ${Math.max(1, Math.ceil(
+              ((sourceReadability.collect?.blockedUntil || 0) - Date.now()) / 60_000,
+            ))} 分钟后可重试`
+        : '';
+      publishSourceManagerNotice(`${blockedLabels.join('、')}当前不可读取${collectionCooldown}；其他来源仍会按顺序同步。`);
     }
     if (refreshing || !loggedIn || modes.length === 0) return { started: false };
     const requestedCount = clampInteger(countOverride ?? syncCount, 1, MAX_SYNC_COUNT);
     saveLibraryQuickSyncPreferences(
-      requestedModes.length > 0 ? modes : persistedModes,
+      persistedModes.length > 0 ? persistedModes : selectedModes,
       requestedCount,
     );
     setSyncCount(requestedCount);
@@ -2338,15 +2368,35 @@ export default function VideoLibraryPage() {
 
     const results: SyncCollectionModeResult[] = [];
     let failed = false;
-    for (const requestedMode of modes) {
+    for (const [modeIndex, requestedMode] of modes.entries()) {
       if (!activeRef.current) return { started: true };
-      const result = await collectOneSource(requestedMode, requestedCount);
+      setSourceSyncQueue({
+        current: modeIndex + 1,
+        total: modes.length,
+        mode: requestedMode,
+      });
+      let result: SyncCollectionModeResult;
+      try {
+        result = await collectOneSource(requestedMode, requestedCount);
+      } catch (error) {
+        result = {
+          requestedMode,
+          refreshed: null,
+          newlyVisible: [],
+          overview: null,
+          finalJob: null,
+          error: error instanceof Error && error.message
+            ? `同步连接异常：${error.message}`
+            : '同步连接异常，请稍后重试',
+        };
+      }
       results.push(result);
       if (result.error) {
         failed = true;
         publishSourceManagerNotice(
           `${SOURCE_MODES.find((mode) => mode.value === requestedMode)?.label || '该来源'}：${result.error}`,
         );
+        if (result.queueMayStillBeRunning) break;
         continue;
       }
       const refreshed = result.refreshed || [];
@@ -2380,6 +2430,7 @@ export default function VideoLibraryPage() {
     }
 
     setRefreshing(false);
+    setSourceSyncQueue(null);
     setPipelineStage(failed ? 'idle' : 'done');
 
     const successful = results.filter((result) => !result.error && result.finalJob);
@@ -2486,9 +2537,10 @@ export default function VideoLibraryPage() {
       // 本机播放地址只在内存中短期有效；先由用户明确触发当前来源重读，
       // 同步完成后会立即把范围内的历史欠账送入文案任务。
       setNotice(`正在重新读取${sourceLabel}并补齐待整理文案`);
+      const savedPreferences = readLibraryQuickSyncPreferences();
       await syncCollectionRef.current(
         [sourceMode],
-        [sourceMode],
+        savedPreferences.modes,
         Math.min(pendingTranscriptTotal, MAX_SYNC_COUNT),
       );
       return;
@@ -3394,25 +3446,17 @@ export default function VideoLibraryPage() {
             <div className={styles.sourcePickerHeader}>
               <div>
                 <strong>选择同步范围</strong>
-                <span>喜欢、收藏和作品分开同步，降低连续读取风险</span>
+                <span>可多选，系统会按卡片顺序逐项读取，不会并发请求多个来源</span>
               </div>
-              <small>单选</small>
+              <small>已选 {sourceManagerModes.length} 项</small>
             </div>
             <div className="library-source-main">
-              <div className="library-source-modes" role="radiogroup" aria-label="选择一个要同步的抖音来源">
+              <div className="library-source-modes" role="group" aria-label="选择一个或多个要同步的抖音来源">
                 {SOURCE_MODES.map(({ value, label, Icon }) => {
                   const active = sourceManagerModes.includes(value);
                   const readinessUnavailable = !desktopLocalDouyin
-                    && !desktopDouyinUpdateRequired && Boolean(
-                    status?.private_list_readiness?.reported
-                    && (
-                      value === 'collect'
-                        ? !status.private_list_readiness.collection_ready
-                        : value === 'like'
-                          ? !status.private_list_readiness.like_ready
-                          : false
-                    ),
-                  );
+                    && !desktopDouyinUpdateRequired
+                    && !isQuickSyncModeReady(value, status?.private_list_readiness);
                   const collectionUnavailable = value === 'collect' && (
                     readinessUnavailable
                     || (
@@ -3425,13 +3469,12 @@ export default function VideoLibraryPage() {
                     <button
                       type="button"
                       key={value}
-                      role="radio"
                       className={active ? 'is-active' : ''}
                       data-unavailable={sourceUnavailable || undefined}
-                      aria-checked={active}
+                      aria-pressed={active}
                       disabled={refreshing || batchExtracting || desktopDouyinUpdateRequired}
                       onClick={() => {
-                        setSourceManagerModes([value]);
+                        setSourceManagerModes((current) => toggleQuickSyncMode(current, value));
                         setSourceManagerNotice('');
                       }}
                     >
@@ -3464,8 +3507,14 @@ export default function VideoLibraryPage() {
                   )}
                   {pipelineStage === 'collect'
                     ? '正在从抖音同步'
-                    : `同步${sourceManagerLabel}`}
-                  {!refreshing && <span className={styles.syncCountBadge}>{syncCount} 条</span>}
+                    : sourceManagerModes.length > 0
+                      ? `同步${sourceManagerLabel}`
+                      : '请选择同步范围'}
+                  {!refreshing && (
+                    <span className={styles.syncCountBadge}>
+                      {sourceManagerModes.length > 1 ? `每项 ${syncCount} 条` : `${syncCount} 条`}
+                    </span>
+                  )}
                 </button>
               </div>
             </div>
@@ -3485,7 +3534,7 @@ export default function VideoLibraryPage() {
               <summary className="library-processing-heading">
                 <span>
                   <SlidersHorizontal size={14} />
-                  同步 {syncCount} 条
+                  {sourceManagerModes.length > 1 ? '每个来源' : '同步'} {syncCount} 条
                 </span>
                 <small>调整数量</small>
                 <ChevronDown size={14} aria-hidden="true" />
@@ -3493,7 +3542,7 @@ export default function VideoLibraryPage() {
               <div className="library-advanced-body">
                 <div className="library-auto-controls">
                   <div className="library-count-control is-sync-count">
-                    <span>最近同步</span>
+                    <span>{sourceManagerModes.length > 1 ? '每个来源同步' : '最近同步'}</span>
                     <div className="library-sync-count-inputs">
                       <div
                         className="library-count-options"
@@ -3544,7 +3593,11 @@ export default function VideoLibraryPage() {
                   <LoaderCircle size={17} className="animate-spin" />
                 </span>
                 <span>
-                  <strong>正在同步{sourceManagerLabel}</strong>
+                  <strong>
+                    {sourceSyncQueue && sourceSyncQueue.total > 1
+                      ? `${sourceSyncQueue.current}/${sourceSyncQueue.total} · 正在同步${activeSyncSourceLabel}`
+                      : `正在同步${activeSyncSourceLabel}`}
+                  </strong>
                 </span>
                 <b>
                   {collectionProgress.current}
@@ -3556,7 +3609,7 @@ export default function VideoLibraryPage() {
               <div
                 className="library-pipeline-progress"
                 role="progressbar"
-                aria-label={`${sourceManagerLabel}同步进度`}
+                aria-label={`${activeSyncSourceLabel}同步进度`}
                 aria-valuemin={0}
                 aria-valuemax={collectionProgress.target}
                 aria-valuenow={collectionProgress.current}

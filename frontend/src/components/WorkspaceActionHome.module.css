@@ -19,6 +19,10 @@
   display: none;
 }
 
+.mobileImport {
+  display: none;
+}
+
 .welcome {
   display: flex;
   min-height: 42px;
@@ -323,33 +327,6 @@
 
 .channels {
   margin-top: 14px;
-}
-
-.channels > header {
-  display: flex;
-  min-height: 42px;
-  margin-bottom: 6px;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.channels h2 {
-  margin: 4px 0 0;
-  color: var(--home-ink);
-  font-size: 1.05rem;
-  font-weight: 700;
-}
-
-.channels header a {
-  display: inline-flex;
-  min-height: 44px;
-  align-items: center;
-  gap: 5px;
-  color: var(--home-muted);
-  font-size: 0.72rem;
-  font-weight: 650;
-  text-decoration: none;
 }
 
 .platformGrid {
@@ -826,7 +803,6 @@
 
   .sourceStatus a:hover,
   .recent header a:hover,
-  .channels header a:hover,
   .platformHead a:hover {
     color: var(--home-ink);
   }
@@ -853,6 +829,9 @@
 
 @media (max-width: 767px) {
   .home {
+    --home-accent: #61728e;
+    --home-accent-soft: #edf1f6;
+    --home-soft: #f4f5f3;
     padding-top: max(8px, env(safe-area-inset-top));
   }
 
@@ -862,6 +841,132 @@
     margin-bottom: 10px;
     align-items: center;
     justify-content: space-between;
+  }
+
+  .mobileImport {
+    display: block;
+    margin: 4px 0 22px;
+    padding: 20px 16px 15px;
+    border: 1px solid var(--home-border);
+    border-radius: 16px;
+    color: var(--home-ink);
+    background: var(--home-surface);
+    box-shadow: 0 8px 22px color-mix(in srgb, var(--home-ink) 7%, transparent);
+  }
+
+  .mobileImportHeading h1 {
+    margin: 0;
+    color: var(--home-ink);
+    font-size: 1.45rem;
+    font-weight: 760;
+    line-height: 1.2;
+    text-wrap: balance;
+  }
+
+  .mobileImportHeading p {
+    margin: 5px 0 0;
+    color: var(--home-muted);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    text-wrap: pretty;
+  }
+
+  .mobileImportForm {
+    display: grid;
+    margin-top: 16px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .mobileImportField {
+    display: grid;
+    min-width: 0;
+    min-height: 54px;
+    padding: 5px 5px 5px 13px;
+    border: 1px solid var(--home-border);
+    border-radius: 12px;
+    grid-template-columns: 20px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    color: var(--home-muted);
+    background: var(--home-surface);
+  }
+
+  .mobileImportField:focus-within {
+    outline: 2px solid color-mix(in srgb, var(--home-accent) 55%, transparent);
+    outline-offset: 2px;
+  }
+
+  .mobileImportField input {
+    min-width: 0;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    outline: 0;
+    color: var(--home-ink);
+    background: transparent;
+    font: inherit;
+    font-size: 16px;
+  }
+
+  .mobileImportField input::placeholder {
+    color: var(--home-muted);
+    opacity: 1;
+  }
+
+  .pasteButton,
+  .importButton {
+    display: inline-flex;
+    min-height: 44px;
+    border: 0;
+    border-radius: 9px;
+    align-items: center;
+    justify-content: center;
+    font: inherit;
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .pasteButton {
+    padding: 0 10px;
+    gap: 5px;
+    color: var(--home-ink);
+    background: var(--home-soft);
+  }
+
+  .importButton {
+    min-height: 48px;
+    gap: 5px;
+    color: #fff;
+    background: var(--home-accent);
+    box-shadow: 0 5px 12px color-mix(in srgb, var(--home-accent) 22%, transparent);
+  }
+
+  .importButton:disabled {
+    color: var(--home-faint);
+    background: var(--home-soft);
+    box-shadow: none;
+    cursor: default;
+  }
+
+  .pasteButton:focus-visible,
+  .importButton:focus-visible {
+    outline: 2px solid var(--home-accent);
+    outline-offset: 2px;
+  }
+
+  .pasteButton:active,
+  .importButton:not(:disabled):active {
+    transform: translateY(1px);
+  }
+
+  .mobileImportError {
+    margin: 9px 0 0;
+    color: #a04444;
+    font-size: 0.72rem;
+    line-height: 1.45;
   }
 
   .mobileBrand {
@@ -888,16 +993,16 @@
   .mobileHeaderActions {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 6px;
   }
 
   .mobileFeedback,
   .mobileSettings {
-    display: grid;
-    width: 44px;
-    height: 44px;
-    border-radius: 12px;
-    place-items: center;
+    display: inline-flex;
+    min-height: 44px;
+    border-radius: 11px;
+    align-items: center;
+    justify-content: center;
     border: 0;
     color: var(--home-muted);
     background: transparent;
@@ -906,17 +1011,28 @@
   }
 
   .mobileFeedback {
-    color: var(--home-faint);
+    min-width: 72px;
+    padding: 0 12px;
+    gap: 6px;
+    color: var(--home-ink);
+    background: var(--home-soft);
+    font-size: 0.78rem;
+    font-weight: 680;
+  }
+
+  .mobileFeedback svg {
+    color: var(--home-accent);
   }
 
   .mobileSettings {
+    width: 44px;
+    height: 44px;
     border: 1px solid var(--home-border);
     background: #fff;
   }
 
   .mobileFeedback:active {
-    color: var(--home-muted);
-    background: var(--home-soft);
+    background: color-mix(in srgb, var(--home-accent) 9%, var(--home-soft));
   }
 
   .mobileFeedback:focus-visible,
@@ -926,9 +1042,7 @@
   }
 
   .welcome {
-    padding-right: 2px;
-    padding-bottom: 12px;
-    padding-left: 2px;
+    display: none;
   }
 
   .welcome h1 {
@@ -938,8 +1052,10 @@
   .start {
     display: block;
     min-height: 0;
-    padding: 10px 11px 7px;
-    border-radius: 17px;
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
   }
 
   .intro {
@@ -947,16 +1063,60 @@
   }
 
   .primaryActions {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
+  }
+
+  .syncEntry {
+    border-color: #438d77;
+    background: linear-gradient(145deg, #4d9f87 0%, #3f8f78 58%, #347965 100%);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 28%),
+      0 5px 8px rgb(42 116 92 / 22%);
+  }
+
+  .syncIcon {
+    background: linear-gradient(145deg, rgb(255 255 255 / 30%), rgb(255 255 255 / 14%));
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 24%);
+  }
+
+  .askEntry {
+    border-color: #c4cedd;
+    background: #f0f4fa;
+    box-shadow: 0 3px 8px rgb(73 91 120 / 10%);
+  }
+
+  .askIcon {
+    color: #60779a;
+    background: #e1e8f2;
   }
 
   .askEntry,
   .syncEntry {
-    min-height: 56px;
+    min-height: 64px;
     margin-top: 0;
-    padding: 7px 8px;
-    grid-template-columns: 38px minmax(0, 1fr) 36px;
+    padding: 8px 10px;
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .askIcon,
+  .syncIcon {
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+  }
+
+  .askCopy strong,
+  .syncCopy strong {
+    font-size: 0.86rem;
+  }
+
+  .askCopy small,
+  .syncCopy small,
+  .askArrow,
+  .syncArrow {
+    display: none;
   }
 
   .startAction {
@@ -969,31 +1129,89 @@
     min-height: 30px;
   }
 
-  .askCopy small {
-    max-width: 34ch;
-  }
-
   .tools {
     gap: 8px;
   }
 
+  .utilityArea {
+    display: none;
+  }
+
   .channels {
-    margin-top: 30px;
+    margin-top: 12px;
+  }
+
+  .platformGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
   }
 
   .channelCard {
-    width: 116px;
+    width: 100%;
     flex: 0 0 auto;
-    aspect-ratio: 3 / 4;
+    aspect-ratio: 1.1;
   }
 
   .platformPanel {
-    min-height: 232px;
-    padding: 12px;
+    min-height: 0;
+    padding: 10px;
+  }
+
+  .platformHead {
+    position: relative;
+    min-height: 34px;
+    margin-bottom: 8px;
+  }
+
+  .platformHead > div {
+    gap: 6px;
+  }
+
+  .platformMark {
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+  }
+
+  .platformMark svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .platformHead h3 {
+    font-size: 0.8rem;
+  }
+
+  .platformHead small {
+    display: none;
+  }
+
+  .platformHead a {
+    position: absolute;
+    top: -2px;
+    right: 0;
+    min-height: 32px;
+    font-size: 0.62rem;
   }
 
   .modeTabs button {
     min-height: 42px;
+    padding: 0 2px;
+    gap: 2px;
+    font-size: 0.62rem;
+  }
+
+  .modeTabs button svg {
+    display: none;
+  }
+
+  .modeTabs button small {
+    min-width: 0;
+    font-size: 0.55rem;
+  }
+
+  .modeTabs button span {
+    white-space: nowrap;
   }
 
   .channelStrip {
@@ -1003,7 +1221,31 @@
   }
 
   .recent {
-    margin-top: 34px;
+    display: block;
+    margin-top: 28px;
+    padding-top: 24px;
+    border-top: 1px solid var(--home-border);
+  }
+
+  .recent > header {
+    min-height: 44px;
+    margin-bottom: 8px;
+    align-items: center;
+  }
+
+  .recent .sectionLabel {
+    display: none;
+  }
+
+  .recent h2 {
+    margin: 0;
+    font-size: 0.95rem;
+  }
+
+  .threadList,
+  .recent .empty,
+  .recent .skeleton {
+    border-radius: 14px;
   }
 
   .empty {
@@ -1044,7 +1286,7 @@
   }
 
   .channelCard {
-    width: 104px;
+    width: 100%;
     border-radius: 13px;
   }
 

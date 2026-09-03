@@ -7,7 +7,8 @@ import os
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -60,7 +61,7 @@ def create_access_token(user_id: str, email: str) -> str:
 def decode_access_token(token: str) -> dict | None:
     try:
         return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    except JWTError:
+    except PyJWTError:
         return None
 
 
@@ -84,7 +85,7 @@ def create_email_verification_token(user: User, nonce: str) -> str:
 def decode_email_verification_token(token: str) -> dict | None:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    except JWTError:
+    except PyJWTError:
         return None
     if payload.get("purpose") != "verify_email":
         return None

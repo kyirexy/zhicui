@@ -121,6 +121,8 @@ def hide_aweme_ids(
     user_id: str,
     aweme_ids: list[str],
     mode: HideMode = "temporary",
+    *,
+    commit: bool = True,
 ) -> dict[str, object]:
     normalized = _normalize_aweme_ids(aweme_ids)
     if not normalized or len(normalized) > MAX_BATCH_REMOVE:
@@ -173,7 +175,7 @@ def hide_aweme_ids(
             )
         )
 
-    if new_ids or promoted_ids or mode == "permanent":
+    if commit and (new_ids or promoted_ids or mode == "permanent"):
         db.commit()
     return {
         "removed": len(normalized),

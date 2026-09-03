@@ -1,5 +1,8 @@
 import type { IpcMainInvokeEvent } from 'electron';
 import type {
+  DesktopAgentClient,
+  DesktopAgentIntegrationRequest,
+  DesktopAgentOperation,
   DesktopLoginRequest,
   DesktopMediaSaveRequest,
   PlatformAccountCollectRequest,
@@ -31,6 +34,14 @@ const PLATFORM_ACCOUNT_MODES = new Set<PlatformAccountSourceMode>([
   'like',
   'collect',
   'post',
+]);
+const DESKTOP_AGENT_CLIENTS = new Set<DesktopAgentClient>(['codex', 'claude']);
+const DESKTOP_AGENT_OPERATIONS = new Set<DesktopAgentOperation>([
+  'setup',
+  'doctor',
+  'status',
+  'update',
+  'uninstall',
 ]);
 
 export function configuredAppUrl(): URL {
@@ -140,6 +151,28 @@ export function validatePlatformAccountCollectRequest(
     throw new Error('账号同步数量必须在 1–100 条之间');
   }
   return { ...request, mode, limit };
+}
+
+export function validateDesktopAgentIntegrationRequest(
+  value: unknown,
+): DesktopAgentIntegrationRequest {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Agent 本机操作请求无效');
+  }
+  const payload = value as Record<string, unknown>;
+  const keys = Object.keys(payload);
+  if (keys.some((key) => key !== 'client' && key !== 'operation')) {
+    throw new Error('Agent 本机操作不接受命令、路径、参数或密钥');
+  }
+  const client = String(payload.client || '') as DesktopAgentClient;
+  const operation = String(payload.operation || '') as DesktopAgentOperation;
+  if (!DESKTOP_AGENT_CLIENTS.has(client)) {
+    throw new Error('Agent 客户端类型无效');
+  }
+  if (!DESKTOP_AGENT_OPERATIONS.has(operation)) {
+    throw new Error('Agent 本机操作不在允许列表中');
+  }
+  return { client, operation };
 }
 
 function validateSignedMediaUrl(

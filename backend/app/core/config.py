@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     SMTP_USE_TLS: bool = True
     SMTP_USE_SSL: bool = False
     SMTP_TIMEOUT_SECONDS: int = 15
+    # Readiness opens an authenticated TLS SMTP session and issues NOOP only;
+    # it never sends a message. Cache successful probes to avoid repeatedly
+    # authenticating while load balancers poll /api/readiness.
+    SMTP_READINESS_CACHE_SECONDS: int = 300
     PUBLIC_APP_URL: str = "https://luxai.cn"
     # Optional operations notification endpoint. Only HTTPS is accepted by
     # the alert service and payloads never include secrets or user content.
@@ -97,6 +101,22 @@ class Settings(BaseSettings):
     # Comma-separated reverse-proxy addresses that may supply X-Real-IP.
     TRUSTED_PROXY_IPS: str = "127.0.0.1,::1"
     RATE_LIMIT_ENABLED: bool = False
+    # Versioned product Action/CLI/MCP interface.  It is deliberately off by
+    # default so credentials and tools cannot become reachable merely by
+    # deploying a database migration.  A reviewed rollout enables it
+    # explicitly per environment.
+    AGENT_INTERFACE_ENABLED: bool = False
+    # Optional comma-separated rollout gates.  Empty means every ordinary user /
+    # every reviewed Registry Action after the global interface switch is on.
+    # A staged rollout should set immutable user IDs and a narrow Action list;
+    # `*` explicitly means all.
+    AGENT_INTERFACE_USER_ALLOWLIST: str = ""
+    AGENT_INTERFACE_ACTION_ALLOWLIST: str = ""
+    # Pepper used for PAT/device-token hashes.  The credential service falls
+    # back to JWT_SECRET for backwards-compatible local development, while
+    # production should set a separate value so a database dump cannot be
+    # brute-forced independently of the application secret.
+    AGENT_TOKEN_PEPPER: str = ""
     # Keep outbound delivery opt-in until the deployment has an approved
     # sender domain and account-email verification policy.
     EMAIL_DELIVERY_ENABLED: bool = False
@@ -105,6 +125,10 @@ class Settings(BaseSettings):
     # local development; no email is sent without explicit SMTP config.
     AGENT_AUTOMATION_ENABLED: bool = True
     AGENT_AUTOMATION_POLL_SECONDS: int = 30
+    # A stored connector result is not permanent proof. Stable readiness
+    # requires each advertised creator platform to have passed a real admin
+    # profile probe within this window, in addition to live catalog probes.
+    CREATOR_CONNECTOR_READINESS_MAX_AGE_HOURS: int = 24
 
     # On-demand detailed video analysis. Keep the feature off until an
     # administrator has tested and published at least one Offering. The

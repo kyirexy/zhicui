@@ -53,3 +53,10 @@ sudo systemctl list-timers 'zhicui-postgres-*'
 `offsite_verified_at` 表示本次归档已从另一故障域回读校验。密钥只存在于
 `/etc/zhicui/backup.key`，属主为 `root:postgres`，readiness 组无权读取，不得复制到
 仓库或 CI 日志。删除密钥且无法解开异地恢复材料会让已有备份永久不可恢复。
+
+生产发布不会只抄录 `latest.json` 中的哈希。root-owned release evidence helper 会在
+每次部署中重新读取加密归档与元数据，计算实际 SHA-256 和大小，并把
+`latest.json` 的实际 SHA-256 一并封入部署证据；证据 JSON 与 detached sidecar 均为
+`root:root 0600`。后续 dark → rehearsal → Stable 晋级会再次读取归档并重算，归档、
+元数据或任一前序证据被替换都会 fail-closed。备份轮换因此不得删除仍被当前 Stable
+晋级/审计引用的归档；清理前应先核对 `/var/lib/zhicui-deployments` 中的引用。

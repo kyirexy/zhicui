@@ -4,10 +4,13 @@ sqlalchemy>=2.0
 litellm>=1.50.0
 requests
 ffmpeg-python
+beautifulsoup4>=4.12,<5.0
+Pillow>=12.3,<13
 pydantic>=2.0
 pydantic-settings>=2.0
 python-multipart
-python-jose[cryptography]>=3.3
+PyJWT>=2.10,<3.0
+cryptography>=50,<51
 werkzeug>=3.0
 funasr>=1.0
 faster-whisper>=1.0
@@ -18,5 +21,5 @@ imageio-ffmpeg>=0.5
 scenedetect-headless==0.7.1
 opencv-python-headless==4.11.0.86
 modelscope>=1.13
-bilibili-api-python>=16.0
+bilibili-api-python>=17.4.2,<18.0
 yt-dlp>=2024.0

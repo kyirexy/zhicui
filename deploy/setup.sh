@@ -11,6 +11,7 @@ err()  { echo -e "${R}[$(date +%H:%M:%S)] 错误:${N} $1"; exit 1; }
 APP_DIR=/opt/zhicui
 VENV=$APP_DIR/.venv
 REPO_URL=https://github.com/kyirexy/zhicui.git
+PIP_BOOTSTRAP_VERSION=26.2.1
 
 [[ $EUID -ne 0 ]] && err "请用 sudo 运行: sudo bash deploy/setup.sh"
 
@@ -61,8 +62,14 @@ git config core.sharedRepository group 2>/dev/null || true
 
 log "=== [3/8] 创建 Python venv + 装后端依赖 ==="
 python3.12 -m venv $VENV
-$VENV/bin/pip install --upgrade pip -q
-$VENV/bin/pip install -r $APP_DIR/deploy/requirements-server.txt -q
+$VENV/bin/python -m pip install --upgrade "pip==$PIP_BOOTSTRAP_VERSION" -q
+$VENV/bin/python -m pip install \
+  --require-hashes \
+  --only-binary=:all: \
+  --no-binary=qrcode-terminal \
+  -r "$APP_DIR/deploy/requirements-server.lock" \
+  -q
+$VENV/bin/python -m pip check
 log "后端依赖安装完成"
 
 log "=== [4/8] 生成 .env 配置 ==="
@@ -81,6 +88,16 @@ npm run build
 
 log "=== [6/8] 安装 systemd 服务 ==="
 install -d -o ubuntu -g ubuntu -m 0775 /opt/zhicui-runtime /opt/zhicui-runtime/releases
+install -d -o root -g root -m 0755 /etc/zhicui /usr/local/lib/zhicui-deploy
+install -o root -g root -m 0755 \
+  "$APP_DIR/deploy/agent-interface-kill-switch.sh" \
+  /usr/local/lib/zhicui-deploy/agent-interface-kill-switch.sh
+install -o root -g root -m 0755 \
+  "$APP_DIR/deploy/release-evidence-store.py" \
+  /usr/local/lib/zhicui-deploy/release-evidence-store.py
+if ! /usr/local/lib/zhicui-deploy/agent-interface-kill-switch.sh verify >/dev/null 2>&1; then
+  /usr/local/lib/zhicui-deploy/agent-interface-kill-switch.sh dark >/dev/null
+fi
 if [ ! -e /opt/zhicui-runtime/current ]; then
   ln -s "$APP_DIR" /opt/zhicui-runtime/current
 fi
@@ -92,7 +109,8 @@ chmod -R g+w $APP_DIR
 systemctl daemon-reload
 systemctl enable videocapsule-backend videocapsule-frontend
 bash "$APP_DIR/deploy/backup/install.sh"
-install -d -o ubuntu -g ubuntu -m 0770 /var/lib/zhicui-deployments
+install -d -o root -g root -m 0700 /var/lib/zhicui-deployments
+/usr/local/lib/zhicui-deploy/release-evidence-store.py status >/dev/null
 install -d -o ubuntu -g ubuntu -m 0770 /var/lib/zhicui-cover-cache
 install -d -o ubuntu -g ubuntu -m 0775 \
   /var/lib/zhicui-downloads/windows \
@@ -155,3 +173,4 @@ echo "     然后重启: sudo systemctl restart videocapsule-backend"
 echo "  2. 编辑灾备配置: sudo nano /etc/zhicui/backup.env  填入真实异地目标和加密恢复材料"
 echo "  3. 腾讯云控制台 → 防火墙 → 放行 TCP 80 端口"
 echo "  4. 配置 Jenkins CI/CD(访问 http://服务器IP:8080)"
+echo "  5. Agent 接口由 /etc/zhicui/agent-interface.env 独立控制；首次安装保持 dark"

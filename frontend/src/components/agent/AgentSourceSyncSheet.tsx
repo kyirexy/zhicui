@@ -151,7 +151,7 @@ export default function AgentSourceSyncSheet({
   const biliAccountSyncAvailable = useMemo(() => {
     return typeof window !== 'undefined' && supportsPlatformAccountSync(window.zhicuiDesktop);
   }, []);
-  const profileKey = user?.id || 'guest';
+  const profileKey = user?.agent_profile_key || 'guest';
 
   const setBiliConnection = useCallback((connected: boolean) => {
     setBiliConnected(connected);

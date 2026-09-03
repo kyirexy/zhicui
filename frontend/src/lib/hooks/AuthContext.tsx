@@ -19,6 +19,7 @@ interface AuthUser {
   is_active: boolean;
   is_admin: boolean;
   email_verified: boolean;
+  agent_profile_key?: string;
   created_at: string;
 }
 
@@ -352,6 +353,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           username: session.user?.username ?? null,
           is_active: session.user?.is_active ?? true,
           is_admin: session.user?.is_admin ?? false,
+          agent_profile_key: session.user?.agent_profile_key || undefined,
           email_verified: false,
           created_at: '',
         },
@@ -359,6 +361,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     return unsubscribe;
   }, [applySession]);
+
+  // 将本机 Agent 桥固定绑定到桌面端当前登录的知萃账号。主进程会在
+  // 账号切换或退出时旋转桥接凭证，因此本机调用方不能自行选择另一
+  // 个 profileKey 去读取或清理其他知萃账号的平台会话。
+  useEffect(() => {
+    const bridge = typeof window !== 'undefined'
+      ? window.zhicuiDesktop
+      : undefined;
+    if (!bridge || typeof bridge.bindAgentUser !== 'function') return;
+    void bridge.bindAgentUser(user?.agent_profile_key || null).catch(() => {
+      // 桥接不可用不影响 Web 会话；Agent doctor 会给出结构化诊断。
+    });
+  }, [user?.agent_profile_key]);
 
   const login = useCallback(async (email: string, password: string) => {
     setError(null);

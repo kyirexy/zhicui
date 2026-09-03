@@ -39,7 +39,11 @@ export default function AppHeader() {
   };
 
   useEffect(() => {
-    setNativeAndroid(isNativeAndroidApp());
+    const isDevelopmentMobilePreview = (
+      process.env.NODE_ENV === 'development'
+      && new URLSearchParams(window.location.search).get('previewMobile') === '1'
+    );
+    setNativeAndroid(isDevelopmentMobilePreview || isNativeAndroidApp());
   }, []);
 
   if (pathname?.startsWith('/login')) {

@@ -17,6 +17,11 @@ import type {
   DesktopZhicuiSession,
   PlatformAccountStatus,
 } from './contract';
+import {
+  DesktopAgentIntegration,
+  resolveBundledCliEntry,
+} from './agent-integration';
+import { DesktopAgentActionBridge } from './agent-action-bridge';
 import { desktopBuildIdentity } from './build-identity';
 import { readPackagedReleaseChannel } from './release-channel';
 import { DouyinDesktopLogin } from './douyin-login';
@@ -29,6 +34,7 @@ import {
   isTrustedAppUrl,
   safeExternalUrl,
   validateAwemeId,
+  validateDesktopAgentIntegrationRequest,
   validateMediaSaveRequest,
   validatePlatformAccountCollectRequest,
   validatePlatformAccountRequest,
@@ -52,6 +58,7 @@ let mainWindow: BrowserWindow | null = null;
 let pendingDeepLink: string | null = null;
 let mediaLibrary: DesktopMediaLibrary | null = null;
 let stopDesktopUpdateChecks: (() => void) | null = null;
+let agentActionBridge: DesktopAgentActionBridge | null = null;
 const DEVELOPMENT_LOAD_RETRY_MS = 1_000;
 const DEVELOPMENT_LOAD_RETRY_LIMIT = 120;
 
@@ -110,14 +117,29 @@ function emitZhicuiLoginStatus(status: DesktopZhicuiLoginStatus): void {
 }
 
 function emitZhicuiSession(session: DesktopZhicuiSession): void {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.webContents.send('desktop:zhicui-session', session);
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  mainWindow.focus();
+  const publish = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('desktop:zhicui-session', session);
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  };
+  const binding = agentActionBridge?.bindUser(
+    session.user.agent_profile_key || null,
+  );
+  if (!binding) {
+    publish();
+    return;
+  }
+  void binding.then(publish).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[desktop] 登录账号绑定到本机 Agent 失败：${message}`);
+    publish();
+  });
 }
 
 function emitPlatformAccountStatus(status: PlatformAccountStatus): void {
+  agentActionBridge?.recordPlatformStatus(status);
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send('desktop:platform-account-status', status);
 }
@@ -142,6 +164,13 @@ const platformAccounts = new PlatformAccountConnector(
   () => join(app.getPath('userData'), 'platform-sessions'),
   emitPlatformAccountStatus,
 );
+const agentIntegration = new DesktopAgentIntegration(() => (
+  resolveBundledCliEntry({
+    packaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    compiledDirectory: __dirname,
+  })
+));
 
 function desktopIconPath(): string {
   return app.isPackaged
@@ -259,6 +288,14 @@ function registerIpc(): void {
       return true;
     },
   );
+  ipcMain.handle('desktop:bind-agent-user', async (event, profileKey: string | null) => {
+    assertTrustedIpcSender(event);
+    if (!agentActionBridge) return false;
+    const normalized = profileKey === null
+      ? null
+      : validatePlatformAccountRequest({ platform: 'douyin', profileKey }).profileKey;
+    return agentActionBridge.bindUser(normalized);
+  });
   ipcMain.handle(
     'desktop:login-douyin',
     (event, request: DesktopLoginRequest) => {
@@ -307,6 +344,16 @@ function registerIpc(): void {
   ipcMain.handle('desktop:install-update', (event) => {
     assertTrustedIpcSender(event);
     return installDesktopUpdate();
+  });
+  ipcMain.handle('desktop:get-agent-integration-status', (event) => {
+    assertTrustedIpcSender(event);
+    return agentIntegration.status();
+  });
+  ipcMain.handle('desktop:run-agent-integration-action', (event, request) => {
+    assertTrustedIpcSender(event);
+    return agentIntegration.run(
+      validateDesktopAgentIntegrationRequest(request),
+    );
   });
   ipcMain.handle('desktop:get-media-settings', (event) => {
     assertTrustedIpcSender(event);
@@ -393,6 +440,21 @@ app.whenReady().then(() => {
   registerProtocol();
   registerIpc();
   pendingDeepLink = findDeepLink(process.argv);
+  agentActionBridge = new DesktopAgentActionBridge({
+    descriptorDirectory: join(
+      process.env.LOCALAPPDATA || app.getPath('userData'),
+      'Zhicui',
+    ),
+    version: app.getVersion(),
+    channel: BUILD_IDENTITY.channel,
+    platformAccounts,
+    getMediaLibrary: () => mediaLibrary,
+    getWindow: () => mainWindow,
+  });
+  void agentActionBridge.start().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[desktop] Agent 本机桥接启动失败：${message}`);
+  });
   mainWindow = createMainWindow();
   stopDesktopUpdateChecks = scheduleDesktopUpdateChecks(mainWindow);
 });
@@ -406,6 +468,10 @@ app.on('before-quit', () => {
   stopDesktopUpdateChecks = null;
   void douyinLogin.cancel();
   void zhicuiLogin.cancel();
+  void agentActionBridge?.stop().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[desktop] Agent 本机桥接清理失败：${message}`);
+  });
 });
 
 app.on('window-all-closed', () => {

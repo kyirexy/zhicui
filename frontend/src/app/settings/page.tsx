@@ -13,6 +13,7 @@ import {
   Info,
   MagnifyingGlass,
   PaintBrushBroad,
+  Robot,
   SignOut,
   ShieldCheck,
   UserCircle,
@@ -28,6 +29,7 @@ import {
 import AppUpdateSettingsCard from '@/components/AppUpdateSettingsCard';
 import AccountDataSettingsCard from '@/components/AccountDataSettingsCard';
 import AgentSourceLimitSettingsCard from '@/components/AgentSourceLimitSettingsCard';
+import AgentAccessSettingsCard from '@/components/AgentAccessSettingsCard';
 import AutoSyncSettingsCard from '@/components/AutoSyncSettingsCard';
 import DesktopMediaSettingsCard from '@/components/DesktopMediaSettingsCard';
 import LocalDataSettingsCard from '@/components/LocalDataSettingsCard';
@@ -46,7 +48,7 @@ import styles from './SettingsWorkspace.module.css';
 
 const WEB_APP_VERSION = '1.1.10';
 
-type SettingsSectionId = 'general' | 'account' | 'appearance' | 'storage' | 'sync' | 'ai' | 'about';
+type SettingsSectionId = 'general' | 'account' | 'appearance' | 'storage' | 'sync' | 'ai' | 'agent' | 'about';
 
 interface SettingsSection {
   id: SettingsSectionId;
@@ -60,8 +62,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: 'general',
     label: '常规',
-    description: '当前设备和账号同步状态',
-    keywords: '应用 设备 连接 版本 桌面端 网页端',
+    description: '设备状态、版本更新与意见反馈',
+    keywords: '应用 设备 连接 版本 桌面端 网页端 反馈 意见反馈 帮助',
     icon: GearSix,
   },
   {
@@ -98,6 +100,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     description: '设置回答模型和视频画面识别',
     keywords: '模型 自定义 视觉 图片 问答 供应商 API Key Base OpenAI DeepSeek 接入 AI',
     icon: Cpu,
+  },
+  {
+    id: 'agent',
+    label: 'Agent 接入',
+    description: '授权 Codex、Claude Code 等本地 Agent',
+    keywords: 'Agent Codex Claude Code CLI MCP PAT 令牌 权限 授权 接入',
+    icon: Robot,
   },
   {
     id: 'about',
@@ -138,7 +147,7 @@ function SettingsWorkspace() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [query, setQuery] = useState('');
-  const [nativeAndroid, setNativeAndroid] = useState(false);
+  const [nativeAndroid, setNativeAndroid] = useState<boolean | null>(null);
   const sectionParam = searchParams.get('section');
 
   useEffect(() => {
@@ -243,7 +252,7 @@ function SettingsWorkspace() {
                       <strong>当前使用</strong>
                       <span>这些设置只影响这台设备</span>
                     </div>
-                    <b>{nativeAndroid ? 'Android App' : isDesktop ? 'Windows 桌面端' : '网页端'}</b>
+                    <b>{nativeAndroid === null ? '正在识别设备' : nativeAndroid ? 'Android App' : isDesktop ? 'Windows 桌面端' : '网页端'}</b>
                   </div>
                   <div className={styles.summaryRow}>
                     <div>
@@ -369,6 +378,15 @@ function SettingsWorkspace() {
                 <UserCustomModelsSettingsCard />
                 <UserVisionProviderSettingsCard />
               </section>
+            )}
+
+            {activeSection.id === 'agent' && (
+              nativeAndroid === null
+                ? <div className={styles.loading}>正在读取设备能力…</div>
+                : <AgentAccessSettingsCard
+                    isDesktop={isDesktop}
+                    nativeAndroid={nativeAndroid}
+                  />
             )}
 
             {activeSection.id === 'about' && (

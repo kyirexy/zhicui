@@ -361,7 +361,7 @@ export default function PlatformLibraryPanel({
     });
     const response = await bridge.loginPlatformAccount({
       platform,
-      profileKey: user.id,
+      profileKey: user.agent_profile_key || '',
     });
     setAccountAction('');
     if (response.success) {
@@ -403,7 +403,7 @@ export default function PlatformLibraryPanel({
       });
       const collected = await bridge.collectPlatformAccount({
         platform,
-        profileKey: user.id,
+        profileKey: user.agent_profile_key || '',
         mode,
         limit: 10,
       });
@@ -534,7 +534,7 @@ export default function PlatformLibraryPanel({
     setAccountAction(`${platform}:disconnect`);
     const response = await bridge.disconnectPlatformAccount({
       platform,
-      profileKey: user.id,
+      profileKey: user.agent_profile_key || '',
     });
     setDisconnectPending(false);
     setAccountAction('');

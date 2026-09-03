@@ -12,6 +12,7 @@ from sqlalchemy import Boolean, Column, DateTime, String
 from sqlalchemy.orm import Session
 
 from app.core.database import Base
+from app.core.agent_identity import agent_profile_key
 
 
 class User(Base):
@@ -38,6 +39,7 @@ class User(Base):
             "is_active": self.is_active,
             "is_admin": self.is_admin,
             "email_verified": bool(self.email_verified),
+            "agent_profile_key": agent_profile_key(self.id),
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

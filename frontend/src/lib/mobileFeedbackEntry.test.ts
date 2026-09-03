@@ -8,19 +8,25 @@ const testDirectory = dirname(fileURLToPath(import.meta.url));
 const srcRoot = resolve(testDirectory, '..');
 const read = (path: string) => readFileSync(resolve(srcRoot, path), 'utf8');
 
-test('移动首页提供低强调且可触达的反馈入口', () => {
+test('移动首页提供清晰但不抢主操作的反馈入口', () => {
   const home = read('components/WorkspaceActionHome.tsx');
   const homeCss = read('components/WorkspaceActionHome.module.css');
+  const homePage = read('app/page.tsx');
+  const appHeader = read('components/AppHeader.tsx');
 
   assert.match(home, /className=\{styles\.mobileFeedback\}/);
   assert.match(home, /aria-label="意见反馈"/);
+  assert.match(home, /<span>反馈<\/span>/);
   assert.match(home, /zhicui:open-feedback/);
   assert.match(homeCss, /@media \(max-width:\s*767px\)/);
   assert.match(
     homeCss,
-    /\.mobileFeedback,\s*\n\s*\.mobileSettings\s*\{[\s\S]*?width:\s*44px;[\s\S]*?height:\s*44px;/,
+    /\.mobileFeedback,\s*\n\s*\.mobileSettings\s*\{[\s\S]*?min-height:\s*44px;/,
   );
-  assert.match(homeCss, /\.mobileFeedback\s*\{[\s\S]*?color:\s*var\(--home-faint\)/);
+  assert.match(homeCss, /\.mobileFeedback\s*\{[\s\S]*?min-width:\s*72px;[\s\S]*?font-weight:\s*680/);
+  assert.match(homeCss, /\.mobileFeedback svg\s*\{[\s\S]*?color:\s*var\(--home-accent\)/);
+  assert.match(homePage, /previewMobile/);
+  assert.match(appHeader, /previewMobile/);
 });
 
 test('设置页保留反馈入口并覆盖全部移动端宽度', () => {
@@ -29,6 +35,7 @@ test('设置页保留反馈入口并覆盖全部移动端宽度', () => {
 
   assert.match(settings, /zhicui:open-feedback/);
   assert.match(settings, /<span>意见反馈<\/span>/);
+  assert.match(settings, /keywords:\s*'[^']*反馈[^']*帮助'/);
   assert.match(settingsCss, /@media \(max-width:\s*767px\)[\s\S]*?\.mobileActions\s*\{[\s\S]*?display:\s*grid/);
 });
 

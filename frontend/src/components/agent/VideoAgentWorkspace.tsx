@@ -21,6 +21,7 @@ import {
   ClipboardText,
   Clock,
   ClockCounterClockwise,
+  DotsThree,
   EnvelopeSimple,
   FileText,
   FolderOpen,
@@ -573,6 +574,7 @@ export default function VideoAgentWorkspace({
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [studioOpen, setStudioOpen] = useState(false);
   const [automationOpen, setAutomationOpen] = useState(false);
+  const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
 
   const [browseScope, setBrowseScope] = useState<BrowseSourceScope>('all_ready');
   const [sourcePlatform, setSourcePlatform] = useState<AgentSourcePlatform>('all');
@@ -3232,7 +3234,7 @@ export default function VideoAgentWorkspace({
             <div className="video-agent-topbar-actions">
               {!isPlanContext && <button
                 type="button"
-                className="is-icon"
+                className="is-icon is-new-chat"
                 onClick={() => startNewTask()}
                 aria-label="新建会话"
                 title="新建会话"
@@ -3242,7 +3244,7 @@ export default function VideoAgentWorkspace({
               </button>}
               {!isPlanContext && <button
                 type="button"
-                className="is-icon"
+                className="is-icon is-automation"
                 onClick={() => setAutomationOpen(true)}
                 aria-label="打开定时摘要"
                 title="定时摘要"
@@ -3294,39 +3296,18 @@ export default function VideoAgentWorkspace({
                 <span>成果</span>
                 <b>{artifactCount}</b>
               </button>}
+              {!isPlanContext && <button
+                type="button"
+                className="is-icon is-mobile-more"
+                onClick={() => setMobileActionsOpen(true)}
+                aria-label="打开对话菜单"
+                title="更多"
+              >
+                <DotsThree size={20} weight="bold" aria-hidden="true" />
+                <span className="sr-only">打开对话菜单</span>
+              </button>}
             </div>
           </header>
-
-          {!isPlanContext && <nav className="video-agent-mobile-tabs" aria-label="知萃 AI 功能">
-            <button
-              type="button"
-              onClick={(event) => openSourcesPanel(event.currentTarget)}
-              aria-controls="video-agent-sources-panel"
-              aria-expanded={sourcesOpen}
-            >
-              <VideoCamera size={16} />
-              视频
-              <b>{activeSourceCount}</b>
-            </button>
-            <button type="button" className="is-active" aria-current="page">
-              <ChatsCircle size={16} />
-              对话
-            </button>
-            <button
-              type="button"
-              onClick={(event) => openStudioPanel(event.currentTarget)}
-              aria-controls="video-agent-studio-panel"
-              aria-expanded={studioOpen}
-            >
-              <Sparkle size={16} weight="fill" />
-              成果
-              <b>{artifactCount}</b>
-            </button>
-            <button type="button" onClick={() => setAutomationOpen(true)}>
-              <Clock size={16} />
-              摘要
-            </button>
-          </nav>}
 
           {(notice || error) && (
             <div
@@ -4548,6 +4529,57 @@ export default function VideoAgentWorkspace({
           }
         }}
       />
+      <NativeModal
+        open={isCompact && mobileActionsOpen}
+        title="对话菜单"
+        onClose={() => setMobileActionsOpen(false)}
+        className="video-agent-mobile-action-dialog"
+      >
+        <nav className="video-agent-mobile-actions" aria-label="对话操作">
+          <button
+            type="button"
+            onClick={() => {
+              setMobileActionsOpen(false);
+              window.requestAnimationFrame(() => openSourcesPanel());
+            }}
+          >
+            <span><FolderOpen size={20} aria-hidden="true" /></span>
+            <span>
+              <strong>选择视频</strong>
+              <small>当前参考 {activeSourceCount} 条视频</small>
+            </span>
+            <CaretRight size={16} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setMobileActionsOpen(false);
+              window.requestAnimationFrame(() => openStudioPanel());
+            }}
+          >
+            <span><Sparkle size={20} weight="fill" aria-hidden="true" /></span>
+            <span>
+              <strong>查看成果</strong>
+              <small>{artifactCount > 0 ? `${artifactCount} 份成果可继续整理` : '生成摘要、清单或行动方案'}</small>
+            </span>
+            <CaretRight size={16} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setMobileActionsOpen(false);
+              window.requestAnimationFrame(() => setAutomationOpen(true));
+            }}
+          >
+            <span><Clock size={20} aria-hidden="true" /></span>
+            <span>
+              <strong>定时摘要</strong>
+              <small>按计划整理新增视频</small>
+            </span>
+            <CaretRight size={16} aria-hidden="true" />
+          </button>
+        </nav>
+      </NativeModal>
       <NativeModal
         open={Boolean(threadDeleteTarget || automationDeleteTarget)}
         title={threadDeleteTarget ? '删除会话' : '删除定时摘要'}

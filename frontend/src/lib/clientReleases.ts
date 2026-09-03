@@ -114,9 +114,10 @@ function parseWindowsRelease(value: unknown): ClientRelease {
   const publishedAt = readRequiredString(value.published_at);
   if (!version || !sizeBytes || !publishedAt) return { ...fallback };
 
+  const channel: ClientReleaseChannel = value.channel === 'stable' ? 'stable' : 'beta';
   return {
     platform: 'windows',
-    channel: value.channel === 'stable' ? 'stable' : 'beta',
+    channel,
     version,
     architecture: readRequiredString(value.architecture) || fallback.architecture,
     downloadUrl: safeDownloadUrl(
@@ -128,7 +129,8 @@ function parseWindowsRelease(value: unknown): ClientRelease {
     codeSigned: typeof value.code_signed === 'boolean'
       ? value.code_signed
       : fallback.codeSigned,
-    releaseStatus: readRequiredString(value.release_status) || fallback.releaseStatus,
+    releaseStatus: readRequiredString(value.release_status)
+      || (channel === 'stable' ? 'stable_download' : 'beta_download'),
   };
 }
 

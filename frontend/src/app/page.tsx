@@ -12,7 +12,11 @@ export default function HomePage() {
   const [nativeAndroid, setNativeAndroid] = useState<boolean | null>(null);
 
   useEffect(() => {
-    setNativeAndroid(isNativeAndroidApp());
+    const isDevelopmentMobilePreview = (
+      process.env.NODE_ENV === 'development'
+      && new URLSearchParams(window.location.search).get('previewMobile') === '1'
+    );
+    setNativeAndroid(isDevelopmentMobilePreview || isNativeAndroidApp());
   }, []);
 
   if (!resolved || nativeAndroid === null) {

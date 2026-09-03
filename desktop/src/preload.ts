@@ -1,5 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
+  DesktopAgentIntegrationOverview,
+  DesktopAgentIntegrationRequest,
+  DesktopAgentIntegrationResult,
   DesktopLoginRequest,
   DesktopLoginResult,
   DesktopLoginStatus,
@@ -21,6 +24,9 @@ import type {
 const bridge: ZhicuiDesktopBridge = {
   getRuntimeInfo: () => (
     ipcRenderer.invoke('desktop:get-runtime-info') as Promise<DesktopRuntimeInfo>
+  ),
+  bindAgentUser: (profileKey: string | null) => (
+    ipcRenderer.invoke('desktop:bind-agent-user', profileKey) as Promise<boolean>
   ),
   setTitlebarTheme: (theme: 'light' | 'dark') => (
     ipcRenderer.invoke('desktop:set-titlebar-theme', theme) as Promise<boolean>
@@ -83,6 +89,17 @@ const bridge: ZhicuiDesktopBridge = {
     ipcRenderer.invoke(
       'desktop:install-update',
     ) as Promise<DesktopUpdateResult>
+  ),
+  getAgentIntegrationStatus: () => (
+    ipcRenderer.invoke(
+      'desktop:get-agent-integration-status',
+    ) as Promise<DesktopAgentIntegrationOverview>
+  ),
+  runAgentIntegrationAction: (request: DesktopAgentIntegrationRequest) => (
+    ipcRenderer.invoke(
+      'desktop:run-agent-integration-action',
+      request,
+    ) as Promise<DesktopAgentIntegrationResult>
   ),
   getMediaSettings: () => (
     ipcRenderer.invoke('desktop:get-media-settings')

@@ -54,6 +54,7 @@ from app.services import (
     local_douyin_library_service,
     llm_usage_service,
     knowledge_service,
+    note_plan_agent_service,
     note_service,
     omniroute_workspace_service,
     platform_library_service,
@@ -4021,37 +4022,15 @@ def run_note_plan_agent(
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
     """Create or revise one note-linked plan through a validated Agent target."""
-    note = note_service.get_note(db, note_id, user_id=current_user.id)
-    if note is None:
-        raise HTTPException(status_code=404, detail="Note not found")
-
-    existing = plan_service.get_plan_by_note(
-        db,
-        note_id,
-        user_id=current_user.id,
-    )
     try:
-        agent_result = ai_juicer.generate_or_revise_plan(
-            title=note.video_title,
-            transcript=note.transcript_raw,
-            ai_summary=note.ai_summary,
-            instruction=body.instruction,
-            existing_plan=existing.to_dict() if existing else None,
-        )
-        plan_data = agent_result["plan"]
-        fields, tasks, total_days = ai_juicer.plan_to_storage(plan_data)
-        plan, created = plan_service.upsert_agent_plan(
+        result = note_plan_agent_service.generate_or_revise_from_note(
             db,
-            note_id=note.id,
-            title=plan_data.get("goal") or note.video_title,
-            fields=fields,
-            tasks=tasks,
-            days=plan_data.get("days") or [],
-            total_days=total_days,
             user_id=current_user.id,
+            note_id=note_id,
+            instruction=body.instruction,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except note_plan_agent_service.NotePlanAgentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(
@@ -4059,12 +4038,7 @@ def run_note_plan_agent(
             detail="计划 Agent 暂时不可用，请稍后重试",
         ) from exc
 
-    return _ok({
-        "plan": plan.to_dict(),
-        "created": created,
-        "change_summary": agent_result["change_summary"],
-        "source_context": agent_result["source_context"],
-    })
+    return _ok(result)
 
 
 # ---------------------------------------------------------------------------

@@ -357,12 +357,11 @@ class AgentPipelineBoundaryTests(unittest.TestCase):
         ]
         streamed: list[str] = []
 
-        def fake_stream(**kwargs):
-            for chunk in provider_chunks:
-                kwargs["on_token"](chunk)
-            return "".join(provider_chunks)
-
-        with patch.object(ai_juicer, "_call_llm_stream", side_effect=fake_stream):
+        # ``validated_stream_only`` deliberately withholds raw provider chunks
+        # until canonical validation, so this path uses the non-streaming
+        # completion helper. Keep the contract test hermetic instead of
+        # reaching a real LLM endpoint during the full production suite.
+        with patch.object(ai_juicer, "_call_llm", return_value="".join(provider_chunks)):
             result = ai_juicer.answer_library_question(
                 sources=[{
                     "note_id": "note-validated-stream",

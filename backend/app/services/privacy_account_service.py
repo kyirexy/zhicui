@@ -388,6 +388,8 @@ _EXPORT_GROUPS: dict[str, tuple[str, ...]] = {
         "douyin_local_library_items",
         "video_source_ledger",
         "library_hidden_items",
+        "library_extraction_batches",
+        "library_extraction_batch_items",
     ),
     "ai_conversations": (
         "agent_threads",

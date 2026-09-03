@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
@@ -16,6 +15,14 @@ import type {
   PlatformAccountSourceMode,
   PlatformAccountStatus,
 } from './contract';
+import {
+  CrossProcessActionLock,
+  type DesktopActionLease,
+  LocalActionBusyError,
+  localPlatformLockKey,
+  normalizeLocalPlatformResult,
+  platformSessionPath,
+} from './desktop-core';
 
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 const XHS_PROFILE_TIMEOUT_MS = 2 * 60 * 1000;
@@ -328,10 +335,13 @@ export class PlatformAccountConnector {
   constructor(
     private readonly baseDirectory: () => string,
     private readonly notify: StatusListener,
+    private readonly actionLocks = new CrossProcessActionLock(
+      () => join(baseDirectory(), '..', 'platform-action-locks'),
+    ),
   ) {}
 
   async login(request: PlatformAccountRequest): Promise<PlatformAccountResult> {
-    return this.runExclusive(request.platform, async () => {
+    return this.runExclusive(request, async () => {
       const profilePath = await this.profilePath(request);
       this.notifyStatus(request.platform, 'starting', '正在打开本机浏览器…');
       const launched = await this.launchBrowser(profilePath);
@@ -387,7 +397,7 @@ export class PlatformAccountConnector {
   async collect(
     request: PlatformAccountCollectRequest,
   ): Promise<PlatformAccountResult> {
-    return this.runExclusive(request.platform, async () => {
+    return this.runExclusive(request, async () => {
       const profilePath = await this.profilePath(request);
       this.notifyStatus(request.platform, 'starting', '正在读取本机登录会话…');
       const launched = await this.launchBrowser(
@@ -453,31 +463,48 @@ export class PlatformAccountConnector {
   }
 
   async disconnect(request: PlatformAccountRequest): Promise<PlatformAccountResult> {
-    if (this.running) {
-      return {
-        success: false,
-        platform: request.platform,
-        error: '请先取消正在进行的平台账号操作',
-      };
-    }
-    const profilePath = await this.profilePath(request, false);
-    await rm(profilePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
-    this.notifyStatus(request.platform, 'disconnected', '本机平台登录已断开');
-    return { success: true, connected: false, platform: request.platform };
+    return this.runExclusive(request, async () => {
+      const profilePath = await this.profilePath(request, false);
+      await rm(profilePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+      this.notifyStatus(request.platform, 'disconnected', '本机平台登录已断开');
+      return { success: true, connected: false, platform: request.platform };
+    });
   }
 
   private async runExclusive(
-    platform: PlatformAccountProvider,
+    request: PlatformAccountRequest,
     action: () => Promise<PlatformAccountResult>,
   ): Promise<PlatformAccountResult> {
+    const platform = request.platform;
     if (this.running) {
-      return { success: false, platform, error: '已有平台账号操作正在进行' };
+      return {
+        success: false,
+        platform,
+        code: 'LOCAL_ACTION_BUSY',
+        error: '已有平台账号操作正在进行',
+      };
+    }
+    let lease: DesktopActionLease;
+    try {
+      lease = await this.actionLocks.acquire(
+        localPlatformLockKey(request.profileKey, request.platform),
+      );
+    } catch (error) {
+      if (error instanceof LocalActionBusyError) {
+        return {
+          success: false,
+          platform,
+          code: error.code,
+          error: error.message,
+        };
+      }
+      throw error;
     }
     this.running = true;
     this.cancelled = false;
     this.activePlatform = platform;
     try {
-      return await action();
+      return normalizeLocalPlatformResult(platform, await action());
     } catch (error) {
       if (this.cancelled) {
         return { success: false, cancelled: true, platform };
@@ -490,6 +517,7 @@ export class PlatformAccountConnector {
       this.activeContext = null;
       if (context) await context.close().catch(() => undefined);
       this.running = false;
+      await lease.release().catch(() => undefined);
     }
   }
 
@@ -497,10 +525,9 @@ export class PlatformAccountConnector {
     request: PlatformAccountRequest,
     create = true,
   ): Promise<string> {
-    const userHash = createHash('sha256').update(request.profileKey).digest('hex');
     const base = this.baseDirectory();
     if (create) await mkdir(base, { recursive: true });
-    return join(base, userHash, request.platform);
+    return platformSessionPath(base, request.profileKey, request.platform);
   }
 
   private async launchBrowser(

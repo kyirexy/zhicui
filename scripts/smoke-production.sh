@@ -6,12 +6,16 @@ umask 077
 BASE_URL="${SMOKE_BASE_URL:-https://luxai.cn}"
 REQUIRE_AUTH="${SMOKE_REQUIRE_AUTHENTICATED:-1}"
 REQUIRE_SSE="${SMOKE_REQUIRE_AGENT_SSE:-1}"
+REQUIRE_AGENT_INTERFACE="${SMOKE_REQUIRE_AGENT_INTERFACE:-1}"
 SSE_TIMEOUT_SECONDS="${SMOKE_SSE_TIMEOUT_SECONDS:-120}"
 LOGIN_EMAIL="${SMOKE_LOGIN_EMAIL:-}"
 PASSWORD_FILE="${SMOKE_PASSWORD_FILE:-}"
 EVIDENCE_FILE="${SMOKE_EVIDENCE_FILE:-}"
+DEPLOYMENT_ID="${SMOKE_DEPLOYMENT_ID:-}"
+TARGET_COMMIT="${SMOKE_TARGET_COMMIT:-}"
 SOURCE_ID="${SMOKE_SOURCE_ID:-}"
 SENTINEL_TOKEN="ZHICUI-SMOKE-94731"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 case "$BASE_URL" in
   https://*) ;;
@@ -30,6 +34,12 @@ done
   printf 'SMOKE_SSE_TIMEOUT_SECONDS 必须是正整数\n' >&2
   exit 2
 }
+if [[ -n "$EVIDENCE_FILE" ]]; then
+  [[ "$DEPLOYMENT_ID" =~ ^[A-Za-z0-9._-]{1,200}$ && "$TARGET_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+    printf '写入发布 smoke 证据必须绑定 SMOKE_DEPLOYMENT_ID 与 40 位 SMOKE_TARGET_COMMIT\n' >&2
+    exit 2
+  }
+fi
 
 WORK_DIR="$(mktemp -d)"
 RESULTS_FILE="$WORK_DIR/results.tsv"
@@ -62,13 +72,14 @@ write_evidence() {
   delete_smoke_thread
   if [[ -n "$EVIDENCE_FILE" ]]; then
     install -d -m 0700 "$(dirname "$EVIDENCE_FILE")"
-    python3 - "$RESULTS_FILE" "$EVIDENCE_FILE" "$BASE_URL" "$STARTED_AT" "$exit_status" <<'PY'
+    python3 - "$RESULTS_FILE" "$EVIDENCE_FILE" "$BASE_URL" "$STARTED_AT" "$exit_status" \
+      "$DEPLOYMENT_ID" "$TARGET_COMMIT" <<'PY'
 import json
 import os
 import sys
 from datetime import datetime, timezone
 
-source, target, base_url, started_at, exit_status = sys.argv[1:]
+source, target, base_url, started_at, exit_status, deployment_id, target_commit = sys.argv[1:]
 checks = []
 if os.path.exists(source):
     with open(source, encoding="utf-8") as handle:
@@ -76,8 +87,10 @@ if os.path.exists(source):
             name, status, detail = line.rstrip("\n").split("\t", 2)
             checks.append({"name": name, "status": status, "detail": detail or None})
 payload = {
-    "schema_version": 1,
+    "schema_version": 2,
     "operation": "production_smoke",
+    "deployment_id": deployment_id or None,
+    "target_commit": target_commit or None,
     "base_url": base_url,
     "started_at": started_at,
     "finished_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -129,6 +142,9 @@ pass 'liveness' '/api/health 通过'
 code="$(request GET /api/readiness '' "$BODY" "$HEADERS")"
 [[ "$code" == 200 ]] || fatal 'readiness' "HTTP $code（关键依赖未就绪）"
 assert_json "$BODY" 'p.get("success") is True and p.get("data", {}).get("status") == "ready" and "creator_connectors" in p.get("data", {}).get("checks", {}) and "backup" in p.get("data", {}).get("checks", {})' 'readiness' || fatal 'readiness' '依赖或连接器摘要不完整'
+if [[ "$REQUIRE_AGENT_INTERFACE" == 1 ]]; then
+  assert_json "$BODY" 'p.get("data", {}).get("checks", {}).get("agent_interface", {}).get("status") == "ready" and p.get("data", {}).get("checks", {}).get("agent_product_features", {}).get("status") == "ready" and p.get("data", {}).get("checks", {}).get("agent_automation_runtime", {}).get("status") == "ready"' 'Agent Stable readiness' || fatal 'Agent Stable readiness' 'Agent 接口、完整产品依赖或自动摘要运行器未就绪'
+fi
 pass 'readiness' '数据库、AI、队列、连接器和备份闸门通过'
 
 for path in /legal/terms /legal/privacy /support /platform-limits /library; do
@@ -242,7 +258,7 @@ for platform in android windows; do
 done
 
 if [[ -z "$LOGIN_EMAIL" || -z "$PASSWORD_FILE" ]]; then
-  if [[ "$REQUIRE_AUTH" == 1 || "$REQUIRE_SSE" == 1 ]]; then
+  if [[ "$REQUIRE_AUTH" == 1 || "$REQUIRE_SSE" == 1 || "$REQUIRE_AGENT_INTERFACE" == 1 ]]; then
     fatal '登录与 AI SSE' '需配置 SMOKE_LOGIN_EMAIL 与仅部署用户可读的 SMOKE_PASSWORD_FILE'
   fi
   skip '登录与 AI SSE' '显式设置为非必需'
@@ -281,7 +297,7 @@ PY
   [[ "$code" == 403 ]] || fatal '普通用户管理端边界' "预期 403，得到 $code"
   pass '专用普通用户登录与管理端边界'
 
-  if [[ "$REQUIRE_SSE" == 1 ]]; then
+  if [[ "$REQUIRE_AGENT_INTERFACE" == 1 || "$REQUIRE_SSE" == 1 ]]; then
     [[ "$SOURCE_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || fatal '隔离冒烟资料' '缺少有效 SMOKE_SOURCE_ID；生产部署必须先预置固定资料'
     python3 - "$WORK_DIR/thread.json" "$SOURCE_ID" <<'PY'
 import json, sys
@@ -294,7 +310,7 @@ with open(path, "w", encoding="utf-8") as handle:
     }, handle, ensure_ascii=False)
 PY
     code="$(curl -sS --max-time 20 -X POST -o "$BODY" -D "$HEADERS" -w '%{http_code}' -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" --data-binary "@$WORK_DIR/thread.json" "$BASE_URL/api/agent/threads")"
-    [[ "$code" == 200 ]] || fatal 'AI SSE 建立测试会话' "HTTP $code"
+    [[ "$code" == 200 ]] || fatal 'AI 建立隔离测试会话' "HTTP $code"
     THREAD_ID="$(python3 - "$BODY" "$SOURCE_ID" <<'PY'
 import json, sys
 p = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -310,7 +326,25 @@ if (
 print(data.get("id") or "")
 PY
 )"
-    [[ "$THREAD_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || fatal 'AI SSE 建立测试会话' '未返回 thread id'
+    [[ "$THREAD_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || fatal 'AI 建立隔离测试会话' '未返回 thread id'
+  fi
+
+  if [[ "$REQUIRE_AGENT_INTERFACE" == 1 ]]; then
+    SMOKE_BASE_URL="$BASE_URL" \
+    SMOKE_BROWSER_TOKEN_FILE="$TOKEN_FILE" \
+    SMOKE_AGENT_THREAD_ID="$THREAD_ID" \
+    SMOKE_AGENT_SOURCE_ID="$SOURCE_ID" \
+    SMOKE_AGENT_ASK_TIMEOUT_SECONDS="$SSE_TIMEOUT_SECONDS" \
+    SMOKE_REQUIRE_AGENT_RUNTIME_SENTINELS=1 \
+    SMOKE_REQUIRE_AGENT_ASK_SENTINEL=1 \
+      bash "$SCRIPT_DIR/smoke-agent-interface.sh" \
+      || fatal 'Agent Action/PAT/MCP Stable' '凭证清理、运行时依赖、真实问答、MCP 或权限边界验证失败'
+    pass 'Agent Action/PAT/MCP Stable' '凭证全生命周期、运行时目录、真实问答、流式事件与工具边界通过'
+  else
+    skip 'Agent Action/PAT/MCP Stable' '显式设置为非必需'
+  fi
+
+  if [[ "$REQUIRE_SSE" == 1 ]]; then
     CLIENT_TURN_ID="smoke-$(date -u +%Y%m%d%H%M%S)-$$"
     python3 - "$WORK_DIR/stream.json" "$CLIENT_TURN_ID" <<'PY'
 import json, sys

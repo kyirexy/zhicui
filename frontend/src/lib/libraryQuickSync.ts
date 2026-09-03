@@ -8,6 +8,7 @@ export const QUICK_SYNC_CHANGED_EVENT = 'zhicui:quick-sync-changed';
 export const QUICK_SYNC_MAX_COUNT = 100;
 export const QUICK_SYNC_DEFAULT_COUNT = 50;
 export const QUICK_SYNC_DEFAULT_MODES: DouyinSourceMode[] = ['collect'];
+export const QUICK_SYNC_MODE_ORDER: DouyinSourceMode[] = ['like', 'collect', 'post'];
 
 export interface LibraryQuickSyncPreferences {
   configured: boolean;
@@ -21,8 +22,40 @@ function isSourceMode(value: unknown): value is DouyinSourceMode {
 
 export function normalizeQuickSyncModes(value: unknown): DouyinSourceMode[] {
   if (!Array.isArray(value)) return [...QUICK_SYNC_DEFAULT_MODES];
-  const modes = [...new Set(value.filter(isSourceMode))];
+  const selected = new Set(value.filter(isSourceMode));
+  const modes = QUICK_SYNC_MODE_ORDER.filter((mode) => selected.has(mode));
   return modes.length > 0 ? modes : [...QUICK_SYNC_DEFAULT_MODES];
+}
+
+export function toggleQuickSyncMode(
+  currentModes: DouyinSourceMode[],
+  mode: DouyinSourceMode,
+): DouyinSourceMode[] {
+  const selected = new Set(currentModes.filter(isSourceMode));
+  if (selected.has(mode)) {
+    if (selected.size === 1) {
+      return QUICK_SYNC_MODE_ORDER.filter((value) => selected.has(value));
+    }
+    selected.delete(mode);
+  } else {
+    selected.add(mode);
+  }
+  return QUICK_SYNC_MODE_ORDER.filter((value) => selected.has(value));
+}
+
+export interface DouyinSourceReadiness {
+  reported: boolean;
+  like_ready: boolean;
+  collection_ready: boolean;
+}
+
+export function isQuickSyncModeReady(
+  mode: DouyinSourceMode,
+  readiness?: DouyinSourceReadiness,
+): boolean {
+  if (!readiness?.reported) return true;
+  if (mode === 'collect') return readiness.collection_ready;
+  return readiness.like_ready;
 }
 
 export function normalizeQuickSyncCount(value: unknown): number {

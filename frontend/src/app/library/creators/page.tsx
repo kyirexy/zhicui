@@ -234,6 +234,7 @@ function CreatorLibraryWorkspace() {
   const removeDialogRef = useRef<HTMLDialogElement | null>(null);
   const taskDialogRef = useRef<HTMLDialogElement | null>(null);
   const catalogRequestRef = useRef(0);
+  const incomingProfileHandledRef = useRef(false);
 
   const selectedSource = useMemo(
     () => sources.find((source) => source.id === selectedSourceId) || null,
@@ -353,6 +354,33 @@ function CreatorLibraryWorkspace() {
     }
     setPreview(response.data);
   };
+
+  useEffect(() => {
+    if (incomingProfileHandledRef.current) return;
+    const currentUrl = new URL(window.location.href);
+    const incomingProfile = currentUrl.searchParams.get('profile')?.trim();
+    const incomingPlatform = currentUrl.searchParams.get('platform');
+    if (!incomingProfile || !['douyin', 'bilibili', 'xiaohongshu'].includes(incomingPlatform || '')) return;
+
+    incomingProfileHandledRef.current = true;
+    const platform = incomingPlatform as CreatorSourcePlatform;
+    setAddPlatform(platform);
+    setProfileRef(incomingProfile);
+    setPendingAction('resolve');
+    setError('');
+    currentUrl.searchParams.delete('profile');
+    currentUrl.searchParams.delete('platform');
+    window.history.replaceState(window.history.state, '', `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
+
+    void resolveCreatorSource(platform, incomingProfile).then((response) => {
+      setPendingAction('');
+      if (!response.success || !response.data) {
+        setError(response.error || '没有识别到有效博主主页');
+        return;
+      }
+      setPreview(response.data);
+    });
+  }, []);
 
   const saveSource = async () => {
     if (!preview || pendingAction) return;

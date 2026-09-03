@@ -937,6 +937,9 @@ def _test_image_completion(
         "max_tokens": 16,
         "temperature": 0,
         "timeout": 30,
+        # Connection tests are explicit single-shot probes. Hidden SDK
+        # retries could multiply BYOK cost and make one Action non-idempotent.
+        "num_retries": 0,
     }
     if api_base:
         kwargs["api_base"] = api_base

@@ -38,6 +38,7 @@ from app.services import (
     email_delivery,
     error_log_service,
     library_hidden_service,
+    library_removal_service,
     user_ai_provider_service,
     settings_service,
     plan_service,
@@ -415,39 +416,15 @@ def batch_delete_agent_sources(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    clean_ids = list(dict.fromkeys(str(value or "").strip() for value in body.note_ids))
     try:
-        clean_ids = [str(UUID(value)) for value in clean_ids]
-    except (TypeError, ValueError, AttributeError) as exc:
-        raise HTTPException(status_code=422, detail="视频资料标识格式无效") from exc
-    notes = db.query(Note).filter(
-        Note.user_id == current_user.id,
-        Note.id.in_(clean_ids),
-    ).all()
-    douyin_ids = [
-        str(note.video_id or "").strip()
-        for note in notes
-        if str(note.to_dict().get("platform") or "").strip().lower() == "douyin"
-        and str(note.video_id or "").strip()
-    ]
-    if douyin_ids:
-        library_hidden_service.hide_aweme_ids(
-            db, current_user.id, douyin_ids, "permanent",
+        result = library_removal_service.remove_many(
+            db,
+            user_id=current_user.id,
+            note_ids=body.note_ids,
         )
-    for note in notes:
-        creator_sync_service.mark_note_permanently_removed(
-            db, user_id=current_user.id, note_id=note.id
-        )
-    deleted_ids = [note.id for note in notes]
-    for note in notes:
-        db.delete(note)
-    db.commit()
-    return _ok({
-        "deleted": len(deleted_ids),
-        "deleted_ids": deleted_ids,
-        "missing_ids": [value for value in clean_ids if value not in set(deleted_ids)],
-        "permanent": True,
-    })
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _ok(result)
 
 
 @router.post("/source-search")

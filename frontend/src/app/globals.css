@@ -9138,7 +9138,15 @@ html[data-desktop-app="true"] .plan-focus-task:hover {
     font-size: 0.58rem;
   }
   .video-knowledge-tabs small { display: none; }
-  .video-knowledge-panel { min-height: 76dvh; }
+  .video-knowledge-panel {
+    height: calc(
+      100dvh
+      - var(--mobile-nav-height)
+      - env(safe-area-inset-bottom, 0px)
+      - 10px
+    );
+    min-height: 0;
+  }
   .video-knowledge-prepare { padding: 34px 22px; }
   .video-knowledge-transcript,
   .video-knowledge-summary,

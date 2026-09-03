@@ -3,8 +3,14 @@
 `deploy/deploy.sh` 不再以“进程存活”代替可发布。它依次要求：生产环境安全配置、
 PostgreSQL 加密备份、SHA-256、隔离库恢复、配置所要求的灾备模式校验、Nginx 配置一致、beta/stable 清单一致、
 `/api/readiness`、法律页、权限边界、桌面登录票据、真实 AI SSE 完整增量与客户端下载哈希。
-任一必需检查失败都会恢复上一版应用产物，并在
-`/var/lib/zhicui-deployments/` 写入不含秘密的 JSON 证据。
+任一必需检查失败都会恢复上一版应用产物，并通过固定 root helper 在
+`/var/lib/zhicui-deployments/` 写入不含秘密的 JSON 证据。该目录必须为
+`root:root 0700`，JSON 与 detached `.sha256` 必须为 `root:root 0600`；部署账号
+不能直接读取或改写。成功证据绑定真实 runtime Git SHA、加密备份/元数据字节哈希、
+公网 smoke 哈希及前序 dark/rehearsal 哈希，Stable 会逐层重新计算而不是信任字段文本。
+Agent 公开状态不写入共享 `backend/.env`；systemd 最后加载
+`/etc/zhicui/agent-interface.env`。该 root-owned 文件只允许固定 helper 原子切换，
+Stable 失败路径会先恢复 `false` 再切回旧 runtime。
 
 应用版本运行在 `/opt/zhicui-runtime/releases/<部署号>` 的只读式 Git worktree 中，
 `runtime/current` 只在所有本地构建检查通过后原子切换。失败只需切回旧 symlink，
@@ -18,6 +24,8 @@ Windows 二进制、Electron feed 和 Windows 渠道清单不跟随 Git 切版�
 1. 以 root 运行 `bash /opt/zhicui/deploy/setup.sh`，安装 systemd timer、Nginx 配置和 sudoers。
    首次尚无证书时先设置 `CERTBOT_EMAIL=运维邮箱`；脚本申请证书后才启用强制 HTTPS/HSTS。
 2. 依据 `deploy/production.env.example` 填写 `/opt/zhicui/backend/.env`；不得使用通配 CORS。
+   不得在该共享文件中添加 `AGENT_INTERFACE_ENABLED`；Agent Pepper、Automation 和
+   allowlist 策略仍在这里配置，启用状态由独立 kill-switch 管理。
    同时依据 `deploy/backup/backup.env.example` 配置 `/etc/zhicui/backup.env`。默认必须
    使用真实 rclone/S3-compatible 或 SSH 异地目标，以及已经离线加密的恢复材料。
    早期阶段若产品所有者明确接受单机风险，可用双重开关进入 `local_only`；它只跳过远端
@@ -38,6 +46,48 @@ sudo bash /opt/zhicui-runtime/releases/<部署号>/deploy/preinstall-production-
 
 若 deploy 检出目标提交包含新的运维资产，它会保留该目标 worktree，并在错误信息中
 给出同一条脚本的精确路径；执行后直接重跑发布即可。
+
+Agent 首次正式上线必须对同一个完整 Git SHA 执行两次发布。Jenkins 的
+`AGENT_RELEASE_MODE` 是受控 choice 参数，Gitee push 使用 `dark`；dark 构建及证据通过且
+期间没有新 push 后，再从 “Build with Parameters” 选择 `stable`。Pipeline 从 Jenkins
+Credentials `zhicui-production-smoke-email`（Secret text）和
+`zhicui-production-smoke-password-file`（Secret file）注入冒烟凭据，并显式向
+`deploy.sh` 传递模式和凭据；禁止依赖脚本默认值或把密码写入 Jenkinsfile。
+
+对应的命令语义如下（人工发布也必须显式传递模式）：
+
+```bash
+AGENT_RELEASE_MODE=dark bash deploy/deploy.sh
+sudo /usr/local/lib/zhicui-deploy/agent-interface-kill-switch.sh verify-dark
+AGENT_RELEASE_MODE=stable bash deploy/deploy.sh
+sudo /usr/local/lib/zhicui-deploy/agent-interface-kill-switch.sh verify-stable
+```
+
+Stable 会拒绝从 true、路由不存在或 Agent 表不完整的状态直接进入。失败证据若没有
+`agent_kill_switch_rollback=pass`，必须按事故处理，不得只依据 runtime symlink 判定回滚成功。
+它还会拒绝 `origin/master` 与当前 dark runtime 的完整 SHA 不一致；此时必须先对新提交
+重新运行 dark，不能把旧 dark 的验收结果沿用到新代码。8 张公开 Agent 表还要通过
+`deploy/verify-agent-schema.py` 的版本化结构契约；列/类型、nullable、主键、唯一约束、
+索引或 `ON DELETE` 外键任一漂移都会失败。dark 成功证据记录完整结构指纹，Stable 要求
+当前库、目标启动后和该 dark 证据为同一指纹。
+
+dark 完成后还要把该次证据记录的同一 `backup_artifact` 恢复到
+`zhicui_agent_rehearsal_*` 隔离库，执行：
+
+```bash
+sudo python3 /opt/zhicui-runtime/current/deploy/rehearse-agent-schema-upgrade.py \
+  --runtime /opt/zhicui-runtime/current \
+  --database-url-file /path/to/0600-isolated-database-url \
+  --snapshot-file '/var/backups/zhicui/<dark evidence backup.artifact>' \
+  --dark-evidence-file '/var/lib/zhicui-deployments/<dark deployment id>.json' \
+  --evidence-directory /var/lib/zhicui-deployments
+```
+
+脚本要求隔离库名使用受控前缀、基础 `users/notes/plans` 表存在且至少有一个用户，连续
+两次运行 schema 启动阶段后再校验结构指纹；不会启动 worker。脚本重算真实 snapshot、
+元数据和 dark sidecar 哈希，生成不覆盖历史的时间戳证据。Stable 会自动要求证据
+目标提交、真实备份、dark 前序 SHA、两次启动、完成时间和指纹均一致。演练完成后必须删除
+隔离库和 0600 URL 文件；详细安全步骤见 `AGENT-INTERFACE-STABLE.md`。
 
 人工演练可显式跳过付费 AI 调用：
 
@@ -61,7 +111,7 @@ RELEASE_COMMIT="$(git rev-parse HEAD)" RELEASE_CHANNEL=beta PUBLISH=0 \
 
 ```powershell
 $commit = git rev-parse HEAD
-pwsh scripts/release-desktop.ps1 -Commit $commit -Version 1.0.10 -Channel Beta
+pwsh scripts/release-desktop.ps1 -Commit $commit -Version 1.1.0 -Channel Stable
 ```
 
 Windows 首次构建会在 Git checkout 之外保存按“提交/渠道/版本”隔离的产物及
@@ -69,9 +119,15 @@ Windows 首次构建会在 Git checkout 之外保存按“提交/渠道/版本�
 创建 detached worktree，并核对发行脚本、依赖锁、安装包、blockmap 和 feed 的哈希。
 缓存缺失或任一来源字段不符时会拒绝发布。
 
+Stable 上传不能只以 SSH 命令成功作为完成。脚本会禁用 HTTP 重定向，从公网
+`https://luxai.cn` 回读 Stable manifest、版本化 installer 与 blockmap，并复验 manifest
+原始字节 SHA-256、`channel/version/source_commit/release_status`、文件大小与 SHA-256，
+还会再次验证公网 installer 的 Authenticode 发布者。回读失败时脚本直接失败且不会输出
+“发布完成”；这项检查不替代全新 Windows 设备上的安装、更新和回滚验收。
+
 ```powershell
-pwsh scripts/release-desktop.ps1 -Commit $commit -Version 1.0.10 `
-  -Channel Beta -SkipBuild -Publish
+pwsh scripts/release-desktop.ps1 -Commit $commit -Version 1.1.0 `
+  -Channel Stable -SkipBuild -Publish
 ```
 
 生产冒烟不是“接口返回 200”检查。它会创建仅选择临时资料的 `selected` 会话，询问固定

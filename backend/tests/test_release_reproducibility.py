@@ -9,6 +9,31 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class ReleaseReproducibilityContractTests(unittest.TestCase):
+    def test_cli_stable_publish_is_tag_scoped_and_provenance_enabled(self) -> None:
+        workflow = (
+            ROOT / ".github" / "workflows" / "publish-zhicui-cli.yml"
+        ).read_text(encoding="utf-8")
+        release_notes = (ROOT / "cli" / "RELEASE.md").read_text(encoding="utf-8")
+        for marker in (
+            "'cli-v*.*.*'",
+            "id-token: write",
+            "environment: npm-production",
+            'expected_tag="cli-v${package_version}"',
+            'git merge-base --is-ancestor "${GITHUB_SHA}" origin/master',
+            "npm ci --registry=https://registry.npmjs.org",
+            "npm test",
+            "npm pack --dry-run --json",
+            "npm publish --access public --tag latest --provenance",
+            "npm view @zhicui/cli dist-tags.latest",
+        ):
+            self.assertIn(marker, workflow)
+        self.assertNotIn("workflow_dispatch:", workflow)
+        self.assertEqual(
+            len(re.findall(r"uses: actions/(?:checkout|setup-node)@[0-9a-f]{40}", workflow)),
+            2,
+        )
+        self.assertIn("禁止从开发机手工发布 Stable", release_notes)
+
     def test_production_deploy_has_no_npm_install_fallback(self) -> None:
         script = (ROOT / "deploy" / "deploy.sh").read_text(encoding="utf-8")
         self.assertIn("npm ci --silent", script)
@@ -61,8 +86,76 @@ class ReleaseReproducibilityContractTests(unittest.TestCase):
             "package_lock_sha256",
             "-SkipBuild 缓存哈希或大小与来源记录不一致",
             "ArtifactCacheRoot 必须位于 Git checkout/worktree 之外",
+            "Invoke-Checked 'npm.cmd' @('run', 'prepare:cli')",
+            "Invoke-Checked 'npm.cmd' @('run', 'verify:agent-integration')",
+            'https://luxai.cn/download/releases/windows/$remoteChannel.json',
+            "无法读取线上 Windows $remoteChannel 发行账本",
+            "版本 $Version 必须高于全部已发布 Windows 版本",
         ):
             self.assertIn(marker, script)
+
+    def test_android_stable_reuses_only_verified_immutable_cache(self) -> None:
+        script = (ROOT / "scripts" / "build-apk.sh").read_text(encoding="utf-8")
+        for marker in (
+            "SKIP_BUILD 复用缓存只允许 Stable 发行",
+            "provenance.status !== 'verified'",
+            "provenance.artifact_sha256 !== actualSha",
+            "provenance.verification_evidence_sha256",
+            "Stable 发布必须使用 SKIP_BUILD=1 复用已完成真机验收的同一字节 APK",
+            "if [[ \"$CHANNEL\" != \"stable\" || \"$SKIP_BUILD\" == \"1\" ]]",
+        ):
+            self.assertIn(marker, script)
+
+    def test_agent_stable_smoke_pins_the_reviewed_capability_contract(self) -> None:
+        script = (ROOT / "scripts" / "smoke-agent-interface.sh").read_text(
+            encoding="utf-8"
+        )
+        for marker in (
+            "stable_capabilities_v1.json",
+            "descriptor_sha256",
+            "production-stable-capability-smoke",
+            "remote_mcp_tool_count",
+            '"run.get", "run.events", "run.cancel"',
+            "FULL_CREDENTIAL_ID",
+        ):
+            self.assertIn(marker, script)
+
+    def test_agent_stable_smoke_recovers_and_confirms_pat_cleanup(self) -> None:
+        script = (ROOT / "scripts" / "smoke-agent-interface.sh").read_text(
+            encoding="utf-8"
+        )
+        for marker in (
+            '"$WORK_DIR/create.response" "$WORK_DIR/create-full.response"',
+            'reserved = {"production-stable-smoke", "production-stable-capability-smoke"}',
+            'not credential.get("revoked_at")',
+            "无法确认所有冒烟 PAT 均已吊销",
+        ):
+            self.assertIn(marker, script)
+
+    def test_agent_stable_smoke_executes_runtime_and_real_ask_sentinels(self) -> None:
+        agent_smoke = (ROOT / "scripts" / "smoke-agent-interface.sh").read_text(
+            encoding="utf-8"
+        )
+        production_smoke = (ROOT / "scripts" / "smoke-production.sh").read_text(
+            encoding="utf-8"
+        )
+        for marker in (
+            "analysis.catalog/invoke",
+            "automation.status/invoke",
+            "models.list/invoke",
+            "models.selection.get/invoke",
+            "ask.turn.start/invoke",
+            "ask.thread.get/invoke",
+            'item.get("type") == "external.turn.answer.delta"',
+        ):
+            self.assertIn(marker, agent_smoke)
+        for marker in (
+            'SMOKE_AGENT_THREAD_ID="$THREAD_ID"',
+            'SMOKE_AGENT_SOURCE_ID="$SOURCE_ID"',
+            "SMOKE_REQUIRE_AGENT_RUNTIME_SENTINELS=1",
+            "SMOKE_REQUIRE_AGENT_ASK_SENTINEL=1",
+        ):
+            self.assertIn(marker, production_smoke)
 
 
 if __name__ == "__main__":

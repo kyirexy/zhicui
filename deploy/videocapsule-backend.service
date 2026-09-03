@@ -8,6 +8,9 @@ User=ubuntu
 Group=ubuntu
 WorkingDirectory=/opt/zhicui-runtime/current/backend
 EnvironmentFile=/opt/zhicui/backend/.env
+# 该 root-owned 文件最后加载，是生产 AGENT_INTERFACE_ENABLED 的唯一来源；
+# 发布失败时 deploy.sh 会先将它原子恢复为 false，再切回旧 runtime。
+EnvironmentFile=/etc/zhicui/agent-interface.env
 ExecStart=/opt/zhicui-runtime/current/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
 Restart=on-failure
 RestartSec=5

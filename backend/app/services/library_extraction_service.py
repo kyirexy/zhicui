@@ -4,13 +4,16 @@ from __future__ import annotations
 import json
 import logging
 import threading
-import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Callable, Literal
 from urllib.parse import urlsplit
 
 from app.core.database import SessionLocal
+from app.models.library_extraction_batch import (
+    LibraryExtractionBatch,
+    LibraryExtractionBatchItem,
+)
 from app.services import (
     ai_juicer,
     douyin_binding_service,
@@ -33,8 +36,6 @@ _EXECUTOR = ThreadPoolExecutor(
     max_workers=_MAX_EXECUTION_WORKERS,
     thread_name_prefix="zhicui-extract",
 )
-_JOBS_LOCK = threading.RLock()
-_JOBS: dict[str, dict[str, Any]] = {}
 _ITEM_LOCKS_GUARD = threading.Lock()
 _ITEM_LOCKS: dict[tuple[str, str], threading.Lock] = {}
 logger = logging.getLogger(__name__)
@@ -499,8 +500,8 @@ def _safe_error(exc: Exception) -> str:
     return message[:360]
 
 
-def _job_counts(job: dict[str, Any]) -> dict[str, int]:
-    states = [item["state"] for item in job["items"].values()]
+def _job_counts(items: list[LibraryExtractionBatchItem]) -> dict[str, int]:
+    states = [item.state for item in items]
     return {
         "total": len(states),
         "success": sum(state == "done" for state in states),
@@ -510,62 +511,95 @@ def _job_counts(job: dict[str, Any]) -> dict[str, int]:
     }
 
 
-def _snapshot(job: dict[str, Any]) -> dict[str, Any]:
-    counts = _job_counts(job)
+def _as_iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
+
+
+def _snapshot(
+    job: LibraryExtractionBatch,
+    items: list[LibraryExtractionBatchItem],
+) -> dict[str, Any]:
+    counts = _job_counts(items)
     return {
-        "job_id": job["job_id"],
-        "operation": job["operation"],
-        "status": job["status"],
-        "created_at": job["created_at"],
-        "started_at": job["started_at"],
-        "finished_at": job["finished_at"],
-        "concurrency": dict(job["concurrency"]),
+        "job_id": job.id,
+        "operation": job.operation,
+        "status": job.status,
+        "created_at": _as_iso(job.created_at),
+        "started_at": _as_iso(job.started_at),
+        "finished_at": _as_iso(job.finished_at),
+        "concurrency": {"asr": job.asr_concurrency, "llm": job.llm_concurrency},
+        "cancellation_requested": bool(job.cancellation_requested),
         **counts,
         "items": [
             {
-                "aweme_id": aweme_id,
-                "state": item["state"],
-                "error": item["error"],
-                "note_id": item["note_id"],
-                "transcript_chars": item["transcript_chars"],
-                "card_type": item["card_type"],
-                "ai_initialized": item["ai_initialized"],
-                "already_existed": item["already_existed"],
-                "updated_at": item["updated_at"],
+                "aweme_id": item.aweme_id,
+                "state": item.state,
+                "error": item.error,
+                "note_id": item.note_id,
+                "transcript_chars": item.transcript_chars,
+                "card_type": item.card_type,
+                "ai_initialized": bool(item.ai_initialized),
+                "already_existed": bool(item.already_existed),
+                "updated_at": _as_iso(item.updated_at),
             }
-            for aweme_id, item in job["items"].items()
+            for item in items
         ],
         "database_stores_media": False,
+        "durable": True,
     }
 
 
 def _update_item(job_id: str, aweme_id: str, **updates: Any) -> None:
-    with _JOBS_LOCK:
-        job = _JOBS.get(job_id)
-        if job is None:
+    with SessionLocal() as db:
+        job = db.query(LibraryExtractionBatch).filter(
+            LibraryExtractionBatch.id == job_id,
+        ).first()
+        if job is None or job.cancellation_requested:
             return
-        item = job["items"].get(aweme_id)
+        item = db.query(LibraryExtractionBatchItem).filter(
+            LibraryExtractionBatchItem.batch_id == job_id,
+            LibraryExtractionBatchItem.aweme_id == aweme_id,
+        ).first()
         if item is None:
             return
-        item.update(updates)
-        item["updated_at"] = _iso_now()
+        allowed = {
+            "state", "error", "note_id", "transcript_chars", "card_type",
+            "ai_initialized", "already_existed",
+        }
+        for key, value in updates.items():
+            if key in allowed:
+                setattr(item, key, value)
+        item.updated_at = _utcnow()
+        job.updated_at = item.updated_at
+        db.commit()
 
 
 def _finish_job_if_ready(job_id: str) -> None:
-    with _JOBS_LOCK:
-        job = _JOBS.get(job_id)
+    with SessionLocal() as db:
+        job = db.query(LibraryExtractionBatch).filter(
+            LibraryExtractionBatch.id == job_id,
+        ).first()
         if job is None:
             return
-        counts = _job_counts(job)
+        items = db.query(LibraryExtractionBatchItem).filter(
+            LibraryExtractionBatchItem.batch_id == job_id,
+        ).order_by(LibraryExtractionBatchItem.id.asc()).all()
+        counts = _job_counts(items)
         if counts["active"] or counts["queued"]:
             return
-        if counts["failed"] == 0:
-            job["status"] = "success"
+        if job.cancellation_requested:
+            job.status = "canceled"
+        elif counts["failed"] == 0:
+            # Keep the legacy browser contract stable.  ProductActionRun maps
+            # this durable domain status to the v1 protocol's ``succeeded``.
+            job.status = "success"
         elif counts["success"] == 0:
-            job["status"] = "failed"
+            job.status = "failed"
         else:
-            job["status"] = "partial"
-        job["finished_at"] = _iso_now()
+            job.status = "partial"
+        job.finished_at = _utcnow()
+        job.updated_at = job.finished_at
+        db.commit()
 
 
 def _run_job_item(
@@ -582,6 +616,13 @@ def _run_job_item(
         _update_item(job_id, aweme_id, state=state, error="")
 
     try:
+        with SessionLocal() as db:
+            job = db.query(LibraryExtractionBatch).filter(
+                LibraryExtractionBatch.id == job_id,
+                LibraryExtractionBatch.user_id == user_id,
+            ).first()
+            if job is None or job.cancellation_requested:
+                return
         result = extract_library_item(
             user_id=user_id,
             aweme_id=aweme_id,
@@ -621,21 +662,53 @@ def _run_job_item(
         _finish_job_if_ready(job_id)
 
 
-def _prune_jobs() -> None:
-    cutoff = _utcnow() - timedelta(hours=6)
-    with _JOBS_LOCK:
-        expired = []
-        for job_id, job in _JOBS.items():
-            if job["status"] == "running":
-                continue
+def _prefetch_items(user_id: str) -> dict[str, dict[str, Any]]:
+    """Load one metadata snapshot; failure safely falls back to per-item lookup."""
+    try:
+        with SessionLocal() as db:
+            binding = douyin_binding_service.get_or_create(db, user_id)
             try:
-                finished = datetime.fromisoformat(job["finished_at"])
-            except (TypeError, ValueError):
-                continue
-            if finished < cutoff:
-                expired.append(job_id)
-        for job_id in expired:
-            _JOBS.pop(job_id, None)
+                sidecar_items = douyin_library.list_items(
+                    binding.session_scope, binding.id, limit=0,
+                )
+            except douyin_library.DouyinLibraryError:
+                sidecar_items = []
+            local_items = local_douyin_library_service.list_items(db, user_id=user_id)
+            result = {
+                str(item.get("aweme_id") or "").strip(): item
+                for item in sidecar_items
+                if str(item.get("aweme_id") or "").strip()
+            }
+            for local_item in local_items:
+                aweme_id = str(local_item.get("aweme_id") or "").strip()
+                if aweme_id and aweme_id not in result:
+                    result[aweme_id] = local_item
+            return result
+    except Exception:
+        return {}
+
+
+def _submit_batch(
+    job: LibraryExtractionBatch,
+    items: list[LibraryExtractionBatchItem],
+    *,
+    media_sources: dict[str, str] | None = None,
+) -> None:
+    item_by_id = _prefetch_items(job.user_id)
+    asr_gate = threading.Semaphore(job.asr_concurrency)
+    llm_gate = threading.Semaphore(job.llm_concurrency)
+    for row in items:
+        _EXECUTOR.submit(
+            _run_job_item,
+            job.id,
+            job.user_id,
+            row.aweme_id,
+            job.operation,
+            asr_gate,
+            llm_gate,
+            item_by_id.get(row.aweme_id),
+            (media_sources or {}).get(row.aweme_id, ""),
+        )
 
 
 def create_batch_job(
@@ -685,88 +758,123 @@ def create_batch_job(
             settings_service.MAX_EXTRACTION_LLM_CONCURRENCY,
         ),
     )
-    now = _iso_now()
-    job_id = f"extract-{uuid.uuid4().hex[:20]}"
-    job = {
-        "job_id": job_id,
-        "user_id": user_id,
-        "operation": operation,
-        "status": "running",
-        "created_at": now,
-        "started_at": now,
-        "finished_at": None,
-        "concurrency": {"asr": safe_asr, "llm": safe_llm},
-        "items": {
-            aweme_id: {
-                "state": "queued",
-                "error": "",
-                "note_id": None,
-                "transcript_chars": 0,
-                "card_type": None,
-                "ai_initialized": False,
-                "already_existed": False,
-                "updated_at": now,
-            }
-            for aweme_id in clean_ids
-        },
-    }
-    _prune_jobs()
-    with _JOBS_LOCK:
-        _JOBS[job_id] = job
-
-    # 一次性预取全量条目，避免每条任务各自重新拉取完整 manifest；
-    # 同一用户同批任务共享同一份快照，落库前仍会在锁内复核。
-    item_by_id: dict[str, dict[str, Any]] = {}
-    try:
-        with SessionLocal() as db:
-            binding = douyin_binding_service.get_or_create(db, user_id)
-            try:
-                sidecar_items = douyin_library.list_items(
-                    binding.session_scope,
-                    binding.id,
-                    limit=0,
-                )
-            except douyin_library.DouyinLibraryError:
-                sidecar_items = []
-            local_items = local_douyin_library_service.list_items(
-                db,
-                user_id=user_id,
-            )
-            item_by_id = {
-                str(item.get("aweme_id") or "").strip(): item
-                for item in sidecar_items
-                if str(item.get("aweme_id") or "").strip()
-            }
-            for local_item in local_items:
-                aweme_id = str(local_item.get("aweme_id") or "").strip()
-                if aweme_id and aweme_id not in item_by_id:
-                    item_by_id[aweme_id] = local_item
-    except Exception:
-        # 预取失败不阻塞任务：任务内会退回逐条 get_item。
-        item_by_id = {}
-
-    asr_gate = threading.Semaphore(safe_asr)
-    llm_gate = threading.Semaphore(safe_llm)
-    for aweme_id in clean_ids:
-        _EXECUTOR.submit(
-            _run_job_item,
-            job_id,
-            user_id,
-            aweme_id,
-            operation,
-            asr_gate,
-            llm_gate,
-            item_by_id.get(aweme_id),
-            media_sources.get(aweme_id, ""),
+    now = _utcnow()
+    with SessionLocal() as db:
+        job = LibraryExtractionBatch(
+            user_id=user_id,
+            operation=operation,
+            status="running",
+            asr_concurrency=safe_asr,
+            llm_concurrency=safe_llm,
+            started_at=now,
+            updated_at=now,
         )
-    with _JOBS_LOCK:
-        return _snapshot(job)
+        db.add(job)
+        db.flush()
+        rows = [
+            LibraryExtractionBatchItem(
+                batch_id=job.id,
+                user_id=user_id,
+                aweme_id=aweme_id,
+                state="queued",
+                updated_at=now,
+            )
+            for aweme_id in clean_ids
+        ]
+        db.add_all(rows)
+        db.commit()
+        db.refresh(job)
+        for row in rows:
+            db.refresh(row)
+        snapshot = _snapshot(job, rows)
+        # Detach the scalar ORM state used by the executor submission below.
+        db.expunge(job)
+        for row in rows:
+            db.expunge(row)
+    _submit_batch(job, rows, media_sources=media_sources)
+    return snapshot
 
 
 def get_batch_job(job_id: str, user_id: str) -> dict[str, Any] | None:
     """Return progress only when the job belongs to the current user."""
-    with _JOBS_LOCK:
-        job = _JOBS.get(job_id)
-        if job is None or job["user_id"] != user_id:
+    with SessionLocal() as db:
+        job = db.query(LibraryExtractionBatch).filter(
+            LibraryExtractionBatch.id == job_id,
+            LibraryExtractionBatch.user_id == user_id,
+        ).first()
+        if job is None:
             return None
-        return _snapshot(job)
+        items = db.query(LibraryExtractionBatchItem).filter(
+            LibraryExtractionBatchItem.batch_id == job.id,
+            LibraryExtractionBatchItem.user_id == user_id,
+        ).order_by(LibraryExtractionBatchItem.id.asc()).all()
+        return _snapshot(job, items)
+
+
+def cancel_batch_job(job_id: str, user_id: str) -> dict[str, Any] | None:
+    """Persist cancellation; in-flight external calls finish but cannot write progress."""
+    with SessionLocal() as db:
+        job = db.query(LibraryExtractionBatch).filter(
+            LibraryExtractionBatch.id == job_id,
+            LibraryExtractionBatch.user_id == user_id,
+        ).first()
+        if job is None:
+            return None
+        if job.status not in {"success", "partial", "failed", "canceled"}:
+            now = _utcnow()
+            job.cancellation_requested = True
+            job.status = "canceled"
+            job.finished_at = now
+            job.updated_at = now
+            db.query(LibraryExtractionBatchItem).filter(
+                LibraryExtractionBatchItem.batch_id == job.id,
+                LibraryExtractionBatchItem.state == "queued",
+            ).update({
+                LibraryExtractionBatchItem.state: "canceled",
+                LibraryExtractionBatchItem.updated_at: now,
+            }, synchronize_session=False)
+            db.commit()
+        items = db.query(LibraryExtractionBatchItem).filter(
+            LibraryExtractionBatchItem.batch_id == job.id,
+        ).order_by(LibraryExtractionBatchItem.id.asc()).all()
+        return _snapshot(job, items)
+
+
+def resume_pending_jobs() -> int:
+    """Resume durable queued/in-flight batches after a backend restart.
+
+    No media URL is restored: those capabilities are intentionally ephemeral.
+    The normal bound-session resolver is used for resumed items.
+    """
+    submissions: list[tuple[LibraryExtractionBatch, list[LibraryExtractionBatchItem]]] = []
+    with SessionLocal() as db:
+        jobs = db.query(LibraryExtractionBatch).filter(
+            LibraryExtractionBatch.status.in_(["queued", "running"]),
+            LibraryExtractionBatch.cancellation_requested.is_(False),
+        ).all()
+        for job in jobs:
+            rows = db.query(LibraryExtractionBatchItem).filter(
+                LibraryExtractionBatchItem.batch_id == job.id,
+                LibraryExtractionBatchItem.state.in_(["queued", "transcribing", "analyzing"]),
+            ).all()
+            if not rows:
+                continue
+            now = _utcnow()
+            for row in rows:
+                row.state = "queued"
+                row.error = ""
+                row.updated_at = now
+            job.status = "running"
+            job.started_at = job.started_at or now
+            job.updated_at = now
+            db.commit()
+            db.refresh(job)
+            for row in rows:
+                db.refresh(row)
+            db.expunge(job)
+            for row in rows:
+                db.expunge(row)
+            submissions.append((job, rows))
+    for job, rows in submissions:
+        _submit_batch(job, rows)
+    return sum(len(rows) for _, rows in submissions)

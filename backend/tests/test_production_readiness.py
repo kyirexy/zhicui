@@ -21,6 +21,26 @@ from app.services import operational_alert_service, readiness_service
 
 
 class ProductionReadinessTests(unittest.TestCase):
+    def test_stable_production_template_enables_agent_dependencies(self) -> None:
+        production_env = (
+            Path(__file__).resolve().parents[2]
+            / "deploy" / "production.env.example"
+        ).read_text(encoding="utf-8")
+        for setting in (
+            "AGENT_AUTOMATION_ENABLED=true",
+            "AGENT_AUTOMATION_POLL_SECONDS=30",
+            "EMAIL_DELIVERY_ENABLED=true",
+            "VIDEO_ANALYSIS_ENABLED=true",
+            "SMTP_HOST=CHANGE_ME_SMTP_HOST",
+            "SMTP_USER=CHANGE_ME_SMTP_USER",
+            "SMTP_PASSWORD=CHANGE_ME_SMTP_PASSWORD",
+            "SMTP_FROM=CHANGE_ME_SENDER_AT_LUXAI_CN",
+            "SMTP_READINESS_CACHE_SECONDS=300",
+            "CREATOR_CONNECTOR_READINESS_MAX_AGE_HOURS=24",
+        ):
+            self.assertIn(setting, production_env)
+        self.assertNotIn("AGENT_INTERFACE_ENABLED=", production_env)
+
     def test_sliding_window_returns_retry_after_and_expires(self) -> None:
         limiter = SlidingWindowLimiter()
         policy = RatePolicy("login", "POST", "/api/auth/login", 2, 60)
@@ -30,6 +50,383 @@ class ProductionReadinessTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertEqual(retry_after, 58)
         self.assertEqual(limiter.check(policy, "ip:127.0.0.1", now=161), (True, 0))
+
+    def test_agent_interface_readiness_requires_independent_strong_pepper(self) -> None:
+        with patch.object(
+            readiness_service.settings, "AGENT_INTERFACE_ENABLED", False
+        ):
+            self.assertEqual(
+                readiness_service._check_agent_interface()["status"],
+                "disabled",
+            )
+
+        with patch.object(
+            readiness_service.settings, "AGENT_INTERFACE_ENABLED", True
+        ), patch.object(
+            readiness_service.settings, "JWT_SECRET", "jwt-secret-0123456789abcdef0123456789abcdef"
+        ), patch.object(
+            readiness_service.settings, "AGENT_TOKEN_PEPPER", "too-short"
+        ):
+            result = readiness_service._check_agent_interface()
+            self.assertEqual(result["status"], "not_ready")
+            self.assertEqual(result["error_code"], "agent_token_pepper_weak")
+
+        shared = "0123456789abcdef" * 4
+        with patch.object(
+            readiness_service.settings, "AGENT_INTERFACE_ENABLED", True
+        ), patch.object(
+            readiness_service.settings, "JWT_SECRET", shared
+        ), patch.object(
+            readiness_service.settings, "AGENT_TOKEN_PEPPER", shared
+        ):
+            result = readiness_service._check_agent_interface()
+            self.assertEqual(result["status"], "not_ready")
+            self.assertEqual(
+                result["error_code"], "agent_token_pepper_not_independent"
+            )
+
+        with patch.object(
+            readiness_service.settings, "AGENT_INTERFACE_ENABLED", True
+        ), patch.object(
+            readiness_service.settings, "JWT_SECRET", "jwt-secret-0123456789abcdef0123456789abcdef"
+        ), patch.object(
+            readiness_service.settings,
+            "AGENT_TOKEN_PEPPER",
+            "agent-pepper-fedcba9876543210-0123456789abcdef",
+        ):
+            result = readiness_service._check_agent_interface()
+            self.assertEqual(result["status"], "ready")
+            self.assertTrue(result["independent_credential_pepper"])
+
+        strong_pepper = "agent-pepper-fedcba9876543210-0123456789abcdef"
+        with patch.object(
+            readiness_service.settings, "AGENT_INTERFACE_ENABLED", True
+        ), patch.object(
+            readiness_service.settings, "AGENT_TOKEN_PEPPER", strong_pepper
+        ), patch.object(
+            readiness_service.settings, "AGENT_AUTOMATION_ENABLED", False
+        ):
+            result = readiness_service._check_agent_interface()
+            self.assertEqual(result["status"], "not_ready")
+            self.assertEqual(result["error_code"], "agent_automation_disabled")
+
+        with patch.object(
+            readiness_service.settings, "AGENT_INTERFACE_ENABLED", True
+        ), patch.object(
+            readiness_service.settings, "AGENT_TOKEN_PEPPER", strong_pepper
+        ), patch.object(
+            readiness_service.settings, "AGENT_AUTOMATION_ENABLED", True
+        ), patch.object(
+            readiness_service.settings, "AGENT_AUTOMATION_POLL_SECONDS", 301
+        ):
+            result = readiness_service._check_agent_interface()
+            self.assertEqual(result["status"], "not_ready")
+            self.assertEqual(result["error_code"], "agent_automation_poll_invalid")
+
+    def test_agent_product_features_require_all_published_cloud_dependencies(self) -> None:
+        with patch.object(
+            readiness_service.settings, "AGENT_INTERFACE_ENABLED", False
+        ):
+            self.assertEqual(
+                readiness_service._check_agent_product_features(object())["status"],
+                "disabled",
+            )
+
+        creator = {
+            "enabled": True,
+            "platforms": {
+                "douyin": True,
+                "bilibili": True,
+                "xiaohongshu": True,
+            },
+            "catalog_platforms": {"douyin": True, "bilibili": True},
+        }
+        with patch.object(
+            readiness_service.settings, "AGENT_INTERFACE_ENABLED", True
+        ), patch.object(
+            readiness_service.settings_service,
+            "get_creator_sync_config",
+            return_value=creator,
+        ), patch.object(
+            readiness_service.video_analysis_catalog_service,
+            "published_catalog",
+            return_value={"enabled": True, "items": [{"id": "stable"}]},
+        ), patch.object(
+            readiness_service,
+            "_check_connectors",
+            return_value={"status": "ready"},
+        ), patch.object(
+            readiness_service,
+            "_check_smtp_transport",
+            return_value={"status": "ready", "protocol_ready": True},
+        ):
+            result = readiness_service._check_agent_product_features(object())
+            self.assertEqual(result["status"], "ready")
+            self.assertTrue(result["creator_sync_ready"])
+            self.assertTrue(result["video_analysis_ready"])
+            self.assertTrue(result["email_delivery_ready"])
+
+        creator["platforms"]["xiaohongshu"] = False
+        with patch.object(
+            readiness_service.settings, "AGENT_INTERFACE_ENABLED", True
+        ), patch.object(
+            readiness_service.settings_service,
+            "get_creator_sync_config",
+            return_value=creator,
+        ), patch.object(
+            readiness_service.video_analysis_catalog_service,
+            "published_catalog",
+            return_value={"enabled": False, "items": []},
+        ), patch.object(
+            readiness_service,
+            "_check_connectors",
+            return_value={"status": "not_ready"},
+        ), patch.object(
+            readiness_service,
+            "_check_smtp_transport",
+            return_value={"status": "not_ready", "protocol_ready": False},
+        ):
+            result = readiness_service._check_agent_product_features(object())
+            self.assertEqual(result["status"], "not_ready")
+            self.assertEqual(
+                result["error_code"],
+                "agent_product_dependencies_unavailable",
+            )
+
+    def test_agent_automation_runtime_requires_live_clean_runner(self) -> None:
+        with patch.object(
+            readiness_service.settings, "AGENT_INTERFACE_ENABLED", False
+        ):
+            self.assertEqual(
+                readiness_service._check_agent_automation_runtime()["status"],
+                "disabled",
+            )
+
+        cases = (
+            (
+                {"enabled": True, "running": True, "poll_seconds": 30, "last_error": ""},
+                "ready",
+                None,
+            ),
+            (
+                {"enabled": True, "running": False, "poll_seconds": 30, "last_error": ""},
+                "not_ready",
+                "agent_automation_not_running",
+            ),
+            (
+                {"enabled": True, "running": True, "poll_seconds": 30, "last_error": "boom"},
+                "not_ready",
+                "agent_automation_last_error",
+            ),
+        )
+        for runner_status, expected_status, expected_error in cases:
+            with self.subTest(runner_status=runner_status), patch.object(
+                readiness_service.settings, "AGENT_INTERFACE_ENABLED", True
+            ), patch.object(
+                readiness_service.automation_runner.runner,
+                "status",
+                return_value=runner_status,
+            ):
+                result = readiness_service._check_agent_automation_runtime()
+                self.assertEqual(result["status"], expected_status)
+                self.assertEqual(result["error_code"], expected_error)
+
+    def test_smtp_readiness_uses_tls_auth_and_noop_without_sending(self) -> None:
+        calls: list[str] = []
+
+        class FakeSMTP:
+            def __init__(self, *args, **kwargs) -> None:
+                del args, kwargs
+                calls.append("connect")
+
+            def ehlo(self):
+                calls.append("ehlo")
+                return 250, b"ok"
+
+            def has_extn(self, name: str) -> bool:
+                calls.append(f"has:{name}")
+                return name == "starttls"
+
+            def starttls(self, *, context):
+                self.context = context
+                calls.append("starttls")
+                return 220, b"ready"
+
+            def login(self, user: str, password: str):
+                self.credentials = (user, password)
+                calls.append("login")
+                return 235, b"ok"
+
+            def noop(self):
+                calls.append("noop")
+                return 250, b"ok"
+
+            def quit(self):
+                calls.append("quit")
+                return 221, b"bye"
+
+            def send_message(self, *args, **kwargs) -> None:
+                raise AssertionError("readiness 不得发送邮件")
+
+        readiness_service.clear_cache()
+        with patch.object(
+            readiness_service.email_delivery, "is_configured", return_value=True
+        ), patch.object(
+            readiness_service.settings, "SMTP_USER", "release-probe"
+        ), patch.object(
+            readiness_service.settings, "SMTP_PASSWORD", "private-password"
+        ), patch.object(
+            readiness_service.settings, "SMTP_USE_TLS", True
+        ), patch.object(
+            readiness_service.settings, "SMTP_USE_SSL", False
+        ), patch.object(
+            readiness_service.smtplib, "SMTP", FakeSMTP
+        ):
+            result = readiness_service._check_smtp_transport(force=True)
+
+        self.assertEqual(result["status"], "ready")
+        self.assertTrue(result["tls_verified"])
+        self.assertTrue(result["authenticated"])
+        self.assertEqual(
+            calls,
+            ["connect", "ehlo", "has:starttls", "starttls", "ehlo", "login", "noop", "quit"],
+        )
+        self.assertNotIn("release-probe", repr(result))
+        self.assertNotIn("private-password", repr(result))
+
+    def test_smtp_readiness_rejects_missing_auth_and_redacts_failures(self) -> None:
+        class RejectingSMTP:
+            def __init__(self, *args, **kwargs) -> None:
+                del args, kwargs
+
+            def ehlo(self):
+                return 250, b"upstream-secret"
+
+            def has_extn(self, name: str) -> bool:
+                return name == "starttls"
+
+            def starttls(self, *, context):
+                del context
+                return 220, b"ready"
+
+            def login(self, user: str, password: str):
+                del user, password
+                raise readiness_service.smtplib.SMTPAuthenticationError(
+                    535,
+                    b"credential rejected for private-user@example.com",
+                )
+
+            def quit(self):
+                return 221, b"bye"
+
+        readiness_service.clear_cache()
+        with patch.object(
+            readiness_service.email_delivery, "is_configured", return_value=True
+        ), patch.object(
+            readiness_service.settings, "SMTP_USER", ""
+        ), patch.object(
+            readiness_service.settings, "SMTP_PASSWORD", ""
+        ):
+            missing = readiness_service._check_smtp_transport(force=True)
+        self.assertEqual(missing["error_code"], "smtp_auth_not_configured")
+
+        with patch.object(
+            readiness_service.email_delivery, "is_configured", return_value=True
+        ), patch.object(
+            readiness_service.settings, "SMTP_USER", "private-user@example.com"
+        ), patch.object(
+            readiness_service.settings, "SMTP_PASSWORD", "private-password"
+        ), patch.object(
+            readiness_service.settings, "SMTP_USE_TLS", True
+        ), patch.object(
+            readiness_service.settings, "SMTP_USE_SSL", False
+        ), patch.object(
+            readiness_service.smtplib, "SMTP", RejectingSMTP
+        ):
+            rejected = readiness_service._check_smtp_transport(force=True)
+        self.assertEqual(rejected["error_code"], "smtp_auth_failed")
+        self.assertNotIn("private-user", repr(rejected))
+        self.assertNotIn("private-password", repr(rejected))
+
+    def test_creator_readiness_requires_fresh_real_tests_and_live_catalogs(self) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        config = {
+            "enabled": True,
+            "platforms": {
+                "douyin": True,
+                "bilibili": True,
+                "xiaohongshu": True,
+            },
+            "catalog_platforms": {"douyin": True, "bilibili": True},
+            "last_tested_at": {
+                "douyin": now,
+                "bilibili": now,
+                "xiaohongshu": now,
+            },
+        }
+
+        with patch.object(
+            readiness_service.settings, "AGENT_INTERFACE_ENABLED", True
+        ), patch.object(
+            readiness_service.settings_service,
+            "get_creator_sync_config",
+            return_value=config,
+        ), patch.object(
+            readiness_service.creator_connectors,
+            "catalog_health",
+            return_value={"healthy": True, "version": "1.0"},
+        ) as catalog_health:
+            ready = readiness_service._check_connectors(object())
+        self.assertEqual(ready["status"], "ready")
+        self.assertEqual(catalog_health.call_count, 2)
+        self.assertTrue(all(
+            item["status"] == "ready"
+            for item in ready["platforms"].values()
+        ))
+
+        stale = dict(config)
+        stale["last_tested_at"] = dict(config["last_tested_at"])
+        stale["last_tested_at"]["xiaohongshu"] = (
+            datetime.now(timezone.utc) - timedelta(hours=25)
+        ).isoformat()
+        with patch.object(
+            readiness_service.settings, "AGENT_INTERFACE_ENABLED", True
+        ), patch.object(
+            readiness_service.settings_service,
+            "get_creator_sync_config",
+            return_value=stale,
+        ), patch.object(
+            readiness_service.creator_connectors,
+            "catalog_health",
+            return_value={"healthy": True},
+        ):
+            stale_result = readiness_service._check_connectors(object())
+        self.assertEqual(stale_result["status"], "not_ready")
+        self.assertEqual(
+            stale_result["platforms"]["xiaohongshu"]["error_code"],
+            "creator_connector_probe_stale_or_missing",
+        )
+
+        with patch.object(
+            readiness_service.settings, "AGENT_INTERFACE_ENABLED", True
+        ), patch.object(
+            readiness_service.settings_service,
+            "get_creator_sync_config",
+            return_value=config,
+        ), patch.object(
+            readiness_service.creator_connectors,
+            "catalog_health",
+            side_effect=(
+                {"healthy": True},
+                {"healthy": False, "error_code": "sidecar_unavailable"},
+            ),
+        ):
+            live_failure = readiness_service._check_connectors(object())
+        self.assertEqual(live_failure["status"], "not_ready")
+        self.assertEqual(
+            live_failure["catalog"]["bilibili"]["error_code"],
+            "sidecar_unavailable",
+        )
 
     def test_backup_readiness_requires_checksum_restore_and_freshness(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

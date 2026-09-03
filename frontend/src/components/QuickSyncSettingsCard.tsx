@@ -14,6 +14,7 @@ import {
   readLibraryQuickSyncPreferences,
   requireQuickSyncConfirmation,
   saveLibraryQuickSyncPreferences,
+  toggleQuickSyncMode,
 } from '@/lib/libraryQuickSync';
 import type { DouyinSourceMode } from '@/lib/types';
 import styles from './QuickSyncSettingsCard.module.css';
@@ -48,11 +49,7 @@ export default function QuickSyncSettingsCard() {
 
   const toggleMode = (mode: DouyinSourceMode) => {
     setSaved(false);
-    setModes((current) => {
-      if (!current.includes(mode)) return [...current, mode];
-      if (current.length === 1) return current;
-      return current.filter((value) => value !== mode);
-    });
+    setModes((current) => toggleQuickSyncMode(current, mode));
   };
 
   const save = () => {

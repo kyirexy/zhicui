@@ -38,6 +38,7 @@ export default function SingleLinkExtractPage() {
   const router = useRouter();
   const navigationArmedRef = useRef(false);
   const observedLoadingRef = useRef(false);
+  const incomingUrlHandledRef = useRef(false);
   const [openingVideo, setOpeningVideo] = useState(false);
   const [completedWithoutId, setCompletedWithoutId] = useState(false);
   const {
@@ -62,6 +63,17 @@ export default function SingleLinkExtractPage() {
     setOpeningVideo(false);
     startExtraction(url);
   }, [startExtraction]);
+
+  useEffect(() => {
+    if (incomingUrlHandledRef.current) return;
+    const currentUrl = new URL(window.location.href);
+    const incomingUrl = currentUrl.searchParams.get('url')?.trim();
+    if (!incomingUrl) return;
+    incomingUrlHandledRef.current = true;
+    currentUrl.searchParams.delete('url');
+    window.history.replaceState(window.history.state, '', `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
+    handleSubmit(incomingUrl);
+  }, [handleSubmit]);
 
   useEffect(() => {
     if (navigationArmedRef.current && isLoading) {

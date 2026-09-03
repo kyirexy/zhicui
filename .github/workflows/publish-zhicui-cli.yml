@@ -1,0 +1,99 @@
+name: Publish Zhicui CLI Stable
+
+on:
+  push:
+    tags:
+      - 'cli-v*.*.*'
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: zhicui-cli-stable-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish immutable npm package
+    runs-on: ubuntu-latest
+    environment: npm-production
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.22.0'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+
+      - name: Pin provenance-capable npm
+        run: npm install --global npm@12.0.2
+
+      - name: Verify tag, package version, and main ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(node -p "require('./package.json').version")"
+          expected_tag="cli-v${package_version}"
+          if [[ "${GITHUB_REF_NAME}" != "${expected_tag}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match package version ${package_version}." >&2
+            exit 1
+          fi
+          git fetch --no-tags origin master
+          git merge-base --is-ancestor "${GITHUB_SHA}" origin/master || {
+            echo 'Tagged commit is not contained in origin/master.' >&2
+            exit 1
+          }
+
+      - name: Install from the official registry
+        run: npm ci --registry=https://registry.npmjs.org
+
+      - name: Verify CLI and release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test
+          pack_json="$(npm pack --dry-run --json)"
+          node -e '
+            const report = JSON.parse(process.argv[1]);
+            if (!Array.isArray(report) || report.length !== 1) process.exit(1);
+            const entry = report[0];
+            if (entry.name !== "@zhicui/cli" || entry.version !== require("./package.json").version) process.exit(1);
+            if (!Array.isArray(entry.files) || !entry.files.some((file) => file.path === "dist/index.js")) process.exit(1);
+          ' "${pack_json}"
+
+      - name: Publish Stable with npm provenance
+        run: npm publish --access public --tag latest --provenance --registry=https://registry.npmjs.org
+        env:
+          # npm trusted publishing uses GitHub OIDC. NPM_TOKEN is retained only
+          # for the first scoped-package bootstrap, stored in this protected
+          # environment and never passed as an argument or printed.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Verify the public registry record
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(node -p "require('./package.json').version")"
+          expected="@zhicui/cli@${package_version}"
+          for attempt in {1..12}; do
+            published_version="$(npm view "${expected}" version --registry=https://registry.npmjs.org 2>/dev/null || true)"
+            latest_version="$(npm view @zhicui/cli dist-tags.latest --registry=https://registry.npmjs.org 2>/dev/null || true)"
+            if [[ "${published_version}" == "${package_version}" && "${latest_version}" == "${package_version}" ]]; then
+              npm view "${expected}" dist.integrity dist.shasum --json --registry=https://registry.npmjs.org
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "The official npm registry did not expose ${expected} on latest." >&2
+          exit 1

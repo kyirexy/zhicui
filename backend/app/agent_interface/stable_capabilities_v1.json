@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "interface_version": "v1",
+  "action_count": 120,
+  "cloud_action_count": 102,
+  "local_windows_action_count": 18,
+  "available_cloud_action_count": 102,
+  "unavailable_local_windows_action_count": 18,
+  "remote_mcp_tool_count": 100,
+  "scope_count": 21,
+  "descriptor_sha256": "c45fdc0d7e477002bdecf26cb0cfeab90a4f45c15dced74c4577ca76a62600f2"
+}

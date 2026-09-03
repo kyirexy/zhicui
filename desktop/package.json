@@ -1,6 +1,6 @@
 {
   "name": "zhicui-desktop",
-  "version": "1.0.10",
+  "version": "1.1.0",
   "releaseChannel": "beta",
   "description": "知萃 Windows 桌面应用",
   "main": "dist/main.js",
@@ -10,14 +10,16 @@
   "scripts": {
     "clean": "node scripts/clean.mjs",
     "patch:builder": "node scripts/patch-electron-builder.mjs",
+    "prepare:cli": "npm --prefix ../cli ci && npm --prefix ../cli run build",
     "build": "npm run clean && tsc -p tsconfig.json",
     "dev": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../scripts/start-desktop-dev.ps1",
     "dev:electron": "npm run build && electron .",
     "verify:platform-account": "npm run build && node scripts/verify-platform-account.mjs",
+    "verify:agent-integration": "npm run build && node scripts/verify-agent-integration.mjs",
     "verify:update-policy": "npm run build && node scripts/verify-update-policy.mjs",
     "verify:release-contract": "npm run build && node scripts/verify-release-contract.mjs",
-    "pack": "npm run build && npm run patch:builder && electron-builder --dir --win --x64",
-    "dist:win": "npm run build && npm run patch:builder && electron-builder --win nsis --x64",
+    "pack": "npm run prepare:cli && npm run build && npm run patch:builder && electron-builder --dir --win --x64",
+    "dist:win": "npm run prepare:cli && npm run build && npm run patch:builder && electron-builder --win nsis --x64",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -29,6 +31,23 @@
     "electron": "^43.2.0",
     "electron-builder": "^26.15.3",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "js-yaml": "4.3.1",
+    "fast-uri": "3.1.6",
+    "@xmldom/xmldom": "0.8.15",
+    "minimatch@3.1.5": {
+      "brace-expansion": "1.1.18"
+    },
+    "minimatch@5.1.9": {
+      "brace-expansion": "2.1.4"
+    },
+    "minimatch@9.0.9": {
+      "brace-expansion": "2.1.4"
+    },
+    "minimatch@10.2.6": {
+      "brace-expansion": "5.0.9"
+    }
   },
   "build": {
     "appId": "cn.luxai.desktop",
@@ -54,6 +73,24 @@
       {
         "from": "../frontend/public/icons/icon-512.png",
         "to": "app-icon.png"
+      },
+      {
+        "from": "../cli/dist",
+        "to": "cli",
+        "filter": [
+          "**/*.js"
+        ]
+      },
+      {
+        "from": "../cli/package.json",
+        "to": "cli/package.json"
+      },
+      {
+        "from": "../cli/skills",
+        "to": "cli/skills",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "protocols": [

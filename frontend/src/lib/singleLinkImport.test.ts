@@ -1,11 +1,48 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildHomeLinkDestination,
   buildBilibiliEmbedUrl,
   buildVideoDetailHref,
   normalizeSingleLinkSubmission,
+  resolveHomeLinkDestination,
   shouldOpenExtractedVideo,
 } from './singleLinkImport.ts';
+
+test('routes a Douyin creator profile to the creator workspace', () => {
+  assert.deepEqual(
+    resolveHomeLinkDestination('https://www.douyin.com/user/MS4wLjABAAAA-demo'),
+    { kind: 'creator', platform: 'douyin', url: 'https://www.douyin.com/user/MS4wLjABAAAA-demo' },
+  );
+});
+
+test('routes a Bilibili space link to the creator workspace', () => {
+  assert.match(
+    buildHomeLinkDestination('https://space.bilibili.com/123456'),
+    /^\/library\/creators\?profile=.*&platform=bilibili$/,
+  );
+});
+
+test('routes a Xiaohongshu profile to the creator workspace', () => {
+  assert.equal(
+    resolveHomeLinkDestination('https://www.xiaohongshu.com/user/profile/abc').platform,
+    'xiaohongshu',
+  );
+});
+
+test('routes a single video link to single-link extraction', () => {
+  assert.equal(
+    buildHomeLinkDestination('https://www.douyin.com/video/7672579366093622537'),
+    '/extract?url=https%3A%2F%2Fwww.douyin.com%2Fvideo%2F7672579366093622537',
+  );
+});
+
+test('uses creator wording to route a short profile share link', () => {
+  assert.deepEqual(
+    resolveHomeLinkDestination('复制博主主页 https://v.douyin.com/creator-demo/'),
+    { kind: 'creator', platform: 'douyin', url: 'https://v.douyin.com/creator-demo/' },
+  );
+});
 
 test('submits a plain video URL without changing it', () => {
   const url = 'https://www.douyin.com/video/7672579366093622537?from=copy';

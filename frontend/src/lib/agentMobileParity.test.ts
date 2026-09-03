@@ -21,6 +21,11 @@ const composer = readFileSync(
   resolve(testDirectory, '../components/agent/AgentComposer.tsx'),
   'utf8',
 );
+const workspace = readFileSync(
+  resolve(testDirectory, '../components/agent/VideoAgentWorkspace.tsx'),
+  'utf8',
+);
+const globalCss = readFileSync(resolve(testDirectory, '../app/globals.css'), 'utf8');
 
 const mobileStart = workspaceCss.indexOf('@media (max-width: 767px)');
 const narrowStart = workspaceCss.indexOf('@media (max-width: 420px)', mobileStart);
@@ -31,6 +36,29 @@ test('移动端知萃 AI 保留稳定的内部滚动与真实消息高度', () =
   assert.match(mobileCss, /\.video-agent-thread[\s\S]*?overscroll-behavior-y:\s*contain/);
   assert.match(mobileCss, /\.video-agent-message:not\(\.is-streaming\)[\s\S]*?content-visibility:\s*visible/);
   assert.match(mobileCss, /\.video-agent-message[\s\S]*?contain:\s*layout style paint/);
+});
+
+test('移动端对话移除重复四栏导航并把次级功能收进菜单', () => {
+  assert.doesNotMatch(workspace, /className="video-agent-mobile-tabs"/);
+  assert.match(workspace, /className="is-icon is-mobile-more"/);
+  assert.match(workspace, /className="video-agent-mobile-actions"/);
+  assert.match(
+    mobileCss,
+    /\.video-agent-topbar-actions button\.is-new-chat\)[\s\S]*?\.video-agent-topbar-actions button\.is-mobile-more\)/,
+  );
+});
+
+test('视频详情里的移动端对话占据稳定视口高度', () => {
+  const knowledgeMobileStart = globalCss.indexOf(
+    '@media (max-width: 640px)',
+    globalCss.indexOf('.video-knowledge-page'),
+  );
+  const knowledgeMobileCss = globalCss.slice(knowledgeMobileStart);
+  assert.ok(knowledgeMobileStart >= 0, '缺少视频详情手机断点');
+  assert.match(
+    knowledgeMobileCss,
+    /\.video-knowledge-panel\s*\{[\s\S]*?height:\s*calc\([\s\S]*?100dvh[\s\S]*?--mobile-nav-height[\s\S]*?min-height:\s*0/,
+  );
 });
 
 test('移动端发送与停止操作具有 44px 触控区域', () => {

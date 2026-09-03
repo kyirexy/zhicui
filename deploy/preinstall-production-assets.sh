@@ -20,7 +20,8 @@ for required in \
   deploy/backup/install.sh deploy/videocapsule-backend.service \
   deploy/videocapsule-frontend.service deploy/nginx-security-headers.conf \
   deploy/nginx-windows-updates.conf deploy/nginx-videocapsule.conf \
-  deploy/jenkins-videocapsule.sudoers; do
+  deploy/agent-interface-kill-switch.sh deploy/jenkins-videocapsule.sudoers \
+  deploy/release-evidence-store.py; do
   [[ -f "$SOURCE_ROOT/$required" ]] || { echo "发行缺少运维资产：$required" >&2; exit 1; }
 done
 [[ -s /etc/letsencrypt/live/luxai.cn/fullchain.pem && -s /etc/letsencrypt/live/luxai.cn/privkey.pem ]] || {
@@ -47,8 +48,24 @@ case "$current_target" in
 esac
 
 bash "$SOURCE_ROOT/deploy/backup/install.sh"
-install -d -o ubuntu -g ubuntu -m 0770 /var/lib/zhicui-deployments
+install -d -o root -g root -m 0700 /var/lib/zhicui-deployments
 install -d -o ubuntu -g ubuntu -m 0770 /var/lib/zhicui-cover-cache
+install -d -o root -g root -m 0755 /etc/zhicui /usr/local/lib/zhicui-deploy
+install -o root -g root -m 0755 \
+  "$SOURCE_ROOT/deploy/agent-interface-kill-switch.sh" \
+  /usr/local/lib/zhicui-deploy/agent-interface-kill-switch.sh
+install -o root -g root -m 0755 \
+  "$SOURCE_ROOT/deploy/release-evidence-store.py" \
+  /usr/local/lib/zhicui-deploy/release-evidence-store.py
+# 首次安装和任何损坏状态都默认关闭；合法的既有 Stable 状态在运维资产
+# 升级时保持不变，真正的模式切换只允许 deploy.sh 通过受限 helper 完成。
+if ! /usr/local/lib/zhicui-deploy/agent-interface-kill-switch.sh verify >/dev/null 2>&1; then
+  /usr/local/lib/zhicui-deploy/agent-interface-kill-switch.sh dark >/dev/null
+fi
+AGENT_KILL_SWITCH_STATE="$(
+  /usr/local/lib/zhicui-deploy/agent-interface-kill-switch.sh verify
+)"
+/usr/local/lib/zhicui-deploy/release-evidence-store.py status >/dev/null
 
 # Electron 更新源独立于 Git/runtime 生命周期。迁移只补缺，不覆盖已发布版本。
 install -d -o ubuntu -g ubuntu -m 0775 \
@@ -129,4 +146,5 @@ if not (common_ok and mode_ok):
     raise SystemExit("本地备份恢复状态与生产配置模式不一致")
 PY
 
-echo '生产运维资产安装完成；加密备份、隔离恢复与配置模式已验证，下一次 deploy.sh 可直接执行。'
+echo "生产运维资产安装完成；加密备份、隔离恢复与配置模式已验证；$AGENT_KILL_SWITCH_STATE。"
+echo '下一次 deploy.sh 将继续通过独立 kill-switch 执行 dark/stable 原子切换。'

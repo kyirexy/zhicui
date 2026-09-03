@@ -56,6 +56,7 @@ export interface DesktopZhicuiUser {
   username: string | null;
   is_active: boolean;
   is_admin: boolean;
+  agent_profile_key?: string;
 }
 
 export interface DesktopZhicuiSession {
@@ -120,6 +121,7 @@ export interface PlatformAccountItem {
 export interface PlatformAccountResult {
   success: boolean;
   platform: PlatformAccountProvider;
+  code?: string;
   cancelled?: boolean;
   connected?: boolean;
   error?: string;
@@ -145,6 +147,48 @@ export interface DesktopUpdateResult {
   total?: number;
   bytesPerSecond?: number;
   error?: string;
+}
+
+export type DesktopAgentClient = 'codex' | 'claude';
+export type DesktopAgentOperation =
+  | 'setup'
+  | 'doctor'
+  | 'status'
+  | 'update'
+  | 'uninstall';
+
+export interface DesktopAgentIntegrationRequest {
+  client: DesktopAgentClient;
+  operation: DesktopAgentOperation;
+}
+
+export interface DesktopAgentClientStatus {
+  client: DesktopAgentClient;
+  installed: boolean;
+  configured: boolean;
+  version?: string;
+  message: string;
+}
+
+export interface DesktopAgentIntegrationOverview {
+  available: boolean;
+  cli_available: boolean;
+  cli_version?: string;
+  clients: DesktopAgentClientStatus[];
+  code?: string;
+  message?: string;
+}
+
+export interface DesktopAgentIntegrationResult {
+  success: boolean;
+  client: DesktopAgentClient;
+  operation: DesktopAgentOperation;
+  code: string;
+  message: string;
+  installed?: boolean;
+  configured?: boolean;
+  version?: string;
+  diagnostics?: string[];
 }
 
 export interface DesktopMediaSettings {
@@ -189,6 +233,7 @@ export interface DesktopMediaDownloadResult {
 
 export interface ZhicuiDesktopBridge {
   getRuntimeInfo(): Promise<DesktopRuntimeInfo>;
+  bindAgentUser?(profileKey: string | null): Promise<boolean>;
   setTitlebarTheme?(theme: 'light' | 'dark'): Promise<boolean>;
   loginDouyin(request: DesktopLoginRequest): Promise<DesktopLoginResult>;
   cancelDouyinLogin(): Promise<DesktopLoginResult>;
@@ -199,6 +244,10 @@ export interface ZhicuiDesktopBridge {
   getUpdateState(): Promise<DesktopUpdateResult>;
   checkForUpdates(): Promise<DesktopUpdateResult>;
   installUpdate(): Promise<DesktopUpdateResult>;
+  getAgentIntegrationStatus(): Promise<DesktopAgentIntegrationOverview>;
+  runAgentIntegrationAction(
+    request: DesktopAgentIntegrationRequest,
+  ): Promise<DesktopAgentIntegrationResult>;
   getMediaSettings(): Promise<DesktopMediaSettings>;
   setMediaAutoSave(enabled: boolean): Promise<DesktopMediaSettings>;
   chooseMediaDirectory(): Promise<DesktopMediaSettings>;

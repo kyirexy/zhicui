@@ -26,6 +26,7 @@ import type {
   DesktopMediaSaveRequest,
   DesktopMediaSettings,
 } from './contract';
+import { desktopUserHash } from './desktop-core';
 import { validateAwemeId } from './security';
 
 interface PersistedMediaSettings {
@@ -47,6 +48,22 @@ interface PersistedMediaIndex {
   assets: Record<string, MediaIndexRecord>;
 }
 
+interface MediaProfileState {
+  profileHash: string;
+  settingsPath: string;
+  indexPath: string;
+  settings: PersistedMediaSettings;
+  index: PersistedMediaIndex;
+  transient: Map<string, DesktopMediaAsset>;
+}
+
+export interface DesktopMediaLibraryOptions {
+  userDataDirectory?: string;
+  videosDirectory?: string;
+  openPath?: (path: string) => Promise<string>;
+  showItemInFolder?: (path: string) => void;
+}
+
 interface DownloadProgress {
   receivedBytes: number;
   totalBytes?: number;
@@ -55,6 +72,18 @@ interface DownloadProgress {
 
 const INDEX_VERSION = 1;
 const MIN_FREE_SPACE_BYTES = 128 * 1024 * 1024;
+const PROFILE_DIRECTORY_NAME = 'desktop-media-profiles';
+
+export function desktopMediaProfileDirectory(
+  userDataDirectory: string,
+  profileKey: string,
+): string {
+  return join(
+    userDataDirectory,
+    PROFILE_DIRECTORY_NAME,
+    desktopUserHash(profileKey),
+  );
+}
 
 function jsonOrFallback<T>(path: string, fallback: T): T {
   if (!existsSync(path)) return fallback;
@@ -140,92 +169,151 @@ function parseRange(
 }
 
 export class DesktopMediaLibrary {
-  private readonly settingsPath: string;
-  private readonly indexPath: string;
-  private settings: PersistedMediaSettings;
-  private index: PersistedMediaIndex;
+  private readonly userDataDirectory: string;
+  private readonly videosDirectory: string;
+  private readonly openPath: (path: string) => Promise<string>;
+  private readonly showItemInFolder: (path: string) => void;
+  private activeProfile: MediaProfileState | null = null;
+  private readonly profiles = new Map<string, MediaProfileState>();
   private readonly downloads = new Map<string, Promise<DesktopMediaAsset>>();
-  private readonly transient = new Map<string, DesktopMediaAsset>();
 
   constructor(
     private readonly emitStatus: (status: DesktopMediaAsset) => void,
+    options: DesktopMediaLibraryOptions = {},
   ) {
-    const userData = app.getPath('userData');
-    mkdirSync(userData, { recursive: true });
-    this.settingsPath = join(userData, 'desktop-media-settings.json');
-    this.indexPath = join(userData, 'desktop-media-index.json');
+    this.userDataDirectory = options.userDataDirectory || app.getPath('userData');
+    this.videosDirectory = options.videosDirectory || app.getPath('videos');
+    this.openPath = options.openPath || ((path) => shell.openPath(path));
+    this.showItemInFolder = options.showItemInFolder
+      || ((path) => shell.showItemInFolder(path));
+    mkdirSync(this.userDataDirectory, { recursive: true });
+  }
+
+  bindProfile(profileKey: string | null): void {
+    const normalized = String(profileKey || '').trim();
+    if (!normalized) {
+      this.activeProfile = null;
+      return;
+    }
+    const profileHash = desktopUserHash(normalized);
+    const cached = this.profiles.get(profileHash);
+    if (cached) {
+      this.activeProfile = cached;
+      return;
+    }
+    const profileDirectory = desktopMediaProfileDirectory(
+      this.userDataDirectory,
+      normalized,
+    );
+    mkdirSync(profileDirectory, { recursive: true });
+    const settingsPath = join(profileDirectory, 'settings.json');
+    const indexPath = join(profileDirectory, 'index.json');
     const defaultDirectory = this.defaultDirectory();
-    this.settings = jsonOrFallback<PersistedMediaSettings>(
-      this.settingsPath,
+    const settings = jsonOrFallback<PersistedMediaSettings>(
+      settingsPath,
       {
         autoSaveOnPlay: false,
         directory: defaultDirectory,
       },
     );
-    if (!this.settings.directory) this.settings.directory = defaultDirectory;
-    this.index = jsonOrFallback<PersistedMediaIndex>(
-      this.indexPath,
+    if (!settings.directory) settings.directory = defaultDirectory;
+    let index = jsonOrFallback<PersistedMediaIndex>(
+      indexPath,
       { version: INDEX_VERSION, assets: {} },
     );
     if (
-      this.index.version !== INDEX_VERSION
-      || typeof this.index.assets !== 'object'
-      || !this.index.assets
+      index.version !== INDEX_VERSION
+      || typeof index.assets !== 'object'
+      || !index.assets
     ) {
-      this.index = { version: INDEX_VERSION, assets: {} };
+      index = { version: INDEX_VERSION, assets: {} };
     }
+    const state: MediaProfileState = {
+      profileHash,
+      settingsPath,
+      indexPath,
+      settings,
+      index,
+      transient: new Map<string, DesktopMediaAsset>(),
+    };
+    this.profiles.set(profileHash, state);
+    this.activeProfile = state;
   }
 
   private defaultDirectory(): string {
-    return join(app.getPath('videos'), '知萃');
+    return join(this.videosDirectory, '知萃');
   }
 
-  private persistSettings(): void {
-    writeJson(this.settingsPath, this.settings);
+  private persistSettings(state: MediaProfileState): void {
+    writeJson(state.settingsPath, state.settings);
   }
 
-  private persistIndex(): void {
-    writeJson(this.indexPath, this.index);
+  private persistIndex(state: MediaProfileState): void {
+    writeJson(state.indexPath, state.index);
   }
 
-  getSettings(): DesktopMediaSettings {
+  private requireActiveProfile(): MediaProfileState {
+    if (this.activeProfile) return this.activeProfile;
+    const error = new Error('请先登录知萃账号，再使用本地媒体功能') as Error & {
+      code: string;
+    };
+    error.code = 'LOCAL_USER_NOT_BOUND';
+    throw error;
+  }
+
+  private isActiveProfile(state: MediaProfileState): boolean {
+    return this.activeProfile?.profileHash === state.profileHash;
+  }
+
+  private publicSettings(state: MediaProfileState | null): DesktopMediaSettings {
+    const settings = state?.settings || {
+      autoSaveOnPlay: false,
+      directory: this.defaultDirectory(),
+    };
     return {
-      autoSaveOnPlay: Boolean(this.settings.autoSaveOnPlay),
-      directory: this.settings.directory,
+      autoSaveOnPlay: Boolean(settings.autoSaveOnPlay),
+      directory: settings.directory,
       defaultDirectory: this.defaultDirectory(),
     };
   }
 
+  getSettings(): DesktopMediaSettings {
+    return this.publicSettings(this.activeProfile);
+  }
+
   setAutoSave(enabled: boolean): DesktopMediaSettings {
-    this.settings.autoSaveOnPlay = Boolean(enabled);
-    this.persistSettings();
+    const state = this.requireActiveProfile();
+    state.settings.autoSaveOnPlay = Boolean(enabled);
+    this.persistSettings(state);
     return this.getSettings();
   }
 
   async chooseDirectory(
     owner: BrowserWindow | null,
   ): Promise<DesktopMediaSettings> {
-    const selected = await this.selectDirectory(owner);
-    if (selected) {
-      this.settings.directory = selected;
-      this.persistSettings();
+    const state = this.requireActiveProfile();
+    const selected = await this.selectDirectory(owner, state);
+    if (selected && this.isActiveProfile(state)) {
+      state.settings.directory = selected;
+      this.persistSettings(state);
     }
-    return this.getSettings();
+    return this.publicSettings(state);
   }
 
   private async selectDirectory(
     owner: BrowserWindow | null,
+    state: MediaProfileState,
   ): Promise<string | null> {
     const result = owner
       ? await dialog.showOpenDialog(owner, {
         title: '选择知萃视频保存目录',
-        defaultPath: this.settings.directory,
+        defaultPath: state.settings.directory,
         buttonLabel: '保存到这里',
         properties: ['openDirectory', 'createDirectory'],
       })
       : await dialog.showOpenDialog({
         title: '选择知萃视频保存目录',
-        defaultPath: this.settings.directory,
+        defaultPath: state.settings.directory,
         buttonLabel: '保存到这里',
         properties: ['openDirectory', 'createDirectory'],
       });
@@ -241,7 +329,8 @@ export class DesktopMediaLibrary {
     owner: BrowserWindow | null,
     request: DesktopMediaSaveRequest,
   ): Promise<DesktopMediaDownloadResult> {
-    const existing = this.getAsset(request.awemeId);
+    const state = this.requireActiveProfile();
+    const existing = this.getAssetFrom(state, request.awemeId);
     if (existing.status === 'cached') {
       return {
         canceled: false,
@@ -249,17 +338,18 @@ export class DesktopMediaLibrary {
         directory: existing.directory,
       };
     }
-    const selected = await this.selectDirectory(owner);
-    if (!selected) return { canceled: true };
-    this.settings.directory = selected;
-    this.persistSettings();
-    const asset = await this.save(request, selected);
+    const selected = await this.selectDirectory(owner, state);
+    if (!selected || !this.isActiveProfile(state)) return { canceled: true };
+    state.settings.directory = selected;
+    this.persistSettings(state);
+    const asset = await this.saveForProfile(state, request, selected);
     return { canceled: false, asset, directory: selected };
   }
 
   async openDirectory(): Promise<boolean> {
-    mkdirSync(this.settings.directory, { recursive: true });
-    return (await shell.openPath(this.settings.directory)) === '';
+    const state = this.requireActiveProfile();
+    mkdirSync(state.settings.directory, { recursive: true });
+    return (await this.openPath(state.settings.directory)) === '';
   }
 
   private localUrl(kind: 'video' | 'cover', awemeId: string): string {
@@ -288,27 +378,40 @@ export class DesktopMediaLibrary {
   }
 
   getAsset(rawAwemeId: string): DesktopMediaAsset {
+    const state = this.activeProfile;
     const awemeId = validateAwemeId(rawAwemeId);
-    const active = this.transient.get(awemeId);
+    if (!state) return { awemeId, status: 'remote' };
+    return this.getAssetFrom(state, awemeId);
+  }
+
+  private getAssetFrom(
+    state: MediaProfileState,
+    rawAwemeId: string,
+  ): DesktopMediaAsset {
+    const awemeId = validateAwemeId(rawAwemeId);
+    const active = state.transient.get(awemeId);
     if (active) return active;
 
-    const record = this.index.assets[awemeId];
+    const record = state.index.assets[awemeId];
     if (!record) return { awemeId, status: 'remote' };
     if (!existsSync(record.videoPath)) {
-      delete this.index.assets[awemeId];
-      this.persistIndex();
+      delete state.index.assets[awemeId];
+      this.persistIndex(state);
       return { awemeId, status: 'remote' };
     }
     return this.cachedAsset(awemeId, record);
   }
 
-  private updateTransient(status: DesktopMediaAsset): void {
+  private updateTransient(
+    state: MediaProfileState,
+    status: DesktopMediaAsset,
+  ): void {
     if (status.status === 'cached' || status.status === 'remote') {
-      this.transient.delete(status.awemeId);
+      state.transient.delete(status.awemeId);
     } else {
-      this.transient.set(status.awemeId, status);
+      state.transient.set(status.awemeId, status);
     }
-    this.emitStatus(status);
+    if (this.isActiveProfile(state)) this.emitStatus(status);
   }
 
   private assertFreeSpace(directory: string, expectedBytes?: number): void {
@@ -398,21 +501,39 @@ export class DesktopMediaLibrary {
 
   async save(
     request: DesktopMediaSaveRequest,
-    targetDirectory = this.settings.directory,
+    targetDirectory?: string,
+  ): Promise<DesktopMediaAsset> {
+    const state = this.requireActiveProfile();
+    return this.saveForProfile(
+      state,
+      request,
+      targetDirectory || state.settings.directory,
+    );
+  }
+
+  private async saveForProfile(
+    state: MediaProfileState,
+    request: DesktopMediaSaveRequest,
+    targetDirectory: string,
   ): Promise<DesktopMediaAsset> {
     const awemeId = validateAwemeId(request.awemeId);
-    const existing = this.getAsset(awemeId);
+    const existing = this.getAssetFrom(state, awemeId);
     if (existing.status === 'cached') return existing;
-    const running = this.downloads.get(awemeId);
+    const downloadKey = `${state.profileHash}:${awemeId}`;
+    const running = this.downloads.get(downloadKey);
     if (running) return running;
 
-    const operation = this.download({ ...request, awemeId }, targetDirectory)
-      .finally(() => this.downloads.delete(awemeId));
-    this.downloads.set(awemeId, operation);
+    const operation = this.download(
+      state,
+      { ...request, awemeId },
+      targetDirectory,
+    ).finally(() => this.downloads.delete(downloadKey));
+    this.downloads.set(downloadKey, operation);
     return operation;
   }
 
   private async download(
+    state: MediaProfileState,
     request: DesktopMediaSaveRequest,
     targetDirectory: string,
   ): Promise<DesktopMediaAsset> {
@@ -423,7 +544,7 @@ export class DesktopMediaLibrary {
     const videoPartPath = `${initialVideoPath}.part-${process.pid}-${Date.now()}`;
     let coverPartPath = '';
 
-    this.updateTransient({
+    this.updateTransient(state, {
       awemeId,
       status: 'downloading',
       directory: targetDirectory,
@@ -438,7 +559,7 @@ export class DesktopMediaLibrary {
         'video',
         targetDirectory,
         (progress) => {
-          this.updateTransient({
+          this.updateTransient(state, {
             awemeId,
             status: 'downloading',
             directory: targetDirectory,
@@ -483,10 +604,10 @@ export class DesktopMediaLibrary {
         sizeBytes: videoResult.sizeBytes,
         savedAt: new Date().toISOString(),
       };
-      this.index.assets[awemeId] = record;
-      this.persistIndex();
+      state.index.assets[awemeId] = record;
+      this.persistIndex(state);
       const asset = this.cachedAsset(awemeId, record);
-      this.updateTransient(asset);
+      this.updateTransient(state, asset);
       return asset;
     } catch (error) {
       rmSync(videoPartPath, { force: true });
@@ -499,30 +620,34 @@ export class DesktopMediaLibrary {
           ? error.message
           : '视频保存失败，请稍后重试',
       };
-      this.updateTransient(asset);
+      this.updateTransient(state, asset);
       return asset;
     }
   }
 
   async reveal(rawAwemeId: string): Promise<boolean> {
+    const state = this.activeProfile;
     const awemeId = validateAwemeId(rawAwemeId);
-    const record = this.index.assets[awemeId];
+    if (!state) return false;
+    const record = state.index.assets[awemeId];
     if (!record || !existsSync(record.videoPath)) return false;
-    shell.showItemInFolder(record.videoPath);
+    this.showItemInFolder(record.videoPath);
     return true;
   }
 
   remove(rawAwemeId: string): DesktopMediaAsset {
+    const state = this.activeProfile;
     const awemeId = validateAwemeId(rawAwemeId);
-    const record = this.index.assets[awemeId];
+    if (!state) return { awemeId, status: 'remote' };
+    const record = state.index.assets[awemeId];
     if (record) {
       rmSync(record.videoPath, { force: true });
       if (record.coverPath) rmSync(record.coverPath, { force: true });
-      delete this.index.assets[awemeId];
-      this.persistIndex();
+      delete state.index.assets[awemeId];
+      this.persistIndex(state);
     }
     const asset: DesktopMediaAsset = { awemeId, status: 'remote' };
-    this.updateTransient(asset);
+    this.updateTransient(state, asset);
     return asset;
   }
 
@@ -544,7 +669,9 @@ export class DesktopMediaLibrary {
     } catch {
       return new Response('Not found', { status: 404 });
     }
-    const record = this.index.assets[awemeId];
+    const state = this.activeProfile;
+    if (!state) return new Response('Not found', { status: 404 });
+    const record = state.index.assets[awemeId];
     const path = kind === 'video' ? record?.videoPath : record?.coverPath;
     if (!path || !existsSync(path)) {
       return new Response('Not found', { status: 404 });

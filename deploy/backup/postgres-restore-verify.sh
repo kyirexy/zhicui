@@ -61,15 +61,16 @@ PY
 write_readiness_ok() {
   local artifact="$1"
   local checksum="$2"
-  local counts="$3"
-  local backup_completed_at="$4"
-  python3 - "$READINESS_FILE" "$artifact" "$checksum" "$counts" "$backup_completed_at" "$OFFSITE_STATUS_FILE" "$OFFSITE_REQUIRED" <<'PY'
+  local size_bytes="$3"
+  local counts="$4"
+  local backup_completed_at="$5"
+  python3 - "$READINESS_FILE" "$artifact" "$checksum" "$size_bytes" "$counts" "$backup_completed_at" "$OFFSITE_STATUS_FILE" "$OFFSITE_REQUIRED" <<'PY'
 import json
 import os
 import sys
 from datetime import datetime, timezone
 
-path, artifact, checksum, counts, backup_completed_at, offsite_status_path, offsite_required_text = sys.argv[1:]
+path, artifact, checksum, size_bytes, counts, backup_completed_at, offsite_status_path, offsite_required_text = sys.argv[1:]
 restore_verified_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 offsite_required = offsite_required_text.lower() in {"1", "true", "yes", "on"}
 offsite = {}
@@ -95,6 +96,7 @@ payload = {
     "restore_verified_at": restore_verified_at,
     "artifact": artifact,
     "sha256": checksum,
+    "size_bytes": int(size_bytes),
     "checksum_verified": True,
     "restore_verified": True,
     "verified_counts": json.loads(counts),
@@ -219,5 +221,5 @@ elif is_false "$OFFSITE_REQUIRED"; then
 else
   fail "ZHICUI_OFFSITE_REQUIRED 必须是明确的 true 或 false"
 fi
-write_readiness_ok "${BACKUP_FILE##*/}" "$VERIFIED_CHECKSUM" "$COUNTS_JSON" "$BACKUP_COMPLETED_AT"
+write_readiness_ok "${BACKUP_FILE##*/}" "$VERIFIED_CHECKSUM" "$BACKUP_SIZE" "$COUNTS_JSON" "$BACKUP_COMPLETED_AT"
 log "备份保护验证通过（模式：$OFFSITE_REQUIRED）：$COUNTS_JSON"

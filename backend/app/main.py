@@ -7,6 +7,7 @@ import os
 import threading
 import time
 import traceback
+import uuid
 from types import SimpleNamespace
 
 from fastapi import FastAPI, HTTPException, Request
@@ -23,6 +24,11 @@ from app.api.video_analysis_routes import router as video_analysis_router
 from app.api.ops_routes import router as ops_router
 from app.api.privacy_account_routes import router as privacy_account_router
 from app.api.catalog_quality_routes import router as catalog_quality_router
+from app.api.agent_interface_routes import (
+    router as agent_interface_router,
+    mcp_router as agent_mcp_router,
+)
+from app.api.agent_secure_routes import router as agent_secure_router
 from app.core.rate_limit import RateLimitMiddleware
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.core.database import Base, SessionLocal, engine
@@ -78,6 +84,20 @@ from app.models.agent_automation import (  # noqa: F401
     AgentAutomation,
     AgentAutomationRun,
 )
+from app.models.agent_interface import (  # noqa: F401
+    AgentCredential,
+    AgentDeviceAuthorization,
+    ProductActionAudit,
+    ProductActionConfirmation,
+    ProductActionEvent,
+    ProductActionIdempotency,
+    ProductActionRateWindow,
+    ProductActionRun,
+)
+from app.models.library_extraction_batch import (  # noqa: F401
+    LibraryExtractionBatch,
+    LibraryExtractionBatchItem,
+)
 from app.core.request_context import reset_request_context, set_request_context
 from app.services import (
     activity_service,
@@ -91,12 +111,17 @@ from app.services import (
     chat_model_catalog_service,
     error_log_service,
     note_service,
+    library_extraction_service,
     ops_monitor_runner,
+    product_action_run_service,
     video_analysis_catalog_service,
     video_analysis_service,
     video_analysis_worker,
 )
 from app.services.video_analysis_engine import probe_note_duration_ms
+from app.agent_interface.contracts import ActionEnvelope, error_payload
+from app.services.agent_credential_service import CredentialError
+from app.services.product_action_run_service import ProductActionError
 
 
 def create_app() -> FastAPI:
@@ -134,8 +159,33 @@ def create_app() -> FastAPI:
             "ip": request.client.host if request.client else None,
         }
 
+    def agent_wire_action(request: Request) -> str:
+        return request.url.path.removeprefix("/api/agent-interface/v1/") or "agent-interface"
+
+    def agent_wire_request_id(request: Request) -> str:
+        supplied = str(request.headers.get("x-request-id") or "").strip()[:64]
+        return supplied or uuid.uuid4().hex
+
     @app.exception_handler(HTTPException)
     async def logged_http_exception(request: Request, exc: HTTPException):
+        if request.url.path.startswith("/api/agent-interface/v1/"):
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            code = str(detail.get("code") or {
+                401: "AUTHENTICATION_REQUIRED",
+                403: "ACCESS_DENIED",
+                404: "RESOURCE_NOT_FOUND",
+            }.get(exc.status_code, "HTTP_ERROR"))
+            message = str(detail.get("message") or exc.detail)
+            return JSONResponse(
+                status_code=exc.status_code,
+                headers={"Cache-Control": "no-store"},
+                content=ActionEnvelope(
+                    action=agent_wire_action(request),
+                    request_id=agent_wire_request_id(request),
+                    status="failed",
+                    error=error_payload(code, message, retryable=exc.status_code >= 500),
+                ).model_dump(mode="json"),
+            )
         # Routine unauthenticated/forbidden/not-found responses are expected
         # control flow and would otherwise drown actionable failures.
         if exc.status_code not in {401, 403, 404}:
@@ -158,6 +208,42 @@ def create_app() -> FastAPI:
             f"{'.'.join(map(str, issue.get('loc', [])))}:{issue.get('type', 'invalid')}"
             for issue in exc.errors()[:12]
         ]
+        safe_details = [
+            {
+                "loc": list(issue.get("loc", [])),
+                "msg": str(issue.get("msg") or "请求参数无效")[:240],
+                "type": str(issue.get("type") or "invalid")[:120],
+            }
+            for issue in exc.errors()[:12]
+        ]
+        if request.url.path == "/mcp":
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {
+                        "code": -32600,
+                        "message": "Invalid Request",
+                        "data": {"issues": safe_details},
+                    },
+                },
+            )
+        if request.url.path.startswith("/api/agent-interface/v1/"):
+            return JSONResponse(
+                status_code=422,
+                headers={"Cache-Control": "no-store"},
+                content=ActionEnvelope(
+                    action=agent_wire_action(request),
+                    request_id=agent_wire_request_id(request),
+                    status="failed",
+                    error=error_payload(
+                        "INVALID_INPUT",
+                        "请求参数校验失败",
+                        details={"issues": safe_details},
+                    ),
+                ).model_dump(mode="json"),
+            )
         error_log_service.record_error_safely(
             source="validation",
             severity="warning",
@@ -174,13 +260,54 @@ def create_app() -> FastAPI:
             content={
                 "detail": [
                     {
-                        "loc": list(issue.get("loc", [])),
-                        "msg": str(issue.get("msg") or "请求参数无效")[:240],
-                        "type": str(issue.get("type") or "invalid")[:120],
+                        **issue,
                     }
-                    for issue in exc.errors()[:12]
+                    for issue in safe_details
                 ]
             },
+        )
+
+    @app.exception_handler(ProductActionError)
+    @app.exception_handler(CredentialError)
+    async def agent_interface_exception(request: Request, exc: Exception):
+        """Keep authentication/feature-gate failures on the v1 wire contract."""
+        code = str(getattr(exc, "code", "INTERNAL_ERROR"))
+        status_code = int(getattr(exc, "http_status", 0) or {
+            "AUTHENTICATION_REQUIRED": 401,
+            "INVALID_CREDENTIAL": 401,
+            "CREDENTIAL_REVOKED": 401,
+            "CREDENTIAL_EXPIRED": 401,
+            "SCOPE_DENIED": 403,
+            "INTERFACE_DISABLED": 503,
+        }.get(code, 400))
+        if request.url.path == "/mcp":
+            return JSONResponse(
+                status_code=status_code,
+                headers={"Cache-Control": "no-store"},
+                content={
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {
+                        "code": -32000,
+                        "message": str(exc),
+                        "data": {"code": code},
+                    },
+                },
+            )
+        return JSONResponse(
+            status_code=status_code,
+            headers={"Cache-Control": "no-store"},
+            content=ActionEnvelope(
+                action=agent_wire_action(request),
+                request_id=agent_wire_request_id(request),
+                status="failed",
+                error=error_payload(
+                    code,
+                    str(exc),
+                    retryable=bool(getattr(exc, "retryable", False)),
+                    details=getattr(exc, "details", {}) or {},
+                ),
+            ).model_dump(mode="json"),
         )
 
     @app.exception_handler(Exception)
@@ -248,6 +375,9 @@ def create_app() -> FastAPI:
     app.include_router(ops_router)
     app.include_router(privacy_account_router)
     app.include_router(catalog_quality_router)
+    app.include_router(agent_interface_router)
+    app.include_router(agent_secure_router)
+    app.include_router(agent_mcp_router)
 
     # Create database tables on startup
     @app.on_event("startup")
@@ -258,6 +388,8 @@ def create_app() -> FastAPI:
         with SessionLocal() as db:
             note_service.scrub_legacy_ephemeral_media(db)
             agent_service.mark_stale_threads(db)
+            product_action_run_service.recover_stale_runs(db)
+            product_action_run_service.repair_missing_terminal_events(db)
             video_analysis_catalog_service.ensure_default_drafts(db)
             chat_model_catalog_service.ensure_default_offering(db)
         video_analysis_service.register_duration_probe(probe_note_duration_ms)
@@ -268,6 +400,7 @@ def create_app() -> FastAPI:
         creator_sync_worker.runner.start()
         creator_catalog_quality_worker.runner.start()
         agent_runtime_worker.runner.start()
+        library_extraction_service.resume_pending_jobs()
         threading.Thread(
             target=_reconcile_video_analysis_agent_runs,
             name="video-analysis-agent-reconcile",
@@ -775,6 +908,27 @@ def _migrate_db() -> None:
                     "WHERE notes.id = video_source_ledgers.note_id "
                     "AND notes.user_id = video_source_ledgers.user_id"
                     "))"
+                ))
+        if insp.has_table("agent_credentials"):
+            credential_cols = {
+                c["name"] for c in insp.get_columns("agent_credentials")
+            }
+            # Beta databases created before refresh replay hardening only had
+            # the current digest.  Keep the migration additive and nullable
+            # so SQLite and PostgreSQL can both upgrade without downtime.
+            if "previous_refresh_hash" not in credential_cols:
+                conn.execute(text(
+                    "ALTER TABLE agent_credentials ADD COLUMN "
+                    "previous_refresh_hash VARCHAR(64) NULL"
+                ))
+        if insp.has_table("product_action_confirmations"):
+            confirmation_cols = {
+                c["name"] for c in insp.get_columns("product_action_confirmations")
+            }
+            if "confirmation_summary_json" not in confirmation_cols:
+                conn.execute(text(
+                    "ALTER TABLE product_action_confirmations ADD COLUMN "
+                    "confirmation_summary_json TEXT NOT NULL DEFAULT '{}'"
                 ))
         if insp.has_table("library_hidden_items"):
             hidden_cols = {

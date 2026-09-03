@@ -36,6 +36,7 @@ if [[ "${ZHICUI_RELEASE_WORKTREE_INTERNAL:-0}" != "1" ]]; then
   ZHICUI_RELEASE_WORKTREE_INTERNAL=1 \
   ZHICUI_RELEASE_CALLER_ROOT="$CALLER_ROOT" \
   RELEASE_COMMIT="$RESOLVED_COMMIT" \
+  SKIP_BUILD="${SKIP_BUILD:-0}" \
     bash "$WORKTREE_DIR/scripts/build-apk.sh"
   exit $?
 fi
@@ -57,10 +58,13 @@ CALLER_ROOT="${ZHICUI_RELEASE_CALLER_ROOT:?隔离构建缺少调用方仓库路�
 API_URL="${API_URL:-https://luxai.cn}"
 CHANNEL="${RELEASE_CHANNEL:-beta}"
 PUBLISH="${PUBLISH:-0}"
+SKIP_BUILD="${SKIP_BUILD:-0}"
 [[ "$CHANNEL" == "beta" || "$CHANNEL" == "stable" ]] ||
   { echo 'RELEASE_CHANNEL 只能是 beta 或 stable' >&2; exit 1; }
 [[ "$PUBLISH" == "0" || "$PUBLISH" == "1" ]] ||
   { echo 'PUBLISH 只能是 0 或 1，且默认安全关闭' >&2; exit 1; }
+[[ "$SKIP_BUILD" == "0" || "$SKIP_BUILD" == "1" ]] ||
+  { echo 'SKIP_BUILD 只能是 0 或 1' >&2; exit 1; }
 git -C "$ROOT" diff --cached --quiet -- || {
   echo 'Git index 已有暂存内容；拒绝混入 Android 发行提交' >&2
   exit 1
@@ -117,6 +121,12 @@ if [[ "$CHANNEL" == "stable" ]]; then
     { echo 'RELEASE_VERSION 格式无效' >&2; exit 1; }
   [[ "$BUILD" =~ ^[1-9][0-9]*$ ]] ||
     { echo 'RELEASE_BUILD 必须是正整数' >&2; exit 1; }
+  [[ "$API_URL" == 'https://luxai.cn' ]] ||
+    { echo 'Stable APK 只能内置 https://luxai.cn 正式 API' >&2; exit 1; }
+  if [[ "$PUBLISH" == "1" && "$SKIP_BUILD" != "1" ]]; then
+    echo 'Stable 发布必须使用 SKIP_BUILD=1 复用已完成真机验收的同一字节 APK' >&2
+    exit 1
+  fi
 else
   readarray -t CURRENT_RELEASE_IDENTITY < <(node - "$LEGACY_MANIFEST" <<'NODE'
 const fs = require('fs');
@@ -142,32 +152,173 @@ NODE
     (( BUILD > CURRENT_BUILD )) ||
       { echo "Beta 新 build 必须大于当前 build $CURRENT_BUILD" >&2; exit 1; }
   else
+    [[ "$PUBLISH" == "0" ]] || {
+      echo 'Beta 发布必须显式指定严格递增的 RELEASE_VERSION 与 RELEASE_BUILD' >&2
+      exit 1
+    }
     VERSION="$CURRENT_VERSION"
     BUILD="$CURRENT_BUILD"
   fi
 fi
 
-echo "=== [1/6] 构建 Android $CHANNEL $VERSION ($BUILD) ==="
-cd "$ROOT/frontend"
-npm ci --silent
-CAPACITOR_BUILD=true \
-NEXT_PUBLIC_API_URL="$API_URL" \
-NEXT_PUBLIC_RELEASE_CHANNEL="$CHANNEL" \
-npm run build
-npx cap sync android
-# public/download 是站点发行目录，不能递归嵌入 APK 自身。
-find "$ROOT/frontend/android/app/src/main/assets/public/download" -type f -name '*.apk' -delete 2>/dev/null || true
+[[ "$CHANNEL" == "stable" || "$SKIP_BUILD" == "0" ]] || {
+  echo 'SKIP_BUILD 当前只允许 Stable 复用已验收产物' >&2
+  exit 1
+}
 
-echo "=== [2/6] Gradle 生成目标 APK ==="
-cd "$ROOT/frontend/android"
-export ZHICUI_ANDROID_VERSION="$VERSION"
-export ZHICUI_ANDROID_BUILD="$BUILD"
+normalize_posix_path() {
+  local value="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    value="$(cygpath -u "$value" 2>/dev/null || printf '%s' "$value")"
+  fi
+  printf '%s' "$value"
+}
+
+cache_base="${ZHICUI_ANDROID_ARTIFACT_CACHE_ROOT:-${LOCALAPPDATA:-${TMPDIR:-/tmp}}/Zhicui/release-cache/android}"
+cache_base="$(normalize_posix_path "$cache_base")"
+mkdir -p "$cache_base"
+ARTIFACT_CACHE_ROOT="$(cd "$cache_base" && pwd -P)"
+ROOT_REAL="$(cd "$ROOT" && pwd -P)"
+CALLER_ROOT_REAL="$(cd "$CALLER_ROOT" && pwd -P)"
+case "$ARTIFACT_CACHE_ROOT/" in
+  "$ROOT_REAL/"*|"$CALLER_ROOT_REAL/"*)
+    echo 'ZHICUI_ANDROID_ARTIFACT_CACHE_ROOT 必须位于 Git checkout/worktree 之外' >&2
+    exit 1
+    ;;
+esac
+ARTIFACT_CACHE_DIR="$ARTIFACT_CACHE_ROOT/$RESOLVED_COMMIT/$CHANNEL/$VERSION-$BUILD"
+mkdir -p "$ARTIFACT_CACHE_DIR"
+ANDROID_PROVENANCE="$ARTIFACT_CACHE_DIR/provenance.json"
+CACHED_APK="$ARTIFACT_CACHE_DIR/Zhicui-$VERSION-$BUILD.apk"
+
+if [[ "$SKIP_BUILD" == "1" ]]; then
+  [[ "$CHANNEL" == "stable" ]] || {
+    echo 'SKIP_BUILD 复用缓存只允许 Stable 发行' >&2
+    exit 1
+  }
+  [[ -s "$CACHED_APK" && -s "$ANDROID_PROVENANCE" ]] || {
+    echo 'Stable -SkipBuild 缺少同提交、同版本的 APK 与 provenance.json' >&2
+    exit 1
+  }
+  node - "$ANDROID_PROVENANCE" "$CACHED_APK" "$RESOLVED_COMMIT" "$CHANNEL" "$VERSION" "$BUILD" <<'NODE'
+const fs = require('fs');
+const crypto = require('crypto');
+const [provenancePath, apkPath, sourceCommit, channel, version, build] = process.argv.slice(2);
+const provenance = JSON.parse(fs.readFileSync(provenancePath, 'utf8'));
+const actualSha = crypto.createHash('sha256').update(fs.readFileSync(apkPath)).digest('hex');
+if (provenance.schema_version !== 1 || provenance.status !== 'verified') throw new Error('Stable 缓存必须带有已完成真机验收的 verified provenance');
+if (provenance.source_commit !== sourceCommit || provenance.channel !== channel || provenance.version !== version || Number(provenance.build) !== Number(build)) throw new Error('Stable 缓存身份与指定提交/版本不一致');
+if (provenance.artifact_sha256 !== actualSha) throw new Error('Stable 缓存 APK SHA-256 与 provenance 不一致');
+if (!/^[a-f0-9]{64}$/u.test(provenance.signing?.certificate_sha256 || '')) throw new Error('Stable 缓存缺少签名证书指纹');
+if (!/^[a-f0-9]{64}$/u.test(provenance.verification_evidence_sha256 || '')) throw new Error('Stable 缓存缺少客户端验收证据指纹');
+NODE
+fi
+
+readarray -t PUBLISHED_ANDROID_IDENTITY < <(node - "$ROOT" "$PUBLISH" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const [root, includeRemote] = process.argv.slice(2);
+const manifests = [
+  path.join(root, 'frontend/public/download/latest.json'),
+  path.join(root, 'frontend/public/download/releases/android/beta.json'),
+  path.join(root, 'frontend/public/download/releases/android/stable.json'),
+];
+const values = [];
+for (const file of manifests) {
+  if (!fs.existsSync(file)) continue;
+  const item = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (item.availability !== 'unavailable' && Number.isInteger(item.build) && /^\d+\.\d+\.\d+$/.test(item.version || '')) {
+    values.push({ build: item.build, version: item.version });
+  }
+}
+const compare = (a, b) => {
+  const left = a.split('.').map(Number);
+  const right = b.split('.').map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index];
+  }
+  return 0;
+};
+(async () => {
+  if (includeRemote === '1') {
+    for (const channel of ['beta', 'stable']) {
+      const response = await fetch(`https://luxai.cn/download/releases/android/${channel}.json`, {
+        redirect: 'error',
+        headers: { 'cache-control': 'no-cache, no-store' },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok) throw new Error(`线上 Android ${channel} 清单 HTTP ${response.status}`);
+      const item = await response.json();
+      if (item.schema_version !== 2 || item.platform !== 'android' || item.channel !== channel || !['available', 'unavailable'].includes(item.availability)) {
+        throw new Error(`线上 Android ${channel} 清单格式无效`);
+      }
+      if (item.availability === 'available') {
+        if (!Number.isInteger(item.build) || !/^\d+\.\d+\.\d+$/.test(item.version || '')) {
+          throw new Error(`线上 Android ${channel} 版本身份无效`);
+        }
+        values.push({ build: item.build, version: item.version });
+      }
+    }
+  }
+  const highestBuild = values.reduce((highest, item) => Math.max(highest, item.build), 0);
+  const highestVersion = values.reduce((highest, item) => compare(item.version, highest) > 0 ? item.version : highest, '0.0.0');
+  console.log(highestBuild);
+  console.log(highestVersion);
+})().catch((error) => {
+  console.error(error.message);
+  process.exit(1);
+});
+NODE
+)
+HIGHEST_ANDROID_BUILD="${PUBLISHED_ANDROID_IDENTITY[0]}"
+HIGHEST_ANDROID_VERSION="${PUBLISHED_ANDROID_IDENTITY[1]}"
+if [[ "$CHANNEL" == "stable" || "$PUBLISH" == "1" ]]; then
+  (( BUILD > HIGHEST_ANDROID_BUILD )) || {
+    echo "Android build $BUILD 必须高于全部已发布 build $HIGHEST_ANDROID_BUILD" >&2
+    exit 1
+  }
+fi
 if [[ "$CHANNEL" == "stable" ]]; then
-  ./gradlew assembleRelease
-  BUILT_APK="$ROOT/frontend/android/app/build/outputs/apk/release/app-release.apk"
+  node - "$VERSION" "$HIGHEST_ANDROID_VERSION" <<'NODE'
+const [candidate, current] = process.argv.slice(2).map((value) => value.split('.').map(Number));
+for (let index = 0; index < 3; index += 1) {
+  if (candidate[index] > current[index]) process.exit(0);
+  if (candidate[index] < current[index]) process.exit(1);
+}
+process.exit(1);
+NODE
+  [[ "$?" -eq 0 ]] || {
+    echo "Android Stable 版本 $VERSION 必须高于全部已发布版本 $HIGHEST_ANDROID_VERSION" >&2
+    exit 1
+  }
+fi
+
+if [[ "$SKIP_BUILD" == "1" ]]; then
+  echo "=== [1/6] 复用已完成真机验收的 Android Stable $VERSION ($BUILD) ==="
+  BUILT_APK="$CACHED_APK"
 else
-  ./gradlew assembleDebug
-  BUILT_APK="$ROOT/frontend/android/app/build/outputs/apk/debug/app-debug.apk"
+  echo "=== [1/6] 构建 Android $CHANNEL $VERSION ($BUILD) ==="
+  cd "$ROOT/frontend"
+  npm ci --silent
+  CAPACITOR_BUILD=true \
+  NEXT_PUBLIC_API_URL="$API_URL" \
+  NEXT_PUBLIC_RELEASE_CHANNEL="$CHANNEL" \
+  npm run build
+  npx cap sync android
+  # public/download 是站点发行目录，不能递归嵌入 APK 自身。
+  find "$ROOT/frontend/android/app/src/main/assets/public/download" -type f -name '*.apk' -delete 2>/dev/null || true
+
+  echo "=== [2/6] Gradle 生成目标 APK ==="
+  cd "$ROOT/frontend/android"
+  export ZHICUI_ANDROID_VERSION="$VERSION"
+  export ZHICUI_ANDROID_BUILD="$BUILD"
+  if [[ "$CHANNEL" == "stable" ]]; then
+    ./gradlew assembleRelease
+    BUILT_APK="$ROOT/frontend/android/app/build/outputs/apk/release/app-release.apk"
+  else
+    ./gradlew assembleDebug
+    BUILT_APK="$ROOT/frontend/android/app/build/outputs/apk/debug/app-debug.apk"
+  fi
 fi
 [[ -s "$BUILT_APK" ]] || { echo "APK 产物缺失：$BUILT_APK" >&2; exit 1; }
 
@@ -206,6 +357,36 @@ else
   DEBUGGABLE='true'
 fi
 
+BUILT_SHA256="$(sha256sum "$BUILT_APK" | awk '{print tolower($1)}')"
+if [[ "$SKIP_BUILD" == "0" ]]; then
+  cp "$BUILT_APK" "$CACHED_APK"
+  node - "$ANDROID_PROVENANCE" "$RESOLVED_COMMIT" "$CHANNEL" "$VERSION" "$BUILD" "$BUILT_SHA256" "$CERT_SHA256" <<'NODE'
+const fs = require('fs');
+const [path, sourceCommit, channel, version, build, artifactSha256, certificateSha256] = process.argv.slice(2);
+const provenance = {
+  schema_version: 1,
+  status: 'built',
+  source_commit: sourceCommit,
+  channel,
+  version,
+  build: Number(build),
+  artifact_sha256: artifactSha256,
+  signing: { certificate_sha256: certificateSha256 },
+  built_at: new Date().toISOString(),
+};
+const temporary = `${path}.tmp-${process.pid}`;
+fs.writeFileSync(temporary, `${JSON.stringify(provenance, null, 2)}\n`, 'utf8');
+fs.renameSync(temporary, path);
+NODE
+else
+  node - "$ANDROID_PROVENANCE" "$CERT_SHA256" <<'NODE'
+const fs = require('fs');
+const [path, certificateSha256] = process.argv.slice(2);
+const provenance = JSON.parse(fs.readFileSync(path, 'utf8'));
+if (provenance.signing.certificate_sha256 !== certificateSha256) throw new Error('Stable 缓存签名证书与 APK 实际证书不一致');
+NODE
+fi
+
 echo "=== [4/6] 复制版本化产物并生成清单 ==="
 if [[ "$CHANNEL" == "stable" ]]; then
   mkdir -p "$APK_PUBLIC_ROOT/android"
@@ -223,6 +404,7 @@ if [[ -z "${RELEASE_NOTES_JSON:-}" ]]; then
   RELEASE_NOTES_JSON='["改进客户端稳定性与安全更新体验。"]'
 fi
 
+if [[ "$CHANNEL" != "stable" || "$SKIP_BUILD" == "1" ]]; then
 node - "$CHANNEL_MANIFEST" "$CHANNEL" "$VERSION" "$BUILD" "$DOWNLOAD_URL" "$SIZE_BYTES" "$SHA256" "$CERT_SHA256" "$ARTIFACT_KIND" "$DEBUGGABLE" "$PUBLISHED_AT" "$RELEASE_NOTES_JSON" "$RESOLVED_COMMIT" <<'NODE'
 const fs = require('fs');
 const [path, channel, version, build, downloadUrl, size, sha256, cert, kind, debuggable, publishedAt, notesJson, sourceCommit] = process.argv.slice(2);
@@ -257,6 +439,7 @@ const temporary = `${path}.tmp-${process.pid}`;
 fs.writeFileSync(temporary, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 fs.renameSync(temporary, path);
 NODE
+fi
 
 if [[ "$CHANNEL" == "beta" ]]; then
   node - "$CHANNEL_MANIFEST" "$LEGACY_MANIFEST" <<'NODE'

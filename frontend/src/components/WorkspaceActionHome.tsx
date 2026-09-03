@@ -2,11 +2,13 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   ArrowRight,
   ArrowsClockwise,
   CalendarCheck,
   ChatCircleDots,
+  ClipboardText,
   FileText,
   GearSix,
   Heart,
@@ -23,6 +25,7 @@ import {
 } from '@/lib/api';
 import LibraryCoverImage from '@/components/LibraryCoverImage';
 import { useAuth } from '@/lib/hooks/AuthContext';
+import { buildHomeLinkDestination } from '@/lib/singleLinkImport';
 import type {
   AgentSource,
   AgentThread,
@@ -184,7 +187,10 @@ function toAgentPreviews(items: AgentSource[]): ChannelPreview[] {
 }
 
 export default function WorkspaceActionHome() {
+  const router = useRouter();
   const { user } = useAuth();
+  const [importLink, setImportLink] = useState('');
+  const [importError, setImportError] = useState('');
   const [threads, setThreads] = useState<AgentThread[]>([]);
   const [readyCount, setReadyCount] = useState<number | null>(null);
   const [channelPreviews, setChannelPreviews] = useState<Record<ChannelKey, ChannelPreview[]>>(
@@ -361,6 +367,30 @@ export default function WorkspaceActionHome() {
     return total === null ? '—' : total.toLocaleString('zh-CN');
   };
 
+  const submitImportLink = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!importLink.trim()) {
+      setImportError('请先粘贴博主主页或视频链接');
+      return;
+    }
+    setImportError('');
+    router.push(buildHomeLinkDestination(importLink));
+  };
+
+  const pasteImportLink = async () => {
+    setImportError('');
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text.trim()) {
+        setImportError('剪贴板里没有链接，也可以长按输入框手动粘贴');
+        return;
+      }
+      setImportLink(text.trim());
+    } catch {
+      setImportError('无法读取剪贴板，请长按输入框粘贴');
+    }
+  };
+
   return (
     <main className={styles.home}>
       <div className={styles.mobileBrandBar}>
@@ -375,13 +405,51 @@ export default function WorkspaceActionHome() {
             aria-label="意见反馈"
             onClick={() => window.dispatchEvent(new Event('zhicui:open-feedback'))}
           >
-            <ChatCircleDots size={21} weight="regular" aria-hidden="true" />
+            <ChatCircleDots size={19} weight="regular" aria-hidden="true" />
+            <span>反馈</span>
           </button>
           <Link href="/settings" className={styles.mobileSettings} aria-label="打开设置">
             <GearSix size={21} weight="regular" aria-hidden="true" />
           </Link>
         </div>
       </div>
+
+      <section className={styles.mobileImport} aria-labelledby="mobile-import-title">
+        <div className={styles.mobileImportHeading}>
+          <h1 id="mobile-import-title">粘贴链接</h1>
+            <p>支持博主主页 / 单条视频链接</p>
+        </div>
+        <form onSubmit={submitImportLink} className={styles.mobileImportForm}>
+          <label htmlFor="mobile-home-link" className="sr-only">博主主页或单条视频链接</label>
+          <div className={styles.mobileImportField}>
+            <LinkSimple size={20} weight="regular" aria-hidden="true" />
+            <input
+              id="mobile-home-link"
+              type="text"
+              inputMode="url"
+              enterKeyHint="go"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              value={importLink}
+              onChange={(event) => {
+                setImportLink(event.target.value);
+                if (importError) setImportError('');
+              }}
+              placeholder="粘贴博主主页 / 视频链接"
+            />
+            <button type="button" className={styles.pasteButton} onClick={() => void pasteImportLink()}>
+              <ClipboardText size={17} weight="regular" aria-hidden="true" />
+              粘贴
+            </button>
+          </div>
+          <button type="submit" className={styles.importButton} disabled={!importLink.trim()}>
+            开始解析
+            <ArrowRight size={17} weight="bold" aria-hidden="true" />
+          </button>
+        </form>
+        {importError ? <p className={styles.mobileImportError} role="alert">{importError}</p> : null}
+      </section>
 
       <header className={styles.welcome}>
         <div>
@@ -442,17 +510,7 @@ export default function WorkspaceActionHome() {
         </div>
       </section>
 
-      <section className={styles.channels} aria-labelledby="channel-stats-title">
-        <header>
-          <div>
-            <span className={styles.sectionLabel}>渠道动态</span>
-            <h2 id="channel-stats-title">最新同步</h2>
-          </div>
-          <Link href="/library">
-            管理
-            <ArrowRight size={14} weight="bold" aria-hidden="true" />
-          </Link>
-        </header>
+      <section className={styles.channels} aria-label="抖音与 B站资料">
         <div className={styles.platformGrid}>
           {CHANNEL_PLATFORMS.map((platform) => {
             const activeMode = activeModes[platform.key];

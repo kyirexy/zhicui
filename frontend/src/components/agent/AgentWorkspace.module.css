@@ -694,6 +694,10 @@
   padding: 0;
 }
 
+.root :global(.video-agent-topbar-actions button.is-mobile-more) {
+  display: none;
+}
+
 .root :global(.video-agent-topbar-actions button.is-source) {
   max-width: 220px;
   border-color: var(--aw-line);
@@ -727,6 +731,70 @@
 
 .root :global(.video-agent-mobile-tabs) {
   display: none;
+}
+
+.root :global(.video-agent-mobile-actions) {
+  display: grid;
+  gap: 2px;
+}
+
+.root :global(.video-agent-mobile-actions > button) {
+  display: grid;
+  width: 100%;
+  min-height: 64px;
+  padding: 9px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--aw-line);
+  border-radius: 0;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  color: var(--foreground-secondary);
+  background: transparent;
+  text-align: left;
+}
+
+.root :global(.video-agent-mobile-actions > button:last-child) {
+  border-bottom: 0;
+}
+
+.root :global(.video-agent-mobile-actions > button > span:first-child) {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  place-items: center;
+  color: var(--aw-mint);
+  background: var(--aw-mint-soft);
+}
+
+.root :global(.video-agent-mobile-actions > button > span:nth-child(2)) {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.root :global(.video-agent-mobile-actions strong) {
+  color: var(--foreground);
+  font-size: 0.88rem;
+  font-weight: 690;
+}
+
+.root :global(.video-agent-mobile-actions small) {
+  overflow: hidden;
+  color: var(--foreground-muted);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.root :global(.video-agent-mobile-actions > button > svg) {
+  color: var(--foreground-muted);
+}
+
+.root :global(.video-agent-mobile-actions > button:focus-visible) {
+  outline: 2px solid color-mix(in srgb, var(--aw-mint) 52%, transparent);
+  outline-offset: 2px;
 }
 
 .root :global(.video-agent-inline-status) {
@@ -5465,8 +5533,8 @@
   }
 
   .root :global(.video-agent-topbar) {
-    min-height: 64px;
-    padding: 8px 10px;
+    min-height: 60px;
+    padding: 7px 9px 7px 14px;
     gap: 7px;
   }
 
@@ -5481,76 +5549,44 @@
   }
 
   .root :global(.video-agent-topbar-leading h1) {
-    max-width: calc(100vw - 82px);
-    font-size: 0.84rem;
+    max-width: calc(100vw - 118px);
+    font-size: 0.94rem;
   }
 
   .root :global(.video-agent-topbar-leading p) {
-    max-width: calc(100vw - 82px);
-    font-size: 0.66rem;
+    max-width: calc(100vw - 118px);
+    margin-top: 2px;
+    font-size: 0.7rem;
   }
 
   .root :global(.video-agent-topbar-actions) {
+    display: flex;
+    gap: 2px;
+  }
+
+  .root :global(.video-agent-topbar-actions button) {
     display: none;
   }
 
-  .root :global(.video-agent-topbar-actions button.is-icon) {
+  .root :global(.video-agent-topbar-actions > a) {
     display: none;
+  }
+
+  .root :global(.video-agent-topbar-actions button.is-new-chat),
+  .root :global(.video-agent-topbar-actions button.is-mobile-more) {
+    display: grid;
+    width: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+    border: 0;
+    place-items: center;
+    color: var(--foreground-secondary);
+    background: transparent;
   }
 
   .root :global(.video-agent-mobile-tabs) {
-    display: grid;
-    min-height: 50px;
-    padding: 4px max(8px, env(safe-area-inset-right, 0px))
-      5px max(8px, env(safe-area-inset-left, 0px));
-    border-bottom: 1px solid var(--aw-line);
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 4px;
-    background: var(--aw-surface);
-  }
-
-  .root :global(.video-agent-mobile-tabs button) {
-    position: relative;
-    display: inline-flex;
-    min-width: 0;
-    min-height: 44px;
-    padding: 0 8px;
-    border: 1px solid transparent;
-    border-radius: 9px;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    color: var(--foreground-muted);
-    background: transparent;
-    font-size: 0.7rem;
-    font-weight: 650;
-    transition:
-      transform 160ms ease-out,
-      opacity 160ms ease-out !important;
-  }
-
-  .root :global(.video-agent-mobile-tabs button:hover),
-  .root :global(.video-agent-mobile-tabs button.is-active) {
-    border-color: color-mix(in srgb, var(--aw-mint) 18%, var(--aw-line));
-    color: var(--foreground);
-    background: var(--aw-mint-soft);
-  }
-
-  .root :global(.video-agent-mobile-tabs button.is-active svg) {
-    color: var(--aw-mint);
-  }
-
-  .root :global(.video-agent-mobile-tabs button b) {
-    display: grid;
-    min-width: 19px;
-    height: 19px;
-    padding: 0 4px;
-    border-radius: 6px;
-    place-items: center;
-    color: var(--aw-mint);
-    background: var(--aw-soft-strong);
-    font-size: 0.58rem;
-    font-variant-numeric: tabular-nums;
+    display: none;
   }
 
   .root :global(.video-agent-inline-status) {
@@ -5566,8 +5602,8 @@
 
   .root :global(.video-agent-thread) {
     padding:
-      24px max(15px, env(safe-area-inset-right, 0px))
-      22px max(15px, env(safe-area-inset-left, 0px));
+      18px max(15px, env(safe-area-inset-right, 0px))
+      18px max(15px, env(safe-area-inset-left, 0px));
     scroll-padding-block: 16px 28px;
     scrollbar-gutter: auto;
     overscroll-behavior-y: contain;
@@ -5588,12 +5624,19 @@
 
   .root :global(.video-agent-welcome) {
     justify-content: flex-start;
-    padding: 26px 2px 34px;
+    min-height: auto;
+    padding: 8px 0 24px;
+  }
+
+  .root :global(.video-agent-welcome-mark) {
+    display: none;
   }
 
   .root :global(.video-agent-welcome h2) {
-    max-width: 18ch;
-    font-size: 1.58rem;
+    max-width: none;
+    margin-top: 0;
+    font-size: 1.2rem;
+    line-height: 1.35;
   }
 
   .root :global(.video-agent-welcome-copy) {
@@ -5601,12 +5644,30 @@
   }
 
   .root :global(.video-agent-starters) {
-    margin-top: 22px;
+    margin-top: 14px;
+    border-top: 0;
+    gap: 8px;
+  }
+
+  .root :global(.video-agent-welcome > .video-agent-starter-origin) {
+    display: none;
   }
 
   .root :global(.video-agent-starters button) {
-    min-height: 52px;
-    font-size: 0.79rem;
+    min-height: 48px;
+    padding: 9px 11px;
+    border: 1px solid var(--aw-line);
+    border-radius: 12px;
+    background: var(--aw-soft);
+    font-size: 0.82rem;
+    line-height: 1.45;
+  }
+
+  .root :global(.video-agent-starters button span) {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
   }
 
   .root :global(.video-agent-welcome-empty) {
@@ -5702,9 +5763,10 @@
 
   .root :global(.video-agent-composer-region) {
     padding:
-      8px max(9px, env(safe-area-inset-right, 0px))
+      7px max(9px, env(safe-area-inset-right, 0px))
       calc(9px + env(safe-area-inset-bottom, 0px))
       max(9px, env(safe-area-inset-left, 0px));
+    border-top: 1px solid var(--aw-line);
   }
 
   .root :global(.video-agent-composer) {
@@ -5730,8 +5792,8 @@
   }
 
   .root :global(.video-agent-composer textarea) {
-    min-height: 62px;
-    padding: 12px 13px 6px;
+    min-height: 54px;
+    padding: 9px 12px 4px;
     font-size: 1rem;
     line-height: 1.48;
   }
@@ -5940,11 +6002,11 @@
 
 @media (max-width: 420px) {
   .root :global(.video-agent-topbar-leading h1) {
-    max-width: calc(100vw - 80px);
+    max-width: calc(100vw - 112px);
   }
 
   .root :global(.video-agent-topbar-leading p) {
-    max-width: calc(100vw - 80px);
+    max-width: calc(100vw - 112px);
   }
 
   .root :global(.video-agent-studio-detail > footer) {

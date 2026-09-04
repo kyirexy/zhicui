@@ -63,6 +63,20 @@ class AgentReleaseKillSwitchContractTests(unittest.TestCase):
         self.assertIn("AGENT_AUTOMATION_POLL_SECONDS", deploy)
         self.assertIn("5 <= automation_poll_seconds <= 300", deploy)
 
+    def test_backup_validation_failure_is_not_swallowed_by_heredoc(self) -> None:
+        deploy = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+        self.assertIn(
+            'python3 - "$BACKUP_STATUS_FILE" "$BACKEND_ENV" <<\'PY\' || err '
+            "'备份状态文件无效，保持当前版本'",
+            deploy,
+        )
+        self.assertNotIn("<<'PY' ||\n  err '备份状态文件无效", deploy)
+
+    def test_previous_runtime_trust_is_scoped_to_the_validated_path(self) -> None:
+        deploy = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+        self.assertIn('git -c safe.directory="$PREVIOUS_RUNTIME"', deploy)
+        self.assertNotIn("safe.directory=*", deploy)
+
     def test_stable_is_activated_only_after_runtime_switch(self) -> None:
         deploy = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
         switch_marker = 'atomic_runtime_switch "$RELEASE_DIR"'

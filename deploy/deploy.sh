@@ -755,6 +755,11 @@ npm ci --silent
 npm run build
 [[ -s "$RELEASE_DIR/frontend/.next/BUILD_ID" ]] || err '目标构建缺少 BUILD_ID'
 [[ -f "$RELEASE_DIR/frontend/node_modules/next/package.json" ]] || err '目标构建缺少 Next.js'
+# Worktree 由 Jenkins 创建，但 systemd 以 ubuntu 运行。沿用生产 runtime 的
+# ubuntu 组模型，只授予该组读取/遍历权限；不向 other 暴露后端源码、venv
+# 或可能存在的构建环境文件。Jenkins 已由 preinstall 加入 ubuntu 组。
+chgrp -R ubuntu "$RELEASE_DIR"
+chmod -R g+rX "$RELEASE_DIR"
 # Nginx only reads versioned public download manifests through the current
 # release symlink.  Keep application source private while granting traversal
 # and read access exclusively to the public asset tree.

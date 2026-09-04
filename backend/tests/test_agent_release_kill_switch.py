@@ -100,6 +100,15 @@ class AgentReleaseKillSwitchContractTests(unittest.TestCase):
         self.assertLess(switch_at, activation_at)
         self.assertLess(activation_at, restart_at)
 
+    def test_release_is_readable_by_runtime_group_before_switch(self) -> None:
+        deploy = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+        group_at = deploy.index('chgrp -R ubuntu "$RELEASE_DIR"')
+        permissions_at = deploy.index('chmod -R g+rX "$RELEASE_DIR"')
+        switch_at = deploy.index('atomic_runtime_switch "$RELEASE_DIR"')
+        self.assertLess(group_at, permissions_at)
+        self.assertLess(permissions_at, switch_at)
+        self.assertNotIn('chmod -R o+rX "$RELEASE_DIR"', deploy)
+
     def test_every_failed_transaction_forces_dark_before_runtime_rollback(self) -> None:
         deploy = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
         rollback_start = deploy.index("rollback_runtime()")

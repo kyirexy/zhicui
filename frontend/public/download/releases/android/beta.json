@@ -4,13 +4,13 @@
   "availability": "available",
   "platform": "android",
   "artifact_kind": "debug",
-  "version": "1.2.9",
-  "build": 21,
-  "published_at": "2026-09-01T10:23:16.300Z",
-  "source_commit": "197657c8dbe211675d2f593dd128bb4bbce54a84",
+  "version": "1.3.0",
+  "build": 22,
+  "published_at": "2026-09-04T04:05:45.919Z",
+  "source_commit": "220fe103b774fe4b17a88bd25a98bcb5373cb0ac",
   "download_url": "https://luxai.cn/download/zhicui.apk",
-  "size_bytes": 10064176,
-  "sha256": "af99b0b8894ae51b51897d0a6d973d882ec8cf2f22800412427efb9a4a7af898",
+  "size_bytes": 33369742,
+  "sha256": "eeb50b2fe378efbe754f3b0ea0f4d4e8cc5e2c871a6ac322d6935925c9c0b1d5",
   "mandatory": false,
   "debuggable": true,
   "signing": {
@@ -19,8 +19,8 @@
     "certificate_sha256": "7504a84b00b13dcb73ce51f87d27dee587a310f47b11a6ae319b19f0e3075136"
   },
   "release_notes": [
-    "移动端新增低干扰的意见反馈入口。",
-    "修复知萃 AI 回答方式面板在手机端被裁切和遮挡的问题。",
-    "扩展手机横屏与折叠屏的设置页适配。"
+    "手机扫码确认后电脑自动登录。",
+    "登录码短时有效且防止重复领取。",
+    "相机画面仅在本机解析，不上传不保存。"
   ]
 }

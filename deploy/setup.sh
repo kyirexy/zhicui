@@ -12,6 +12,9 @@ APP_DIR=/opt/zhicui
 VENV=$APP_DIR/.venv
 REPO_URL=https://github.com/kyirexy/zhicui.git
 PIP_BOOTSTRAP_VERSION=26.2.1
+PYPI_INDEX_URL="${ZHICUI_PYPI_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+PIP_NETWORK_TIMEOUT="${ZHICUI_PIP_TIMEOUT_SECONDS:-60}"
+PIP_NETWORK_RETRIES="${ZHICUI_PIP_RETRIES:-8}"
 
 [[ $EUID -ne 0 ]] && err "请用 sudo 运行: sudo bash deploy/setup.sh"
 
@@ -62,8 +65,13 @@ git config core.sharedRepository group 2>/dev/null || true
 
 log "=== [3/8] 创建 Python venv + 装后端依赖 ==="
 python3.12 -m venv $VENV
-$VENV/bin/python -m pip install --upgrade "pip==$PIP_BOOTSTRAP_VERSION" -q
 $VENV/bin/python -m pip install \
+  --index-url "$PYPI_INDEX_URL" --timeout "$PIP_NETWORK_TIMEOUT" --retries "$PIP_NETWORK_RETRIES" \
+  --disable-pip-version-check --no-input \
+  --upgrade "pip==$PIP_BOOTSTRAP_VERSION" -q
+$VENV/bin/python -m pip install \
+  --index-url "$PYPI_INDEX_URL" --timeout "$PIP_NETWORK_TIMEOUT" --retries "$PIP_NETWORK_RETRIES" \
+  --disable-pip-version-check --no-input \
   --require-hashes \
   --only-binary=:all: \
   --no-binary=qrcode-terminal \

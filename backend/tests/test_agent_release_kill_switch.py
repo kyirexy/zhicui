@@ -77,6 +77,17 @@ class AgentReleaseKillSwitchContractTests(unittest.TestCase):
         self.assertIn('git -c safe.directory="$PREVIOUS_RUNTIME"', deploy)
         self.assertNotIn("safe.directory=*", deploy)
 
+    def test_locked_dependencies_use_explicit_resilient_https_index(self) -> None:
+        deploy = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+        setup = (DEPLOY / "setup.sh").read_text(encoding="utf-8")
+        for script in (deploy, setup):
+            self.assertIn("https://pypi.tuna.tsinghua.edu.cn/simple", script)
+            self.assertIn('--index-url "$PYPI_INDEX_URL"', script)
+            self.assertIn('--timeout "$PIP_NETWORK_TIMEOUT"', script)
+            self.assertIn('--retries "$PIP_NETWORK_RETRIES"', script)
+            self.assertIn("--require-hashes", script)
+            self.assertIn("--disable-pip-version-check --no-input", script)
+
     def test_stable_is_activated_only_after_runtime_switch(self) -> None:
         deploy = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
         switch_marker = 'atomic_runtime_switch "$RELEASE_DIR"'

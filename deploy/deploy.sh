@@ -17,6 +17,9 @@ AGENT_KILL_SWITCH_FILE="/etc/zhicui/agent-interface.env"
 AGENT_KILL_SWITCH_HELPER="/usr/local/lib/zhicui-deploy/agent-interface-kill-switch.sh"
 RELEASE_EVIDENCE_HELPER="/usr/local/lib/zhicui-deploy/release-evidence-store.py"
 PIP_BOOTSTRAP_VERSION="26.2.1"
+PYPI_INDEX_URL="${ZHICUI_PYPI_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+PIP_NETWORK_TIMEOUT="${ZHICUI_PIP_TIMEOUT_SECONDS:-60}"
+PIP_NETWORK_RETRIES="${ZHICUI_PIP_RETRIES:-8}"
 
 G='\033[0;32m'; Y='\033[1;33m'; R='\033[0;31m'; N='\033[0m'
 log() { printf "${G}[%s]${N} %s\n" "$(date +%H:%M:%S)" "$1"; }
@@ -30,6 +33,10 @@ case "$AGENT_RELEASE_MODE" in
   dark|stable) ;;
   *) err 'AGENT_RELEASE_MODE 只能是 dark 或 stable' ;;
 esac
+[[ "$PYPI_INDEX_URL" =~ ^https://[^[:space:]]+/simple/?$ ]] ||
+  err 'ZHICUI_PYPI_INDEX_URL 必须是 HTTPS simple 索引'
+[[ "$PIP_NETWORK_TIMEOUT" =~ ^[1-9][0-9]*$ && "$PIP_NETWORK_RETRIES" =~ ^[1-9][0-9]*$ ]] ||
+  err 'pip 超时与重试次数必须是正整数'
 if [[ "$AGENT_RELEASE_MODE" == stable && "${SMOKE_REQUIRE_AGENT_INTERFACE:-1}" != 1 ]]; then
   err 'Stable 发布不得跳过 Agent Action/PAT/MCP 冒烟'
 fi
@@ -709,8 +716,13 @@ log '为目标 release 创建独立 Python 环境'
 python3.12 -m venv "$RELEASE_DIR/.venv"
 REQUIREMENTS_LOCK="$RELEASE_DIR/deploy/requirements-server.lock"
 [[ -s "$REQUIREMENTS_LOCK" ]] || err '生产 Python 依赖锁文件缺失或为空'
-"$RELEASE_DIR/.venv/bin/python" -m pip install --upgrade "pip==$PIP_BOOTSTRAP_VERSION" -q
 "$RELEASE_DIR/.venv/bin/python" -m pip install \
+  --index-url "$PYPI_INDEX_URL" --timeout "$PIP_NETWORK_TIMEOUT" --retries "$PIP_NETWORK_RETRIES" \
+  --disable-pip-version-check --no-input \
+  --upgrade "pip==$PIP_BOOTSTRAP_VERSION" -q
+"$RELEASE_DIR/.venv/bin/python" -m pip install \
+  --index-url "$PYPI_INDEX_URL" --timeout "$PIP_NETWORK_TIMEOUT" --retries "$PIP_NETWORK_RETRIES" \
+  --disable-pip-version-check --no-input \
   --require-hashes \
   --only-binary=:all: \
   --no-binary=qrcode-terminal \

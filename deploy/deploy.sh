@@ -584,6 +584,8 @@ done
 log '部署前执行加密备份与隔离恢复验证'
 sudo systemctl start zhicui-postgres-backup.service || err 'PostgreSQL 加密备份失败，保持当前版本'
 sudo systemctl start zhicui-postgres-restore-verify.service || err '隔离恢复验证失败，保持当前版本'
+[[ -r "$BACKUP_STATUS_FILE" ]] ||
+  err "备份状态文件不可读；运行 sudo bash $APP_DIR/deploy/preinstall-production-assets.sh 并重启 Jenkins"
 python3 - "$BACKUP_STATUS_FILE" "$BACKEND_ENV" <<'PY' || err '备份状态文件无效，保持当前版本'
 import json, sys
 from datetime import datetime, timezone

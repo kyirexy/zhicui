@@ -83,6 +83,16 @@ class BackupOffsiteAssetTests(unittest.TestCase):
         self.assertIn('if is_true "$OFFSITE_REQUIRED"', restore)
         self.assertIn('postgres-offsite-replicate.sh', installer)
 
+    def test_readiness_metadata_is_available_to_runtime_and_deployer_only(self) -> None:
+        installer = (BACKUP / "install.sh").read_text(encoding="utf-8")
+        deploy = (ROOT / "deploy" / "deploy.sh").read_text(encoding="utf-8")
+        self.assertIn("usermod -aG zhicui-readiness postgres", installer)
+        self.assertIn("usermod -aG zhicui-readiness ubuntu", installer)
+        self.assertIn("usermod -aG zhicui-readiness jenkins", installer)
+        self.assertIn("install -d -o postgres -g postgres -m 0700 /var/backups/zhicui", installer)
+        self.assertIn("install -d -o postgres -g zhicui-readiness -m 2750", installer)
+        self.assertIn('[[ -r "$BACKUP_STATUS_FILE" ]]', deploy)
+
     def test_production_gates_require_offsite_or_double_opt_in_local_mode(self) -> None:
         deploy = (ROOT / "deploy" / "deploy.sh").read_text(encoding="utf-8")
         preinstall = (ROOT / "deploy" / "preinstall-production-assets.sh").read_text(encoding="utf-8")

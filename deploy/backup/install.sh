@@ -10,10 +10,14 @@ command -v pg_dump >/dev/null 2>&1 || { echo '缺少 PostgreSQL client（pg_dump
 command -v openssl >/dev/null 2>&1 || { echo '缺少 openssl' >&2; exit 1; }
 id postgres >/dev/null 2>&1 || { echo '缺少 postgres 系统用户' >&2; exit 1; }
 id ubuntu >/dev/null 2>&1 || { echo '缺少后端运行用户 ubuntu' >&2; exit 1; }
+id jenkins >/dev/null 2>&1 || { echo '缺少 Jenkins 部署用户' >&2; exit 1; }
 
 getent group zhicui-readiness >/dev/null 2>&1 || groupadd --system zhicui-readiness
 usermod -aG zhicui-readiness postgres
 usermod -aG zhicui-readiness ubuntu
+# Jenkins 只加入 readiness 组，用于读取脱敏的备份状态；归档本体仍保持
+# postgres:postgres 0600，不向部署进程暴露数据库备份或加密密钥。
+usermod -aG zhicui-readiness jenkins
 
 install -d -m 0755 /usr/local/lib/zhicui-backup
 install -m 0755 "$SOURCE/postgres-backup.sh" /usr/local/lib/zhicui-backup/postgres-backup.sh

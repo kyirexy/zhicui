@@ -9,19 +9,30 @@ import {
   CheckCircle2,
   ChevronDown,
   Code2,
-  ExternalLink,
   LoaderCircle,
   Lock,
   Mail,
   MonitorUp,
-  RotateCcw,
   ShieldCheck,
   User,
-  X,
 } from 'lucide-react';
+import DesktopQrLoginCard from '@/components/DesktopQrLoginCard';
+import MobileDesktopLoginScanner, {
+  type MobileDesktopLoginPreview,
+} from '@/components/MobileDesktopLoginScanner';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import { API_BASE } from '@/lib/api';
 import type { DesktopZhicuiLoginStatus } from '@/lib/desktopRuntime';
+import {
+  clearPendingDesktopLoginApproval,
+  decideDesktopLoginSession,
+  parseDesktopLoginQr,
+  previewDesktopLoginSession,
+  readPendingDesktopLoginApproval,
+  savePendingDesktopLoginApproval,
+  type DesktopLoginApprovalReference,
+} from '@/lib/desktopLogin';
+import { isNativeAndroidApp } from '@/lib/douyinNative';
 import { CURRENT_LEGAL_VERSIONS } from '@/lib/legalDocuments';
 
 const IS_DEV = process.env.NODE_ENV === 'development';
@@ -50,6 +61,7 @@ export default function LoginPage() {
     enterDevelopmentSession,
     login,
     register,
+    acceptSession,
     error,
     clearError,
   } = useAuth();
@@ -63,6 +75,11 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
   const [fieldError, setFieldError] = useState('');
   const [legalAccepted, setLegalAccepted] = useState(false);
+  const [nativeAndroid, setNativeAndroid] = useState(false);
+  const [runtimeReady, setRuntimeReady] = useState(false);
+  const [pendingDesktopApproval, setPendingDesktopApproval] = useState<
+    DesktopLoginApprovalReference | null
+  >(null);
 
   // 桌面端 ↔ Web 联动登录
   const [desktopSession, setDesktopSession] = useState<string | null>(null);
@@ -73,6 +90,25 @@ export default function LoginPage() {
   const [desktopStarting, setDesktopStarting] = useState(false);
   const isDesktopRuntime =
     typeof window !== 'undefined' && Boolean(window.zhicuiDesktop);
+
+  useEffect(() => {
+    const android = isNativeAndroidApp();
+    setNativeAndroid(android);
+    if (android) {
+      const incoming = parseDesktopLoginQr(window.location.href);
+      const pending = incoming || readPendingDesktopLoginApproval();
+      if (incoming) {
+        savePendingDesktopLoginApproval(incoming);
+        window.history.replaceState(
+          window.history.state,
+          '',
+          `${window.location.pathname}${window.location.search}`,
+        );
+      }
+      setPendingDesktopApproval(pending);
+    }
+    setRuntimeReady(true);
+  }, []);
 
   // 从 URL 识别「桌面联动登录」：/login?desktop=1&session=…
   useEffect(() => {
@@ -141,10 +177,48 @@ export default function LoginPage() {
 
   // 登录成功后跳转；网页联动登录成功后停留在「请回到客户端」成功页
   useEffect(() => {
-    if (loading || !user) return;
+    if (!runtimeReady || loading || !user) return;
+    if (nativeAndroid && pendingDesktopApproval) return;
     if (desktopSession && claimState === 'claimed') return;
     router.replace(getSafeRedirect('/'));
-  }, [loading, router, user, desktopSession, claimState]);
+  }, [
+    claimState,
+    desktopSession,
+    loading,
+    nativeAndroid,
+    pendingDesktopApproval,
+    router,
+    runtimeReady,
+    user,
+  ]);
+
+  const previewDesktopApproval = useCallback(async (
+    reference: DesktopLoginApprovalReference,
+  ): Promise<MobileDesktopLoginPreview> => {
+    const result = await previewDesktopLoginSession(reference);
+    if (!result.success) throw new Error(result.error);
+    return {
+      sessionId: result.data.session_id,
+      clientName: result.data.client_name,
+      verificationCode: result.data.verification_code,
+      expiresAt: result.data.expires_at,
+      status: result.data.status,
+    };
+  }, []);
+
+  const decideDesktopApproval = useCallback(async (
+    reference: DesktopLoginApprovalReference,
+    decision: 'approve' | 'deny',
+  ) => {
+    const result = await decideDesktopLoginSession(reference, decision);
+    if (!result.success) throw new Error(result.error);
+  }, []);
+
+  const finishDesktopApproval = useCallback(() => {
+    clearPendingDesktopLoginApproval();
+    setPendingDesktopApproval(null);
+    if (user) router.replace(getSafeRedirect('/'));
+  }, [router, user]);
 
   const validate = () => {
     if (!email.trim()) return '请输入邮箱或用户名';
@@ -196,12 +270,6 @@ export default function LoginPage() {
     }
   };
 
-  const handleCancelDesktopLogin = async () => {
-    const bridge = window.zhicuiDesktop;
-    if (!bridge || typeof bridge.cancelZhicuiWebLogin !== 'function') return;
-    await bridge.cancelZhicuiWebLogin();
-  };
-
   // 网页联动登录成功：提示回到客户端
   if (desktopSession && claimState === 'claimed') {
     return (
@@ -233,7 +301,7 @@ export default function LoginPage() {
     );
   }
 
-  if (loading || user) {
+  if (loading || (user && !(nativeAndroid && pendingDesktopApproval))) {
     return (
       <div className="min-h-[70vh] flex items-center justify-center px-5">
         <div className="dev-session-entry" role="status" aria-live="polite">
@@ -256,7 +324,7 @@ export default function LoginPage() {
 
   const desktopStage = desktopStatus?.stage;
 
-  // ================= 桌面客户端：只保留「打开浏览器登录」 =================
+  // ================= 桌面客户端：手机扫码为主，浏览器登录为兜底 =================
   if (isDesktopRuntime) {
     const busy = desktopStage === 'starting'
       || desktopStage === 'browser-open'
@@ -294,101 +362,24 @@ export default function LoginPage() {
                 登录知萃
               </h1>
               <p className="mx-auto mt-2 max-w-[20rem] text-pretty text-sm leading-6 text-foreground-muted">
-                在系统浏览器中登录你的账号，登录完成后自动回到客户端。
+                用手机知萃扫码，确认后电脑自动登录
               </p>
             </div>
 
-            <div className="relative mt-8">
-              {busy ? (
-                <div
-                  className="rounded-2xl border border-card-border bg-background/60 px-5 py-5"
-                  role="status"
-                  aria-live="polite"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent-brand/[0.1] text-accent-brand">
-                      {desktopStage === 'waiting' ? (
-                        <LoaderCircle size={18} aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
-                      ) : (
-                        <MonitorUp size={18} aria-hidden="true" />
-                      )}
-                    </span>
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-foreground">
-                        {desktopStage === 'starting'
-                          ? '正在准备网页登录…'
-                          : desktopStage === 'browser-open'
-                            ? '浏览器已打开'
-                            : '等待网页登录完成…'}
-                      </p>
-                      <p className="mt-0.5 text-xs leading-5 text-foreground-muted">
-                        {desktopStatus?.message || '请在弹出的浏览器中完成登录'}
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleCancelDesktopLogin}
-                    className="mt-4 inline-flex items-center gap-1.5 rounded-lg px-1 py-1 text-xs font-medium text-foreground-muted transition-colors hover:text-accent-rose"
-                  >
-                    <X size={13} aria-hidden="true" />
-                    取消登录
-                  </button>
-                </div>
-              ) : desktopStage === 'success' ? (
-                <div className="rounded-2xl border border-accent-brand/20 bg-accent-brand/[0.06] px-5 py-5 text-center">
-                  <CheckCircle2
-                    size={26}
-                    aria-hidden="true"
-                    className="mx-auto text-accent-brand"
-                  />
-                  <p className="mt-2 text-sm font-semibold text-foreground">
-                    登录成功，正在回到客户端…
-                  </p>
-                </div>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={handleBeginDesktopLogin}
-                    disabled={desktopStarting}
-                    className="btn-primary flex w-full min-h-[50px] items-center justify-center gap-2 rounded-xl px-6 text-sm font-semibold"
-                  >
-                    {desktopStarting ? (
-                      <>
-                        <LoaderCircle size={16} aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
-                        正在打开浏览器…
-                      </>
-                    ) : (
-                      <>
-                        <ExternalLink size={17} aria-hidden="true" />
-                        打开浏览器登录
-                        <ArrowRight size={16} aria-hidden="true" />
-                      </>
-                    )}
-                  </button>
+            <DesktopQrLoginCard
+              className="relative mt-7"
+              onSession={(session) => {
+                acceptSession(session);
+              }}
+              onBrowserLogin={handleBeginDesktopLogin}
+              browserLoginBusy={busy || desktopStarting}
+            />
 
-                  {desktopStage === 'error' && desktopStatus?.message && (
-                    <div className="mt-4 rounded-xl border border-accent-rose/20 bg-accent-rose/[0.05] px-4 py-3" role="alert">
-                      <p className="text-xs leading-5 text-accent-rose">{desktopStatus.message}</p>
-                      <button
-                        type="button"
-                        onClick={handleBeginDesktopLogin}
-                        className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-accent-brand transition-colors hover:underline"
-                      >
-                        <RotateCcw size={12} aria-hidden="true" />
-                        重新打开浏览器
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-
-            <div className="relative mt-7 flex items-center justify-center gap-1.5 text-xs text-foreground-muted">
-              <ShieldCheck size={13} aria-hidden="true" className="text-accent-brand" />
-              密码不会保存在客户端，仅用于本次登录
-            </div>
+            {desktopStage === 'error' && desktopStatus?.message ? (
+              <p className="relative mt-4 rounded-xl border border-accent-rose/20 bg-accent-rose/[0.05] px-4 py-3 text-xs leading-5 text-accent-rose" role="alert">
+                {desktopStatus.message}
+              </p>
+            ) : null}
           </div>
 
           <p className="mt-4 text-center text-xs text-foreground-muted">
@@ -440,6 +431,37 @@ export default function LoginPage() {
               登录后继续整理你的知识卡片与行动计划
             </p>
           </div>
+
+          {nativeAndroid ? (
+            <section className="relative mb-4 rounded-2xl border border-accent-brand/15 bg-accent-brand/[0.045] p-3.5">
+              <MobileDesktopLoginScanner
+                isAuthenticated={Boolean(user)}
+                currentAccountLabel={user?.username || user?.email}
+                initialReference={pendingDesktopApproval}
+                onPreview={previewDesktopApproval}
+                onDecision={decideDesktopApproval}
+                onAuthenticationRequired={(reference) => {
+                  setPendingDesktopApproval(reference);
+                  setShowStandardAuth(true);
+                  setFieldError('');
+                }}
+                onApproved={finishDesktopApproval}
+                onDismiss={finishDesktopApproval}
+                label="扫描电脑登录码"
+                variant="primary"
+              />
+              <div className="mt-3 flex items-center gap-3 text-[11px] text-foreground-muted" aria-hidden="true">
+                <span className="h-px flex-1 bg-card-border" />
+                或使用账号密码
+                <span className="h-px flex-1 bg-card-border" />
+              </div>
+              {pendingDesktopApproval && !user ? (
+                <p className="mt-2 text-center text-xs font-medium text-accent-brand" role="status">
+                  登录后继续确认这台电脑
+                </p>
+              ) : null}
+            </section>
+          ) : null}
 
           {IS_DEV && (
             <section className="relative rounded-2xl border border-card-border bg-background/60 p-4">

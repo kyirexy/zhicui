@@ -13,6 +13,7 @@ interface PublicDocumentPageProps {
   category: string;
   title: string;
   version: string;
+  effectiveDate?: string;
   intro: string;
   sections: PublicDocumentSection[];
 }
@@ -21,6 +22,7 @@ export default function PublicDocumentPage({
   category,
   title,
   version,
+  effectiveDate = LEGAL_EFFECTIVE_DATE,
   intro,
   sections,
 }: PublicDocumentPageProps) {
@@ -32,7 +34,7 @@ export default function PublicDocumentPage({
           <h1>{title}</h1>
           <div className={styles.meta}>
             <span>版本：{version}</span>
-            <span>生效日期：{LEGAL_EFFECTIVE_DATE}</span>
+            <span>生效日期：{effectiveDate}</span>
           </div>
           <p className={styles.intro}>{intro}</p>
           {sections.map((section) => (

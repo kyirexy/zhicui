@@ -39,6 +39,30 @@ class RatePolicy:
 POLICIES: tuple[RatePolicy, ...] = (
     RatePolicy("auth_login", "POST", "/api/auth/login", 12, 5 * 60),
     RatePolicy("auth_register", "POST", "/api/auth/register", 5, 60 * 60),
+    RatePolicy(
+        "desktop_login_create",
+        "POST",
+        "/api/auth/desktop-login/sessions",
+        12,
+        5 * 60,
+    ),
+    RatePolicy(
+        "desktop_login_approval",
+        "POST",
+        "/api/auth/desktop-login/sessions",
+        60,
+        5 * 60,
+        "user",
+    ),
+    RatePolicy(
+        "desktop_login_poll",
+        "POST",
+        "/api/auth/desktop-login/sessions",
+        # 单个客户端每两秒轮询一次，五分钟约 150 次。共享 IP 门禁需容纳
+        # 办公室、宿舍与运营商 NAT；单会话的两秒节流由业务服务继续执行。
+        1200,
+        5 * 60,
+    ),
     RatePolicy("account_export", "POST", "/api/account/data-export", 5, 15 * 60, "user"),
     RatePolicy("account_delete_prepare", "POST", "/api/account/deletion/prepare", 5, 15 * 60, "user"),
     RatePolicy("account_delete_confirm", "POST", "/api/account/deletion/confirm", 5, 60 * 60, "user"),
@@ -138,6 +162,16 @@ def _matches(policy: RatePolicy, request: Request) -> bool:
     if request.method.upper() != policy.method:
         return False
     path = request.url.path
+    if policy.name == "desktop_login_create":
+        return path == policy.path_prefix
+    if policy.name == "desktop_login_approval":
+        return path.endswith(("/preview", "/decision")) and path.startswith(
+            policy.path_prefix + "/"
+        )
+    if policy.name == "desktop_login_poll":
+        return path.endswith(("/token", "/cancel")) and path.startswith(
+            policy.path_prefix + "/"
+        )
     if policy.name == "agent_generate":
         return path.startswith(policy.path_prefix) and path.endswith(("/messages", "/messages/stream"))
     if policy.name == "creator_sync":

@@ -12,7 +12,7 @@ import {
 import { API_BASE } from '@/lib/api';
 import { shouldDiscardDevelopmentSession } from '@/lib/clientAuthPolicy';
 
-interface AuthUser {
+export interface AuthUser {
   id: string;
   email: string;
   username: string | null;
@@ -37,11 +37,12 @@ interface AuthState {
     username: string,
     consent: { termsVersion: string; privacyVersion: string },
   ) => Promise<AuthUser | null>;
+  acceptSession: (session: AuthSession) => AuthUser;
   logout: () => void;
   clearError: () => void;
 }
 
-interface AuthSession {
+export interface AuthSession {
   token: string;
   user: AuthUser;
 }
@@ -63,6 +64,7 @@ const AuthContext = createContext<AuthState>({
   enterDevelopmentSession: async () => null,
   login: async () => null,
   register: async () => null,
+  acceptSession: (session) => session.user,
   logout: () => {},
   clearError: () => {},
 });
@@ -216,6 +218,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(session.user);
     setError(null);
   }, []);
+
+  const acceptSession = useCallback((session: AuthSession) => {
+    applySession(session);
+    return session.user;
+  }, [applySession]);
 
   const enterDevelopmentSession = useCallback(async () => {
     if (!IS_DEV) {
@@ -436,9 +443,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     enterDevelopmentSession,
     login,
     register,
+    acceptSession,
     logout,
     clearError,
   }), [
+    acceptSession,
     clearError,
     enterDevelopmentSession,
     enteringDevelopmentSession,

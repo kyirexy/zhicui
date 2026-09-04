@@ -141,8 +141,11 @@ class PrivacyAccountControlTests(unittest.TestCase):
         self.assertEqual({row.document_type for row in rows}, {"terms", "privacy"})
         self.assertEqual({row.client_type for row in rows}, {"android"})
         self.assertEqual(
-            {row.document_version for row in rows},
-            {privacy_account_service.TERMS_VERSION},
+            {row.document_type: row.document_version for row in rows},
+            {
+                "terms": privacy_account_service.TERMS_VERSION,
+                "privacy": privacy_account_service.PRIVACY_VERSION,
+            },
         )
 
     def test_export_is_password_reverified_and_redacts_secrets(self) -> None:

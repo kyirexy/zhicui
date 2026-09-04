@@ -126,7 +126,7 @@ import sys
 path, expression, label = sys.argv[1:]
 with open(path, encoding="utf-8") as handle:
     payload = json.load(handle)
-safe = {"p": payload, "isinstance": isinstance, "str": str, "bool": bool}
+safe = {"p": payload, "isinstance": isinstance, "str": str, "bool": bool, "len": len}
 if not bool(eval(expression, {"__builtins__": {}}, safe)):
     raise SystemExit(f"{label}: 响应结构不符合预期")
 PY
@@ -147,7 +147,7 @@ if [[ "$REQUIRE_AGENT_INTERFACE" == 1 ]]; then
 fi
 pass 'readiness' '数据库、AI、队列、连接器和备份闸门通过'
 
-for path in /legal/terms /legal/privacy /support /platform-limits /library; do
+for path in /legal/terms /legal/privacy /support /platform-limits /library /settings; do
   code="$(request GET "$path" '' "$BODY" "$HEADERS")"
   [[ "$code" == 200 ]] || fatal "页面 $path" "HTTP $code"
   pass "页面 $path"
@@ -180,6 +180,47 @@ assert_json "$BODY" 'p.get("success") is True and p.get("data", {}).get("status"
 code="$(request GET "/login?desktop=1&session=$HANDOFF_SESSION" '' "$BODY" "$HEADERS")"
 [[ "$code" == 200 ]] || fatal '桌面登录回跳页' "HTTP $code"
 pass '桌面登录票据与回跳页'
+
+printf '{"client_type":"windows"}\n' >"$WORK_DIR/desktop-login-create.json"
+code="$(request POST /api/auth/desktop-login/sessions "$WORK_DIR/desktop-login-create.json" "$BODY" "$HEADERS")"
+[[ "$code" == 200 ]] || fatal '手机扫码登录会话' "create HTTP $code"
+assert_json "$BODY" 'p.get("success") is True and p.get("data", {}).get("status") == "pending" and isinstance(p.get("data", {}).get("session_id"), str) and isinstance(p.get("data", {}).get("approval_token"), str) and isinstance(p.get("data", {}).get("poll_secret"), str) and p.get("data", {}).get("approval_token") != p.get("data", {}).get("poll_secret") and p.get("data", {}).get("approval_url", "").startswith("https://luxai.cn/login#desktop-login=") and not p.get("data", {}).get("token")' '手机扫码登录会话' || fatal '手机扫码登录会话' '创建响应结构或双凭证隔离无效'
+grep -Eiq '^cache-control:.*no-store' "$HEADERS" || fatal '手机扫码登录禁止缓存' '创建响应缺少 no-store'
+python3 - "$BODY" "$WORK_DIR/desktop-login-session" <<'PY'
+import json
+import os
+import sys
+
+source, prefix = sys.argv[1:]
+data = json.load(open(source, encoding="utf-8"))["data"]
+values = {
+    f"{prefix}.id": data["session_id"],
+    f"{prefix}.preview.json": json.dumps({"approval_token": data["approval_token"]}),
+    f"{prefix}.poll.json": json.dumps({"poll_secret": data["poll_secret"]}),
+    f"{prefix}.wrong-poll.json": json.dumps({"poll_secret": data["approval_token"]}),
+}
+for path, value in values.items():
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(value)
+        handle.write("\n")
+    os.chmod(path, 0o600)
+PY
+DESKTOP_LOGIN_SESSION="$(<"$WORK_DIR/desktop-login-session.id")"
+code="$(request POST "/api/auth/desktop-login/sessions/$DESKTOP_LOGIN_SESSION/preview" "$WORK_DIR/desktop-login-session.preview.json" "$BODY" "$HEADERS")"
+[[ "$code" == 200 ]] || fatal '手机扫码登录预览' "preview HTTP $code"
+assert_json "$BODY" 'p.get("success") is True and p.get("data", {}).get("status") == "pending" and isinstance(p.get("data", {}).get("verification_code"), str) and len(p.get("data", {}).get("verification_code")) == 4' '手机扫码登录预览' || fatal '手机扫码登录预览' '审批凭证无法预览待确认会话'
+code="$(request POST "/api/auth/desktop-login/sessions/$DESKTOP_LOGIN_SESSION/token" "$WORK_DIR/desktop-login-session.wrong-poll.json" "$BODY" "$HEADERS")"
+[[ "$code" == 404 ]] || fatal '扫码双凭证隔离' "审批凭证竟可轮询，HTTP $code"
+code="$(request POST "/api/auth/desktop-login/sessions/$DESKTOP_LOGIN_SESSION/token" "$WORK_DIR/desktop-login-session.poll.json" "$BODY" "$HEADERS")"
+[[ "$code" == 200 ]] || fatal '手机扫码登录轮询' "poll HTTP $code"
+assert_json "$BODY" 'p.get("success") is True and p.get("data", {}).get("status") in ("pending", "slow_down") and not p.get("data", {}).get("token")' '手机扫码登录轮询' || fatal '手机扫码登录轮询' '待确认轮询意外签发会话'
+code="$(request POST "/api/auth/desktop-login/sessions/$DESKTOP_LOGIN_SESSION/cancel" "$WORK_DIR/desktop-login-session.poll.json" "$BODY" "$HEADERS")"
+[[ "$code" == 200 ]] || fatal '手机扫码登录取消' "cancel HTTP $code"
+assert_json "$BODY" 'p.get("success") is True and p.get("data", {}).get("status") == "cancelled"' '手机扫码登录取消' || fatal '手机扫码登录取消' '会话未进入 cancelled'
+code="$(request POST "/api/auth/desktop-login/sessions/$DESKTOP_LOGIN_SESSION/token" "$WORK_DIR/desktop-login-session.poll.json" "$BODY" "$HEADERS")"
+[[ "$code" == 200 ]] || fatal '手机扫码登录重放拦截' "replay HTTP $code"
+assert_json "$BODY" 'p.get("success") is True and p.get("data", {}).get("status") == "cancelled" and not p.get("data", {}).get("token")' '手机扫码登录重放拦截' || fatal '手机扫码登录重放拦截' '已取消会话发生重放签发'
+pass '手机扫码登录双凭证、禁止缓存与重放边界'
 
 curl -sS --max-time 15 -D "$HEADERS" -o /dev/null -H 'Origin: https://evil.invalid' "$BASE_URL/api/health"
 if grep -Eiq '^access-control-allow-origin:[[:space:]]*https://evil\.invalid' "$HEADERS"; then

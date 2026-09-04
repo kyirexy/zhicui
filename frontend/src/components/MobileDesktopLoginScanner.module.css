@@ -1,0 +1,439 @@
+.host {
+  width: 100%;
+}
+
+.trigger {
+  display: inline-flex;
+  min-height: var(--ui-control-lg);
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 0;
+  border-radius: var(--ui-radius-md);
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    color var(--ui-duration-normal) ease,
+    background var(--ui-duration-normal) ease,
+    transform var(--ui-duration-fast) ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.trigger:active {
+  transform: scale(0.985);
+}
+
+.primary {
+  width: 100%;
+  color: #fff;
+  background: var(--ui-accent);
+}
+
+.primary:hover {
+  background: var(--accent-brand-strong);
+}
+
+.secondary {
+  width: 100%;
+  color: var(--ui-text);
+  background: var(--ui-surface-subtle);
+}
+
+.secondary:hover {
+  background: color-mix(in srgb, var(--ui-accent) 10%, var(--ui-surface-subtle));
+}
+
+.settings {
+  width: 100%;
+  justify-content: flex-start;
+  padding: 0 4px;
+  color: var(--ui-text);
+  background: transparent;
+}
+
+.settings > svg:last-child {
+  margin-left: auto;
+  color: var(--ui-text-muted);
+}
+
+.triggerIcon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+}
+
+.primary .triggerIcon {
+  color: #fff;
+  background: rgb(255 255 255 / 16%);
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 100dvh;
+  color: #fff;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--ui-duration-normal) ease;
+}
+
+.overlayOpen {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.panelMode {
+  color: var(--ui-text);
+  background: var(--ui-canvas);
+}
+
+.scannerHeader {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: 48px 1fr 48px;
+  align-items: center;
+  min-height: calc(64px + env(safe-area-inset-top, 0px));
+  padding: env(safe-area-inset-top, 0px) 12px 0;
+  background: rgb(7 13 24 / 68%);
+}
+
+.panelMode .scannerHeader {
+  background: var(--ui-surface);
+  box-shadow: 0 1px 0 var(--ui-border);
+}
+
+.scannerHeader strong {
+  font-size: 1rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.iconButton,
+.headerSpacer {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+}
+
+.iconButton {
+  border: 0;
+  border-radius: 50%;
+  color: inherit;
+  background: rgb(255 255 255 / 12%);
+  cursor: pointer;
+  transition: background var(--ui-duration-fast) ease;
+}
+
+.panelMode .iconButton {
+  background: var(--ui-surface-subtle);
+}
+
+.iconButton:hover,
+.iconButtonActive {
+  background: rgb(255 255 255 / 22%);
+}
+
+.cameraStage {
+  --scan-frame: min(72vw, 320px);
+  display: grid;
+  min-height: 0;
+  grid-template-areas:
+    "top top top"
+    "left frame right"
+    "bottom bottom bottom";
+  grid-template-columns: 1fr var(--scan-frame) 1fr;
+  grid-template-rows: 1fr var(--scan-frame) 1.15fr;
+  overflow: hidden;
+}
+
+.cameraShade {
+  background: rgb(7 13 24 / 58%);
+}
+
+.shadeTop { grid-area: top; }
+.shadeLeft { grid-area: left; }
+.shadeRight { grid-area: right; }
+.shadeBottom { grid-area: bottom; }
+
+.scanFrame {
+  position: relative;
+  grid-area: frame;
+  border: 1px solid rgb(255 255 255 / 36%);
+}
+
+.scanFrame > span:not(.scanBeam) {
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  border-color: #77a9ff;
+  border-style: solid;
+}
+
+.cornerTopLeft {
+  top: -2px;
+  left: -2px;
+  border-width: 3px 0 0 3px;
+}
+
+.cornerTopRight {
+  top: -2px;
+  right: -2px;
+  border-width: 3px 3px 0 0;
+}
+
+.cornerBottomLeft {
+  bottom: -2px;
+  left: -2px;
+  border-width: 0 0 3px 3px;
+}
+
+.cornerBottomRight {
+  right: -2px;
+  bottom: -2px;
+  border-width: 0 3px 3px 0;
+}
+
+.scanBeam {
+  position: absolute;
+  top: 18px;
+  right: 14px;
+  left: 14px;
+  height: 2px;
+  border-radius: 99px;
+  background: #7ab0ff;
+  box-shadow: 0 0 8px rgb(102 166 255 / 75%);
+  animation: scan 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite alternate;
+}
+
+.scannerFooter {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  min-height: calc(92px + env(safe-area-inset-bottom, 0px));
+  align-items: flex-start;
+  justify-content: center;
+  gap: 12px;
+  padding: 19px 20px calc(18px + env(safe-area-inset-bottom, 0px));
+  background: rgb(7 13 24 / 68%);
+}
+
+.scannerFooter > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: #99beff;
+}
+
+.scannerFooter div {
+  display: grid;
+  gap: 3px;
+}
+
+.scannerFooter strong {
+  max-width: 30ch;
+  font-size: 0.92rem;
+  line-height: 1.4;
+}
+
+.scannerFooter span {
+  color: rgb(255 255 255 / 72%);
+  font-size: 0.78rem;
+}
+
+.panelContent {
+  display: grid;
+  min-height: 0;
+  place-items: center;
+  overflow-y: auto;
+  padding: 28px 20px calc(28px + env(safe-area-inset-bottom, 0px));
+}
+
+.confirmPanel,
+.statePanel {
+  width: min(100%, 380px);
+  text-align: center;
+}
+
+.deviceIcon,
+.neutralIcon,
+.successIcon {
+  display: grid;
+  width: 58px;
+  height: 58px;
+  margin: 0 auto 18px;
+  place-items: center;
+  border-radius: 16px;
+}
+
+.deviceIcon,
+.successIcon {
+  color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+}
+
+.neutralIcon {
+  color: var(--ui-text-secondary);
+  background: var(--ui-surface-subtle);
+}
+
+.kicker {
+  margin: 0 0 6px;
+  color: var(--ui-accent);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.confirmPanel h2,
+.statePanel h2 {
+  margin: 0;
+  color: var(--ui-text);
+  font-size: 1.35rem;
+  font-weight: 740;
+  line-height: 1.3;
+  text-wrap: balance;
+}
+
+.confirmLead,
+.statePanel p {
+  margin: 9px auto 0;
+  max-width: 32ch;
+  color: var(--ui-text-secondary);
+  font-size: 0.92rem;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.verificationCode {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin: 25px 0 18px;
+}
+
+.verificationCode span {
+  display: grid;
+  width: 48px;
+  height: 54px;
+  place-items: center;
+  border-radius: 12px;
+  color: var(--ui-text);
+  background: var(--ui-surface-subtle);
+  font-size: 1.4rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+}
+
+.confirmMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 24px;
+  color: var(--ui-text-muted);
+  font-size: 0.78rem;
+}
+
+.actionStack {
+  display: grid;
+  gap: 10px;
+}
+
+.primaryAction,
+.secondaryAction {
+  display: inline-flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--ui-radius-md);
+  font: inherit;
+  font-size: 0.94rem;
+  font-weight: 680;
+  cursor: pointer;
+  transition:
+    background var(--ui-duration-normal) ease,
+    transform var(--ui-duration-fast) ease;
+}
+
+.primaryAction {
+  color: #fff;
+  background: var(--ui-accent);
+}
+
+.primaryAction:hover {
+  background: var(--accent-brand-strong);
+}
+
+.secondaryAction {
+  color: var(--ui-text-secondary);
+  background: var(--ui-surface-subtle);
+}
+
+.primaryAction:active,
+.secondaryAction:active {
+  transform: scale(0.985);
+}
+
+.statePanel > .primaryAction:first-of-type {
+  margin-top: 24px;
+}
+
+.statePanel > .secondaryAction {
+  margin-top: 10px;
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes scan {
+  from { transform: translateY(0); }
+  to { transform: translateY(calc(var(--scan-frame) - 38px)); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+:global(html.zhicui-desktop-login-scanner-active),
+:global(body.zhicui-desktop-login-scanner-active) {
+  background: transparent !important;
+}
+
+:global(body.zhicui-desktop-login-scanner-active) {
+  overflow: hidden !important;
+  visibility: hidden;
+}
+
+:global(body.zhicui-desktop-login-scanner-active) .overlayOpen {
+  visibility: visible;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trigger,
+  .overlay,
+  .iconButton,
+  .primaryAction,
+  .secondaryAction {
+    transition: none;
+  }
+
+  .scanBeam {
+    animation: none;
+    top: 50%;
+  }
+}

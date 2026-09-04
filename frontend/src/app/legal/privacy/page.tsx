@@ -1,6 +1,9 @@
 import Link from 'next/link';
 import PublicDocumentPage from '@/components/PublicDocumentPage';
-import { CURRENT_LEGAL_VERSIONS } from '@/lib/legalDocuments';
+import {
+  CURRENT_LEGAL_VERSIONS,
+  PRIVACY_EFFECTIVE_DATE,
+} from '@/lib/legalDocuments';
 
 export default function PrivacyPage() {
   return (
@@ -8,12 +11,13 @@ export default function PrivacyPage() {
       category="法律文件"
       title="知萃隐私政策"
       version={CURRENT_LEGAL_VERSIONS.privacy}
+      effectiveDate={PRIVACY_EFFECTIVE_DATE}
       intro="本政策说明知萃收集哪些信息、为何处理、如何保护，以及你如何访问、导出或删除自己的数据。"
       sections={[
         {
           id: 'collection',
           title: '1. 我们处理的信息',
-          content: <ul><li>账号信息：邮箱、用户名、密码哈希、注册时间和协议同意记录。</li><li>你主动选择的资料：来源链接、标题、作者、公开元数据、完整文稿、知识、计划和 AI 对话。</li><li>平台绑定状态：连接状态、授权范围和验证时间；必要的登录凭据会加密保存，不在数据导出或日志中返回。</li><li>运行信息：客户端类型、请求时间、错误类别、安全和用量记录。我们不为广告目的收集多余设备指纹。</li></ul>,
+          content: <ul><li>账号信息：邮箱、用户名、密码哈希、注册时间和协议同意记录。</li><li>你主动选择的资料：来源链接、标题、作者、公开元数据、完整文稿、知识、计划和 AI 对话。</li><li>平台绑定状态：连接状态、授权范围和验证时间；必要的登录凭据会加密保存，不在数据导出或日志中返回。</li><li>扫码登录电脑：仅在你主动点击扫码时申请相机权限。二维码画面在 Android 设备本地解析，不上传、不保存。</li><li>运行信息：客户端类型、请求时间、错误类别、安全和用量记录。我们不为广告目的收集多余设备指纹。</li></ul>,
         },
         {
           id: 'purpose',

@@ -349,6 +349,12 @@
   .mobileActions > button:last-child { border-bottom: 0; }
   .mobileActions > button:active { background: var(--background-secondary); }
   .mobileActions > button.mobileLogout { color: var(--ui-danger); }
+
+  .mobileScanner {
+    min-height: 48px;
+    padding: 0 10px;
+    border-bottom: 1px solid var(--card-border);
+  }
 }
 
 @media (max-width: 767px) {

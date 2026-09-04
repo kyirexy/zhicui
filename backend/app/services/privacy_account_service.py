@@ -31,8 +31,9 @@ from app.services.auth_service import SECRET_KEY, hash_password, verify_password
 
 
 TERMS_VERSION = "2026-08-28"
-PRIVACY_VERSION = "2026-08-28"
+PRIVACY_VERSION = "2026-09-04"
 LEGAL_EFFECTIVE_DATE = "2026-08-28"
+PRIVACY_EFFECTIVE_DATE = "2026-09-04"
 ACCOUNT_DELETE_CONFIRMATION = "永久注销"
 DELETE_GRANT_TTL_MINUTES = 10
 
@@ -44,7 +45,7 @@ LEGAL_DOCUMENTS = {
     },
     "privacy": {
         "version": PRIVACY_VERSION,
-        "effective_date": LEGAL_EFFECTIVE_DATE,
+        "effective_date": PRIVACY_EFFECTIVE_DATE,
         "path": "/legal/privacy",
     },
     "platform_limits": {

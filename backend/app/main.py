@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.routes import router
+from app.api.desktop_login_routes import router as desktop_login_router
 from app.api.agent_routes import router as agent_router
 from app.api.video_analysis_routes import router as video_analysis_router
 from app.api.ops_routes import router as ops_router
@@ -55,6 +56,7 @@ from app.models.library_hidden_item import LibraryHiddenItem  # noqa: F401
 from app.models.douyin_account_binding import DouyinAccountBinding  # noqa: F401
 from app.models.douyin_local_library_item import DouyinLocalLibraryItem  # noqa: F401
 from app.models.desktop_handoff import DesktopHandoff  # noqa: F401
+from app.models.desktop_login_session import DesktopLoginSession  # noqa: F401
 from app.models.video_source_ledger import VideoSourceLedger  # noqa: F401
 from app.models.creator_sync import (  # noqa: F401
     CreatorSource,
@@ -370,6 +372,7 @@ def create_app() -> FastAPI:
 
     # Register routes
     app.include_router(router)
+    app.include_router(desktop_login_router)
     app.include_router(agent_router)
     app.include_router(video_analysis_router)
     app.include_router(ops_router)

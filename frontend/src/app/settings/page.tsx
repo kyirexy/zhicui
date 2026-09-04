@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -33,6 +33,9 @@ import AgentAccessSettingsCard from '@/components/AgentAccessSettingsCard';
 import AutoSyncSettingsCard from '@/components/AutoSyncSettingsCard';
 import DesktopMediaSettingsCard from '@/components/DesktopMediaSettingsCard';
 import LocalDataSettingsCard from '@/components/LocalDataSettingsCard';
+import MobileDesktopLoginScanner, {
+  type MobileDesktopLoginPreview,
+} from '@/components/MobileDesktopLoginScanner';
 import QuickSyncSettingsCard from '@/components/QuickSyncSettingsCard';
 import UserCustomModelsSettingsCard from '@/components/UserCustomModelsSettingsCard';
 import UserVisionProviderSettingsCard from '@/components/UserVisionProviderSettingsCard';
@@ -40,6 +43,11 @@ import ClientCapabilitySettingsCard from '@/components/ClientCapabilitySettingsC
 import { useDesktopApp } from '@/components/DesktopAppFrame';
 import ThemeSelector from '@/components/theme/ThemeSelector';
 import { isNativeAndroidApp } from '@/lib/douyinNative';
+import {
+  decideDesktopLoginSession,
+  previewDesktopLoginSession,
+  type DesktopLoginApprovalReference,
+} from '@/lib/desktopLogin';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import { useSettings } from '@/lib/hooks/SettingsContext';
 import { useIsMobile } from '@/lib/hooks/useMediaQuery';
@@ -186,6 +194,28 @@ function SettingsWorkspace() {
     router.replace(`/settings?section=${id}`, { scroll: false });
   };
 
+  const previewDesktopApproval = useCallback(async (
+    reference: DesktopLoginApprovalReference,
+  ): Promise<MobileDesktopLoginPreview> => {
+    const result = await previewDesktopLoginSession(reference);
+    if (!result.success) throw new Error(result.error);
+    return {
+      sessionId: result.data.session_id,
+      clientName: result.data.client_name,
+      verificationCode: result.data.verification_code,
+      expiresAt: result.data.expires_at,
+      status: result.data.status,
+    };
+  }, []);
+
+  const decideDesktopApproval = useCallback(async (
+    reference: DesktopLoginApprovalReference,
+    decision: 'approve' | 'deny',
+  ) => {
+    const result = await decideDesktopLoginSession(reference, decision);
+    if (!result.success) throw new Error(result.error);
+  }, []);
+
   return (
     <div className={`desktop-settings-page ${styles.workspace}`}>
       <aside className={styles.rail} aria-label="设置分类">
@@ -280,6 +310,17 @@ function SettingsWorkspace() {
                       <small>{user?.email || '内容已安全同步'}</small>
                     </div>
                   </div>
+                  {nativeAndroid ? (
+                    <MobileDesktopLoginScanner
+                      className={styles.mobileScanner}
+                      isAuthenticated={Boolean(user)}
+                      currentAccountLabel={user?.username || user?.email}
+                      onPreview={previewDesktopApproval}
+                      onDecision={decideDesktopApproval}
+                      onAuthenticationRequired={() => router.replace('/login')}
+                      variant="settings"
+                    />
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => window.dispatchEvent(new Event('zhicui:open-feedback'))}

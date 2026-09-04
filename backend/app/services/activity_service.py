@@ -20,6 +20,9 @@ ACTION_LABELS: dict[str, str] = {
     "account_register": "注册账号",
     "account_login": "登录账号",
     "account_dev_session": "进入开发会话",
+    "desktop_login_approved": "确认电脑扫码登录",
+    "desktop_login_denied": "拒绝电脑扫码登录",
+    "desktop_login_consumed": "完成电脑扫码登录",
     "video_parse": "解析视频链接",
     "content_extract": "提取内容",
     "douyin_login": "发起抖音扫码登录",
@@ -89,6 +92,8 @@ _DETAIL_KEYS = {
     "quarantined",
     "client_version",
     "channel",
+    "session_id",
+    "status",
 }
 _DETAIL_INTEGER_KEYS = {
     "requested_count",
@@ -114,6 +119,8 @@ _DETAIL_STRING_LIMITS = {
     "trigger": 24,
     "client_version": 32,
     "channel": 32,
+    "session_id": 40,
+    "status": 16,
 }
 _SOURCE_MODE_LABELS = {
     "like": "喜欢",

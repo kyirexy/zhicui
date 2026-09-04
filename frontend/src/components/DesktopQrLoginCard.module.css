@@ -1,0 +1,237 @@
+.card {
+  display: grid;
+  width: 100%;
+  gap: 18px;
+  color: var(--foreground);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: left;
+}
+
+.headerIcon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent-brand) 18%, var(--card-border));
+  border-radius: 11px;
+  color: var(--accent-brand);
+  background: color-mix(in srgb, var(--accent-brand) 8%, var(--card-bg));
+}
+
+.header h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+}
+
+.header p {
+  margin: 2px 0 0;
+  color: var(--foreground-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.qrStage {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 18px 16px 14px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent-brand) 17%, var(--card-border));
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--accent-brand) 11%, transparent), transparent 55%),
+    color-mix(in srgb, var(--background-secondary) 62%, var(--card-bg));
+}
+
+.qrStage::before {
+  position: absolute;
+  top: -62px;
+  left: 50%;
+  width: 200px;
+  height: 108px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-brand) 14%, transparent);
+  filter: blur(34px);
+  content: '';
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.qrFrame {
+  position: relative;
+  display: grid;
+  width: 212px;
+  height: 212px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(23, 32, 51, .08);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow:
+    0 1px 2px rgba(16, 24, 40, .05),
+    0 16px 38px -24px color-mix(in srgb, var(--accent-brand) 46%, transparent);
+}
+
+.qrCode {
+  display: block;
+  width: 188px;
+  height: 188px;
+}
+
+.spinner,
+.buttonSpinner {
+  color: var(--accent-brand);
+  animation: qr-login-spin .9s linear infinite;
+}
+
+.mutedIcon {
+  color: var(--foreground-muted);
+}
+
+.successIcon {
+  color: var(--accent-brand);
+}
+
+.status {
+  display: grid;
+  min-height: 38px;
+  justify-items: center;
+  gap: 2px;
+  text-align: center;
+}
+
+.status strong {
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.status span {
+  max-width: 270px;
+  color: var(--foreground-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.verification {
+  display: flex;
+  min-height: 30px;
+  padding: 0 10px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  color: var(--foreground-muted);
+  background: color-mix(in srgb, var(--card-bg) 84%, transparent);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.verification strong {
+  color: var(--foreground);
+  font-size: 13px;
+  letter-spacing: .16em;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.primaryAction,
+.secondaryAction {
+  display: inline-flex;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--card-border);
+  border-radius: 11px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease, transform 140ms ease;
+}
+
+.primaryAction {
+  border-color: color-mix(in srgb, var(--accent-brand) 25%, var(--card-border));
+  color: var(--accent-brand-strong);
+  background: color-mix(in srgb, var(--accent-brand) 9%, var(--card-bg));
+}
+
+.secondaryAction {
+  color: var(--foreground-secondary);
+  background: var(--card-bg);
+}
+
+.primaryAction:hover:not(:disabled),
+.secondaryAction:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent-brand) 40%, var(--card-border));
+  transform: translateY(-1px);
+}
+
+.primaryAction:focus-visible,
+.secondaryAction:focus-visible,
+.cancelAction:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-brand) 62%, transparent);
+  outline-offset: 2px;
+}
+
+.primaryAction:disabled,
+.secondaryAction:disabled {
+  cursor: wait;
+  opacity: .52;
+}
+
+.cancelAction {
+  display: inline-flex;
+  min-height: 44px;
+  margin: -8px auto 0;
+  padding: 0 8px;
+  border: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: var(--foreground-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: color 140ms ease;
+}
+
+.cancelAction:hover {
+  color: var(--ui-danger);
+}
+
+@keyframes qr-login-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 360px) {
+  .qrStage { padding-inline: 12px; }
+  .qrFrame { width: 196px; height: 196px; }
+  .qrCode { width: 174px; height: 174px; }
+  .actions { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner,
+  .buttonSpinner { animation: none; }
+
+  .primaryAction,
+  .secondaryAction { transition: none; }
+}

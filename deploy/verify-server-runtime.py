@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import argparse
 import importlib
 import importlib.util
 import json
 import os
 from importlib.metadata import version
+from pathlib import Path
 from typing import Any, Iterable
+
+from dotenv import dotenv_values
 
 
 # 生产部署验证必须完全离线，避免 LiteLLM 导入时探测远端价格表。
@@ -30,6 +34,20 @@ REQUIRED_IMPORTS = {
 }
 
 FORBIDDEN_HEAVY_IMPORTS = ("funasr", "torch", "torchaudio", "modelscope")
+
+
+def load_runtime_environment(env_file: str) -> None:
+    """加载 systemd 使用的同一份环境配置，且不把任何值写入日志。"""
+
+    path = Path(env_file)
+    if not path.is_absolute() or not path.is_file():
+        raise RuntimeError("生产运行时环境文件不存在或不是绝对路径")
+    values = dotenv_values(path, interpolate=False)
+    if not values:
+        raise RuntimeError("生产运行时环境文件为空或无法解析")
+    for key, value in values.items():
+        if key and value is not None:
+            os.environ[key] = value
 
 
 def iter_route_paths(router: Any) -> Iterable[str]:
@@ -58,6 +76,11 @@ def iter_route_paths(router: Any) -> Iterable[str]:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--env-file", required=True)
+    args = parser.parse_args()
+    load_runtime_environment(args.env_file)
+
     for module_name in REQUIRED_IMPORTS:
         importlib.import_module(module_name)
 

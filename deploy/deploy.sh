@@ -739,7 +739,8 @@ DOUYIN_MCP_ROOT="${DOUYIN_MCP_SERVER_ROOT:-$APP_DIR/douyin-mcp-server}"
       'from app.services.video_extractor import DouyinProcessor; assert DouyinProcessor is not None'
   DOUYIN_MCP_SERVER_ROOT="$DOUYIN_MCP_ROOT" \
     "$RELEASE_DIR/.venv/bin/python" \
-      "$RELEASE_DIR/deploy/verify-server-runtime.py"
+      "$RELEASE_DIR/deploy/verify-server-runtime.py" \
+      --env-file "$BACKEND_ENV"
 )
 record_gate backend_import pass '锁定依赖、JWT、应用路由与核心视频解析运行时可用'
 

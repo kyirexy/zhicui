@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 SCRIPT_PATH = (
@@ -42,6 +45,22 @@ class ServerRuntimeVerifierTests(unittest.TestCase):
             list(MODULE.iter_route_paths(app)),
             ["/api/direct"],
         )
+
+    def test_load_runtime_environment_uses_explicit_file_without_logging_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            env_path = Path(directory) / ".env"
+            env_path.write_text(
+                'JWT_SECRET="runtime-secret-not-for-logs"\nPORT=8000\n',
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {}, clear=True):
+                MODULE.load_runtime_environment(str(env_path.resolve()))
+                self.assertEqual(os.environ["JWT_SECRET"], "runtime-secret-not-for-logs")
+                self.assertEqual(os.environ["PORT"], "8000")
+
+    def test_load_runtime_environment_rejects_relative_or_missing_file(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "绝对路径"):
+            MODULE.load_runtime_environment("backend/.env")
 
 
 if __name__ == "__main__":

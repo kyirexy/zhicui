@@ -102,7 +102,10 @@ case "$PREVIOUS_RUNTIME" in
 esac
 [[ -x "$PREVIOUS_RUNTIME/.venv/bin/python" ]] ||
   err "当前 runtime 缺少独立 .venv：$PREVIOUS_RUNTIME"
-PREVIOUS_RUNTIME_COMMIT="$(git -C "$PREVIOUS_RUNTIME" rev-parse HEAD 2>/dev/null || true)"
+# current 可能来自受控的 ubuntu 运维 worktree，而流水线以 jenkins 运行。
+# 路径已在上方 realpath 并限制到批准目录，因此仅对本次命令信任这个精确路径，
+# 避免依赖持久的 safe.directory 或使用不安全的通配符。
+PREVIOUS_RUNTIME_COMMIT="$(git -c safe.directory="$PREVIOUS_RUNTIME" -C "$PREVIOUS_RUNTIME" rev-parse HEAD 2>/dev/null || true)"
 [[ "$PREVIOUS_RUNTIME_COMMIT" =~ ^[0-9a-f]{40}$ ]] ||
   err "当前 runtime 无法追溯到完整 Git 提交：$PREVIOUS_RUNTIME"
 

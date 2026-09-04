@@ -71,7 +71,10 @@ write_evidence() {
   trap - EXIT
   delete_smoke_thread
   if [[ -n "$EVIDENCE_FILE" ]]; then
-    install -d -m 0700 "$(dirname "$EVIDENCE_FILE")"
+    evidence_dir="$(dirname "$EVIDENCE_FILE")"
+    # mktemp 通常把证据文件放在现有 /tmp；绝不能尝试把共享 /tmp 改成
+    # 0700。仅当调用方给的是尚不存在的私有目录时才创建它。
+    [[ -d "$evidence_dir" ]] || install -d -m 0700 "$evidence_dir"
     python3 - "$RESULTS_FILE" "$EVIDENCE_FILE" "$BASE_URL" "$STARTED_AT" "$exit_status" \
       "$DEPLOYMENT_ID" "$TARGET_COMMIT" <<'PY'
 import json

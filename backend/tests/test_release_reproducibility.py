@@ -39,6 +39,24 @@ class ReleaseReproducibilityContractTests(unittest.TestCase):
         self.assertIn("npm ci --silent", script)
         self.assertNotRegex(script, re.compile(r"\bnpm\s+install\b"))
 
+    def test_public_release_assets_remain_nginx_readable_after_rsync(self) -> None:
+        preinstall = (ROOT / "deploy" / "preinstall-production-assets.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "find /var/lib/zhicui-downloads -type d -exec chmod 0755 {} +",
+            preinstall,
+        )
+        self.assertIn(
+            "find /var/lib/zhicui-downloads -type f -exec chmod 0644 {} +",
+            preinstall,
+        )
+
+    def test_smoke_evidence_does_not_chmod_an_existing_shared_directory(self) -> None:
+        smoke = (ROOT / "scripts" / "smoke-production.sh").read_text(encoding="utf-8")
+        self.assertIn('[[ -d "$evidence_dir" ]] || install -d -m 0700', smoke)
+        self.assertNotIn('install -d -m 0700 "$(dirname "$EVIDENCE_FILE")"', smoke)
+
     def test_android_release_uses_explicit_detached_commit(self) -> None:
         script = (ROOT / "scripts" / "build-apk.sh").read_text(encoding="utf-8")
         for marker in (

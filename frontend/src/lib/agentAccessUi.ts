@@ -1,10 +1,12 @@
-export type AgentAccessPlatform = 'web' | 'windows' | 'android';
+export type AgentAccessPlatform = 'web' | 'windows' | 'android' | 'ios';
 
 export function resolveAgentAccessPlatform(input: {
   desktop: boolean;
   android: boolean;
+  ios?: boolean;
 }): AgentAccessPlatform {
   if (input.android) return 'android';
+  if (input.ios) return 'ios';
   return input.desktop ? 'windows' : 'web';
 }
 
@@ -13,7 +15,7 @@ export function canRunLocalAgentActions(platform: AgentAccessPlatform): boolean 
 }
 
 export function canShowAgentInstallGuide(platform: AgentAccessPlatform): boolean {
-  return platform !== 'android';
+  return platform !== 'android' && platform !== 'ios';
 }
 
 export function safeAgentScopes(scopes: string[]): string[] {

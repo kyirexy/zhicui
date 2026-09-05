@@ -3,8 +3,15 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { resolveClientAuthPolicy } from './clientAuthPolicy.ts';
 import { detectMobileDownloadPlatform } from './mobilePlatform.ts';
+import { resolveAgentAccessPlatform, canRunLocalAgentActions, canShowAgentInstallGuide } from './agentAccessUi.ts';
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
+
+test('iOS 不展示电脑端本机命令安装引导', () => {
+  assert.equal(resolveAgentAccessPlatform({ desktop: false, android: false, ios: true }), 'ios');
+  assert.equal(canRunLocalAgentActions('ios'), false);
+  assert.equal(canShowAgentInstallGuide('ios'), false);
+});
 
 test('iOS 使用已安装客户端权限，浏览器不能靠 UA 绕过', () => {
   for (const path of ['/', '/library', '/harness', '/plans', '/settings']) {
@@ -35,6 +42,7 @@ test('共享壳支持 iOS，安卓专用插件和 APK 更新不扩散', () => {
   assert.match(read('./douyinNative.ts'), /\['android', 'ios'\]/);
   assert.match(read('./douyinNative.ts'), /if \(!isNativeAndroidApp\(\)\)/);
   assert.match(read('./appUpdate.ts'), /getPlatform\(\) !== 'android'/);
+  assert.match(read('../components/AppUpdateSettingsCard.tsx'), /setMode\('ios'\)/);
   assert.match(read('../components/MobileDesktopLoginScanner.tsx'), /\['android', 'ios'\]/);
 });
 

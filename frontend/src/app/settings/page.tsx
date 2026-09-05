@@ -429,6 +429,7 @@ function SettingsWorkspace() {
                 : <AgentAccessSettingsCard
                     isDesktop={isDesktop}
                     nativeAndroid={nativeAndroid}
+                    nativeIOS={nativeMobile && !nativeAndroid}
                   />
             )}
 

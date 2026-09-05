@@ -1,5 +1,7 @@
 'use client';
 
+import { Capacitor } from '@capacitor/core';
+
 import {
   CheckCircle2,
   Download,
@@ -29,7 +31,7 @@ import {
   releaseChannelLabel,
 } from '@/lib/releaseChannel';
 
-type RuntimeMode = 'loading' | 'web' | 'android' | 'desktop';
+type RuntimeMode = 'loading' | 'web' | 'android' | 'ios' | 'desktop';
 
 export default function AppUpdateSettingsCard() {
   const mountedRef = useRef(true);
@@ -56,6 +58,10 @@ export default function AppUpdateSettingsCard() {
         return;
       }
 
+      if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios') {
+        if (mountedRef.current) setMode('ios');
+        return;
+      }
       const result = await checkAndroidAppUpdate();
       if (!mountedRef.current) return;
       setAndroidResult(result);
@@ -164,6 +170,8 @@ export default function AppUpdateSettingsCard() {
 
   const title = mode === 'desktop'
     ? 'Windows 桌面端'
+    : mode === 'ios'
+      ? 'iOS 版本与更新'
     : mode === 'android'
       ? 'Android 版本与更新'
       : mode === 'web'
@@ -176,7 +184,7 @@ export default function AppUpdateSettingsCard() {
         <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-accent-brand">
           {mode === 'desktop' ? (
             <MonitorDown size={21} aria-hidden="true" />
-          ) : mode === 'android' ? (
+          ) : mode === 'android' || mode === 'ios' ? (
             <Smartphone size={21} aria-hidden="true" />
           ) : (
             <Globe2 size={21} aria-hidden="true" />
@@ -191,6 +199,8 @@ export default function AppUpdateSettingsCard() {
                 ? androidResult
                   ? `当前安装 ${androidResult.installed.version} (${androidResult.installed.build}) · ${releaseChannelLabel(androidResult.release?.channel || CLIENT_RELEASE_CHANNEL)}。启动时只检查同一渠道的新版。`
                   : '正在读取设备版本…'
+                : mode === 'ios'
+                  ? 'iOS 测试版。请通过原安装渠道获取更新；Android 和 Mac 安装包不适用于此设备。'
                 : mode === 'web'
                   ? '网页会自动使用线上最新版；需要本机扫码或独立使用时，可安装对应客户端。'
                   : '正在读取版本信息…'}

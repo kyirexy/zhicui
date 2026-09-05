@@ -101,6 +101,7 @@ async function copyText(value: string): Promise<void> {
 interface AgentAccessSettingsCardProps {
   isDesktop: boolean;
   nativeAndroid: boolean;
+  nativeIOS?: boolean;
 }
 
 type AgentAccessErrorContext = 'global' | 'local' | 'pat' | 'connections' | 'confirmations';
@@ -108,9 +109,10 @@ type AgentAccessErrorContext = 'global' | 'local' | 'pat' | 'connections' | 'con
 export default function AgentAccessSettingsCard({
   isDesktop,
   nativeAndroid,
+  nativeIOS = false,
 }: AgentAccessSettingsCardProps) {
   const mountedRef = useRef(true);
-  const platform = resolveAgentAccessPlatform({ desktop: isDesktop, android: nativeAndroid });
+  const platform = resolveAgentAccessPlatform({ desktop: isDesktop, android: nativeAndroid, ios: nativeIOS });
   const [capabilities, setCapabilities] = useState<AgentCapabilities | null>(null);
   const [credentials, setCredentials] = useState<AgentCredential[]>([]);
   const [devices, setDevices] = useState<AgentDeviceConnection[]>([]);
@@ -458,7 +460,7 @@ export default function AgentAccessSettingsCard({
           </p>
         </div>
         <span className={styles.platformBadge}>
-          {platform === 'windows' ? 'Windows 本机 + 云端' : platform === 'android' ? '仅管理授权' : '云端接入'}
+          {platform === 'windows' ? 'Windows 本机 + 云端' : platform === 'android' || platform === 'ios' ? '仅管理授权' : '云端接入'}
         </span>
       </section>
 

@@ -15,6 +15,17 @@ const landingStyles = readFileSync(
   'utf8',
 );
 
+test('官网首屏和下载区都能找到双架构 Mac 测试版', () => {
+  assert.match(landingPage, /href="#download-mac"/);
+  assert.match(landingPage, /id="download-mac"/);
+  assert.match(landingPage, /下载 Apple Silicon 版/);
+  assert.match(landingPage, /下载 Intel 版/);
+  assert.match(landingPage, /Zhicui-Mac-Test-1\.1\.0-arm64\.dmg/);
+  assert.match(landingPage, /Zhicui-Mac-Test-1\.1\.0-x64\.dmg/);
+  assert.match(landingPage, /尚未完成苹果签名公证和真机验收/);
+  assert.match(landingPage, /iPhone \/ iPad 版尚未发布/);
+});
+
 test('官网用真实能力介绍博主整理和多视频提问', () => {
   assert.match(landingPage, /只整理你关心的博主/);
   assert.match(landingPage, /多选视频，一次问清楚/);

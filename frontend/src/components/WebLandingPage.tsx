@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ArrowDown,
+  AppleLogo,
   ChatCenteredText,
   CheckCircle,
   DeviceMobile,
@@ -25,6 +26,9 @@ import {
   type ClientPlatform,
 } from '@/lib/clientReleases';
 import styles from './WebLandingPage.module.css';
+
+// 只引用已发布并校验过的测试产物，不能改指向正式更新通道。
+const MAC_TEST_DOWNLOAD_ROOT = 'https://luxai.cn/download/mac/test/dccfdecdcb7879746a031053047697822c3b6096';
 
 const CORE_FEATURES = [
   {
@@ -138,9 +142,10 @@ export default function WebLandingPage() {
   }, []);
 
   useEffect(() => {
-    if (window.location.hash !== '#download') return undefined;
+    const sectionId = window.location.hash === '#download-mac' ? 'download-mac' : 'download';
+    if (!['#download', '#download-mac'].includes(window.location.hash)) return undefined;
     const timeoutId = window.setTimeout(() => {
-      document.getElementById('download')?.scrollIntoView({
+      document.getElementById(sectionId)?.scrollIntoView({
         behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
           ? 'auto'
           : 'smooth',
@@ -198,6 +203,14 @@ export default function WebLandingPage() {
                   {preferredClient === 'android' ? '本机推荐 · ' : ''}
                   v{releases.android.version} · {androidSize}
                 </small>
+              </span>
+              <i aria-hidden="true"><ArrowDown size={16} weight="bold" /></i>
+            </a>
+            <a className={styles.secondaryAction} data-platform="mac" href="#download-mac">
+              <AppleLogo size={20} weight="light" aria-hidden="true" />
+              <span>
+                <strong>下载 Mac 版</strong>
+                <small>Apple Silicon / Intel · 测试版</small>
               </span>
               <i aria-hidden="true"><ArrowDown size={16} weight="bold" /></i>
             </a>
@@ -330,6 +343,34 @@ export default function WebLandingPage() {
                 />
                 <span>扫码下载</span>
               </div>
+            </div>
+          </article>
+          <article id="download-mac" className={`${styles.platformCard} ${styles.macCard}`}>
+            <div className={styles.platformTop}>
+              <span className={styles.platformIcon}><AppleLogo size={28} weight="light" aria-hidden="true" /></span>
+              <span className={styles.platformLabel}>Mac 测试版</span>
+            </div>
+            <h3>macOS 桌面端</h3>
+            <p>选择与你的 Mac 芯片对应的安装包。iPhone / iPad 版尚未发布。</p>
+            <div className={styles.releaseMeta} aria-label="Mac 版本信息">
+              <span>v1.1.0 · 测试版</span>
+              <span>macOS 12 及以上</span>
+              <span>DMG</span>
+            </div>
+            <div className={`${styles.platformFooter} ${styles.macFooter}`}>
+              <div className={styles.macActions}>
+                <a href={`${MAC_TEST_DOWNLOAD_ROOT}/Zhicui-Mac-Test-1.1.0-arm64.dmg`} aria-describedby="mac-test-notice">
+                  <DownloadSimple size={19} aria-hidden="true" />
+                  <strong>下载 Apple Silicon 版</strong>
+                  <ArrowDown size={16} aria-hidden="true" />
+                </a>
+                <a href={`${MAC_TEST_DOWNLOAD_ROOT}/Zhicui-Mac-Test-1.1.0-x64.dmg`} aria-describedby="mac-test-notice">
+                  <DownloadSimple size={19} aria-hidden="true" />
+                  <strong>下载 Intel 版</strong>
+                  <ArrowDown size={16} aria-hidden="true" />
+                </a>
+              </div>
+              <small id="mac-test-notice">尚未完成苹果签名公证和真机验收，安装时可能出现安全提示。芯片型号可在“关于本机”中查看。</small>
             </div>
           </article>
         </div>

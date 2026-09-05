@@ -137,8 +137,8 @@ function formatRemaining(seconds: number): string {
   return `${minutes}:${String(remainder).padStart(2, '0')}`;
 }
 
-export function isNativeAndroidScanner(): boolean {
-  return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+export function isNativeMobileScanner(): boolean {
+  return Capacitor.isNativePlatform() && ['android', 'ios'].includes(Capacitor.getPlatform());
 }
 
 export default function MobileDesktopLoginScanner({
@@ -155,7 +155,7 @@ export default function MobileDesktopLoginScanner({
   variant = 'secondary',
   className = '',
 }: MobileDesktopLoginScannerProps) {
-  const [nativeAndroid, setNativeAndroid] = useState(false);
+  const [nativeMobile, setNativeMobile] = useState(false);
   const [viewState, setViewState] = useState<ViewState>('closed');
   const [message, setMessage] = useState('');
   const [preview, setPreview] = useState<MobileDesktopLoginPreview | null>(null);
@@ -175,7 +175,7 @@ export default function MobileDesktopLoginScanner({
   const lastInitialReferenceRef = useRef('');
 
   useEffect(() => {
-    setNativeAndroid(isNativeAndroidScanner());
+    setNativeMobile(isNativeMobileScanner());
   }, []);
 
   const restoreWebView = useCallback(() => {
@@ -303,8 +303,8 @@ export default function MobileDesktopLoginScanner({
   }, [reviewReference]);
 
   const startScanner = useCallback(async () => {
-    if (!isNativeAndroidScanner()) {
-      setMessage('请在知萃 Android 客户端中使用扫码登录');
+    if (!isNativeMobileScanner()) {
+      setMessage('请在知萃移动客户端中使用扫码登录');
       setViewState('unsupported');
       return;
     }
@@ -474,7 +474,7 @@ export default function MobileDesktopLoginScanner({
   }, [closeOverlay, onApproved, onDecision, preview, reference]);
 
   useEffect(() => {
-    if (!nativeAndroid || !isAuthenticated || !initialReference || viewState !== 'closed') {
+    if (!nativeMobile || !isAuthenticated || !initialReference || viewState !== 'closed') {
       return;
     }
     const referenceKey = `${initialReference.sessionId}.${initialReference.approvalToken}`;
@@ -486,7 +486,7 @@ export default function MobileDesktopLoginScanner({
   }, [
     initialReference,
     isAuthenticated,
-    nativeAndroid,
+    nativeMobile,
     onInitialReferenceLoaded,
     reviewReference,
     viewState,
@@ -547,7 +547,7 @@ export default function MobileDesktopLoginScanner({
     };
   }, [stopScanner]);
 
-  if (!nativeAndroid) return null;
+  if (!nativeMobile) return null;
 
   const cameraVisible = viewState === 'scanning';
   const overlayOpen = viewState !== 'closed';

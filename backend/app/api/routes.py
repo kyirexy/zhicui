@@ -798,7 +798,7 @@ class RegisterRequest(BaseModel):
     accepted_privacy: bool = False
     terms_version: str = Field(default="", max_length=24)
     privacy_version: str = Field(default="", max_length=24)
-    client_type: Literal["web", "windows", "android"] = "web"
+    client_type: Literal["web", "windows", "android", "ios"] = "web"
 
 
 class LoginRequest(BaseModel):

@@ -141,6 +141,9 @@ def create_app() -> FastAPI:
         if allowed_origins_raw != "*"
         else ["*"]
     )
+    # iOS Capacitor 从本机资源加载界面；只增加固定原生源，不放宽公网来源。
+    if allowed_origins != ["*"] and "capacitor://localhost" not in allowed_origins:
+        allowed_origins.append("capacitor://localhost")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,

@@ -45,11 +45,12 @@ export function resolveClientAuthPolicy(
   pathname: string,
   options: {
     desktop: boolean;
-    nativeAndroid: boolean;
+    nativeAndroid?: boolean;
+    nativeMobile?: boolean;
     development: boolean;
   },
 ): ClientAuthPolicy {
-  const installedClient = options.desktop || options.nativeAndroid;
+  const installedClient = options.desktop || options.nativeMobile === true || options.nativeAndroid === true;
   const publicRoute = ALWAYS_PUBLIC.includes(pathname)
     || (!installedClient && BROWSER_PUBLIC.includes(pathname));
   const clientOnlyRoute = CLIENT_ONLY_PATHS.some(

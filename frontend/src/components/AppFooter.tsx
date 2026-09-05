@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ArrowUpRight, DownloadSimple, ShieldCheck } from '@phosphor-icons/react';
-import { isNativeAndroidApp } from '@/lib/douyinNative';
+import { isNativeMobileApp } from '@/lib/douyinNative';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import { PUBLIC_INFORMATION_LINKS } from '@/lib/legalDocuments';
 import styles from './MarketingFooter.module.css';
@@ -12,17 +12,17 @@ import styles from './MarketingFooter.module.css';
 export default function AppFooter() {
   const pathname = usePathname();
   const { user } = useAuth();
-  const [nativeAndroid, setNativeAndroid] = useState<boolean | null>(null);
+  const [nativeMobile, setNativeMobile] = useState<boolean | null>(null);
 
   useEffect(() => {
-    setNativeAndroid(isNativeAndroidApp());
+    setNativeMobile(isNativeMobileApp());
   }, []);
 
   if (pathname?.startsWith('/login')) {
     return null;
   }
 
-  if (pathname === '/' && nativeAndroid === false) {
+  if (pathname === '/' && nativeMobile === false) {
     return (
       <footer className={`${styles.footer} web-app-footer`}>
         <div className={styles.inner}>
@@ -55,7 +55,7 @@ export default function AppFooter() {
     );
   }
 
-  if (pathname === '/' && nativeAndroid === null) {
+  if (pathname === '/' && nativeMobile === null) {
     return null;
   }
 

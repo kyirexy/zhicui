@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { getPlanStats } from '@/lib/api';
 import { useAuth } from '@/lib/hooks/AuthContext';
-import { isNativeAndroidApp } from '@/lib/douyinNative';
+import { isNativeMobileApp } from '@/lib/douyinNative';
 import {
   PRODUCT_DESTINATIONS,
   isProductDestinationActive,
@@ -17,11 +17,11 @@ export default function BottomTabBar() {
   const pathname = usePathname() ?? '/';
   const { user, loading: authLoading } = useAuth();
   const [planBadge, setPlanBadge] = useState(0);
-  const [nativeAndroid, setNativeAndroid] = useState<boolean | null>(null);
+  const [nativeMobile, setNativeMobile] = useState<boolean | null>(null);
   const [pendingTab, setPendingTab] = useState<string | null>(null);
 
   useEffect(() => {
-    setNativeAndroid(isNativeAndroidApp());
+    setNativeMobile(isNativeMobileApp());
   }, []);
 
   useEffect(() => {
@@ -36,7 +36,7 @@ export default function BottomTabBar() {
   // A8: Fetch plan stats for badge. Refresh every 60s while mounted.
   useEffect(() => {
     if (authLoading || !user || pathname.startsWith('/login')) return undefined;
-    if (pathname === '/' && nativeAndroid !== true) return undefined;
+    if (pathname === '/' && nativeMobile !== true) return undefined;
     const fetch = () => {
       getPlanStats().then((res) => {
         if (res.success && res.data) setPlanBadge(res.data.open_tasks);
@@ -45,13 +45,13 @@ export default function BottomTabBar() {
     fetch();
     const interval = setInterval(fetch, 60_000);
     return () => clearInterval(interval);
-  }, [authLoading, nativeAndroid, pathname, user]);
+  }, [authLoading, nativeMobile, pathname, user]);
 
   if (authLoading || !user || pathname.startsWith('/login')) {
     return null;
   }
 
-  if (pathname === '/' && nativeAndroid !== true) {
+  if (pathname === '/' && nativeMobile !== true) {
     return null;
   }
 

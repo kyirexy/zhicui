@@ -25,6 +25,10 @@
     "cap:build": "npm run generate:build-version && CAPACITOR_BUILD=true NEXT_PUBLIC_API_URL=http://10.0.2.2:8000 next build && cap sync android",
     "cap:build:prod": "npm run generate:build-version && CAPACITOR_BUILD=true NEXT_PUBLIC_API_URL=https://luxai.cn next build && cap sync android",
     "cap:sync": "cap sync android",
+    "ios:build:prod": "node scripts/build-ios-web.mjs",
+    "ios:sync": "cap sync ios",
+    "ios:open": "cap open ios",
+    "test:ios": "node --experimental-strip-types --test src/lib/iosMobile.test.ts",
     "cap:run:live": "cap run android --live-reload --host 127.0.0.1 --port 3000 --forwardPorts 3000:3000 --forwardPorts 8000:8000",
     "cap:open": "cap open android"
   },
@@ -34,6 +38,7 @@
     "@capacitor/app": "^8.1.1",
     "@capacitor/browser": "^8.0.4",
     "@capacitor/core": "8.5.1",
+    "@capacitor/ios": "8.5.1",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
@@ -58,6 +63,7 @@
     "@types/node": "^20",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
+    "sharp": "0.35.4",
     "tailwindcss": "^4.3.3",
     "typescript": "^5"
   },

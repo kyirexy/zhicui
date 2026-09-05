@@ -32,7 +32,7 @@ import {
   savePendingDesktopLoginApproval,
   type DesktopLoginApprovalReference,
 } from '@/lib/desktopLogin';
-import { isNativeAndroidApp } from '@/lib/douyinNative';
+import { isNativeMobileApp } from '@/lib/douyinNative';
 import { CURRENT_LEGAL_VERSIONS } from '@/lib/legalDocuments';
 
 const IS_DEV = process.env.NODE_ENV === 'development';
@@ -75,7 +75,7 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
   const [fieldError, setFieldError] = useState('');
   const [legalAccepted, setLegalAccepted] = useState(false);
-  const [nativeAndroid, setNativeAndroid] = useState(false);
+  const [nativeMobile, setNativeMobile] = useState(false);
   const [runtimeReady, setRuntimeReady] = useState(false);
   const [pendingDesktopApproval, setPendingDesktopApproval] = useState<
     DesktopLoginApprovalReference | null
@@ -92,9 +92,9 @@ export default function LoginPage() {
     typeof window !== 'undefined' && Boolean(window.zhicuiDesktop);
 
   useEffect(() => {
-    const android = isNativeAndroidApp();
-    setNativeAndroid(android);
-    if (android) {
+    const mobile = isNativeMobileApp();
+    setNativeMobile(mobile);
+    if (mobile) {
       const incoming = parseDesktopLoginQr(window.location.href);
       const pending = incoming || readPendingDesktopLoginApproval();
       if (incoming) {
@@ -178,14 +178,14 @@ export default function LoginPage() {
   // 登录成功后跳转；网页联动登录成功后停留在「请回到客户端」成功页
   useEffect(() => {
     if (!runtimeReady || loading || !user) return;
-    if (nativeAndroid && pendingDesktopApproval) return;
+    if (nativeMobile && pendingDesktopApproval) return;
     if (desktopSession && claimState === 'claimed') return;
     router.replace(getSafeRedirect('/'));
   }, [
     claimState,
     desktopSession,
     loading,
-    nativeAndroid,
+    nativeMobile,
     pendingDesktopApproval,
     router,
     runtimeReady,
@@ -301,7 +301,7 @@ export default function LoginPage() {
     );
   }
 
-  if (loading || (user && !(nativeAndroid && pendingDesktopApproval))) {
+  if (loading || (user && !(nativeMobile && pendingDesktopApproval))) {
     return (
       <div className="min-h-[70vh] flex items-center justify-center px-5">
         <div className="dev-session-entry" role="status" aria-live="polite">
@@ -432,7 +432,7 @@ export default function LoginPage() {
             </p>
           </div>
 
-          {nativeAndroid ? (
+          {nativeMobile ? (
             <section className="relative mb-4 rounded-2xl border border-accent-brand/15 bg-accent-brand/[0.045] p-3.5">
               <MobileDesktopLoginScanner
                 isAuthenticated={Boolean(user)}

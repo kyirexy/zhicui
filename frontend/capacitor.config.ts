@@ -4,6 +4,9 @@ const config: CapacitorConfig = {
   appId: 'com.videocapsule.app',
   appName: '知萃',
   webDir: 'out',
+  ios: {
+    contentInset: 'automatic',
+  },
   server: {
     androidScheme: 'https',
     // For development, you can uncomment the line below to point to dev server:

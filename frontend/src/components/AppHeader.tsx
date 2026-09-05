@@ -13,7 +13,7 @@ import {
 import { useAuth } from '@/lib/hooks/AuthContext';
 import { useVideoAnalysis } from '@/lib/hooks/VideoAnalysisContext';
 import { useCreatorSync } from '@/lib/hooks/CreatorSyncContext';
-import { isNativeAndroidApp } from '@/lib/douyinNative';
+import { isNativeMobileApp } from '@/lib/douyinNative';
 import QRModal from '@/components/QRModal';
 import { PRODUCT_DESTINATIONS, isProductDestinationActive } from '@/lib/productNavigation';
 import styles from './MarketingHeader.module.css';
@@ -23,7 +23,7 @@ export default function AppHeader() {
   const { user, loading: authLoading, logout } = useAuth();
   const { activeItemCount, attentionItemCount } = useVideoAnalysis();
   const { activeRuns: activeCreatorRuns } = useCreatorSync();
-  const [nativeAndroid, setNativeAndroid] = useState<boolean | null>(null);
+  const [nativeMobile, setNativeMobile] = useState<boolean | null>(null);
   const analysisTaskCount = activeItemCount + attentionItemCount;
   const analysisStatusText = attentionItemCount > 0
     ? (activeItemCount > 0
@@ -43,22 +43,22 @@ export default function AppHeader() {
       process.env.NODE_ENV === 'development'
       && new URLSearchParams(window.location.search).get('previewMobile') === '1'
     );
-    setNativeAndroid(isDevelopmentMobilePreview || isNativeAndroidApp());
+    setNativeMobile(isDevelopmentMobilePreview || isNativeMobileApp());
   }, []);
 
   if (pathname?.startsWith('/login')) {
     return null;
   }
 
-  if (nativeAndroid === true && (authLoading || !user)) {
+  if (nativeMobile === true && (authLoading || !user)) {
     return null;
   }
 
-  if (pathname === '/' && nativeAndroid === null) {
+  if (pathname === '/' && nativeMobile === null) {
     return null;
   }
 
-  if (pathname === '/' && nativeAndroid === false) {
+  if (pathname === '/' && nativeMobile === false) {
     return (
       <header className={`${styles.header} web-app-header`}>
         <nav className={styles.nav} aria-label="官网导航">

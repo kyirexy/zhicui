@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 import { API_BASE } from '@/lib/api';
+import { Capacitor } from '@capacitor/core';
 import { shouldDiscardDevelopmentSession } from '@/lib/clientAuthPolicy';
 
 export interface AuthUser {
@@ -77,10 +78,12 @@ const AUTH_RESTORE_TIMEOUT_MS = 6_000;
 const DEV_SESSION_TIMEOUT_MS = 5_000;
 const DEV_SESSION_RETRY_DELAYS_MS = [0, 300, 800] as const;
 
-function currentClientType(): 'web' | 'windows' | 'android' {
+function currentClientType(): 'web' | 'windows' | 'android' | 'ios' {
   if (typeof window === 'undefined') return 'web';
   if (window.zhicuiDesktop) return 'windows';
-  return /Android/i.test(window.navigator.userAgent) ? 'android' : 'web';
+  const platform = Capacitor.getPlatform();
+  return Capacitor.isNativePlatform() && (platform === 'ios' || platform === 'android')
+    ? platform : 'web';
 }
 
 function wait(delay: number, signal: AbortSignal): Promise<boolean> {

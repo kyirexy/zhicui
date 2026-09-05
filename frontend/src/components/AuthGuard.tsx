@@ -5,7 +5,7 @@ import Image from 'next/image';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import { useDesktopApp } from '@/components/DesktopAppFrame';
-import { isNativeAndroidApp } from '@/lib/douyinNative';
+import { isNativeMobileApp } from '@/lib/douyinNative';
 import { resolveClientAuthPolicy } from '@/lib/clientAuthPolicy';
 
 const IS_DEV = process.env.NODE_ENV === 'development';
@@ -19,10 +19,10 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const { isDesktop, resolved: desktopResolved } = useDesktopApp();
-  const isNativeAndroid = isNativeAndroidApp();
+  const isNativeMobile = isNativeMobileApp();
   const policy = resolveClientAuthPolicy(pathname, {
     desktop: isDesktop,
-    nativeAndroid: isNativeAndroid,
+    nativeMobile: isNativeMobile,
     development: IS_DEV,
   });
   const clientGateActive = desktopResolved && policy.browserClientGate;

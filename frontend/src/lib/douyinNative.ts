@@ -14,6 +14,13 @@ interface DouyinBridgePlugin {
 
 const DouyinBridge = registerPlugin<DouyinBridgePlugin>('DouyinBridge');
 
+// 共享移动页面支持 iOS；下方安卓专属插件仍保持独立保护。
+export function isNativeMobileApp(): boolean {
+  return typeof window !== 'undefined'
+    && Capacitor.isNativePlatform()
+    && ['android', 'ios'].includes(Capacitor.getPlatform());
+}
+
 export function isNativeAndroidApp(): boolean {
   return (
     typeof window !== 'undefined'

@@ -251,7 +251,7 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<ApiR
   }
 }
 
-export type ZhicuiClientType = 'web' | 'windows' | 'android';
+export type ZhicuiClientType = 'web' | 'windows' | 'android' | 'ios';
 
 export interface AccountDeletionPreparation {
   confirmation_token: string;

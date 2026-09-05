@@ -26,6 +26,7 @@ import {
   type ClientPlatform,
 } from '@/lib/clientReleases';
 import styles from './WebLandingPage.module.css';
+import { detectMobileDownloadPlatform } from '@/lib/mobilePlatform';
 
 // 只引用已发布并校验过的测试产物，不能改指向正式更新通道。
 const MAC_TEST_DOWNLOAD_ROOT = 'https://luxai.cn/download/mac/test/dccfdecdcb7879746a031053047697822c3b6096';
@@ -96,6 +97,7 @@ export default function WebLandingPage() {
   const [origin, setOrigin] = useState('https://luxai.cn');
   const [releases, setReleases] = useState(CLIENT_RELEASE_FALLBACKS);
   const [preferredClient, setPreferredClient] = useState<ClientPlatform | null>(null);
+  const [mobilePlatform, setMobilePlatform] = useState<'android' | 'ios' | null>(null);
 
   useEffect(() => {
     setOrigin(window.location.origin);
@@ -133,6 +135,9 @@ export default function WebLandingPage() {
       browserNavigator.userAgent,
       browserNavigator.userAgentData?.platform || browserNavigator.platform,
     ));
+    setMobilePlatform(detectMobileDownloadPlatform(
+      browserNavigator.userAgent, browserNavigator.platform, browserNavigator.maxTouchPoints,
+    ));
 
     void loadClientReleaseCatalog(controller.signal).then((catalog) => {
       if (!controller.signal.aborted) setReleases(catalog);
@@ -142,8 +147,8 @@ export default function WebLandingPage() {
   }, []);
 
   useEffect(() => {
-    const sectionId = window.location.hash === '#download-mac' ? 'download-mac' : 'download';
-    if (!['#download', '#download-mac'].includes(window.location.hash)) return undefined;
+    if (!['#download', '#download-mac', '#download-ios'].includes(window.location.hash)) return undefined;
+    const sectionId = window.location.hash.slice(1);
     const timeoutId = window.setTimeout(() => {
       document.getElementById(sectionId)?.scrollIntoView({
         behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -162,7 +167,7 @@ export default function WebLandingPage() {
   const windowsSize = formatReleaseSize(releases.windows.sizeBytes);
 
   return (
-    <div ref={rootRef} className={`${styles.page} marketing-home`}>
+    <div ref={rootRef} className={`${styles.page} marketing-home`} data-mobile-platform={mobilePlatform ?? undefined}>
       <section className={styles.hero} aria-labelledby="landing-title">
         <div className={styles.heroCopy} data-reveal>
           <h1 id="landing-title">
@@ -175,7 +180,7 @@ export default function WebLandingPage() {
 
           <div className={styles.heroActions}>
             <a
-              className={preferredClient === 'android' ? styles.secondaryAction : styles.primaryAction}
+              className={preferredClient === 'android' || mobilePlatform === 'ios' ? styles.secondaryAction : styles.primaryAction}
               data-platform="windows"
               href={windowsDownloadHref}
               aria-label={`下载 Windows 桌面端 v${releases.windows.version}`}
@@ -203,6 +208,14 @@ export default function WebLandingPage() {
                   {preferredClient === 'android' ? '本机推荐 · ' : ''}
                   v{releases.android.version} · {androidSize}
                 </small>
+              </span>
+              <i aria-hidden="true"><ArrowDown size={16} weight="bold" /></i>
+            </a>
+            <a className={styles.secondaryAction} data-platform="ios" href="#download-ios">
+              <AppleLogo size={20} weight="light" aria-hidden="true" />
+              <span>
+                <strong>iPhone 版</strong>
+                <small>正在准备 · 查看发布状态</small>
               </span>
               <i aria-hidden="true"><ArrowDown size={16} weight="bold" /></i>
             </a>
@@ -345,13 +358,25 @@ export default function WebLandingPage() {
               </div>
             </div>
           </article>
+          <article id="download-ios" className={`${styles.platformCard} ${styles.iosCard}`}>
+            <div className={styles.platformTop}>
+              <span className={styles.platformIcon}><AppleLogo size={28} weight="light" aria-hidden="true" /></span>
+              <span className={styles.platformLabel}>准备中</span>
+            </div>
+            <h3>iPhone 移动端</h3>
+            <p>iPhone / iPad 版尚未发布。完成苹果签名和测试后，这里会提供安装入口。</p>
+            <div className={styles.iosNotice}>
+              <strong>暂未开放下载</strong>
+              <span>iPhone 不能安装 Android APK 或 Mac DMG，请勿下载其他平台的包。</span>
+            </div>
+          </article>
           <article id="download-mac" className={`${styles.platformCard} ${styles.macCard}`}>
             <div className={styles.platformTop}>
               <span className={styles.platformIcon}><AppleLogo size={28} weight="light" aria-hidden="true" /></span>
               <span className={styles.platformLabel}>Mac 测试版</span>
             </div>
             <h3>macOS 桌面端</h3>
-            <p>选择与你的 Mac 芯片对应的安装包。iPhone / iPad 版尚未发布。</p>
+            <p>仅适用于苹果电脑。选择与你的 Mac 芯片对应的安装包。</p>
             <div className={styles.releaseMeta} aria-label="Mac 版本信息">
               <span>v1.1.0 · 测试版</span>
               <span>macOS 12 及以上</span>

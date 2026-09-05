@@ -42,7 +42,7 @@ import UserVisionProviderSettingsCard from '@/components/UserVisionProviderSetti
 import ClientCapabilitySettingsCard from '@/components/ClientCapabilitySettingsCard';
 import { useDesktopApp } from '@/components/DesktopAppFrame';
 import ThemeSelector from '@/components/theme/ThemeSelector';
-import { isNativeAndroidApp } from '@/lib/douyinNative';
+import { isNativeAndroidApp, isNativeMobileApp } from '@/lib/douyinNative';
 import {
   decideDesktopLoginSession,
   previewDesktopLoginSession,
@@ -156,10 +156,12 @@ function SettingsWorkspace() {
   const searchParams = useSearchParams();
   const [query, setQuery] = useState('');
   const [nativeAndroid, setNativeAndroid] = useState<boolean | null>(null);
+  const [nativeMobile, setNativeMobile] = useState(false);
   const sectionParam = searchParams.get('section');
 
   useEffect(() => {
     setNativeAndroid(isNativeAndroidApp());
+    setNativeMobile(isNativeMobileApp());
   }, []);
 
   useEffect(() => {
@@ -282,7 +284,7 @@ function SettingsWorkspace() {
                       <strong>当前使用</strong>
                       <span>这些设置只影响这台设备</span>
                     </div>
-                    <b>{nativeAndroid === null ? '正在识别设备' : nativeAndroid ? 'Android App' : isDesktop ? 'Windows 桌面端' : '网页端'}</b>
+                    <b>{nativeAndroid === null ? '正在识别设备' : nativeAndroid ? 'Android App' : nativeMobile ? 'iOS App' : isDesktop ? '桌面端' : '网页端'}</b>
                   </div>
                   <div className={styles.summaryRow}>
                     <div>
@@ -310,7 +312,7 @@ function SettingsWorkspace() {
                       <small>{user?.email || '内容已安全同步'}</small>
                     </div>
                   </div>
-                  {nativeAndroid ? (
+                  {nativeMobile ? (
                     <MobileDesktopLoginScanner
                       className={styles.mobileScanner}
                       isAuthenticated={Boolean(user)}

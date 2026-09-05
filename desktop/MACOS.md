@@ -4,6 +4,16 @@
 
 首次成功构建：[运行记录与安装包](https://github.com/kyirexy/zhicui/actions/runs/33949358772)，代码提交 `235e0fd1cfc43d6cbf3b4a9e4d740497183e0603`。Artifacts 中的 `zhicui-mac-arm64-test` 适用于 Apple Silicon，`zhicui-mac-x64-test` 适用于 Intel。两项构建的跨平台逻辑检查均通过，签名公证步骤未执行。下载需要登录有访问权限的 GitHub 账号，产物保留 14 天。
 
+## 已授权的线上测试下载（2026-09-05）
+
+用户明确授权后，已将提交 `dccfdecdcb7879746a031053047697822c3b6096` 的双架构测试包发布到正式域名的独立测试目录：
+
+- [Apple Silicon DMG](https://luxai.cn/download/mac/test/dccfdecdcb7879746a031053047697822c3b6096/Zhicui-Mac-Test-1.1.0-arm64.dmg)
+- [Intel DMG](https://luxai.cn/download/mac/test/dccfdecdcb7879746a031053047697822c3b6096/Zhicui-Mac-Test-1.1.0-x64.dmg)
+- [测试版声明与完整文件哈希](https://luxai.cn/download/mac/test/dccfdecdcb7879746a031053047697822c3b6096/manifest.json)
+
+以上仍为未公证测试版，自动更新关闭，真实 Mac 交互验收待完成。云端工作流仍只生成 artifacts；本次是用户单独授权后的人工发布。所有 DMG/ZIP 的 HTTPS 源站全量 SHA-256 与构建产物一致，公网 HEAD 返回 200 和正确大小；arm64 DMG 另完成公网全量哈希回读。外部网络下载偏慢，额外的本机重复下载触发超时，不将其写为成功。
+
 ## Windows 上开始
 
 首次开发验证推送 `codex/macos-desktop` 分支会自动运行相同测试构建；后续合入默认分支后可通过 Run workflow 手动运行。

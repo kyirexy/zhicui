@@ -1,6 +1,8 @@
 # 知萃 Mac 开发与构建
 
-现有 Windows 环境可以继续改代码，无需安装 Xcode 或额外软件。真正的 Mac 安装包需要 macOS 构建机；本仓库提供手动 GitHub Actions 工作流。当前适配尚未经过实际 Mac 构建和设备验收，不能当作已发布版本。
+现有 Windows 环境可以继续改代码，无需安装 Xcode 或额外软件。真正的 Mac 安装包需要 macOS 构建机；本仓库提供 GitHub Actions 工作流。2026-09-05 已在 macOS runner 成功构建 Apple Silicon 和 Intel 测试包，尚未经过真实设备交互验收，不能当作已发布版本。
+
+首次成功构建：[运行记录与安装包](https://github.com/kyirexy/zhicui/actions/runs/33949358772)，代码提交 `235e0fd1cfc43d6cbf3b4a9e4d740497183e0603`。Artifacts 中的 `zhicui-mac-arm64-test` 适用于 Apple Silicon，`zhicui-mac-x64-test` 适用于 Intel。两项构建的跨平台逻辑检查均通过，签名公证步骤未执行。下载需要登录有访问权限的 GitHub 账号，产物保留 14 天。
 
 ## Windows 上开始
 

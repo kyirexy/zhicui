@@ -227,7 +227,7 @@ test('stdio MCP merges a fixed local action only through a live loopback bridge'
 });
 
 test('stdio MCP publishes trusted local schemas instead of drifting server schemas', {
-  skip: process.platform !== 'win32',
+  skip: !['win32', 'darwin'].includes(process.platform),
 }, async (t) => {
   const directory = await temporaryDirectory();
   const actions = [

@@ -3,6 +3,7 @@ import {
   app,
   BrowserWindow,
   ipcMain,
+  Menu,
   nativeTheme,
   protocol,
   shell,
@@ -23,6 +24,7 @@ import {
 } from './agent-integration';
 import { DesktopAgentActionBridge } from './agent-action-bridge';
 import { desktopBuildIdentity } from './build-identity';
+import { desktopBridgeDirectory } from './platform-runtime';
 import { readPackagedReleaseChannel } from './release-channel';
 import { DouyinDesktopLogin } from './douyin-login';
 import { DesktopMediaLibrary } from './media-library';
@@ -204,8 +206,8 @@ function createMainWindow(): BrowserWindow {
     title: BUILD_IDENTITY.windowTitle,
     icon: desktopIconPath(),
     autoHideMenuBar: true,
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
+    titleBarStyle: process.platform === 'darwin' ? 'default' : 'hidden',
+    titleBarOverlay: process.platform === 'darwin' ? false : {
       color: darkTitlebar ? '#111714' : '#f5f7f6',
       symbolColor: darkTitlebar ? '#e9efeb' : '#26312b',
       height: 34,
@@ -252,11 +254,14 @@ function createMainWindow(): BrowserWindow {
   });
   window.once('ready-to-show', () => window.show());
   window.on('closed', () => {
+    stopDesktopUpdateChecks?.();
+    stopDesktopUpdateChecks = null;
     mainWindow = null;
   });
 
   loadDesktopPage(window, desktopDestination(pendingDeepLink));
   pendingDeepLink = null;
+  stopDesktopUpdateChecks = scheduleDesktopUpdateChecks(window);
   return window;
 }
 
@@ -431,6 +436,39 @@ app.on('open-url', (event, url) => {
 
 app.whenReady().then(() => {
   nativeTheme.themeSource = 'system';
+  if (process.platform === 'darwin') {
+    Menu.setApplicationMenu(Menu.buildFromTemplate([
+      { label: app.getName(), submenu: [
+        { role: 'about', label: '关于知萃' },
+        { type: 'separator' },
+        { role: 'services', label: '服务' },
+        { type: 'separator' },
+        { role: 'hide', label: '隐藏知萃' },
+        { role: 'hideOthers', label: '隐藏其他应用' },
+        { role: 'unhide', label: '显示全部' },
+        { type: 'separator' },
+        { role: 'quit', label: '退出知萃' },
+      ] },
+      { label: '编辑', submenu: [
+        { role: 'undo', label: '撤销' }, { role: 'redo', label: '重做' },
+        { type: 'separator' },
+        { role: 'cut', label: '剪切' }, { role: 'copy', label: '复制' },
+        { role: 'paste', label: '粘贴' }, { role: 'selectAll', label: '全选' },
+      ] },
+      { label: '显示', submenu: [
+        { role: 'resetZoom', label: '实际大小' },
+        { role: 'zoomIn', label: '放大' }, { role: 'zoomOut', label: '缩小' },
+        { role: 'togglefullscreen', label: '切换全屏' },
+      ] },
+      { label: '窗口', submenu: [
+        { label: '显示知萃', click: () => {
+          if (!mainWindow) mainWindow = createMainWindow();
+          else focusMainWindow();
+        } },
+        { role: 'minimize', label: '最小化' }, { role: 'close', label: '关闭窗口' },
+      ] },
+    ]));
+  }
   mediaLibrary = new DesktopMediaLibrary(emitMediaStatus);
   protocol.handle(
     'zhicui-media',
@@ -439,12 +477,9 @@ app.whenReady().then(() => {
   initializeDesktopUpdater(emitUpdateStatus, PACKAGED_RELEASE_CHANNEL);
   registerProtocol();
   registerIpc();
-  pendingDeepLink = findDeepLink(process.argv);
+  pendingDeepLink = pendingDeepLink || findDeepLink(process.argv);
   agentActionBridge = new DesktopAgentActionBridge({
-    descriptorDirectory: join(
-      process.env.LOCALAPPDATA || app.getPath('userData'),
-      'Zhicui',
-    ),
+    descriptorDirectory: desktopBridgeDirectory(),
     version: app.getVersion(),
     channel: BUILD_IDENTITY.channel,
     platformAccounts,
@@ -456,7 +491,6 @@ app.whenReady().then(() => {
     console.error(`[desktop] Agent 本机桥接启动失败：${message}`);
   });
   mainWindow = createMainWindow();
-  stopDesktopUpdateChecks = scheduleDesktopUpdateChecks(mainWindow);
 });
 
 app.on('activate', () => {

@@ -15,6 +15,7 @@ import type {
 import type { DesktopMediaLibrary } from './media-library';
 import type { PlatformAccountConnector } from './platform-account';
 import { desktopUserHash } from './desktop-core';
+import { supportsDesktopBridge } from './platform-runtime';
 import {
   validateAwemeId,
   validatePlatformAccountCollectRequest,
@@ -239,7 +240,7 @@ export class DesktopAgentActionBridge {
   constructor(private readonly options: DesktopAgentActionBridgeOptions) {}
 
   async start(): Promise<boolean> {
-    if (process.platform !== 'win32' || this.server) return false;
+    if (!supportsDesktopBridge(process.platform) || this.server) return false;
     this.token = randomBytes(32).toString('base64url');
     this.tokenExpiresAt = Date.now() + DESCRIPTOR_TTL_MS;
     const server = createServer((request, response) => {
@@ -432,7 +433,7 @@ export class DesktopAgentActionBridge {
           available: true,
           user_bound: Boolean(this.activeProfileKey),
           user_hash: this.activeProfileKey ? desktopUserHash(this.activeProfileKey) : null,
-          platform: 'win32',
+          platform: process.platform,
           version: this.options.version,
           channel: this.options.channel,
           actions: [...LOCAL_ACTIONS],

@@ -134,7 +134,7 @@ test('timeout and local-unavailable use stable exit codes', async (t) => {
 });
 
 test('local aliases keep desktop inputs exact and never poll a local run through cloud APIs', {
-  skip: process.platform !== 'win32',
+  skip: !['win32', 'darwin'].includes(process.platform),
 }, async (t) => {
   const directory = await temporaryDirectory();
   const bridgeToken = 'desktop_bridge_private_token';
@@ -237,7 +237,7 @@ test('local aliases keep desktop inputs exact and never poll a local run through
 });
 
 test('local actions reject a desktop bridge bound to another Zhicui account', {
-  skip: process.platform !== 'win32',
+  skip: !['win32', 'darwin'].includes(process.platform),
 }, async (t) => {
   const directory = await temporaryDirectory();
   let localCalls = 0;

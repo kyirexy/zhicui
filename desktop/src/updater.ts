@@ -1,4 +1,6 @@
 import { app, type BrowserWindow } from 'electron';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { autoUpdater } from 'electron-updater';
 import type { DesktopUpdateResult } from './contract';
 import { nativeUpdateCheckDisposition } from './update-policy';
@@ -11,6 +13,16 @@ type UpdatePublisher = (state: DesktopUpdateResult) => void;
 
 let publishUpdate: UpdatePublisher = () => {};
 let updaterReady = false;
+function nativeUpdatesEnabled(): boolean {
+  if (!app.isPackaged) return false;
+  if (process.platform !== 'darwin') return true;
+  try {
+    const metadata = JSON.parse(readFileSync(join(app.getAppPath(), 'package.json'), 'utf8'));
+    return metadata.nativeUpdatesEnabled === true;
+  } catch {
+    return false;
+  }
+}
 let updateCheckInFlight: Promise<DesktopUpdateResult> | null = null;
 let updateState: DesktopUpdateResult = {
   status: 'idle',
@@ -38,7 +50,7 @@ function setUpdateState(
 }
 
 export function getDesktopUpdateState(): DesktopUpdateResult {
-  if (!app.isPackaged) {
+  if (!nativeUpdatesEnabled()) {
     return {
       status: 'unsupported',
       installedVersion: app.getVersion(),
@@ -93,6 +105,7 @@ export function initializeDesktopUpdater(
 }
 
 export async function checkForDesktopUpdates(): Promise<DesktopUpdateResult> {
+  if (!nativeUpdatesEnabled()) return getDesktopUpdateState();
   const disposition = nativeUpdateCheckDisposition({
     packaged: app.isPackaged,
     hasInFlightCheck: Boolean(updateCheckInFlight),
@@ -121,7 +134,7 @@ export async function checkForDesktopUpdates(): Promise<DesktopUpdateResult> {
 }
 
 export function installDesktopUpdate(): DesktopUpdateResult {
-  if (!app.isPackaged) return getDesktopUpdateState();
+  if (!nativeUpdatesEnabled()) return getDesktopUpdateState();
   if (updateState.status !== 'downloaded') {
     return setUpdateState({
       status: 'error',
@@ -139,7 +152,7 @@ const PERIODIC_CHECK_INTERVAL_MS = 60 * 60_000;
 const FOCUS_CHECK_THROTTLE_MS = 5 * 60_000;
 
 export function scheduleDesktopUpdateChecks(window: BrowserWindow): () => void {
-  if (!app.isPackaged) return () => {};
+  if (!nativeUpdatesEnabled()) return () => {};
   let disposed = false;
   let lastAutomaticCheckAt = 0;
 

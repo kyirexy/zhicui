@@ -109,6 +109,9 @@ function descriptorPath(): string {
   if (process.env.ZHICUI_DESKTOP_BRIDGE_DESCRIPTOR) {
     return process.env.ZHICUI_DESKTOP_BRIDGE_DESCRIPTOR;
   }
+  if (process.platform === 'darwin') {
+    return join(homedir(), 'Library', 'Application Support', 'Zhicui', 'desktop-agent-bridge.json');
+  }
   const root = process.platform === 'win32'
     ? process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local')
     : process.env.XDG_RUNTIME_DIR || join(homedir(), '.cache');
@@ -166,7 +169,7 @@ function assertSameUser(expectedUserHash: string | null | undefined, actualUserH
 
 export class RestrictedLocalAdapter {
   async status(expectedUserHash?: string | null): Promise<Record<string, unknown>> {
-    if (process.platform !== 'win32') {
+    if (!['win32', 'darwin'].includes(process.platform)) {
       return { available: false, code: 'UNSUPPORTED_PLATFORM', platform: process.platform };
     }
     try {
@@ -191,8 +194,8 @@ export class RestrictedLocalAdapter {
         exitCode: EXIT_CODES.permission,
       });
     }
-    if (process.platform !== 'win32') {
-      throw new CliError('UNSUPPORTED_PLATFORM', '该 Action 仅在知萃 Windows 客户端可用', {
+    if (!['win32', 'darwin'].includes(process.platform)) {
+      throw new CliError('UNSUPPORTED_PLATFORM', '该 Action 需要知萃 Windows 或 Mac 客户端', {
         exitCode: EXIT_CODES.localUnavailable,
       });
     }
@@ -256,7 +259,7 @@ export class RestrictedLocalAdapter {
       if (error instanceof CliError) throw error;
       throw new CliError(
         'DESKTOP_BRIDGE_UNAVAILABLE',
-        '未检测到正在运行且已登录的知萃 Windows 客户端',
+        '未检测到正在运行且已登录的知萃桌面客户端',
         { exitCode: EXIT_CODES.localUnavailable, cause: error },
       );
     }

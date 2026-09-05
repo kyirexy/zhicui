@@ -1,0 +1,86 @@
+name: 构建知萃 Mac
+
+on:
+  push:
+    branches: ['codex/macos-desktop']
+  workflow_dispatch:
+    inputs:
+      signed:
+        description: 使用苹果证书签名并公证（需要先配置 Secrets）
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Mac ${{ matrix.arch }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x64]
+    defaults:
+      run:
+        working-directory: desktop
+        shell: bash
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: 配置 Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.22.0'
+          cache: npm
+          cache-dependency-path: |
+            desktop/package-lock.json
+            cli/package-lock.json
+      - name: 安装桌面依赖
+        run: npm ci
+      - name: 安装 CLI 契约验证依赖
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zhicui-contract-python"
+          "$RUNNER_TEMP/zhicui-contract-python/bin/pip" install 'pydantic>=2,<3'
+          echo "PYTHON=$RUNNER_TEMP/zhicui-contract-python/bin/python" >> "$GITHUB_ENV"
+      - name: 验证跨平台逻辑
+        run: |
+          npm run verify:mac
+          npm run verify:platform-account
+          npm run verify:release-contract
+          npm --prefix ../cli ci
+          npm --prefix ../cli test
+      - name: 构建测试安装包
+        if: ${{ !inputs.signed }}
+        env:
+          MAC_ARCH: ${{ matrix.arch }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run dist:mac -- --arch="$MAC_ARCH"
+      - name: 签名并公证安装包
+        if: ${{ inputs.signed }}
+        env:
+          MAC_ARCH: ${{ matrix.arch }}
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          npm run dist:mac -- --arch="$MAC_ARCH" --signed
+          app_path=$(find "release-mac-$MAC_ARCH" -maxdepth 3 -name '*.app' -type d -print -quit)
+          test -n "$app_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          xcrun stapler validate "$app_path"
+          spctl --assess --type execute --verbose=2 "$app_path"
+      - name: 保留安装包（不发布到下载站）
+        uses: actions/upload-artifact@v4
+        with:
+          name: zhicui-mac-${{ matrix.arch }}-${{ inputs.signed && 'signed' || 'test' }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            desktop/release-mac-${{ matrix.arch }}/*.dmg
+            desktop/release-mac-${{ matrix.arch }}/*.zip
+            desktop/release-mac-${{ matrix.arch }}/*-mac.yml
+            desktop/release-mac-${{ matrix.arch }}/*.blockmap

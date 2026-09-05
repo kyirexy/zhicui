@@ -165,7 +165,7 @@ export class DesktopAgentIntegration {
         cli_available: false,
         clients: [],
         code: 'CLI_UNAVAILABLE',
-        message: '当前安装包没有找到内置 CLI，请更新 Windows 客户端',
+        message: '当前安装包没有找到内置 CLI，请更新桌面客户端',
       };
     }
     const clients = await Promise.all(
@@ -193,7 +193,7 @@ export class DesktopAgentIntegration {
         client: request.client,
         operation: request.operation,
         code: 'CLI_UNAVAILABLE',
-        message: '当前安装包没有找到内置 CLI，请更新 Windows 客户端',
+        message: '当前安装包没有找到内置 CLI，请更新桌面客户端',
       };
     }
     const cliClient = request.client === 'claude' ? 'claude' : 'codex';

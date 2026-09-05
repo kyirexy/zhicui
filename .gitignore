@@ -79,3 +79,8 @@ zhicui.tar.gz
 *.cer
 *.crt
 *.pem
+# macOS 构建时生成的图标
+desktop/build/mac/
+!desktop/build/
+desktop/build/*
+!desktop/build/entitlements.mac.plist

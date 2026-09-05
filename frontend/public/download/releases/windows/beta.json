@@ -5,21 +5,36 @@
   "platform": "windows",
   "architecture": "x64",
   "artifact_kind": "unsigned",
-  "version": "1.0.10",
-  "source_commit": "291c24b94e43e0184e6821b63ce620df5703f84b",
-  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.0.10-x64.exe",
-  "size_bytes": 93530764,
-  "sha256": "2bb62a919349f85496c191186d3a8f96b0fa15d0e1c7b80b184d586a9464bf2d",
-  "published_at": "2026-08-28T11:43:49.5242281Z",
+  "version": "1.1.0",
+  "source_commit": "dccfdecdcb7879746a031053047697822c3b6096",
+  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.0-x64.exe",
+  "size_bytes": 93579974,
+  "sha256": "ea3287a74b1b87f26b9f4951101cd81b0c863048760d43b540a9a79cea039b3a",
+  "blockmap": {
+    "name": "Zhicui-Setup-1.1.0-x64.exe.blockmap",
+    "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.0-x64.exe.blockmap",
+    "size_bytes": 99268,
+    "sha256": "5b1b8a40663db8cc06d69516dcc4e8e864c8942b1fa671ea12ca0f8ed1f6ff77"
+  },
+  "update_feed": {
+    "name": "beta.yml",
+    "download_url": "https://luxai.cn/download/windows/beta.yml",
+    "size_bytes": 348,
+    "sha256": "d3ec4d55192a45e1782236ba818917f4a196d1aded999f5d3b867f3cbef0b576"
+  },
+  "published_at": "2026-09-05T06:58:33.8939913Z",
   "release_notes": [
-    "支持后台下载桌面端更新，并在左下角显示实时进度。",
-    "下载完成后可一键重启并安装，新版会自动回到知萃。",
-    "网页功能更新与原生客户端更新采用独立、安全的发布通道。"
+    "修正抖音收藏、喜欢和作品分类。",
+    "改进本机 Agent 与跨平台桌面支持。"
   ],
   "code_signed": false,
+  "release_status": "beta_download",
   "signing": {
     "verified": false,
     "publisher": null,
-    "timestamp_verified": false
-  }
+    "certificate_sha256": null,
+    "timestamp_verified": false,
+    "timestamp_certificate_sha256": null
+  },
+  "verification_evidence": null
 }

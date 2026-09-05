@@ -4,13 +4,13 @@
   "availability": "available",
   "platform": "android",
   "artifact_kind": "debug",
-  "version": "1.3.0",
-  "build": 22,
-  "published_at": "2026-09-04T04:05:45.919Z",
-  "source_commit": "220fe103b774fe4b17a88bd25a98bcb5373cb0ac",
+  "version": "1.3.1",
+  "build": 23,
+  "published_at": "2026-09-05T06:52:39.369Z",
+  "source_commit": "dccfdecdcb7879746a031053047697822c3b6096",
   "download_url": "https://luxai.cn/download/zhicui.apk",
-  "size_bytes": 33369742,
-  "sha256": "eeb50b2fe378efbe754f3b0ea0f4d4e8cc5e2c871a6ac322d6935925c9c0b1d5",
+  "size_bytes": 33381202,
+  "sha256": "adcf48e865ac8ec76c0cdf5b12083fe275fabdee30459f554465179160e4acba",
   "mandatory": false,
   "debuggable": true,
   "signing": {
@@ -19,8 +19,7 @@
     "certificate_sha256": "7504a84b00b13dcb73ce51f87d27dee587a310f47b11a6ae319b19f0e3075136"
   },
   "release_notes": [
-    "手机扫码确认后电脑自动登录。",
-    "登录码短时有效且防止重复领取。",
-    "相机画面仅在本机解析，不上传不保存。"
+    "优化移动端首页与视频分类。",
+    "改进博主视频选择、计划管理和知识保存。"
   ]
 }

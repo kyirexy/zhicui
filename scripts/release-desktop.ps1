@@ -60,6 +60,10 @@ if ($isStable -and $AllowUnsigned) {
 
 function Invoke-Checked {
     param([string]$Command, [string[]]$Arguments)
+    # Windows checkout 的 here-string 可能保留 CRLF，远端 Bash 只接受 LF。
+    if ($Command -eq 'ssh.exe') {
+        $Arguments = @($Arguments | ForEach-Object { $_.Replace("`r`n", "`n") })
+    }
     & $Command @Arguments
     if ($LASTEXITCODE -ne 0) {
         throw "$Command 执行失败，退出码：$LASTEXITCODE"
@@ -194,7 +198,8 @@ function Invoke-StrictPublicDownload {
 # 外层只解析调用方显式给出的完整提交并创建临时 detached worktree。
 # 随后改由该提交中的脚本执行，主 checkout 的已修改/未追踪文件不参与编译。
 if (-not $InternalWorktree) {
-    $resolvedCommit = (& git.exe -C $workspace rev-parse --verify "$Commit`^{commit}" 2>$null | Select-Object -First 1)
+    # 不通过 Select-Object 提前关闭原生命令管道，确保读取到真实退出码。
+    $resolvedCommit = & git.exe -C $workspace rev-parse --verify "$Commit`^{commit}" 2>$null
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($resolvedCommit)) {
         throw 'Commit 不存在或不是提交对象。'
     }

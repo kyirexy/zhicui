@@ -266,6 +266,8 @@ def process_turn(turn_id: str) -> None:
                 "video.answer_synthesize": "synthesizing",
                 "video.claim_repair": "verifying",
                 "video.claim_validate": "verifying",
+                "plan.create": "planning",
+                "knowledge.create": "planning",
             }
 
             def tool_event_callback(

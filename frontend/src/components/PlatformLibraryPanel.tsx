@@ -8,7 +8,6 @@ import {
   Captions,
   CheckCircle2,
   ChevronDown,
-  ExternalLink,
   FileText,
   Heart,
   Image as ImageIcon,
@@ -1004,9 +1003,6 @@ export default function PlatformLibraryPanel({
                           查看摘要
                         </Link>
                       )}
-                      <a href={item.source_url} target="_blank" rel="noreferrer">
-                        <ExternalLink size={15} />来源
-                      </a>
                     </div>
                   </div>
                 </article>

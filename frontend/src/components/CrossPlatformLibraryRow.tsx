@@ -2,10 +2,8 @@
 
 import Link from 'next/link';
 import {
-  ArrowUpRight,
   Captions,
   Check,
-  ExternalLink,
   LoaderCircle,
   NotebookPen,
   Square,
@@ -155,8 +153,7 @@ export default function CrossPlatformLibraryRow({
 
       <div className={styles.crossRowActions} aria-label={`${item.title}的可用操作`}>
         <Link href={detailHref}>
-          打开详情
-          <ArrowUpRight size={14} />
+          查看详情
         </Link>
         {item.ai_initialized ? (
           <Link href={summaryHref}>
@@ -176,12 +173,6 @@ export default function CrossPlatformLibraryRow({
             )}
             {initializing ? '正在生成' : '生成摘要'}
           </button>
-        )}
-        {item.source_url && (
-          <a href={item.source_url} target="_blank" rel="noreferrer">
-            <ExternalLink size={14} />
-            来源
-          </a>
         )}
       </div>
     </article>

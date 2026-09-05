@@ -60,6 +60,7 @@ import styles from './AgentSourceSyncSheet.module.css';
 
 interface Props {
   open: boolean;
+  initialSourceKind?: 'account' | 'creator';
   onClose: () => void;
   onSynced: () => void | Promise<void>;
   onManageSources: () => void;
@@ -99,6 +100,7 @@ function creatorProgress(run: CreatorSyncRun): string {
 
 export default function AgentSourceSyncSheet({
   open,
+  initialSourceKind = 'account',
   onClose,
   onSynced,
   onManageSources,
@@ -147,6 +149,11 @@ export default function AgentSourceSyncSheet({
   const douyinDesktopUpdateRequired = requiresLocalDouyinDesktopUpdate(
     douyinDesktopVersion,
   );
+
+  useEffect(() => {
+    if (!open) return;
+    setSourceKind(initialSourceKind);
+  }, [initialSourceKind, open]);
 
   const biliAccountSyncAvailable = useMemo(() => {
     return typeof window !== 'undefined' && supportsPlatformAccountSync(window.zhicuiDesktop);

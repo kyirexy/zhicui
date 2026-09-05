@@ -269,9 +269,18 @@ span.crossRowCoverFallback {
 }
 
 .crossRowStatus b {
+  flex: none;
   margin-left: 2px;
   font-size: 0.6875rem;
   font-weight: 650;
+  white-space: nowrap;
+}
+
+.crossRowStatus span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .crossRowError {
@@ -292,20 +301,31 @@ span.crossRowCoverFallback {
 }
 
 .crossRow[data-layout='grid'] .crossRowActions {
-  display: flex;
+  display: grid;
   min-width: 0;
-  flex-wrap: wrap;
-  gap: 5px;
-  padding: 0 12px 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  overflow: hidden;
+  margin: 0 12px 12px;
+  border: 1px solid var(--library-action-border, var(--card-border));
+  border-radius: 9px;
+  background: var(--library-action-surface, var(--background-secondary));
 }
 
 .crossRow[data-layout='grid'] .crossRowActions a,
 .crossRow[data-layout='grid'] .crossRowActions button {
+  min-height: 40px;
   min-width: 0;
-  flex: 1 1 64px;
-  padding-inline: 6px;
-  font-size: 0.6875rem;
+  border: 0;
+  border-radius: 0;
+  padding-inline: 8px;
+  background: transparent;
+  font-size: 0.75rem;
   white-space: nowrap;
+}
+
+.crossRow[data-layout='grid'] .crossRowActions > :first-child {
+  border-right: 1px solid var(--library-action-border, var(--card-border));
 }
 
 .crossRowActions a,
@@ -580,7 +600,7 @@ span.crossRowCoverFallback {
 
   .crossRowActions {
     grid-column: 1 / -1;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .crossRowActions a,

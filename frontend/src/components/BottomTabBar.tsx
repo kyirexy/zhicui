@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { getPlanStats } from '@/lib/api';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import { isNativeAndroidApp } from '@/lib/douyinNative';
@@ -13,14 +13,25 @@ import {
 import { PRODUCT_NAVIGATION_ICONS } from '@/lib/productNavigationIcons';
 
 export default function BottomTabBar() {
+  const router = useRouter();
   const pathname = usePathname() ?? '/';
   const { user, loading: authLoading } = useAuth();
   const [planBadge, setPlanBadge] = useState(0);
   const [nativeAndroid, setNativeAndroid] = useState<boolean | null>(null);
+  const [pendingTab, setPendingTab] = useState<string | null>(null);
 
   useEffect(() => {
     setNativeAndroid(isNativeAndroidApp());
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    PRODUCT_DESTINATIONS.forEach((destination) => router.prefetch(destination.href));
+  }, [router, user]);
+
+  useEffect(() => {
+    setPendingTab(null);
+  }, [pathname]);
 
   // A8: Fetch plan stats for badge. Refresh every 60s while mounted.
   useEffect(() => {
@@ -54,13 +65,14 @@ export default function BottomTabBar() {
         <ul className="flex h-16 items-stretch justify-around">
           {PRODUCT_DESTINATIONS.map((tab) => {
             const active = isProductDestinationActive(tab.id, pathname);
+            const visuallyActive = active || pendingTab === tab.id;
             const Icon = PRODUCT_NAVIGATION_ICONS[tab.id];
             const badge = tab.id === 'plans' ? planBadge : 0;
             const showBadge = badge > 0;
             const badgeLabel = badge > 9 ? '9+' : String(badge);
 
-            const innerClass = `relative flex h-full min-h-11 w-full flex-col items-center justify-center gap-1 px-1 transition-colors duration-150 ${
-              active ? 'text-foreground' : 'text-foreground-muted hover:text-foreground-secondary'
+            const innerClass = `relative flex h-full min-h-11 w-full touch-manipulation select-none flex-col items-center justify-center gap-1 px-1 transition-[color,background-color,transform] duration-100 active:scale-[0.97] active:bg-background-secondary ${
+              visuallyActive ? 'text-foreground' : 'text-foreground-muted hover:text-foreground-secondary'
             }`;
 
             const inner = (
@@ -72,18 +84,29 @@ export default function BottomTabBar() {
                   </span>
                 )}
                 <Icon
-                  size={20}
-                  strokeWidth={active ? 2.4 : 1.8}
+                  size={22}
+                  strokeWidth={visuallyActive ? 2.4 : 1.8}
                   aria-hidden="true"
                 />
                 <span className="text-[11px] font-medium leading-none">{tab.mobileLabel}</span>
-                {active && <span className="absolute top-0 h-0.5 w-7 rounded-full bg-foreground" />}
+                {visuallyActive && <span className="absolute top-0 h-0.5 w-7 rounded-full bg-foreground" />}
               </>
             );
 
             return (
               <li key={tab.id} className="flex-1 min-w-0">
-                <Link href={tab.href} className={innerClass} aria-label={tab.label} aria-current={active ? 'page' : undefined}>{inner}</Link>
+                <Link
+                  href={tab.href}
+                  prefetch
+                  draggable={false}
+                  className={innerClass}
+                  aria-label={tab.label}
+                  aria-current={active ? 'page' : undefined}
+                  onPointerDown={() => router.prefetch(tab.href)}
+                  onClick={() => setPendingTab(tab.id)}
+                >
+                  {inner}
+                </Link>
               </li>
             );
           })}

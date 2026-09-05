@@ -1932,9 +1932,19 @@ def stream_platform_library_cover(
         note_id, expires, signature,
     ):
         raise HTTPException(status_code=403, detail="视频封面地址已失效，请刷新页面")
+    note = db.query(Note).filter(Note.id == note_id).first()
+    if note is None:
+        raise HTTPException(status_code=404, detail="视频封面不存在")
     target_url = platform_library_service.cover_target(db, note_id)
     if not target_url:
         raise HTTPException(status_code=404, detail="视频封面不存在")
+    if platform_library_service.media_platform(note) == "douyin":
+        return _proxy_douyin_image(
+            "",
+            "",
+            fallback_url=target_url,
+            stable_cache_key=f"platform-cover:{note_id}",
+        )
     return _proxy_bilibili_image(
         target_url,
         stable_cache_key=f"platform-cover:{note_id}",
@@ -2673,6 +2683,10 @@ def list_douyin_library_items(
         default=False,
         description="显式选择来源顺序时刷新抖音返回的喜欢或收藏顺序",
     ),
+    local_only: bool = Query(
+        default=False,
+        description="只读取已落库的桌面快照，不等待旧版连接器",
+    ),
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
@@ -2687,7 +2701,7 @@ def list_douyin_library_items(
     catalog_warning = ""
     # 桌面端快照已经落库，是当前资料页的数据源；有本地数据时不再让首屏
     # 等待旧连接器最多 15 秒。只有尚无本地快照的旧版云端账号才走兼容回退。
-    if not local_items:
+    if not local_items and not local_only:
         try:
             sidecar_items = douyin_library.list_items(
                 binding.session_scope,

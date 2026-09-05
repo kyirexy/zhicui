@@ -36,6 +36,7 @@ import {
   Sparkle,
   SquaresFour,
   Trash,
+  UserCircle,
   VideoCamera,
   X,
 } from '@phosphor-icons/react';
@@ -94,6 +95,7 @@ import {
   listAgentAutomations,
   listAgentSources,
   listAgentThreads,
+  listCreatorSources,
   resetUserAIProvider,
   retryAgentTurn,
   resumeAgentTurnStream,
@@ -126,6 +128,7 @@ import type {
   AgentStreamProgress,
   AgentThread,
   AgentTurn,
+  CreatorSource,
   LibraryOutputStyle,
   LibraryResearchMode,
   ResearchScope,
@@ -136,16 +139,18 @@ import type {
 
 const MAX_SELECTED_SOURCES = 100;
 type BrowseSourceScope = Exclude<AgentSourceScope, 'selected'>;
-type AgentSourcePlatform = 'all' | 'douyin' | 'bilibili' | 'xiaohongshu';
+type AgentSourcePlatform = 'all' | 'douyin' | 'bilibili' | 'xiaohongshu' | 'creator';
 
 const SOURCE_PLATFORMS: Array<{ value: AgentSourcePlatform; label: string }> = [
   { value: 'all', label: '全部' },
   { value: 'douyin', label: '抖音' },
   { value: 'bilibili', label: 'B站' },
+  { value: 'creator', label: '博主' },
 ];
 
 function SourcePlatformIcon({ platform }: { platform: AgentSourcePlatform }) {
   if (platform === 'all') return <SquaresFour size={20} weight="fill" aria-hidden="true" />;
+  if (platform === 'creator') return <UserCircle size={20} weight="fill" aria-hidden="true" />;
   return (
     <PlatformBrandIcon
       platform={platform}
@@ -154,7 +159,7 @@ function SourcePlatformIcon({ platform }: { platform: AgentSourcePlatform }) {
   );
 }
 
-function agentSourcePlatform(source: AgentSource): Exclude<AgentSourcePlatform, 'all'> | 'unknown' {
+function agentSourcePlatform(source: AgentSource): 'douyin' | 'bilibili' | 'xiaohongshu' | 'unknown' {
   const explicit = String(source.platform || '').toLowerCase();
   if (explicit === 'douyin' || explicit === 'bilibili' || explicit === 'xiaohongshu') {
     return explicit;
@@ -528,6 +533,56 @@ function AgentSourceOption({ source, selected, onToggle, disabled = false }: Age
   );
 }
 
+interface CreatorSourceOptionProps {
+  source: CreatorSource;
+  selectedCount: number;
+  onToggle: (source: CreatorSource) => void;
+}
+
+function CreatorSourceOption({ source, selectedCount, onToggle }: CreatorSourceOptionProps) {
+  const readyCount = source.ready_note_ids?.length || 0;
+  const fullySelected = readyCount > 0 && selectedCount === readyCount;
+  const partiallySelected = selectedCount > 0 && !fullySelected;
+  const initial = source.display_name.trim().slice(0, 1) || '博';
+
+  return (
+    <button
+      type="button"
+      className={`video-agent-creator-item ${fullySelected ? 'is-selected' : ''} ${partiallySelected ? 'is-partial' : ''}`}
+      onClick={() => onToggle(source)}
+      disabled={readyCount === 0}
+      aria-pressed={fullySelected}
+      aria-label={`${fullySelected ? '取消选择' : '选择'}博主 ${source.display_name} 的 ${readyCount} 条视频`}
+    >
+      <span className="video-agent-creator-avatar" aria-hidden="true">
+        <b>{initial}</b>
+        {source.avatar_url && (
+          <img
+            src={source.avatar_url}
+            alt=""
+            loading="lazy"
+            onError={(event) => { event.currentTarget.hidden = true; }}
+          />
+        )}
+      </span>
+      <span className="video-agent-creator-copy">
+        <strong>{source.display_name}</strong>
+        <small>
+          <PlatformBrandIcon platform={source.platform} size={13} />
+          {source.platform === 'bilibili' ? 'B站' : source.platform === 'douyin' ? '抖音' : '小红书'}
+        </small>
+      </span>
+      <span className="video-agent-creator-count">
+        {readyCount > 0 ? `${readyCount} 条可用` : '暂无文稿'}
+        {selectedCount > 0 && <b>{fullySelected ? '已选择' : `已选 ${selectedCount}`}</b>}
+      </span>
+      <span className="video-agent-creator-check" aria-hidden="true">
+        {fullySelected ? <CheckCircle size={20} weight="fill" /> : partiallySelected ? <CheckCircle size={20} weight="duotone" /> : <Plus size={18} />}
+      </span>
+    </button>
+  );
+}
+
 export interface VideoAgentWorkspaceProps {
   /**
    * 以指定来源初始化新会话。仅在工作区挂载时读取一次；切换详情时请用新 key 重挂载。
@@ -571,6 +626,7 @@ export default function VideoAgentWorkspace({
   const [isCompact, setIsCompact] = useState(embedded);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [sourceSyncOpen, setSourceSyncOpen] = useState(false);
+  const [sourceSyncKind, setSourceSyncKind] = useState<'account' | 'creator'>('account');
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [studioOpen, setStudioOpen] = useState(false);
   const [automationOpen, setAutomationOpen] = useState(false);
@@ -580,6 +636,11 @@ export default function VideoAgentWorkspace({
   const [sourcePlatform, setSourcePlatform] = useState<AgentSourcePlatform>('all');
   const [draftSourceMode, setDraftSourceMode] = useState<DraftSourceMode>('scope');
   const [sources, setSources] = useState<AgentSource[]>([]);
+  const [creatorSources, setCreatorSources] = useState<CreatorSource[]>([]);
+  const [creatorReadySourceIds, setCreatorReadySourceIds] = useState<Set<string>>(new Set());
+  const [creatorSourcesLoading, setCreatorSourcesLoading] = useState(false);
+  const [creatorSourcesLoaded, setCreatorSourcesLoaded] = useState(false);
+  const [creatorSourcesError, setCreatorSourcesError] = useState('');
   const [sourceCount, setSourceCount] = useState(0);
   const [scopeReadyCount, setScopeReadyCount] = useState(0);
   const [sourceQuery, setSourceQuery] = useState('');
@@ -991,6 +1052,25 @@ export default function VideoAgentWorkspace({
       ...(response.data.items || []),
     ]);
   }, [rememberSources, settings.agentSourceDisplayLimit]);
+
+  const loadCreatorSources = useCallback(async () => {
+    setCreatorSourcesLoading(true);
+    setCreatorSourcesError('');
+    const response = await listCreatorSources();
+    setCreatorSourcesLoading(false);
+    setCreatorSourcesLoaded(true);
+    if (!response.success || !response.data) {
+      setCreatorSources([]);
+      setCreatorReadySourceIds(new Set());
+      setCreatorSourcesError(response.error || '暂时无法读取博主');
+      return;
+    }
+    const nextCreators = response.data.items || [];
+    setCreatorSources(nextCreators);
+    setCreatorReadySourceIds(new Set(
+      nextCreators.flatMap((source) => source.ready_note_ids || []),
+    ));
+  }, []);
 
   useEffect(() => {
     const refreshVisualStatuses = () => void loadSources(
@@ -1523,7 +1603,9 @@ export default function VideoAgentWorkspace({
     : draftSourceMode === 'scope'
     ? !sourceLoading && scopeReadyCount > 0
     : selectedSourceIds.size > 0
-      && Array.from(selectedSourceIds).every((noteId) => Boolean(sourceRegistry[noteId]));
+      && Array.from(selectedSourceIds).every((noteId) => (
+        Boolean(sourceRegistry[noteId]) || creatorReadySourceIds.has(noteId)
+      ));
   const sourceHandoffPending = requestedSourceIdsRef.current.length > 0
     && !requestedSourceCheckComplete;
   const canGenerateStudioResult = isPlanContext
@@ -1769,13 +1851,17 @@ export default function VideoAgentWorkspace({
     [selectedSourceIds, sourceRegistry],
   );
   const platformSources = useMemo(
-    () => sourcePlatform === 'all'
+    () => sourcePlatform === 'creator'
+      ? []
+      : sourcePlatform === 'all'
       ? sources
       : sources.filter((source) => agentSourcePlatform(source) === sourcePlatform),
     [sourcePlatform, sources],
   );
   const visibleSelectedSources = useMemo(
-    () => sourcePlatform === 'all'
+    () => sourcePlatform === 'creator'
+      ? []
+      : sourcePlatform === 'all'
       ? selectedSources
       : selectedSources.filter((source) => agentSourcePlatform(source) === sourcePlatform),
     [selectedSources, sourcePlatform],
@@ -1786,7 +1872,8 @@ export default function VideoAgentWorkspace({
     maxSelection: MAX_SELECTED_SOURCES,
     alwaysAdditive: false,
     toggleOnHitSelected: true,
-    disabled: sourceLoading
+    disabled: sourcePlatform === 'creator'
+      || sourceLoading
       || Boolean(sourceError)
       || (platformSources.length === 0 && visibleSelectedSources.length === 0),
     isDisabled: () => sourceLoading,
@@ -1809,6 +1896,13 @@ export default function VideoAgentWorkspace({
   );
   const allVisibleSourcesSelected = visibleSelectionTargetIds.length > 0
     && visibleSelectionTargetIds.every((noteId) => selectedSourceIds.has(noteId));
+
+  const creatorSelectedCounts = useMemo(() => Object.fromEntries(
+    creatorSources.map((source) => [
+      source.id,
+      (source.ready_note_ids || []).filter((noteId) => selectedSourceIds.has(noteId)).length,
+    ]),
+  ), [creatorSources, selectedSourceIds]);
 
   const studioResults = useMemo(
     () => deriveAgentStudioResults(messages),
@@ -2040,6 +2134,37 @@ export default function VideoAgentWorkspace({
       next.add(noteId);
       setDraftSourceMode('selected');
       setPendingBatchDeleteIds(null);
+      return next;
+    });
+  };
+
+  const toggleCreatorSource = (creator: CreatorSource) => {
+    const readyIds = normalizeSourceIds(creator.ready_note_ids);
+    if (readyIds.length === 0) {
+      setNotice(`${creator.display_name} 还没有可用于问答的完整文稿`);
+      return;
+    }
+    setDraftSourceMode('selected');
+    setPendingBatchDeleteIds(null);
+    setSelectedSourceIds((current) => {
+      const allSelected = readyIds.every((noteId) => current.has(noteId));
+      const next = new Set(current);
+      if (allSelected) {
+        readyIds.forEach((noteId) => next.delete(noteId));
+        setNotice(`已取消 ${creator.display_name} 的 ${readyIds.length} 条视频`);
+        return next;
+      }
+      let added = 0;
+      for (const noteId of readyIds) {
+        if (next.has(noteId)) continue;
+        if (next.size >= MAX_SELECTED_SOURCES) break;
+        next.add(noteId);
+        added += 1;
+      }
+      const remaining = readyIds.filter((noteId) => !next.has(noteId)).length;
+      setNotice(remaining > 0
+        ? `已加入 ${creator.display_name} 的 ${added} 条视频；每个会话最多 ${MAX_SELECTED_SOURCES} 条`
+        : `已加入 ${creator.display_name} 的 ${readyIds.length} 条视频`);
       return next;
     });
   };
@@ -3616,7 +3741,10 @@ export default function VideoAgentWorkspace({
               <button
                 type="button"
                 className="video-agent-source-sync-link"
-                onClick={() => setSourceSyncOpen(true)}
+                onClick={() => {
+                  setSourceSyncKind('account');
+                  setSourceSyncOpen(true);
+                }}
                 aria-label="同步视频"
                 title="同步视频"
               >
@@ -3642,7 +3770,13 @@ export default function VideoAgentWorkspace({
                 type="button"
                 className={sourcePlatform === platform.value ? 'is-active' : ''}
                 aria-current={sourcePlatform === platform.value ? 'page' : undefined}
-                onClick={() => { setPendingBatchDeleteIds(null); setSourcePlatform(platform.value); }}
+                onClick={() => {
+                  setPendingBatchDeleteIds(null);
+                  setSourcePlatform(platform.value);
+                  if (platform.value === 'creator' && !creatorSourcesLoading) {
+                    void loadCreatorSources();
+                  }
+                }}
                 disabled={deletingBatch}
                 aria-label={platform.label}
                 title={platform.label}
@@ -3653,6 +3787,69 @@ export default function VideoAgentWorkspace({
             ))}
           </nav>
 
+          {sourcePlatform === 'creator' ? (
+            <div className="video-agent-creator-panel">
+              <div className="video-agent-creator-panel-summary">
+                <span>选择一个博主，一次加入他的已同步视频</span>
+                <span className="video-agent-creator-panel-actions">
+                  {creatorSources.length > 0 && <strong>{creatorSources.length} 位</strong>}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSourceSyncKind('creator');
+                      setSourceSyncOpen(true);
+                    }}
+                  >
+                    <Plus size={13} weight="bold" /> 添加博主
+                  </button>
+                </span>
+              </div>
+              <div className="video-agent-creator-list" role="group" aria-label="已保存博主">
+                {creatorSourcesLoading ? (
+                  <div className="video-agent-source-skeleton" aria-label="正在读取博主">
+                    <i /><i /><i /><i />
+                  </div>
+                ) : creatorSourcesError ? (
+                  <div className="video-agent-source-empty">
+                    <UserCircle size={23} />
+                    <strong>博主暂时不可用</strong>
+                    <span>{creatorSourcesError}</span>
+                    <button type="button" onClick={() => void loadCreatorSources()}>重新读取</button>
+                  </div>
+                ) : creatorSourcesLoaded && creatorSources.length === 0 ? (
+                  <div className="video-agent-source-empty">
+                    <UserCircle size={23} />
+                    <strong>还没有保存博主</strong>
+                    <span>先在“同步视频”中添加博主，完成的文稿会出现在这里。</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSourceSyncKind('creator');
+                        setSourceSyncOpen(true);
+                      }}
+                    >添加博主</button>
+                  </div>
+                ) : (
+                  creatorSources.map((creator) => (
+                    <CreatorSourceOption
+                      key={creator.id}
+                      source={creator}
+                      selectedCount={creatorSelectedCounts[creator.id] || 0}
+                      onToggle={toggleCreatorSource}
+                    />
+                  ))
+                )}
+              </div>
+              <div className="video-agent-creator-selection" role="status">
+                <span>当前会话已选</span>
+                <strong>{selectedSourceIds.size}/{MAX_SELECTED_SOURCES} 条</strong>
+                {selectedSourceIds.size > 0 && (
+                  <button type="button" onClick={clearSelectedSources}>清空</button>
+                )}
+              </div>
+            </div>
+          ) : (
+          <>
           <form className="video-agent-source-search" onSubmit={runSmartSourceSearch}>
             <input
               type="search"
@@ -3841,7 +4038,10 @@ export default function VideoAgentWorkspace({
                       : '同步视频后会显示在这里。'}
                 </span>
                 {!sourceAppliedQuery && selectedSourceIds.size === 0 && (
-                  <button type="button" onClick={() => setSourceSyncOpen(true)}>同步视频</button>
+                  <button type="button" onClick={() => {
+                    setSourceSyncKind('account');
+                    setSourceSyncOpen(true);
+                  }}>同步视频</button>
                 )}
               </div>
             ) : (
@@ -3875,6 +4075,8 @@ export default function VideoAgentWorkspace({
               </>
             )}
           </div>
+          </>
+          )}
 
           {!removeSelectionMode && (activeThread ? (
             <button
@@ -4512,8 +4714,12 @@ export default function VideoAgentWorkspace({
       </section>
       <AgentSourceSyncSheet
         open={sourceSyncOpen}
+        initialSourceKind={sourceSyncKind}
         onClose={() => setSourceSyncOpen(false)}
-        onSynced={() => loadSources(browseScope)}
+        onSynced={() => {
+          void loadSources(browseScope);
+          void loadCreatorSources();
+        }}
         onManageSources={() => {
           setSourceSyncOpen(false);
           enterRemoveSelectionMode();

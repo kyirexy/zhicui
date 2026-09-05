@@ -4781,11 +4781,70 @@ def generate_plan(transcript: str) -> dict[str, Any] | None:
         return None
 
 
-_PLAN_AGENT_PROMPT = """\
-你是知萃的行动计划 Agent。你的任务是把一条视频中真正可执行的信息，与用户的明确要求结合，生成一份完整、可落库的计划目标状态。
+_KNOWLEDGE_AGENT_PROMPT = """\
+你是知萃的知识整理 Agent。用户已经明确要求把当前信息保存到自己的知识库。请根据用户要求、最近对话和资料上下文，生成一篇可长期检索和阅读的知识页。
 
 工作规则：
-1. 视频文稿和 AI 结构化理解是事实来源；用户指令可以改变节奏、日期、次数、任务颗粒度和目标，但不能让你虚构视频中的事实。
+1. 只整理输入中真实存在的信息，不补造人物、数字、来源或结论。
+2. 优先保存用户明确指定的对象；如果用户说“刚才、上面、这个回答”，主要依据最近对话。
+3. 标题要具体、可检索，避免“知识整理”“聊天记录”等空泛标题。
+4. summary 用 1 至 3 句话概括最重要的信息。
+5. content 使用清晰的 Markdown 正文；按内容自然分段，需要时使用二级标题和列表，不要添加解释本次任务的元话语。
+6. 如果输入不足以形成知识正文，content 返回空字符串，不得虚构填充。
+
+只输出严格 JSON，不要 Markdown 代码围栏：
+{
+  "title": "知识标题",
+  "summary": "简短摘要",
+  "content": "Markdown 正文"
+}
+"""
+
+
+def generate_knowledge_entry(
+    *,
+    instruction: str,
+    conversation_context: str = "",
+    source_context: str = "",
+) -> dict[str, str]:
+    """Turn bounded Agent context into one validated personal knowledge page."""
+    clean_instruction = str(instruction or "").strip()[:1_000]
+    if not clean_instruction:
+        raise ValueError("请说明希望保存什么知识")
+
+    raw = _call_llm(
+        system=_KNOWLEDGE_AGENT_PROMPT,
+        user=f"""\
+【用户本次要求】
+{clean_instruction}
+
+【最近对话】
+{str(conversation_context or '').strip()[:24_000] or '无'}
+
+【当前资料】
+{str(source_context or '').strip()[:80_000] or '无'}
+""",
+        max_tokens=3_200,
+        temperature=0.15,
+        timeout=90,
+        operation="knowledge_agent",
+    )
+    parsed = _parse_agent_response_payload(raw)
+    title = str(parsed.get("title") or "").strip()[:256]
+    summary = str(parsed.get("summary") or "").strip()[:4_000]
+    content = str(parsed.get("content") or "").strip()[:100_000]
+    if not title or not content:
+        raise ValueError("知识 Agent 没有整理出有效内容，请补充要保存的信息")
+    if not summary:
+        summary = re.sub(r"\s+", " ", content)[:240]
+    return {"title": title, "summary": summary, "content": content}
+
+
+_PLAN_AGENT_PROMPT = """\
+你是知萃的行动计划 Agent。你的任务是把用户的明确要求与提供的资料中真正可执行的信息结合，生成一份完整、可落库的计划目标状态。资料为空时，以用户明确给出的目标、周期和约束为准。
+
+工作规则：
+1. 资料文稿和 AI 结构化理解是事实来源；用户指令可以改变节奏、日期、次数、任务颗粒度和目标，但不能让你虚构资料中的事实。
 2. 如果提供了现有计划，你是在修订它。保留没有被用户要求改变且仍然合理的内容；相同任务尽量保留原 id。
 3. dynamic_fields、days、tasks 的数量完全由内容和用户需求决定，不设固定字段数或每日任务数。
 4. days 只表示真实执行节点，可以稀疏；每个 day 为正整数。scheduled_at 只使用 YYYY-MM-DD 或 YYYY-MM-DDTHH:MM。
@@ -4869,8 +4928,8 @@ def generate_or_revise_plan(
 【当前北京时间日期】
 {datetime.now(_PLAN_TIMEZONE).date().isoformat()}
 
-【视频标题】
-{title.strip()[:512] or '未命名视频'}
+【资料主题】
+{title.strip()[:512] or '用户的行动目标'}
 
 【用户要求】
 {clean_instruction[:1000]}
@@ -4878,11 +4937,11 @@ def generate_or_revise_plan(
 【来源覆盖】
 {coverage}
 
-【AI 对视频的结构化理解】
+【AI 对资料的结构化理解】
 {summary_context or '无'}
 
-【视频文稿上下文】
-{transcript_context or '无可用文稿'}
+【资料上下文】
+{transcript_context or '无额外资料，仅依据用户明确要求'}
 
 【现有计划】
 {existing_context}

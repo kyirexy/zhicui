@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import {
   boundedPlatformUrls,
   hasPlatformAuthCookie,
+  isDouyinSourceResponseUrl,
   mergeDouyinItem,
   normalizeDouyinRecord,
   readDouyinMetadataPayload,
+  readDouyinSourceRecords,
 } from '../dist/platform-account.js';
 import {
   validatePlatformAccountCollectRequest,
@@ -44,6 +46,50 @@ const asyncHeaderPayload = await readDouyinMetadataPayload({
   json: async () => ({ aweme_detail: { aweme_id: '7672579366093622537' } }),
 });
 assert.equal(asyncHeaderPayload?.aweme_detail?.aweme_id, '7672579366093622537');
+
+assert.equal(
+  isDouyinSourceResponseUrl(
+    'https://www.douyin.com/aweme/v1/web/aweme/favorite/?cursor=0',
+    'like',
+  ),
+  true,
+);
+assert.equal(
+  isDouyinSourceResponseUrl(
+    'https://www.douyin.com/aweme/v1/web/aweme/post/?sec_user_id=author',
+    'like',
+  ),
+  false,
+);
+assert.equal(
+  isDouyinSourceResponseUrl(
+    'https://www.douyin.com/aweme/v1/web/aweme/listcollection/?cursor=0',
+    'collect',
+  ),
+  true,
+);
+assert.equal(
+  isDouyinSourceResponseUrl(
+    'https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=1',
+    'post',
+  ),
+  false,
+);
+
+const wrongModePayload = await readDouyinMetadataPayload({
+  url: () => 'https://www.douyin.com/aweme/v1/web/aweme/post/?cursor=0',
+  allHeaders: async () => ({ 'content-type': 'application/json' }),
+  json: async () => ({ aweme_list: [{ aweme_id: 'post-id' }] }),
+}, 'like');
+assert.equal(wrongModePayload, null);
+
+assert.deepEqual(
+  readDouyinSourceRecords({
+    aweme_list: [{ aweme_id: 'favorite-id' }],
+    recommendations: { aweme_list: [{ aweme_id: 'unrelated-id' }] },
+  }),
+  [{ aweme_id: 'favorite-id' }],
+);
 
 const mergedItems = new Map();
 mergeDouyinItem(mergedItems, {

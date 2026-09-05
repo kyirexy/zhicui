@@ -1704,6 +1704,61 @@
   gap: 3px;
 }
 
+.root :global(.video-agent-created-plan),
+.root :global(.video-agent-created-knowledge) {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--aw-mint) 28%, var(--aw-line));
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--aw-mint) 5%, var(--aw-surface));
+}
+
+.root :global(.video-agent-created-plan-icon),
+.root :global(.video-agent-created-knowledge-icon) {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  border-radius: 10px;
+  place-items: center;
+  color: var(--aw-mint);
+  background: var(--aw-soft);
+}
+
+.root :global(.video-agent-created-plan-copy),
+.root :global(.video-agent-created-knowledge-copy) { min-width: 0; display: grid; gap: 2px; }
+.root :global(.video-agent-created-plan-copy small),
+.root :global(.video-agent-created-plan-copy span),
+.root :global(.video-agent-created-knowledge-copy small),
+.root :global(.video-agent-created-knowledge-copy span) { color: var(--foreground-muted); font-size: 0.67rem; }
+.root :global(.video-agent-created-plan-copy strong),
+.root :global(.video-agent-created-knowledge-copy strong) { overflow: hidden; color: var(--foreground); font-size: 0.82rem; text-overflow: ellipsis; white-space: nowrap; }
+.root :global(.video-agent-created-plan > a),
+.root :global(.video-agent-created-knowledge > a) {
+  min-height: 42px;
+  display: inline-flex;
+  padding: 0 11px;
+  border-radius: 9px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: white;
+  background: var(--aw-mint);
+  font-size: 0.72rem;
+  font-weight: 680;
+  text-decoration: none;
+}
+
+@media (max-width: 640px) {
+  .root :global(.video-agent-created-plan),
+  .root :global(.video-agent-created-knowledge) { grid-template-columns: auto minmax(0, 1fr); }
+  .root :global(.video-agent-created-plan > a),
+  .root :global(.video-agent-created-knowledge > a) { min-height: 44px; grid-column: 1 / -1; }
+}
+
 .root :global(.video-agent-plan-change) {
   display: grid;
   margin-top: 14px;
@@ -3643,6 +3698,198 @@
   scrollbar-color: var(--aw-line) transparent;
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
+}
+
+.root :global(.video-agent-creator-panel) {
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.root :global(.video-agent-creator-panel-summary) {
+  display: flex;
+  min-height: 34px;
+  padding: 0 16px 7px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--foreground-muted);
+  font-size: 0.66rem;
+}
+
+.root :global(.video-agent-creator-panel-summary strong) {
+  color: var(--foreground-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.root :global(.video-agent-creator-panel-actions) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.root :global(.video-agent-creator-panel-actions button) {
+  display: inline-flex;
+  min-height: 30px;
+  padding: 0 7px;
+  align-items: center;
+  gap: 3px;
+  color: var(--aw-mint);
+  font-size: 0.63rem;
+  font-weight: 680;
+}
+
+.root :global(.video-agent-creator-list) {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 0 9px 10px;
+  flex: 1;
+  overscroll-behavior: contain;
+}
+
+.root :global(.video-agent-creator-item) {
+  display: grid;
+  width: 100%;
+  min-height: 66px;
+  margin-top: 4px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  grid-template-columns: 42px minmax(0, 1fr) auto 24px;
+  align-items: center;
+  gap: 9px;
+  color: var(--foreground-secondary);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background 160ms ease-out, border-color 160ms ease-out, transform 120ms ease-out;
+}
+
+.root :global(.video-agent-creator-item:not(:disabled):hover),
+.root :global(.video-agent-creator-item:not(:disabled):focus-visible) {
+  border-color: var(--aw-line);
+  outline: none;
+  background: var(--aw-soft);
+}
+
+.root :global(.video-agent-creator-item:not(:disabled):active) {
+  transform: scale(0.985);
+}
+
+.root :global(.video-agent-creator-item.is-selected),
+.root :global(.video-agent-creator-item.is-partial) {
+  border-color: color-mix(in srgb, var(--aw-mint) 26%, var(--aw-line));
+  background: var(--aw-mint-soft);
+}
+
+.root :global(.video-agent-creator-item:disabled) {
+  cursor: default;
+  opacity: 0.52;
+}
+
+.root :global(.video-agent-creator-avatar) {
+  position: relative;
+  display: grid;
+  overflow: hidden;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  place-items: center;
+  color: var(--foreground-secondary);
+  background: var(--aw-soft-strong);
+}
+
+.root :global(.video-agent-creator-avatar b) {
+  font-size: 0.76rem;
+  font-weight: 720;
+}
+
+.root :global(.video-agent-creator-avatar img) {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.root :global(.video-agent-creator-copy) {
+  overflow: hidden;
+  min-width: 0;
+}
+
+.root :global(.video-agent-creator-copy strong),
+.root :global(.video-agent-creator-copy small) {
+  display: flex;
+  overflow: hidden;
+  align-items: center;
+  gap: 4px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.root :global(.video-agent-creator-copy strong) {
+  color: var(--foreground);
+  font-size: 0.73rem;
+  font-weight: 700;
+}
+
+.root :global(.video-agent-creator-copy small) {
+  margin-top: 3px;
+  color: var(--foreground-muted);
+  font-size: 0.61rem;
+}
+
+.root :global(.video-agent-creator-count) {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  color: var(--foreground-muted);
+  font-size: 0.62rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.root :global(.video-agent-creator-count b) {
+  color: var(--aw-mint);
+  font-size: 0.59rem;
+}
+
+.root :global(.video-agent-creator-check) {
+  display: grid;
+  color: var(--foreground-muted);
+  place-items: center;
+}
+
+.root :global(.video-agent-creator-item.is-selected .video-agent-creator-check),
+.root :global(.video-agent-creator-item.is-partial .video-agent-creator-check) {
+  color: var(--aw-mint);
+}
+
+.root :global(.video-agent-creator-selection) {
+  display: flex;
+  min-height: 42px;
+  padding: 6px 14px;
+  border-top: 1px solid var(--aw-line);
+  align-items: center;
+  gap: 6px;
+  color: var(--foreground-muted);
+  font-size: 0.65rem;
+}
+
+.root :global(.video-agent-creator-selection strong) {
+  color: var(--foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.root :global(.video-agent-creator-selection button) {
+  min-height: 30px;
+  margin-left: auto;
+  padding: 0 7px;
+  color: var(--foreground-secondary);
+  font-size: 0.64rem;
 }
 
 .root :global(.video-agent-source-group) {

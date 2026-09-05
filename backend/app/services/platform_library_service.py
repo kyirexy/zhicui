@@ -45,6 +45,7 @@ _XHS_MEDIA_HEADERS = {
     "Referer": "https://www.xiaohongshu.com/",
 }
 _BILIBILI_PLACEHOLDER_TITLES = {"", "B站视频", "未命名视频"}
+_ACCOUNT_SOURCE_MODES = ("collect", "like", "post")
 _DOUYIN_MEDIA_DOMAINS = (
     "douyinvod.com",
     "douyin.com",
@@ -86,6 +87,18 @@ def _load_payload(note: Note) -> dict[str, Any]:
 def _source_meta(note: Note) -> dict[str, Any]:
     source_meta = _load_payload(note).get("source_meta")
     return source_meta if isinstance(source_meta, dict) else {}
+
+
+def _source_modes(*values: object) -> list[str]:
+    """Keep every explicit account membership without guessing unknown sources."""
+    result: list[str] = []
+    for value in values:
+        candidates = value if isinstance(value, (list, tuple, set)) else [value]
+        for candidate in candidates:
+            mode = str(candidate or "").strip().lower()
+            if mode in _ACCOUNT_SOURCE_MODES and mode not in result:
+                result.append(mode)
+    return result
 
 
 def _cover_signature(note_id: str, expires: int) -> str:
@@ -273,15 +286,15 @@ def resolve_media_target(note: Note) -> tuple[str, dict[str, str]]:
 
 
 def cover_target(db: Session, note_id: str) -> str:
-    """Return only the reviewed Bilibili CDN cover for a signed capability."""
+    """Return an allowlisted video cover target for a signed capability."""
     note = db.query(Note).filter(Note.id == note_id).first()
     if note is None:
         return ""
     meta = _source_meta(note)
-    if (
-        meta.get("source_kind") != SOURCE_KIND
-        or meta.get("platform") != "bilibili"
-    ):
+    platform = str(meta.get("platform") or "").strip()
+    if platform not in {"bilibili", "douyin"}:
+        return ""
+    if platform == "bilibili" and meta.get("source_kind") != SOURCE_KIND:
         return ""
     return str(meta.get("cover_url") or "").strip()
 
@@ -552,11 +565,20 @@ def _save_or_refresh(
 
     payload = _load_payload(existing)
     previous_meta = sanitized_source_meta(payload.get("source_meta"))
-    payload["source_meta"] = {
+    merged_source_modes = _source_modes(
+        previous_meta.get("source_modes"),
+        previous_meta.get("source_mode"),
+        source_meta.get("source_modes"),
+        source_meta.get("source_mode"),
+    )
+    merged_source_meta = {
         **previous_meta,
         **source_meta,
         "first_seen_at": previous_meta.get("first_seen_at") or existing.created_at.isoformat(),
     }
+    if merged_source_modes:
+        merged_source_meta["source_modes"] = merged_source_modes
+    payload["source_meta"] = merged_source_meta
     existing.video_title = str(info.get("title") or existing.video_title)
     existing.video_url = stable_source_url
     if transcript and len(transcript) >= len(existing.transcript_raw or ""):
@@ -599,6 +621,7 @@ def import_one(
         info, transcript, source_meta = _extract_xiaohongshu(url, db)
     if source_mode in {"collect", "like", "post"}:
         source_meta["source_mode"] = source_mode
+        source_meta["source_modes"] = [source_mode]
     note, reused = _save_or_refresh(
         db,
         user_id=user_id,
@@ -730,6 +753,10 @@ def serialize_item(
         "ai_initialized": bool(note.ai_initialized),
         "card_type": note.card_type,
         "source_mode": str(meta.get("source_mode") or "import").strip() or "import",
+        "source_modes": _source_modes(
+            meta.get("source_modes"),
+            meta.get("source_mode"),
+        ),
     }
     if include_note:
         assert data is not None

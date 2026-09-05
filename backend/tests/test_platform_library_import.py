@@ -301,6 +301,33 @@ class PlatformLibraryImportTests(unittest.TestCase):
 
         self.assertEqual(result["success"], 1)
         self.assertEqual(result["items"][0]["item"]["source_mode"], "collect")
+        self.assertEqual(result["items"][0]["item"]["source_modes"], ["collect"])
+
+    def test_reused_bilibili_video_preserves_multiple_real_memberships(self) -> None:
+        with patch.object(
+            platform_library_service,
+            "_extract_bilibili",
+            return_value=self.bili_result(),
+        ):
+            liked = platform_library_service.import_one(
+                self.db,
+                user_id=self.user_a.id,
+                value="https://www.bilibili.com/video/BV1TEST",
+                source_mode="like",
+            )
+            collected = platform_library_service.import_one(
+                self.db,
+                user_id=self.user_a.id,
+                value="https://www.bilibili.com/video/BV1TEST",
+                source_mode="collect",
+            )
+
+        self.assertEqual(liked["item"]["source_modes"], ["like"])
+        self.assertEqual(collected["status"], "reused")
+        self.assertEqual(
+            set(collected["item"]["source_modes"]),
+            {"collect", "like"},
+        )
 
     def test_xhs_video_keeps_caption_and_spoken_text(self) -> None:
         info = {

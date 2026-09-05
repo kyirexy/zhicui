@@ -44,6 +44,7 @@ from app.services import (
 
 MAX_SOURCES_PER_USER = 50
 MAX_SELECTED_ITEMS = 50
+MAX_READY_NOTE_IDS = 100
 DEFAULT_PAGE_SIZE = 50
 ALLOWED_LIMITS = {20, 50, 100}
 ALLOWED_OPERATIONS = {
@@ -348,6 +349,34 @@ def _source_counts(db: Session, source: CreatorSource) -> dict[str, int]:
 def serialize_source_detail(db: Session, source: CreatorSource) -> dict[str, Any]:
     data = source.to_dict()
     data["catalog_counts"] = _source_counts(db, source)
+    ready_note_ids = [
+        note_id
+        for (note_id,) in (
+            db.query(CreatorSourceItem.note_id)
+            .join(Note, Note.id == CreatorSourceItem.note_id)
+            .filter(
+                CreatorSourceItem.user_id == source.user_id,
+                CreatorSourceItem.source_id == source.id,
+                CreatorSourceItem.note_id.is_not(None),
+                CreatorSourceItem.removed_at.is_(None),
+                CreatorSourceItem.state != "removed",
+                CreatorSourceItem.is_available.is_(True),
+                Note.user_id == source.user_id,
+                Note.transcript_raw.is_not(None),
+                Note.transcript_raw != "",
+            )
+            .order_by(
+                CreatorSourceItem.published_at.desc(),
+                CreatorSourceItem.order_index.asc(),
+                CreatorSourceItem.id.asc(),
+            )
+            .limit(MAX_READY_NOTE_IDS)
+            .all()
+        )
+        if note_id
+    ]
+    data["ready_note_ids"] = ready_note_ids
+    data["transcript_count"] = len(ready_note_ids)
     last_run = _last_run(db, source.user_id, source.id)
     data["last_run"] = last_run.to_dict() if last_run else None
     return data

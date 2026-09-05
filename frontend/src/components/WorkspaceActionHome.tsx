@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -26,8 +26,13 @@ import {
 import LibraryCoverImage from '@/components/LibraryCoverImage';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import { buildHomeLinkDestination } from '@/lib/singleLinkImport';
+import {
+  classifyHomeSourceModes,
+  firstPopulatedHomeMode,
+  type HomeChannelMode,
+  type HomeChannelPlatform,
+} from '@/lib/homeSourceClassification';
 import type {
-  AgentSource,
   AgentThread,
   DouyinLibraryItem,
   PlatformLibraryItem,
@@ -51,8 +56,8 @@ interface WorkspaceHomeCache {
   activeModes: Record<ChannelPlatform, ChannelMode>;
 }
 
-type ChannelPlatform = 'douyin' | 'bilibili';
-type ChannelMode = 'collect' | 'like' | 'post';
+type ChannelPlatform = HomeChannelPlatform;
+type ChannelMode = HomeChannelMode;
 type ChannelKey = `${ChannelPlatform}_${ChannelMode}`;
 
 const CHANNEL_PLATFORMS: Array<{
@@ -79,11 +84,11 @@ const CHANNEL_PLATFORMS: Array<{
   {
     key: 'bilibili',
     label: 'B站',
-    description: '收藏、喜欢与投稿 / 导入',
+    description: '收藏、喜欢与导入视频',
     modes: [
       { key: 'collect', label: '收藏', empty: '还没有同步 B站收藏', Icon: Lockers },
       { key: 'like', label: '喜欢', empty: '还没有同步 B站喜欢', Icon: Heart },
-      { key: 'post', label: '作品', empty: '还没有同步 B站投稿或导入视频', Icon: VideoCamera },
+      { key: 'import', label: '导入', empty: '还没有导入 B站视频', Icon: VideoCamera },
     ],
   },
 ];
@@ -94,10 +99,10 @@ const CHANNEL_KEYS: ChannelKey[] = [
   'douyin_post',
   'bilibili_collect',
   'bilibili_like',
-  'bilibili_post',
+  'bilibili_import',
 ];
 
-const HOME_CACHE_VERSION = 'v1';
+const HOME_CACHE_VERSION = 'v5';
 const HOME_CACHE_MAX_AGE = 5 * 60 * 1000;
 
 function homeCacheKey(userId: string): string {
@@ -176,16 +181,6 @@ function toPlatformPreviews(items: PlatformLibraryItem[]): ChannelPreview[] {
   }));
 }
 
-function toAgentPreviews(items: AgentSource[]): ChannelPreview[] {
-  return items.slice(0, 3).map((item) => ({
-    key: item.note_id,
-    href: `/library/detail?note=${encodeURIComponent(item.note_id)}`,
-    title: item.title,
-    cover: item.cover_url || '',
-    author: item.author_name || (item.platform === 'bilibili' ? 'B站' : '抖音'),
-  }));
-}
-
 export default function WorkspaceActionHome() {
   const router = useRouter();
   const { user } = useAuth();
@@ -203,11 +198,13 @@ export default function WorkspaceActionHome() {
     douyin: 'collect',
     bilibili: 'collect',
   });
+  const touchedModes = useRef<Set<ChannelPlatform>>(new Set());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!user?.id) return;
     let active = true;
+    touchedModes.current = new Set();
     const cached = readHomeCache(user.id);
     if (cached) {
       setThreads(cached.threads);
@@ -227,6 +224,21 @@ export default function WorkspaceActionHome() {
       if (!active) return;
       setChannelPreviews({ ...nextPreviews });
       setChannelTotals({ ...nextTotals });
+      setActiveModes((current) => {
+        let changed = false;
+        const next = { ...current };
+        CHANNEL_PLATFORMS.forEach((platform) => {
+          if (touchedModes.current.has(platform.key)) return;
+          const firstAvailable = platform.modes.find(({ key: mode }) => (
+            (nextTotals[`${platform.key}_${mode}` as ChannelKey] || 0) > 0
+          ));
+          if (firstAvailable && next[platform.key] !== firstAvailable.key) {
+            next[platform.key] = firstAvailable.key;
+            changed = true;
+          }
+        });
+        return changed ? next : current;
+      });
     };
 
     const threadRequest = listAgentThreads().then((response) => {
@@ -247,33 +259,17 @@ export default function WorkspaceActionHome() {
       const sources = response.data;
       nextReadyCount = sources?.ready_count ?? sources?.total ?? 0;
       setReadyCount(nextReadyCount);
-        const bilibiliBuckets: Record<ChannelMode, AgentSource[]> = {
-          collect: [],
-          like: [],
-          post: [],
-        };
-      (sources?.items || []).forEach((item) => {
-          if (item.platform !== 'bilibili') return;
-          const mode = item.source_mode === 'collect' || item.source_mode === 'like'
-            ? item.source_mode
-            : 'post';
-          bilibiliBuckets[mode].push(item);
-        });
-      (Object.keys(bilibiliBuckets) as ChannelMode[]).forEach((mode) => {
-          const key = `bilibili_${mode}` as ChannelKey;
-        nextPreviews[key] = toAgentPreviews(bilibiliBuckets[mode]);
-        nextTotals[key] = bilibiliBuckets[mode].length;
-      });
-      publishChannels();
       return response;
     }).catch(() => null);
 
-    const douyinRequests = (['collect', 'like', 'post'] as ChannelMode[]).map((mode) => (
-      listDouyinLibraryItems(6, mode).then((response) => {
+    const douyinRequests = (['collect', 'like', 'post'] as const).map((mode) => (
+      listDouyinLibraryItems(6, mode, 'collection', false, true).then((response) => {
         if (!active || !response.success) return response;
         const key = `douyin_${mode}` as ChannelKey;
+        const total = response.data?.source_total ?? 0;
+        // 成功响应（包括真实的 0 条）就是该来源的权威结果。
         nextPreviews[key] = toDouyinPreviews(response.data?.items || []);
-        nextTotals[key] = response.data?.source_total ?? 0;
+        nextTotals[key] = total;
         publishChannels();
         return response;
       }).catch(() => null)
@@ -282,25 +278,25 @@ export default function WorkspaceActionHome() {
     const biliRequest = listPlatformLibraryItems('bilibili').then((response) => {
       if (!active || !response.success) return response;
       const fallbackItems = response.data?.items || [];
-        if ((nextTotals.bilibili_collect || 0) + (nextTotals.bilibili_like || 0) + (nextTotals.bilibili_post || 0) === 0) {
-          const fallbackBuckets: Record<ChannelMode, PlatformLibraryItem[]> = {
-            collect: [],
-            like: [],
-            post: [],
-          };
-          fallbackItems.forEach((item) => {
-            const mode = item.source_mode === 'collect' || item.source_mode === 'like'
-              ? item.source_mode
-              : 'post';
-            fallbackBuckets[mode].push(item);
-          });
-          (Object.keys(fallbackBuckets) as ChannelMode[]).forEach((mode) => {
-            const key = `bilibili_${mode}` as ChannelKey;
-            nextPreviews[key] = toPlatformPreviews(fallbackBuckets[mode]);
-            nextTotals[key] = fallbackBuckets[mode].length;
-          });
-        publishChannels();
-      }
+      const fallbackBuckets: Record<ChannelMode, PlatformLibraryItem[]> = {
+        collect: [],
+        like: [],
+        post: [],
+        import: [],
+      };
+      fallbackItems.forEach((item) => {
+        classifyHomeSourceModes(
+          'bilibili',
+          item.source_mode,
+          item.source_modes,
+        ).forEach((mode) => fallbackBuckets[mode].push(item));
+      });
+      (['collect', 'like', 'import'] as const).forEach((mode) => {
+        const key = `bilibili_${mode}` as ChannelKey;
+        nextPreviews[key] = toPlatformPreviews(fallbackBuckets[mode]);
+        nextTotals[key] = fallbackBuckets[mode].length;
+      });
+      publishChannels();
       return response;
     }).catch(() => null);
 
@@ -312,18 +308,21 @@ export default function WorkspaceActionHome() {
     ]).then(() => {
       if (!active) return;
       const nextActiveModes: Record<ChannelPlatform, ChannelMode> = {
-        douyin: (nextTotals.douyin_collect || 0) > 0
-          ? 'collect'
-          : (nextTotals.douyin_like || 0) > 0
-            ? 'like'
-            : 'post',
-        bilibili: (nextTotals.bilibili_collect || 0) > 0
-          ? 'collect'
-          : (nextTotals.bilibili_like || 0) > 0
-            ? 'like'
-            : 'post',
+        douyin: firstPopulatedHomeMode('douyin', {
+          collect: nextTotals.douyin_collect,
+          like: nextTotals.douyin_like,
+          post: nextTotals.douyin_post,
+        }),
+        bilibili: firstPopulatedHomeMode('bilibili', {
+          collect: nextTotals.bilibili_collect,
+          like: nextTotals.bilibili_like,
+          import: nextTotals.bilibili_import,
+        }),
       };
-      setActiveModes(nextActiveModes);
+      setActiveModes((current) => ({
+        douyin: touchedModes.current.has('douyin') ? current.douyin : nextActiveModes.douyin,
+        bilibili: touchedModes.current.has('bilibili') ? current.bilibili : nextActiveModes.bilibili,
+      }));
       setLoading(false);
       writeHomeCache(user.id, {
         threads: nextThreads,
@@ -417,7 +416,7 @@ export default function WorkspaceActionHome() {
       <section className={styles.mobileImport} aria-labelledby="mobile-import-title">
         <div className={styles.mobileImportHeading}>
           <h1 id="mobile-import-title">粘贴链接</h1>
-            <p>支持博主主页 / 单条视频链接</p>
+          <p>支持抖音 / B站博主主页或单条视频</p>
         </div>
         <form onSubmit={submitImportLink} className={styles.mobileImportForm}>
           <label htmlFor="mobile-home-link" className="sr-only">博主主页或单条视频链接</label>
@@ -436,7 +435,7 @@ export default function WorkspaceActionHome() {
                 setImportLink(event.target.value);
                 if (importError) setImportError('');
               }}
-              placeholder="粘贴博主主页 / 视频链接"
+              placeholder="粘贴抖音 / B站主页或视频链接"
             />
             <button type="button" className={styles.pasteButton} onClick={() => void pasteImportLink()}>
               <ClipboardText size={17} weight="regular" aria-hidden="true" />
@@ -555,7 +554,10 @@ export default function WorkspaceActionHome() {
                         role="tab"
                         aria-selected={selected}
                         className={selected ? styles.activeMode : undefined}
-                        onClick={() => setActiveModes((current) => ({ ...current, [platform.key]: mode }))}
+                        onClick={() => {
+                          touchedModes.current.add(platform.key);
+                          setActiveModes((current) => ({ ...current, [platform.key]: mode }));
+                        }}
                       >
                         <Icon size={14} weight={selected ? 'fill' : 'regular'} aria-hidden="true" />
                         <span>{label}</span>

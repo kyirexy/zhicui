@@ -34,6 +34,11 @@ const BILIBILI_LOGIN_URL = 'https://passport.bilibili.com/login';
 const XHS_LOGIN_URL = 'https://www.xiaohongshu.com/explore';
 const DOUYIN_LOGIN_URL = 'https://www.douyin.com/?showLogin=true';
 const DOUYIN_PROFILE_URL = 'https://www.douyin.com/user/self?from_tab_name=main';
+const DOUYIN_SOURCE_RESPONSE_PATHS: Record<PlatformAccountSourceMode, RegExp> = {
+  like: /^\/aweme\/v1\/web\/aweme\/favorite\/?$/i,
+  collect: /^\/aweme\/v1\/web\/aweme\/listcollection\/?$/i,
+  post: /^\/aweme\/v1\/web\/aweme\/post\/?$/i,
+};
 
 type SupportedBrowser = 'chrome' | 'msedge';
 type StatusListener = (status: PlatformAccountStatus) => void;
@@ -158,11 +163,36 @@ export function mergeDouyinItem(
 
 type DouyinResponse = Pick<Response, 'url' | 'allHeaders' | 'json'>;
 
+export function isDouyinSourceResponseUrl(
+  value: string,
+  mode: PlatformAccountSourceMode,
+): boolean {
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase().replace(/\.$/, '');
+    if (hostname !== 'douyin.com' && !hostname.endsWith('.douyin.com')) return false;
+    return DOUYIN_SOURCE_RESPONSE_PATHS[mode].test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+export function readDouyinSourceRecords(value: unknown): unknown[] {
+  const payload = record(value);
+  const direct = list(payload.aweme_list);
+  if (direct.length > 0) return direct;
+  return list(record(payload.data).aweme_list);
+}
+
 export async function readDouyinMetadataPayload(
   response: DouyinResponse,
+  expectedMode?: PlatformAccountSourceMode,
 ): Promise<unknown | null> {
   const url = response.url();
-  if (!/douyin\.com/i.test(url) || !/(aweme|favorite|collection|post|user|feed|detail|like)/i.test(url)) {
+  const accepted = expectedMode
+    ? isDouyinSourceResponseUrl(url, expectedMode)
+    : /douyin\.com/i.test(url) && /(aweme|favorite|collection|post|user|feed|detail|like)/i.test(url);
+  if (!accepted) {
     return null;
   }
   try {
@@ -828,29 +858,38 @@ export class PlatformAccountConnector {
     const page = context.pages()[0] || await context.newPage();
     const items = new Map<string, PlatformAccountItem>();
     const pending = new Set<Promise<void>>();
+    let targetPayloadSeen = false;
     const onResponse = (response: Response): void => {
-      const work = readDouyinMetadataPayload(response)
+      const work = readDouyinMetadataPayload(response, mode)
         .then((payload) => {
-          if (payload !== null) this.collectDouyinRecords(payload, items, limit);
+          if (payload === null) return;
+          targetPayloadSeen = true;
+          this.collectDouyinRecords(readDouyinSourceRecords(payload), items, limit);
         })
         .then(() => undefined);
       pending.add(work);
       void work.finally(() => pending.delete(work));
     };
-    page.on('response', onResponse);
     try {
       await page.goto(DOUYIN_PROFILE_URL, { waitUntil: 'commit', timeout: 25_000 })
         .catch(() => undefined);
       const browser = context.browser()?.browserType().name() === 'chromium'
         ? 'chrome'
         : 'msedge';
+      // 导航预热阶段会返回默认“作品”和推荐流；只在进入本人主页后监听
+      // 当前 mode 的精确接口，避免把别的 tab 整批写成收藏或喜欢。
+      page.on('response', onResponse);
       await this.selectDouyinTab(page, 'douyin', mode, browser);
       let unchangedRounds = 0;
       for (let index = 0; index < MAX_DOUYIN_SCROLLS && items.size < limit; index += 1) {
         if (this.cancelled) break;
         const before = items.size;
-        await this.collectVisibleDouyinCards(page, items, limit);
         await Promise.allSettled([...pending]);
+        // 官方接口不可见时才使用已切换 tab 的可见卡片；接口明确返回空
+        // 代表真实 0 条，不能再从页面推荐区猜测来源。
+        if (!targetPayloadSeen) {
+          await this.collectVisibleDouyinCards(page, items, limit);
+        }
         unchangedRounds = items.size === before ? unchangedRounds + 1 : 0;
         if (items.size >= limit || unchangedRounds >= 5) break;
         await page.evaluate(() => {

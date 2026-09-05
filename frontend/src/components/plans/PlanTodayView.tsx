@@ -433,6 +433,16 @@ export default function PlanTodayView({
                         {quadrantTasks[quadrant.key].map(task => (
                           <TaskRow key={taskKey(task)} task={task} compact busy={busyKeys.has(taskKey(task))} onToggle={onToggle} />
                         ))}
+                        {quadrantTasks[quadrant.key].length > 2 && (
+                          <button
+                            type="button"
+                            className={styles.quadrantMore}
+                            onClick={() => setTaskView('list')}
+                          >
+                            查看全部 {quadrantTasks[quadrant.key].length} 项
+                            <CaretRight size={13} aria-hidden="true" />
+                          </button>
+                        )}
                       </div>
                     ) : (
                       <p className={styles.quadrantEmpty}>暂无任务</p>

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -21,10 +22,12 @@ from app.models.user import User
 from app.services import (
     agent_video_analysis_service,
     ai_juicer,
+    knowledge_service,
+    platform_library_service,
     plan_service,
     video_source_ledger_service,
 )
-from app.services.agent_tool_runtime import AgentToolExecutor
+from app.services.agent_tool_runtime import AgentTool, AgentToolExecutor
 
 
 logger = logging.getLogger(__name__)
@@ -255,12 +258,18 @@ def _source_dict(
                 detailed = raw_detailed
         except (json.JSONDecodeError, TypeError):
             detailed = {}
+    platform = str(meta.get("platform") or "unknown")
+    raw_cover_url = str(meta.get("cover_url") or "")
     return {
         "note_id": note.id,
         "video_id": note.video_id,
-        "platform": str(meta.get("platform") or "unknown"),
+        "platform": platform,
         "title": note.video_title,
-        "cover_url": str(meta.get("cover_url") or ""),
+        "cover_url": (
+            platform_library_service.public_cover_url(note.id)
+            if raw_cover_url and platform in {"douyin", "bilibili"}
+            else raw_cover_url
+        ),
         "source_url": str(meta.get("source_url") or note.video_url or ""),
         "author_name": str(meta.get("author_name") or ""),
         "source_mode": _source_mode(note, meta),
@@ -1164,6 +1173,410 @@ def _persist_answer_result(
     return assistant_message
 
 
+_PLAN_CREATE_ACTION_RE = re.compile(
+    r"(?:帮我|请|给我|替我|我要|我想|想要|需要|能不能帮我|可以帮我)?"
+    r"(?:创建|制定|生成|规划|安排|做(?:一个|一份)?|列(?:一个|一份)?|出(?:一个|一份)?)"
+    r".{0,18}?(?:行动计划|学习计划|训练计划|执行计划|备考计划|减脂计划|计划|日程|路线图|执行清单)",
+)
+_PLAN_CREATE_REVERSE_RE = re.compile(
+    r"(?:行动计划|学习计划|训练计划|执行计划|备考计划|减脂计划|计划|日程|路线图|执行清单)"
+    r".{0,10}?(?:帮我)?(?:创建|制定|生成|规划|安排|做出来|列出来)",
+)
+_PLAN_CREATE_NATURAL_SCHEDULE_RE = re.compile(
+    r"(?:帮我|请|给我|替我|我要|我想|想要).{0,8}(?:安排|规划)"
+    r".{0,36}(?:今天|明天|本周|这周|下周|接下来|未来|每天|\d+天|\d+周|\d+个月)"
+)
+_PLAN_CREATE_NEGATION_RE = re.compile(
+    r"(?:不要|不用|别|无需|不需要|先不).{0,8}(?:创建|制定|生成|规划|安排|做|计划)"
+)
+_PLAN_CREATE_REQUEST_MARKER_RE = re.compile(r"帮我|请|给我|替我|我要|我想|想要")
+_PLAN_ADVICE_PREFIX_RE = re.compile(r"^(?:怎么|如何|为什么|是否|怎样|评价|分析|介绍)")
+_PLAN_ADVICE_SUFFIX_RE = re.compile(r"(?:怎么做|如何做|合理吗|可以吗|是什么|注意什么|有什么建议|方法|原则)[？?]?$")
+
+_KNOWLEDGE_WRITE_ACTION_RE = re.compile(
+    r"(?:保存|存入|写入|写到|加入|添加|放到|放进|收录|归档|沉淀|整理成|做成|变成|创建|生成|记下|记住|记录)"
+)
+_KNOWLEDGE_WRITE_TARGET_RE = re.compile(
+    r"(?:知识库|知识页|知识卡|知识条目|知识记录|我的知识|个人知识|笔记|备忘|记录|知识)"
+)
+_KNOWLEDGE_WRITE_DEICTIC_RE = re.compile(
+    r"(?:刚才|上面|上述|这个|这些|这段|这条|当前|本次|回答|答案|结论|要点|内容|资料)"
+)
+_KNOWLEDGE_WRITE_NEGATION_RE = re.compile(
+    r"(?:不要|不用|别|无需|不需要|先不|暂不).{0,10}(?:保存|存入|写入|写到|加入|添加|放到|放进|收录|归档|沉淀|整理|创建|生成|记录|记下|记住)"
+)
+_KNOWLEDGE_WRITE_QUESTION_RE = re.compile(
+    r"^(?:(?:我想知道|我想了解)?(?:怎么|如何)|为什么|是否|能否|可不可以|可以吗|介绍|讲讲|什么是).{0,40}"
+    r"(?:保存|存入|写入|写到|加入|添加|放到|放进|收录|归档|整理|创建|生成|记录|知识库)"
+)
+
+
+def is_explicit_plan_creation_request(content: str) -> bool:
+    """Return True only for affirmative, user-directed plan creation requests."""
+    normalized = re.sub(r"\s+", "", str(content or "")).strip("，。！？!? ")
+    if not normalized or _PLAN_CREATE_NEGATION_RE.search(normalized):
+        return False
+    matched = bool(
+        _PLAN_CREATE_ACTION_RE.search(normalized)
+        or _PLAN_CREATE_REVERSE_RE.search(normalized)
+        or _PLAN_CREATE_NATURAL_SCHEDULE_RE.search(normalized)
+    )
+    if not matched:
+        return False
+    has_request_marker = bool(_PLAN_CREATE_REQUEST_MARKER_RE.search(normalized))
+    if not has_request_marker and (
+        _PLAN_ADVICE_PREFIX_RE.search(normalized)
+        or _PLAN_ADVICE_SUFFIX_RE.search(normalized)
+    ):
+        return False
+    return True
+
+
+def is_explicit_knowledge_creation_request(content: str) -> bool:
+    """Only accept affirmative commands that clearly ask for a knowledge write."""
+    raw = re.sub(r"\s+", "", str(content or ""))
+    has_question_mark = raw.rstrip().endswith(("？", "?"))
+    normalized = raw.strip("，。！？!? ")
+    if not normalized or _KNOWLEDGE_WRITE_NEGATION_RE.search(normalized):
+        return False
+    if _KNOWLEDGE_WRITE_QUESTION_RE.search(normalized):
+        return False
+    action = _KNOWLEDGE_WRITE_ACTION_RE.search(normalized)
+    if action is None:
+        return False
+    has_target = bool(_KNOWLEDGE_WRITE_TARGET_RE.search(normalized))
+    has_deictic_object = bool(_KNOWLEDGE_WRITE_DEICTIC_RE.search(normalized))
+    has_command_form = (
+        normalized.startswith(("把", "将", "帮我", "请", "给我", "替我"))
+        or normalized.endswith(("下来", "下来吧", "知识库", "知识页", "知识卡", "笔记"))
+    )
+    if has_question_mark and not normalized.startswith(("把", "将", "帮我", "请", "给我", "替我")):
+        return False
+    return has_target or (has_deictic_object and has_command_form)
+
+
+def _bounded_knowledge_conversation_context(
+    history: list[dict[str, str]],
+    maximum: int = 24_000,
+) -> str:
+    blocks: list[str] = []
+    remaining = maximum
+    for message in reversed(history):
+        role = "用户" if message.get("role") == "user" else "知萃"
+        content = str(message.get("content") or "").strip()
+        if not content:
+            continue
+        prefix = f"【{role}】\n"
+        room = remaining - len(prefix)
+        if room <= 0:
+            break
+        blocks.append(f"{prefix}{content[-room:]}")
+        remaining -= min(len(content), room) + len(prefix) + 2
+    return "\n\n".join(reversed(blocks))
+
+
+def _bounded_plan_source_context(notes: list[Note], maximum: int = 120_000) -> str:
+    blocks: list[str] = []
+    remaining = maximum
+    for note in notes:
+        title = str(note.video_title or "未命名视频").strip()[:300]
+        transcript = str(note.transcript_raw or "").strip()
+        if not transcript:
+            continue
+        prefix = f"【资料：{title}】\n"
+        room = remaining - len(prefix)
+        if room <= 0:
+            break
+        block = f"{prefix}{transcript[:room]}"
+        blocks.append(block)
+        remaining -= len(block) + 2
+        if remaining <= 0:
+            break
+    return "\n\n".join(blocks)
+
+
+def _ask_create_plan_thread(
+    db: Session,
+    *,
+    thread: AgentThread,
+    notes: list[Note],
+    content: str,
+    progress_callback: AgentProgressCallback | None,
+    answer_delta: Callable[[str], None] | None,
+    turn_id_override: str | None,
+    tool_executor: AgentToolExecutor | None,
+) -> tuple[AgentMessage, AgentMessage]:
+    """Execute the bounded internal plan.create tool for an explicit request."""
+    turn_id = turn_id_override or str(uuid.uuid4())
+    user_message = AgentMessage(
+        thread_id=thread.id,
+        user_id=thread.user_id,
+        turn_id=turn_id,
+        role="user",
+        content=content[:600],
+    )
+    db.add(user_message)
+    db.commit()
+    db.refresh(user_message)
+    _emit_progress(
+        progress_callback,
+        "planning",
+        "正在把你的要求整理成行动计划",
+        tool_name="plan.create",
+    )
+
+    created_plan_id = ""
+    try:
+        source_context = _bounded_plan_source_context(notes)
+        source_title = (
+            str(notes[0].video_title or "当前视频")
+            if len(notes) == 1
+            else "所选视频资料"
+        )
+
+        def create_plan_tool(_arguments: Any) -> dict[str, Any]:
+            nonlocal created_plan_id
+            generated = ai_juicer.generate_or_revise_plan(
+                title=source_title,
+                transcript=source_context,
+                ai_summary=None,
+                instruction=content,
+                existing_plan=None,
+            )
+            proposed = generated.get("plan")
+            if not isinstance(proposed, dict):
+                raise ValueError("计划 Agent 没有返回有效计划")
+            fields, tasks, total_days = ai_juicer.plan_to_storage(proposed)
+            if not tasks:
+                raise ValueError("计划 Agent 没有生成可执行任务，请换一种说法重试")
+            row = plan_service.create_plan(
+                db,
+                note_id=notes[0].id if len(notes) == 1 else None,
+                title=str(proposed.get("goal") or "我的行动计划"),
+                fields=fields,
+                tasks=tasks,
+                days=proposed.get("days") if isinstance(proposed.get("days"), list) else [],
+                total_days=total_days,
+                user_id=thread.user_id,
+            )
+            created_plan_id = row.id
+            return {
+                "plan": row.to_dict(),
+                "change_summary": str(generated.get("change_summary") or "行动计划已创建"),
+            }
+
+        runtime = tool_executor or AgentToolExecutor(turn_id=turn_id, max_calls=4)
+        runtime.register(AgentTool(
+            name="plan.create",
+            description="根据用户明确要求创建行动计划",
+            handler=create_plan_tool,
+            max_result_chars=500_000,
+        ))
+        tool_result = runtime.execute("plan.create", {"instruction": content})
+        plan = tool_result["plan"]
+        task_count = len(plan.get("tasks") or [])
+        duration = int(plan.get("total_days") or 0)
+        answer = (
+            f"已经创建《{plan['title']}》。"
+            f"共 {task_count} 项任务"
+            f"{'，计划周期 ' + str(duration) + ' 天' if duration else ''}，可以直接进入行动计划开始执行。"
+        )
+        if answer_delta is not None:
+            answer_delta(answer)
+        result = {
+            "answer": answer,
+            "type": "plan_created",
+            "created_plan": {
+                "id": plan["id"],
+                "title": plan["title"],
+                "total_days": duration,
+                "task_count": task_count,
+                "status": plan.get("status") or "active",
+            },
+            "source_context": {
+                "context_type": "plan_creation",
+                "researched_note_ids": [note.id for note in notes],
+                "note_count": len(notes),
+            },
+        }
+        assistant_message = _persist_answer_result(
+            db,
+            thread=thread,
+            user_message=user_message,
+            notes=notes,
+            result=result,
+        )
+    except Exception:
+        db.rollback()
+        if created_plan_id:
+            created = plan_service.get_plan(db, created_plan_id, thread.user_id)
+            if created is not None:
+                db.delete(created)
+        persisted_user_message = db.query(AgentMessage).filter(
+            AgentMessage.id == user_message.id,
+            AgentMessage.user_id == thread.user_id,
+        ).first()
+        if persisted_user_message is not None:
+            db.delete(persisted_user_message)
+        persisted_thread = db.query(AgentThread).filter(
+            AgentThread.id == thread.id,
+            AgentThread.user_id == thread.user_id,
+        ).first()
+        if persisted_thread is not None:
+            persisted_thread.status = "failed"
+            persisted_thread.updated_at = _utcnow()
+        db.commit()
+        raise
+
+    if thread.title.endswith("研究"):
+        thread.title = str(plan["title"])[:40]
+        db.commit()
+        db.refresh(thread)
+    _emit_progress(
+        progress_callback,
+        "completed",
+        "行动计划已经创建",
+        tool_name="plan.create",
+        plan_id=plan["id"],
+        assistant_message_id=assistant_message.id,
+    )
+    return user_message, assistant_message
+
+
+def _ask_create_knowledge_thread(
+    db: Session,
+    *,
+    thread: AgentThread,
+    notes: list[Note],
+    content: str,
+    progress_callback: AgentProgressCallback | None,
+    answer_delta: Callable[[str], None] | None,
+    turn_id_override: str | None,
+    tool_executor: AgentToolExecutor | None,
+) -> tuple[AgentMessage, AgentMessage]:
+    """Execute knowledge.create after the deterministic explicit-intent gate."""
+    turn_id = turn_id_override or str(uuid.uuid4())
+    user_message = AgentMessage(
+        thread_id=thread.id,
+        user_id=thread.user_id,
+        turn_id=turn_id,
+        role="user",
+        content=content[:600],
+    )
+    db.add(user_message)
+    db.commit()
+    db.refresh(user_message)
+    _emit_progress(
+        progress_callback,
+        "planning",
+        "正在整理并写入你的知识库",
+        tool_name="knowledge.create",
+    )
+
+    created_entry_id = ""
+    try:
+        history = _history_before_turn(
+            db,
+            thread=thread,
+            user_message=user_message,
+        )
+        conversation_context = _bounded_knowledge_conversation_context(history)
+        source_context = _bounded_plan_source_context(notes, maximum=80_000)
+
+        def create_knowledge_tool(_arguments: Any) -> dict[str, Any]:
+            nonlocal created_entry_id
+            generated = ai_juicer.generate_knowledge_entry(
+                instruction=content,
+                conversation_context=conversation_context,
+                source_context=source_context,
+            )
+            entry = knowledge_service.create_entry(
+                db,
+                thread.user_id,
+                title=generated["title"],
+                summary=generated.get("summary", ""),
+                content=generated["content"],
+                source_label=f"Agent · {thread.title}"[:256],
+            )
+            created_entry_id = entry.id
+            return {"knowledge": knowledge_service.serialize_entry(entry)}
+
+        runtime = tool_executor or AgentToolExecutor(turn_id=turn_id, max_calls=4)
+        runtime.register(AgentTool(
+            name="knowledge.create",
+            description="根据用户明确要求整理内容并写入个人知识库",
+            handler=create_knowledge_tool,
+            max_result_chars=500_000,
+        ))
+        tool_result = runtime.execute("knowledge.create", {"instruction": content})
+        knowledge = tool_result["knowledge"]
+        answer = f"已经把《{knowledge['title']}》保存到你的知识库。"
+        if answer_delta is not None:
+            answer_delta(answer)
+        result = {
+            "answer": answer,
+            "type": "knowledge_created",
+            "created_knowledge": {
+                "id": knowledge["id"],
+                "title": knowledge["title"],
+                "summary": knowledge.get("summary") or "",
+                "content_chars": int(knowledge.get("content_chars") or 0),
+            },
+            "source_context": {
+                "context_type": "knowledge_creation",
+                "researched_note_ids": [note.id for note in notes],
+                "note_count": len(notes),
+                "conversation_message_count": len(history),
+            },
+        }
+        assistant_message = _persist_answer_result(
+            db,
+            thread=thread,
+            user_message=user_message,
+            notes=notes,
+            result=result,
+        )
+    except Exception:
+        db.rollback()
+        if created_entry_id:
+            created = knowledge_service.get_entry(
+                db,
+                thread.user_id,
+                created_entry_id,
+            )
+            if created is not None:
+                db.delete(created)
+        persisted_user_message = db.query(AgentMessage).filter(
+            AgentMessage.id == user_message.id,
+            AgentMessage.user_id == thread.user_id,
+        ).first()
+        if persisted_user_message is not None:
+            db.delete(persisted_user_message)
+        persisted_thread = db.query(AgentThread).filter(
+            AgentThread.id == thread.id,
+            AgentThread.user_id == thread.user_id,
+        ).first()
+        if persisted_thread is not None:
+            persisted_thread.status = "failed"
+            persisted_thread.updated_at = _utcnow()
+        db.commit()
+        raise
+
+    if thread.title.endswith("研究"):
+        thread.title = str(knowledge["title"])[:40]
+        db.commit()
+        db.refresh(thread)
+    _emit_progress(
+        progress_callback,
+        "completed",
+        "知识已经保存",
+        tool_name="knowledge.create",
+        knowledge_id=knowledge["id"],
+        assistant_message_id=assistant_message.id,
+    )
+    return user_message, assistant_message
+
+
 def _plan_preview_answer(preview: dict[str, Any]) -> str:
     diff = preview.get("diff") if isinstance(preview.get("diff"), dict) else {}
     additions = len(diff.get("additions") or [])
@@ -1699,6 +2112,17 @@ def ask_thread(
     db.refresh(thread)
 
     notes = _thread_notes(db, thread)
+    if is_explicit_knowledge_creation_request(clean_content):
+        return _ask_create_knowledge_thread(
+            db,
+            thread=thread,
+            notes=notes,
+            content=clean_content,
+            progress_callback=progress_callback,
+            answer_delta=answer_delta,
+            turn_id_override=turn_id_override,
+            tool_executor=tool_executor,
+        )
     if thread.context_type == "plan":
         return _ask_plan_thread(
             db,
@@ -1707,6 +2131,17 @@ def ask_thread(
             progress_callback=progress_callback,
             answer_delta=answer_delta,
             turn_id_override=turn_id_override,
+        )
+    if is_explicit_plan_creation_request(clean_content):
+        return _ask_create_plan_thread(
+            db,
+            thread=thread,
+            notes=notes,
+            content=clean_content,
+            progress_callback=progress_callback,
+            answer_delta=answer_delta,
+            turn_id_override=turn_id_override,
+            tool_executor=tool_executor,
         )
     if not notes:
         thread.status = "failed"

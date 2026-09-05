@@ -161,6 +161,83 @@ class CreatorSyncServiceTests(unittest.TestCase):
             self.db, user_id=self.other_user.id, source_id=source.id
         ))
 
+    def test_source_list_only_returns_user_owned_ready_note_ids(self) -> None:
+        source = CreatorSource(user_id=self.user.id, **self.preview())
+        other_source = CreatorSource(
+            user_id=self.other_user.id,
+            platform="bilibili",
+            creator_id="67890",
+            profile_url="https://space.bilibili.com/67890/video",
+            display_name="其他 UP",
+            avatar_url="",
+        )
+        self.db.add_all([source, other_source])
+        self.db.flush()
+        ready_note = Note(
+            user_id=self.user.id,
+            video_id="BV1READY",
+            video_title="已就绪视频",
+            video_url="https://www.bilibili.com/video/BV1READY",
+            transcript_raw="完整文稿",
+            seo_title="已就绪视频",
+            seo_slug="ready-video",
+            seo_meta="已就绪视频",
+        )
+        empty_note = Note(
+            user_id=self.user.id,
+            video_id="BV1EMPTY",
+            video_title="无文稿视频",
+            video_url="https://www.bilibili.com/video/BV1EMPTY",
+            transcript_raw="",
+            seo_title="无文稿视频",
+            seo_slug="empty-video",
+            seo_meta="无文稿视频",
+        )
+        foreign_note = Note(
+            user_id=self.other_user.id,
+            video_id="BV1FOREIGN",
+            video_title="其他用户视频",
+            video_url="https://www.bilibili.com/video/BV1FOREIGN",
+            transcript_raw="其他用户完整文稿",
+            seo_title="其他用户视频",
+            seo_slug="foreign-video",
+            seo_meta="其他用户视频",
+        )
+        self.db.add_all([ready_note, empty_note, foreign_note])
+        self.db.flush()
+        self.db.add_all([
+            CreatorSourceItem(
+                user_id=self.user.id,
+                source_id=source.id,
+                note_id=ready_note.id,
+                platform="bilibili",
+                external_id="BV1READY",
+                state="ready",
+            ),
+            CreatorSourceItem(
+                user_id=self.user.id,
+                source_id=source.id,
+                note_id=empty_note.id,
+                platform="bilibili",
+                external_id="BV1EMPTY",
+                state="ready",
+            ),
+            CreatorSourceItem(
+                user_id=self.other_user.id,
+                source_id=other_source.id,
+                note_id=foreign_note.id,
+                platform="bilibili",
+                external_id="BV1FOREIGN",
+                state="ready",
+            ),
+        ])
+        self.db.commit()
+
+        result = creator_sync_service.list_sources(self.db, user_id=self.user.id)
+
+        self.assertEqual(result[0]["ready_note_ids"], [ready_note.id])
+        self.assertEqual(result[0]["transcript_count"], 1)
+
     def test_removed_work_is_skipped_without_import(self) -> None:
         source = CreatorSource(user_id=self.user.id, **self.preview())
         self.db.add(source)

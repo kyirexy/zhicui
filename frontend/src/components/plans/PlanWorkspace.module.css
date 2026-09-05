@@ -85,6 +85,49 @@
   transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease;
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.manageButton,
+.goalDeleteButton {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border: 1px solid var(--plan-border);
+  border-radius: 0.65rem;
+  background: var(--plan-surface);
+  color: var(--plan-ink-soft);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.manageButton { padding: 0 0.75rem; }
+.manageButton[aria-pressed='true'] {
+  border-color: color-mix(in srgb, var(--plan-mint-strong) 38%, var(--plan-border));
+  color: var(--plan-mint-ink);
+  background: var(--plan-mint);
+}
+.manageButton:hover,
+.goalDeleteButton:hover {
+  border-color: var(--plan-border-strong);
+  background: var(--plan-surface-muted);
+}
+.goalDeleteButton {
+  min-width: 4.25rem;
+  padding: 0 0.7rem;
+  border-color: color-mix(in srgb, var(--plan-danger) 22%, var(--plan-border));
+  color: var(--plan-danger);
+  background: color-mix(in srgb, var(--plan-danger) 5%, var(--plan-surface));
+}
+
 .primaryButton {
   display: inline-flex;
   align-items: center;
@@ -644,6 +687,10 @@
   display: none;
 }
 
+.quadrantMore {
+  display: none;
+}
+
 .quadrantEmpty {
   min-height: 5.8rem;
   display: grid;
@@ -1177,6 +1224,8 @@
   .shell { min-height: calc(100dvh - 5rem); padding: 0.25rem 0.75rem calc(7rem + env(safe-area-inset-bottom)); }
   .pageHeader { min-height: 3.5rem; margin-bottom: 0.55rem; padding-bottom: 0.6rem; }
   .pageHeader .primaryButton { display: none; }
+  .headerActions { flex: none; }
+  .manageButton { padding-inline: 0.65rem; }
   .pageTitle { font-size: 1.22rem; }
   .headerSummary { max-width: calc(100vw - 1.5rem); flex-wrap: nowrap; overflow-x: auto; padding-bottom: 0.1rem; scrollbar-width: none; }
   .headerSummary::-webkit-scrollbar { display: none; }
@@ -1212,11 +1261,29 @@
   .quadrant h3 { font-size: 0.72rem; line-height: 1.25; }
   .quadrant > header > span,
   .quadrant > header > strong { font-size: 0.62rem; }
-  .quadrantTasks { min-height: 0; flex: 1; gap: 0.2rem; padding: 0.3rem; overflow-y: auto; overscroll-behavior: contain; }
+  .quadrantTasks { min-height: 0; flex: 1; gap: 0.2rem; padding: 0.3rem; overflow: hidden; }
   .quadrantTasks .compactTask { min-height: 3.4rem; padding: 0.2rem; grid-template-columns: 44px minmax(0, 1fr); gap: 0.25rem; }
+  .quadrantTasks .compactTask:nth-child(n + 3) { display: none; }
   .quadrantTasks .taskMeta,
   .quadrantTasks .reason { display: none; }
   .quadrantTasks .taskTitle { font-size: 0.72rem; white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+  .quadrantMore {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.2rem;
+    padding: 0 0.35rem;
+    border: 0;
+    border-top: 1px solid var(--plan-border);
+    color: var(--plan-ink-soft);
+    background: transparent;
+    font: inherit;
+    font-size: 0.68rem;
+    font-weight: 650;
+    cursor: pointer;
+  }
+  .quadrantMore:focus-visible { outline: 2px solid var(--plan-mint-strong); outline-offset: -2px; }
   .quadrantEmpty { min-height: 0; flex: 1; font-size: 0.66rem; }
   .sectionHeader { align-items: flex-start; }
   .sectionHeader .secondaryButton { min-width: 6.25rem; padding-inline: 0.65rem; white-space: nowrap; }
@@ -1230,12 +1297,13 @@
   .segmented { flex: none; }
   .segment { min-height: 40px; padding-inline: 0.6rem; }
   .goalList { gap: 0.6rem; }
-  .goalRow { grid-template-columns: minmax(0, 1fr) 44px; gap: 0.5rem; min-height: 7rem; padding: 0.8rem 0.5rem 0.75rem 0.8rem; border-radius: 0.85rem; }
+  .goalRow { grid-template-columns: minmax(0, 1fr) 4.65rem; gap: 0.5rem; min-height: 7rem; padding: 0.8rem 0.5rem 0.75rem 0.8rem; border-radius: 0.85rem; }
   .goalMain { grid-column: 1; grid-row: 1; }
   .goalProgress { grid-column: 1; grid-row: 2; }
   .goalNext { grid-column: 1 / -1; grid-row: 3; padding-top: 0.55rem; border-top: 1px solid var(--plan-border); }
   .goalActions { grid-column: 2; grid-row: 1 / 4; }
   .goalActions > span { display: none; }
+  .goalDeleteButton { width: 100%; min-width: 0; padding-inline: 0.45rem; }
   .goalTitle { font-size: 0.9rem; }
   .goalNext strong { max-width: calc(100vw - 3.5rem); }
   .reviewTopline { align-items: flex-start; flex-direction: column; }

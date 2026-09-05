@@ -13,6 +13,7 @@ import {
   Note,
   PencilSimple,
   Plus,
+  SlidersHorizontal,
   SpinnerGap,
   Sparkle,
   Target,
@@ -161,8 +162,9 @@ function GoalRow({ plan, onDelete }: { plan: PlanData; onDelete: () => void }) {
         <span className={styles.progressLabel}>{progress.done}/{progress.total} · {progress.pct}%</span>
       </div>
       <div className={styles.goalActions}>
-        <button type="button" className={styles.iconButton} onClick={onDelete} aria-label={`删除计划：${plan.title}`}>
+        <button type="button" className={styles.goalDeleteButton} onClick={onDelete} aria-label={`删除计划：${plan.title}`}>
           <Trash size={16} />
+          <span>删除</span>
         </button>
         <span className={styles.iconButton}><CaretRight size={16} /></span>
       </div>
@@ -274,9 +276,19 @@ function PlansWorkspace() {
             <span><strong>{overview?.summary.open_tasks || 0}</strong> 项待办</span>
           </div>
         </div>
-        <button type="button" className={styles.primaryButton} onClick={() => openCapture('plan')}>
-          <Plus size={16} weight="bold" />新建计划
-        </button>
+        <div className={styles.headerActions}>
+          <button
+            type="button"
+            className={styles.manageButton}
+            onClick={() => setView(current => current === 'plans' ? 'today' : 'plans')}
+            aria-pressed={view === 'plans'}
+          >
+            <SlidersHorizontal size={16} />{view === 'plans' ? '退出管理' : '管理计划'}
+          </button>
+          <button type="button" className={styles.primaryButton} onClick={() => openCapture('plan')}>
+            <Plus size={16} weight="bold" />新建计划
+          </button>
+        </div>
       </header>
 
       <nav className={styles.tabs} role="tablist" aria-label="行动计划视图">

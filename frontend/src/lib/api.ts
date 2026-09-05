@@ -882,6 +882,7 @@ export async function listDouyinLibraryItems(
   mode?: DouyinSourceMode,
   sort: DouyinLibrarySort = 'collection',
   refreshOrder = false,
+  localOnly = false,
 ): Promise<ApiResponse<DouyinLibraryListResult>> {
   const params = new URLSearchParams({
     limit: String(Math.max(0, Math.min(limit, 10000))),
@@ -889,6 +890,7 @@ export async function listDouyinLibraryItems(
   if (mode) params.set('mode', mode);
   params.set('sort', sort);
   if (refreshOrder) params.set('refresh_order', 'true');
+  if (localOnly) params.set('local_only', 'true');
   const response = await request<DouyinLibraryListResult>(
     `/api/library/douyin/items?${params.toString()}`,
   );

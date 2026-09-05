@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import Link from 'next/link';
 import {
   ArrowClockwise,
   CaretRight,
@@ -132,6 +133,9 @@ function AgentMessageView({
 }: AgentMessageViewProps) {
   const isAssistant = message.role === 'assistant';
   const isPlanChange = message.result?.type === 'plan_change_preview';
+  const isPlanCreated = message.result?.type === 'plan_created' && Boolean(message.result.created_plan?.id);
+  const isKnowledgeCreated = message.result?.type === 'knowledge_created'
+    && Boolean(message.result.created_knowledge?.id);
   // DSH rows keep assistant output full-width all the way through streaming; a
   // markdown-only pass has no `[object Object]`-style noise to hide, so it
   // stays as the last visible source.
@@ -215,7 +219,7 @@ function AgentMessageView({
             </span>
             <span className="video-agent-message-identity">
               <strong>知萃</strong>
-              <small>{isPlanChange ? '基于当前计划' : streaming ? '基于所选视频' : '基于视频资料'}</small>
+              <small>{isKnowledgeCreated ? '知识已保存' : isPlanCreated ? '行动计划已创建' : isPlanChange ? '基于当前计划' : streaming ? '基于所选视频' : '基于视频资料'}</small>
             </span>
           </>
         </div>
@@ -257,6 +261,46 @@ function AgentMessageView({
         <AgentPlanChangeCard message={message} disabled={disabled} />
       )}
 
+      {isAssistant && !streaming && isPlanCreated && message.result?.created_plan && (
+        <section className="video-agent-created-plan" aria-label="已创建的行动计划">
+          <span className="video-agent-created-plan-icon" aria-hidden="true">
+            <ListChecks size={19} weight="duotone" />
+          </span>
+          <span className="video-agent-created-plan-copy">
+            <small>已加入行动计划</small>
+            <strong>{message.result.created_plan.title}</strong>
+            <span>
+              {message.result.created_plan.task_count} 项任务
+              {message.result.created_plan.total_days > 0
+                ? ` · ${message.result.created_plan.total_days} 天`
+                : ''}
+            </span>
+          </span>
+          <Link href={`/plans?id=${encodeURIComponent(message.result.created_plan.id)}`}>
+            打开计划<CaretRight size={14} />
+          </Link>
+        </section>
+      )}
+
+      {isAssistant && !streaming && isKnowledgeCreated && message.result?.created_knowledge && (
+        <section className="video-agent-created-knowledge" aria-label="已创建的知识">
+          <span className="video-agent-created-knowledge-icon" aria-hidden="true">
+            <FileText size={19} weight="duotone" />
+          </span>
+          <span className="video-agent-created-knowledge-copy">
+            <small>已加入知识库</small>
+            <strong>{message.result.created_knowledge.title}</strong>
+            <span>
+              {message.result.created_knowledge.summary
+                || `${message.result.created_knowledge.content_chars.toLocaleString('zh-CN')} 字`}
+            </span>
+          </span>
+          <Link href={`/notes?id=${encodeURIComponent(message.result.created_knowledge.id)}`}>
+            打开知识<CaretRight size={14} />
+          </Link>
+        </section>
+      )}
+
       {!isAssistant && deliveryState && (
         <div
           className={`video-agent-message-delivery is-${deliveryState}`}
@@ -292,7 +336,7 @@ function AgentMessageView({
         </div>
       )}
 
-      {isAssistant && !streaming && !isPlanChange && (
+      {isAssistant && !streaming && !isPlanChange && !isPlanCreated && !isKnowledgeCreated && (
         <details
           className={`video-agent-grounding ${
             groundingStatus === 'grounded' ? 'is-grounded' : 'is-limited'

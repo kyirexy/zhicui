@@ -860,6 +860,7 @@ export interface PlatformLibraryItem {
   ai_initialized: boolean;
   card_type?: CardType | null;
   source_mode?: DouyinSourceMode | 'unknown' | 'import';
+  source_modes?: DouyinSourceMode[];
   /** 列表请求省略完整文稿；详情和导入响应才携带 Note。 */
   note?: NoteDetail;
 }
@@ -1051,6 +1052,7 @@ export interface CreatorSource {
   catalog_count?: number;
   available_count?: number;
   transcript_count?: number;
+  ready_note_ids?: string[];
   catalog_counts?: {
     total: number;
     untranscribed: number;
@@ -1322,6 +1324,19 @@ export interface AgentMessage {
       state: 'pending' | 'applied';
       applied_at?: string;
       applied_plan_updated_at?: string;
+    };
+    created_plan?: {
+      id: string;
+      title: string;
+      total_days: number;
+      task_count: number;
+      status: 'active' | 'done' | string;
+    };
+    created_knowledge?: {
+      id: string;
+      title: string;
+      summary: string;
+      content_chars: number;
     };
   };
 }

@@ -38,7 +38,13 @@ TBD - created by archiving change simplify-action-plan-workspace. Update Purpose
 
 ### Requirement: 用户可以安全删除自己的计划
 
-计划列表和计划详情 SHALL 提供删除入口，并在执行删除前显示明确确认对话框。
+计划首页 SHALL 在默认视图提供可见的“管理计划”入口，计划列表和计划详情 SHALL 提供带明确文字的删除入口，并在执行删除前显示明确确认对话框。窄屏设备不得仅依赖无文字图标表达删除或管理能力。
+
+#### Scenario: 用户从默认视图进入管理
+
+- **WHEN** 用户在计划首页默认“今日”视图点击“管理计划”
+- **THEN** 系统切换到展示全部目标的计划管理视图
+- **AND** 每项计划都提供明确的“删除”操作
 
 #### Scenario: 用户从列表删除计划
 

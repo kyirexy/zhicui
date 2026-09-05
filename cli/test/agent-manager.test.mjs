@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import { dirname, resolve } from 'node:path';
 import { runCli, temporaryDirectory } from './helpers.mjs';
@@ -321,7 +321,8 @@ test('packaged Electron resources/cli layout resolves its adjacent Skill bundle'
   assert.equal(installed, await readFile(resolve(packagedCli, 'skills', 'zhicui', 'SKILL.md'), 'utf8'));
   const state = JSON.parse(await readFile(env.FAKE_CODEX_STATE, 'utf8'));
   assert.equal(state.command, process.execPath);
-  assert.equal(state.args[0], resolve(packagedCli, 'index.js'));
+  // macOS 的 /var 是符号链接，比较实际文件路径，兼容 Node 的路径规范化。
+  assert.equal(await realpath(state.args[0]), await realpath(resolve(packagedCli, 'index.js')));
 });
 
 test('Windows command discovery skips the extensionless npm shim and launches the cmd shim', {

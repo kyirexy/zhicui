@@ -16,8 +16,7 @@ const landingStyles = readFileSync(
   'utf8',
 );
 
-test('官网首屏和下载区都能找到双架构 Mac 测试版', () => {
-  assert.match(landingPage, /href="#download-mac"/);
+test('官网下载区保留双架构 Mac 测试版', () => {
   assert.match(landingPage, /id="download-mac"/);
   assert.match(landingPage, /下载 Apple Silicon 版/);
   assert.match(landingPage, /下载 Intel 版/);

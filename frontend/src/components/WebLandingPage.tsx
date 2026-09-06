@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowRight, AppleLogo, BookOpenText, CheckCircle, DeviceMobile, DownloadSimple, Monitor, Play, Quotes, Stack, Target } from '@phosphor-icons/react';
+import { ArrowDown, ArrowRight, AppleLogo, BookOpenText, DeviceMobile, DownloadSimple, Monitor, Play, Quotes, Stack, Target } from '@phosphor-icons/react';
 import { QRCodeSVG } from 'qrcode.react';
 import Link from 'next/link';
 import { CLIENT_RELEASE_FALLBACKS, countedClientDownloadUrl, detectPreferredClient, formatReleaseSize, loadClientReleaseCatalog, toAbsoluteDownloadUrl, type ClientPlatform } from '@/lib/clientReleases';
@@ -98,9 +98,6 @@ export default function WebLandingPage() {
             <a className={styles.primaryAction} href="#download"><DownloadSimple size={20} aria-hidden="true" /><strong>下载知萃，开始整理</strong><ArrowRight size={18} aria-hidden="true" /></a>
             <a className={styles.secondaryAction} href="#demo"><Play size={17} weight="fill" aria-hidden="true" /><strong>先试试交互示例</strong></a>
           </div>
-          <p className={styles.heroNote}>示例无需登录 · 支持 Windows 与 Android</p>
-          <div className={styles.morePlatforms}><a href="#download-mac">Mac 测试版</a><span aria-hidden="true">/</span><a href="#download-ios">iPhone 版准备中</a></div>
-          <div className={styles.heroPromise}><span><CheckCircle size={16} aria-hidden="true" /> 文案随时回看</span><span><CheckCircle size={16} aria-hidden="true" /> 回答有原文依据</span><span><CheckCircle size={16} aria-hidden="true" /> 结论接着做</span></div>
         </div>
         <div className={styles.heroVisual}>
           <div className={styles.visualCaption}><span>从「看过了」到「我会用了」</span><span>↓ 点一点，亲自试试</span></div>

@@ -33,6 +33,10 @@ _smtp_cache_lock = threading.Lock()
 _smtp_cache_until = 0.0
 _smtp_cached: dict[str, Any] | None = None
 
+# 本次正式开放仅包含抖音和 B站。小红书保留独立状态及既有数据，
+# 不把尚未开放的平台当成已发布能力，也不要求其凭据才能晋级。
+AGENT_REQUIRED_CREATOR_PLATFORMS = ("douyin", "bilibili")
+
 
 def _iso(value: datetime | None) -> str | None:
     if value is None:
@@ -229,7 +233,7 @@ def _check_agent_product_features(
         creator = settings_service.get_creator_sync_config(db)
         creator_platforms = {
             platform: bool((creator.get("platforms") or {}).get(platform))
-            for platform in ("douyin", "bilibili", "xiaohongshu")
+            for platform in AGENT_REQUIRED_CREATOR_PLATFORMS
         }
         creator_catalogs = {
             platform: bool((creator.get("catalog_platforms") or {}).get(platform))
@@ -375,9 +379,11 @@ def _check_connectors(db: Session) -> dict[str, Any]:
         ready = enabled and (
             probe.get("status") == "ready" or not strict_stable
         )
-        required_failure = required_failure or (strict_stable and not ready)
+        required = platform in AGENT_REQUIRED_CREATOR_PLATFORMS
+        required_failure = required_failure or (strict_stable and required and not ready)
         platforms[platform] = {
             "enabled": enabled,
+            "required_for_agent_release": required,
             **probe,
             "status": "ready" if ready else "not_ready",
             "error_code": (

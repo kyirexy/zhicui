@@ -386,7 +386,7 @@ class ProductionReadinessTests(unittest.TestCase):
 
         stale = dict(config)
         stale["last_tested_at"] = dict(config["last_tested_at"])
-        stale["last_tested_at"]["xiaohongshu"] = (
+        stale["last_tested_at"]["bilibili"] = (
             datetime.now(timezone.utc) - timedelta(hours=25)
         ).isoformat()
         with patch.object(
@@ -403,7 +403,7 @@ class ProductionReadinessTests(unittest.TestCase):
             stale_result = readiness_service._check_connectors(object())
         self.assertEqual(stale_result["status"], "not_ready")
         self.assertEqual(
-            stale_result["platforms"]["xiaohongshu"]["error_code"],
+            stale_result["platforms"]["bilibili"]["error_code"],
             "creator_connector_probe_stale_or_missing",
         )
 
@@ -427,6 +427,30 @@ class ProductionReadinessTests(unittest.TestCase):
             live_failure["catalog"]["bilibili"]["error_code"],
             "sidecar_unavailable",
         )
+
+    def test_deferred_xhs_does_not_block_douyin_bilibili_release(self) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        config = {
+            "enabled": True,
+            "platforms": {"douyin": True, "bilibili": True, "xiaohongshu": False},
+            "catalog_platforms": {"douyin": True, "bilibili": True},
+            "last_tested_at": {"douyin": now, "bilibili": now},
+        }
+        with patch.object(readiness_service.settings, "AGENT_INTERFACE_ENABLED", True), patch.object(
+            readiness_service.settings_service, "get_creator_sync_config", return_value=config,
+        ), patch.object(
+            readiness_service.creator_connectors, "catalog_health", return_value={"healthy": True},
+        ), patch.object(
+            readiness_service.video_analysis_catalog_service, "published_catalog",
+            return_value={"enabled": True, "items": [{"id": "stable"}]},
+        ), patch.object(readiness_service, "_check_smtp_transport", return_value={"status": "ready"}):
+            connectors = readiness_service._check_connectors(object())
+            self.assertEqual(connectors["status"], "ready")
+            self.assertEqual(connectors["platforms"]["xiaohongshu"]["status"], "not_ready")
+            self.assertFalse(connectors["platforms"]["xiaohongshu"]["required_for_agent_release"])
+            product = readiness_service._check_agent_product_features(object(), connector_check=connectors)
+            self.assertEqual(product["status"], "ready")
+            self.assertEqual(set(product["creator_platforms"]), {"douyin", "bilibili"})
 
     def test_backup_readiness_requires_checksum_restore_and_freshness(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

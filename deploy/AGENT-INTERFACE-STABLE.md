@@ -46,7 +46,10 @@ CREATOR_CONNECTOR_READINESS_MAX_AGE_HOURS=24
 VIDEO_ANALYSIS_ENABLED=true
 ```
 
-Stable readiness 还要求：管理端已启用博主同步，抖音/B站/小红书连接状态均健康，
+本次产品范围按所有者确认暂不开放小红书；无需配置其凭据，保留既有数据与独立的
+未就绪状态。小红书不参与本次 Agent 必需平台门禁，不得宣传其已可用。
+
+Stable readiness 还要求：管理端已启用博主同步，抖音/B站连接状态均健康，
 抖音与 B站全量作品目录连接器健康；至少发布一个可由 Agent 使用且 Provider 健康的
 详细解析方案；SMTP 发件配置真实可用。任何一项关闭或仅有占位配置都会阻断晋级，
 不能以“Action 已显示”代替下游能力可用。`/api/readiness` 中的
@@ -54,7 +57,7 @@ Stable readiness 还要求：管理端已启用博主同步，抖音/B站/小红
 `ready`，最后一项还会确认自动摘要轮询线程已经实际启动且没有残留运行错误。
 
 博主同步也不再只读取 `system_settings` 的健康布尔值。Stable 前须在管理端为抖音、
-B站、小红书分别填写一个公开博主主页并完成真实测试；三次测试都必须仍处于
+B站分别填写一个公开博主主页并完成真实测试；两次测试都必须仍处于
 `CREATOR_CONNECTOR_READINESS_MAX_AGE_HOURS` 时间窗内。readiness 还会在当次请求中
 实时验证抖音/B站全量目录 sidecar 协议；测试缺失、过期、平台关闭或实时探测失败均
 返回 `not_ready`。探测只读取公开元数据，不发起同步、媒体下载或风控重试。

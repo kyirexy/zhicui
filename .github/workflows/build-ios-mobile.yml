@@ -31,6 +31,7 @@ jobs:
           npm run test:ios
           npm run test:desktop-login
           npm run test:navigation
+          npm run test:file-export
       - name: 构建生产 Web 并同步 iOS
         env:
           NEXT_PUBLIC_RELEASE_COMMIT: ${{ github.sha }}
@@ -45,6 +46,18 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent \
             ios/DerivedData/Build/Products/Debug-iphonesimulator/App.app \
             ios/zhicui-ios-simulator.zip
+      - name: 启动模拟器并安装运行
+        run: |
+          DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(d["udid"] for group in data["devices"].values() for d in group if d["name"].startswith("iPhone")))')
+          xcrun simctl boot "$DEVICE_ID"
+          xcrun simctl bootstatus "$DEVICE_ID" -b
+          xcrun simctl install "$DEVICE_ID" ios/DerivedData/Build/Products/Debug-iphonesimulator/App.app
+          xcrun simctl launch "$DEVICE_ID" com.videocapsule.app
+          sleep 15
+          xcrun simctl io "$DEVICE_ID" screenshot ios/ios-launch.png
+          xcrun simctl spawn "$DEVICE_ID" launchctl list | grep com.videocapsule.app
+          xcrun simctl terminate "$DEVICE_ID" com.videocapsule.app
+          xcrun simctl shutdown "$DEVICE_ID"
       - name: 保存模拟器产物（不是 iPhone 安装包）
         uses: actions/upload-artifact@v4
         with:
@@ -54,3 +67,4 @@ jobs:
           path: |
             frontend/ios/zhicui-ios-simulator.zip
             frontend/ios/App/Podfile.lock
+            frontend/ios/ios-launch.png

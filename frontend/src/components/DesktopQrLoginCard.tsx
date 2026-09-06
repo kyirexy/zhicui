@@ -10,6 +10,7 @@ import {
   X,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
+import { currentClientType } from '@/lib/clientIdentity';
 import {
   buildDesktopLoginApprovalUrl,
   cancelDesktopLoginSession,
@@ -125,7 +126,8 @@ export default function DesktopQrLoginCard({
     if (creationRequestRef.current?.generation !== generation) {
       creationRequestRef.current = {
         generation,
-        promise: createDesktopLoginSession(),
+        promise: currentClientType().then((type) => createDesktopLoginSession(undefined,
+          type === 'macos' || type === 'windows' ? type : 'web')),
       };
     }
     const request = creationRequestRef.current.promise;

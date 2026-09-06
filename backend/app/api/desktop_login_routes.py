@@ -25,7 +25,7 @@ class DesktopLoginCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     client_name: str = Field(default="Windows 客户端", max_length=64)
-    client_type: Literal["windows", "web"] = "windows"
+    client_type: Literal["windows", "macos", "web"] = "windows"
 
 
 class DesktopLoginApprovalRequest(BaseModel):

@@ -79,7 +79,7 @@ import {
   API_BASE,
 } from '@/lib/api';
 import {
-  isNativeAndroidApp,
+  isNativeMobileApp,
 } from '@/lib/douyinNative';
 import {
   DESKTOP_DOWNLOAD_URL,
@@ -205,7 +205,7 @@ const SYNC_COUNT_OPTIONS = [50, 100] as const;
 const QR_AUTO_RECOVERY_ATTEMPTS = 15;
 const JOB_POLL_TIMEOUT_MS = 10_000;
 type DouyinSessionAction = 'logout' | 'rebind';
-type BindingClient = 'desktop-app' | 'desktop-web' | 'mobile-web' | 'android-app';
+type BindingClient = 'desktop-app' | 'desktop-web' | 'mobile-web' | 'mobile-app';
 const SOURCE_MODE_STORAGE_KEY = 'zhicui-library-source-mode-v1';
 
 const SOURCE_MODES: Array<{
@@ -681,8 +681,8 @@ export default function VideoLibraryPage() {
         }
         return;
       }
-      if (isNativeAndroidApp()) {
-        setBindingClient('android-app');
+      if (isNativeMobileApp()) {
+        setBindingClient('mobile-app');
         return;
       }
       const mobileBrowser = (
@@ -1644,7 +1644,7 @@ export default function VideoLibraryPage() {
   }, [recoverQrLogin]);
 
   useEffect(() => {
-    if (bindingClient !== 'android-app') return undefined;
+    if (bindingClient !== 'mobile-app') return undefined;
     let disposed = false;
     let listener: { remove: () => Promise<void> } | null = null;
 
@@ -3140,7 +3140,7 @@ export default function VideoLibraryPage() {
                 role={bindingClient === 'mobile-web' ? 'note' : undefined}
               >
                 {bindingClient === 'desktop-web' && '已安装可直接打开；未安装请先下载 Windows 版。'}
-                {bindingClient === 'android-app' && '手机端登录同一个知萃账号，电脑绑定成功后这里会自动生效。'}
+                {bindingClient === 'mobile-app' && '手机端登录同一个知萃账号，电脑绑定成功后这里会自动生效。'}
                 {bindingClient === 'mobile-web' && '电脑和手机登录同一个知萃账号，绑定一次即可跨端使用。'}
               </p>
               <ol>

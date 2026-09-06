@@ -30,6 +30,11 @@ from app.main import _migrate_admin_audit_logs
 
 
 class PrivacyAccountControlTests(unittest.TestCase):
+    def test_apple_client_identity_is_preserved(self) -> None:
+        for client_type in ("macos", "ios"):
+            self.assertEqual(privacy_account_service.normalize_client_type(client_type), client_type)
+        self.assertEqual(privacy_account_service.normalize_client_type("unknown"), "web")
+
     def setUp(self) -> None:
         self.engine = create_engine(
             "sqlite://",

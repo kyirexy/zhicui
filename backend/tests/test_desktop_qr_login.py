@@ -119,6 +119,23 @@ class DesktopQrLoginTests(unittest.TestCase):
             json={**self._approval_body(created), "decision": "approve"},
         )
 
+    def test_macos_label_is_server_owned_and_approval_still_required(self) -> None:
+        response = self.client.post(
+            "/api/auth/desktop-login/sessions",
+            json={"client_type": "macos", "client_name": "伪造可信设备"},
+        )
+        self.assertEqual(response.status_code, 200)
+        created = response.json()["data"]
+        self.assertEqual(created["client_name"], "Mac 客户端")
+        self.assertEqual(created["client_type"], "macos")
+        pending = self.client.post(
+            f"/api/auth/desktop-login/sessions/{created['session_id']}/token",
+            json=self._poll_body(created),
+        )
+        self.assertEqual(pending.json()["data"]["status"], "pending")
+        self.assertNotIn("token", pending.json()["data"])
+        self.assertEqual(self._approve(created).status_code, 200)
+
     def test_normal_lifecycle_separates_hashes_and_consumes_once(self) -> None:
         created = self._create()
         self.assertNotIn(created["poll_secret"], created["approval_url"])

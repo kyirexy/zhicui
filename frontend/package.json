@@ -29,6 +29,7 @@
     "ios:sync": "cap sync ios",
     "ios:open": "cap open ios",
     "test:ios": "node --experimental-strip-types --test src/lib/iosMobile.test.ts",
+    "test:file-export": "node --experimental-strip-types --test src/lib/fileExportCore.test.ts",
     "cap:run:live": "cap run android --live-reload --host 127.0.0.1 --port 3000 --forwardPorts 3000:3000 --forwardPorts 8000:8000",
     "cap:open": "cap open android"
   },
@@ -38,7 +39,9 @@
     "@capacitor/app": "^8.1.1",
     "@capacitor/browser": "^8.0.4",
     "@capacitor/core": "8.5.1",
+    "@capacitor/filesystem": "^8.1.3",
     "@capacitor/ios": "8.5.1",
+    "@capacitor/share": "^8.0.1",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",

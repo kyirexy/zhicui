@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 import { API_BASE } from '@/lib/api';
-import { Capacitor } from '@capacitor/core';
+import { currentClientType } from '@/lib/clientIdentity';
 import { shouldDiscardDevelopmentSession } from '@/lib/clientAuthPolicy';
 
 export interface AuthUser {
@@ -77,14 +77,6 @@ const AUTH_REQUEST_TIMEOUT_MS = 10_000;
 const AUTH_RESTORE_TIMEOUT_MS = 6_000;
 const DEV_SESSION_TIMEOUT_MS = 5_000;
 const DEV_SESSION_RETRY_DELAYS_MS = [0, 300, 800] as const;
-
-function currentClientType(): 'web' | 'windows' | 'android' | 'ios' {
-  if (typeof window === 'undefined') return 'web';
-  if (window.zhicuiDesktop) return 'windows';
-  const platform = Capacitor.getPlatform();
-  return Capacitor.isNativePlatform() && (platform === 'ios' || platform === 'android')
-    ? platform : 'web';
-}
 
 function wait(delay: number, signal: AbortSignal): Promise<boolean> {
   return new Promise((resolve) => {
@@ -418,7 +410,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         accepted_privacy: true,
         terms_version: consent.termsVersion,
         privacy_version: consent.privacyVersion,
-        client_type: currentClientType(),
+        client_type: await currentClientType(),
       }),
     });
     if (response.success && response.data) {

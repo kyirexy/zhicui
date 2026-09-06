@@ -73,6 +73,10 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$app_path"
           xcrun stapler validate "$app_path"
           spctl --assess --type execute --verbose=2 "$app_path"
+      - name: 启动与重新打开 Mac App
+        env:
+          MAC_ARCH: ${{ matrix.arch }}
+        run: bash scripts/smoke-macos.sh "release-mac-$MAC_ARCH"
       - name: 保留安装包（不发布到下载站）
         uses: actions/upload-artifact@v4
         with:
@@ -84,3 +88,4 @@ jobs:
             desktop/release-mac-${{ matrix.arch }}/*.zip
             desktop/release-mac-${{ matrix.arch }}/*-mac.yml
             desktop/release-mac-${{ matrix.arch }}/*.blockmap
+            desktop/release-mac-${{ matrix.arch }}/smoke/*

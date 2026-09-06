@@ -21,7 +21,7 @@ router = APIRouter()
 
 class PasswordReverificationRequest(BaseModel):
     password: str = Field(..., min_length=1, max_length=128)
-    client_type: Literal["web", "windows", "android", "ios"] = "web"
+    client_type: Literal["web", "windows", "macos", "android", "ios"] = "web"
 
 
 class AccountDeletionConfirmRequest(BaseModel):

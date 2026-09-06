@@ -134,8 +134,8 @@ def create_session(
     """Create a five-minute login session and return its two plaintext secrets."""
     current = now or _utcnow()
     cleanup_stale_sessions(db, now=current)
-    normalized_type = client_type if client_type in {"windows", "web"} else "windows"
-    client_name = "Windows 客户端" if normalized_type == "windows" else "桌面浏览器"
+    normalized_type = client_type if client_type in {"windows", "macos", "web"} else "windows"
+    client_name = {"windows": "Windows 客户端", "macos": "Mac 客户端", "web": "桌面浏览器"}[normalized_type]
     approval_token = secrets.token_urlsafe(32)
     poll_secret = secrets.token_urlsafe(32)
     session = DesktopLoginSession(

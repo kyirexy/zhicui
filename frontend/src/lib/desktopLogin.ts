@@ -42,7 +42,7 @@ export interface DesktopLoginCreateData {
   expires_at: string;
   poll_interval_seconds: number;
   client_name: string;
-  client_type: 'windows' | 'web';
+  client_type: 'windows' | 'macos' | 'web';
 }
 
 export type DesktopLoginRemoteStatus =
@@ -67,7 +67,7 @@ export interface DesktopLoginPreviewData {
   status: Exclude<DesktopLoginRemoteStatus, 'slow_down'>;
   session_id: string;
   client_name: string;
-  client_type: 'windows' | 'web';
+  client_type: 'windows' | 'macos' | 'web';
   verification_code: string;
   expires_at: string;
 }
@@ -160,10 +160,10 @@ async function postJson<T>(
 
 export function createDesktopLoginSession(
   signal?: AbortSignal,
+  clientType: 'windows' | 'macos' | 'web' = 'windows',
 ): Promise<DesktopLoginApiResult<DesktopLoginCreateData>> {
   return postJson('/api/auth/desktop-login/sessions', {
-    client_name: 'Windows 客户端',
-    client_type: 'windows',
+    client_type: clientType,
   }, { signal });
 }
 

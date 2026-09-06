@@ -60,7 +60,7 @@ LEGAL_DOCUMENTS = {
     },
 }
 
-_CLIENT_TYPES = {"web", "windows", "android", "ios"}
+_CLIENT_TYPES = {"web", "windows", "macos", "android", "ios"}
 _SENSITIVE_KEYS = {
     "hashed_password",
     "password",

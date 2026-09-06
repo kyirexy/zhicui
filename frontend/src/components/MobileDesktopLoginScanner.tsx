@@ -639,7 +639,7 @@ export default function MobileDesktopLoginScanner({
               <section className={styles.confirmPanel} aria-live="polite">
                 <div className={styles.deviceIcon} aria-hidden="true"><Laptop size={28} /></div>
                 <p className={styles.kicker}>登录确认</p>
-                <h2>{preview.clientName || 'Windows 客户端'}</h2>
+                <h2>{preview.clientName || '知萃电脑端'}</h2>
                 <p className={styles.confirmLead}>确认是你正在操作的电脑</p>
                 <div className={styles.verificationCode} aria-label={`校验码 ${preview.verificationCode}`}>
                   {preview.verificationCode.split('').map((digit, index) => (

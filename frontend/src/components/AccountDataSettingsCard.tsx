@@ -1,6 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import { currentClientType as clientType } from '@/lib/clientIdentity';
+import { exportFile } from '@/lib/fileExport';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Download, LoaderCircle, ShieldCheck, Trash2 } from 'lucide-react';
@@ -10,17 +12,10 @@ import {
   downloadPersonalDataArchive,
   prepareAccountDeletion,
   type AccountDeletionPreparation,
-  type ZhicuiClientType,
 } from '@/lib/api';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import { PUBLIC_INFORMATION_LINKS } from '@/lib/legalDocuments';
 import styles from './AccountDataSettingsCard.module.css';
-
-function clientType(): ZhicuiClientType {
-  if (typeof window === 'undefined') return 'web';
-  if (window.zhicuiDesktop) return 'windows';
-  return /Android/i.test(window.navigator.userAgent) ? 'android' : 'web';
-}
 
 export default function AccountDataSettingsCard() {
   const router = useRouter();
@@ -44,23 +39,23 @@ export default function AccountDataSettingsCard() {
       return;
     }
     setExporting(true);
-    const response = await downloadPersonalDataArchive({
-      password: exportPassword,
-      client_type: clientType(),
-    });
-    setExporting(false);
-    if (!response.success || !response.data) {
-      setExportError(response.error || '导出失败，请稍后重试');
-      return;
+    try {
+      const response = await downloadPersonalDataArchive({
+        password: exportPassword,
+        client_type: await clientType(),
+      });
+      if (!response.success || !response.data) {
+        setExportError(response.error || '导出失败，请稍后重试');
+        return;
+      }
+      const result = await exportFile(response.data.blob, response.data.filename);
+      setExportPassword('');
+      setExportSuccess(result === 'cancelled' ? '已取消保存' : result === 'shared' ? '已完成系统分享操作' : '个人数据归档已开始下载');
+    } catch {
+      setExportError('保存失败，请稍后重试');
+    } finally {
+      setExporting(false);
     }
-    const objectUrl = URL.createObjectURL(response.data.blob);
-    const anchor = document.createElement('a');
-    anchor.href = objectUrl;
-    anchor.download = response.data.filename;
-    anchor.click();
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
-    setExportPassword('');
-    setExportSuccess('个人数据归档已开始下载');
   };
 
   const closeDelete = () => {
@@ -81,7 +76,7 @@ export default function AccountDataSettingsCard() {
     setDeletePending(true);
     const response = await prepareAccountDeletion({
       password: deletePassword,
-      client_type: clientType(),
+      client_type: await clientType(),
     });
     setDeletePending(false);
     if (!response.success || !response.data) {

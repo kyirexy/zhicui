@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import { DownloadSimple } from '@phosphor-icons/react';
+import { exportFile } from '@/lib/fileExport';
 
 interface ExportButtonProps {
   targetRef: React.RefObject<HTMLElement | null>;
@@ -13,11 +14,13 @@ export default function ExportButton({
   filename = 'videocapsule-card',
 }: ExportButtonProps) {
   const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
 
   const handleExport = useCallback(async () => {
     if (!targetRef.current || isExporting) return;
 
     setIsExporting(true);
+    setExportError('');
     const exportInstance = `zhicui-card-${Date.now()}`;
     targetRef.current.dataset.exportInstance = exportInstance;
     try {
@@ -37,12 +40,12 @@ export default function ExportButton({
         },
       });
 
-      const link = document.createElement('a');
-      link.download = `${filename}.png`;
-      link.href = canvas.toDataURL('image/png');
-      link.click();
-    } catch (error) {
-      console.error('Export failed:', error);
+      const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(
+        (value) => value ? resolve(value) : reject(new Error('图片生成失败')), 'image/png',
+      ));
+      await exportFile(blob, `${filename}.png`);
+    } catch {
+      setExportError('导出失败，请重试');
     } finally {
       delete targetRef.current?.dataset.exportInstance;
       setIsExporting(false);
@@ -63,7 +66,7 @@ export default function ExportButton({
       ) : (
         <>
           <DownloadSimple size={16} weight="bold" aria-hidden />
-          <span>导出长图</span>
+          <span aria-live="polite">{exportError || '导出长图'}</span>
         </>
       )}
     </button>

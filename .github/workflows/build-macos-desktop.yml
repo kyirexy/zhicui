@@ -16,12 +16,16 @@ permissions:
 jobs:
   build:
     name: Mac ${{ matrix.arch }}
-    runs-on: macos-15
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        arch: [arm64, x64]
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
     defaults:
       run:
         working-directory: desktop
@@ -89,3 +93,11 @@ jobs:
             desktop/release-mac-${{ matrix.arch }}/*-mac.yml
             desktop/release-mac-${{ matrix.arch }}/*.blockmap
             desktop/release-mac-${{ matrix.arch }}/smoke/*
+      - name: 保留启动诊断
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zhicui-mac-${{ matrix.arch }}-smoke
+          if-no-files-found: ignore
+          retention-days: 14
+          path: desktop/release-mac-${{ matrix.arch }}/smoke/*

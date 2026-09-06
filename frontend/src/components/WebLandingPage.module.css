@@ -189,11 +189,21 @@
 .heroDownload strong { font-size:20px; font-weight:650; line-height:1.25; }
 .heroDownload small { font-size:13px; line-height:1.5; color:#62758a; }
 .heroDownload:hover { background:#edf3fa; border-color:#afc3dc; }
-.heroDownloadPrimary { color:#fff; background:#365e96; border-color:#365e96; }
-.heroDownloadPrimary small { color:#e4edfa; }
-.heroDownloadPrimary:hover { background:#2c5082; border-color:#2c5082; }
+.heroDownload[data-primary='true'] { color:#fff; background:#365e96; border-color:#365e96; }
+.heroDownload[data-primary='true'] small { color:#e4edfa; }
+.heroDownload[data-primary='true']:hover { background:#2c5082; border-color:#2c5082; }
 .heroDownloadUpcoming { background:#fff; color:#68788c; }
 .heroDemoLink { display:inline-flex; align-items:center; gap:9px; min-height:48px; margin-top:12px; color:#426aa5; font-size:16px; font-weight:550; }
 .heroDemoLink:hover { color:#263f67; }
 @media (max-width:1100px) { .heroDownload { padding:14px 12px; gap:9px; } .heroDownload > svg:last-child { width:16px; } }
 @media (max-width:480px) { .heroDownloads { gap:10px; margin-top:24px; } .heroDownload { min-height:82px; padding:12px; gap:9px; } .heroDownload strong { font-size:18px; } .heroDownload small { font-size:12px; } .heroDownload > svg:first-child { width:24px; } .heroDownload > svg:last-child { display:none; } .heroDemoLink { font-size:15px; } }
+
+@media (max-width:640px) {
+ .page[data-mobile-platform='android'] .heroDownload[data-platform='android'], .page[data-mobile-platform='ios'] .heroDownload[data-platform='ios'] { order:-1; }
+ .platformFooter a,.platformFooter a strong { font-size:15px; }
+ .platformFooter a { min-height:52px; }
+ .platformLabel,.recommended { font-size:13px; }
+ .iosNotice { font-size:14px; }
+ .iosNotice span { font-size:13px; }
+ .page[data-mobile-platform='ios'] .platformGrid .iosCard { order:-1; }
+}

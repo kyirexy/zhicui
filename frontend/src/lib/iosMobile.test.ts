@@ -57,8 +57,9 @@ test('iOS 相机用途、最低版本和无签名模拟器边界', () => {
 
 test('官网 iPhone 未发布时不伪造可下载安装包', () => {
   const page = read('../components/WebLandingPage.tsx');
-  assert.match(page, /href="#download-ios"/);
   const section = page.slice(page.indexOf('<article id="download-ios"'), page.indexOf('<article id="download-mac"'));
   assert.match(section, /暂未开放下载/);
+  assert.match(section, /href="#demo"/);
+  assert.match(section, /体验网页演示/);
   assert.doesNotMatch(section, /href=.*\.(ipa|apk|dmg)/);
 });

@@ -8,6 +8,7 @@ import { CLIENT_RELEASE_FALLBACKS, countedClientDownloadUrl, detectPreferredClie
 import { detectMobileDownloadPlatform } from '@/lib/mobilePlatform';
 import LandingProductDemo from './LandingProductDemo';
 import LandingShowcase from './LandingShowcase';
+import MobileDownloadHelp from './MobileDownloadHelp';
 import styles from './WebLandingPage.module.css';
 
 // 保留已经发布的双架构测试产物与真实发布状态。
@@ -95,19 +96,20 @@ export default function WebLandingPage() {
           <h1 id="landing-title"><span className={styles.heroInk}>让收藏的视频，</span><span>变成你的知识。</span></h1>
           <p className={styles.heroLead}>看过的教程、记不住的观点、来不及整理的收藏。<br className={styles.desktopBreak} />交给知萃，留下完整文案，问清重点，再变成能执行的计划。</p>
           <nav className={styles.heroDownloads} aria-label="选择客户端下载渠道">
-            <a className={`${styles.heroDownload} ${styles.heroDownloadPrimary}`} href={windowsDownloadHref}>
+            <a className={styles.heroDownload} data-platform="windows" data-primary={mobilePlatform === null} href={windowsDownloadHref}>
               <WindowsLogo size={28} aria-hidden="true" /><span><strong>Windows</strong><small>立即下载</small></span><DownloadSimple size={20} aria-hidden="true" />
             </a>
-            <a className={styles.heroDownload} href={androidDownloadHref}>
+            <a className={styles.heroDownload} data-platform="android" data-primary={mobilePlatform === 'android'} href={androidDownloadHref}>
               <AndroidLogo size={28} aria-hidden="true" /><span><strong>Android</strong><small>立即下载</small></span><DownloadSimple size={20} aria-hidden="true" />
             </a>
-            <a className={styles.heroDownload} href="#download-mac">
+            <a className={styles.heroDownload} data-platform="mac" href="#download-mac">
               <AppleLogo size={28} aria-hidden="true" /><span><strong>Mac</strong><small>测试版 · 选择版本</small></span><ArrowRight size={20} aria-hidden="true" />
             </a>
-            <a className={`${styles.heroDownload} ${styles.heroDownloadUpcoming}`} href="#download-ios">
-              <DeviceMobile size={28} aria-hidden="true" /><span><strong>iPhone</strong><small>即将上线</small></span><ArrowRight size={20} aria-hidden="true" />
+            <a className={styles.heroDownload} data-platform="ios" data-primary={mobilePlatform === 'ios'} href="#demo">
+              <DeviceMobile size={28} aria-hidden="true" /><span><strong>iPhone</strong><small>体验网页演示</small></span><ArrowRight size={20} aria-hidden="true" />
             </a>
           </nav>
+          <MobileDownloadHelp platform={mobilePlatform} androidHref={androidDownloadHref} />
           <a className={styles.heroDemoLink} href="#demo"><Play size={18} weight="fill" aria-hidden="true" />先试试交互示例<ArrowRight size={18} aria-hidden="true" /></a>
         </div>
         <div className={styles.heroVisual}>
@@ -250,13 +252,14 @@ export default function WebLandingPage() {
           <article id="download-ios" className={`${styles.platformCard} ${styles.iosCard}`}>
             <div className={styles.platformTop}>
               <span className={styles.platformIcon}><AppleLogo size={28} weight="light" aria-hidden="true" /></span>
-              <span className={styles.platformLabel}>准备中</span>
+              <span className={styles.platformLabel}>可体验网页演示</span>
             </div>
             <h3>iPhone 移动端</h3>
-            <p>iPhone / iPad 版尚未发布。完成苹果签名和测试后，这里会提供安装入口。</p>
+            <p>先用网页演示看看知萃怎么用，无需下载。iPhone / iPad 版尚未发布。</p>
+            <div className={styles.platformFooter}><a href="#demo"><Play size={18} weight="fill" aria-hidden="true" /><strong>体验网页演示</strong><ArrowRight size={18} aria-hidden="true" /></a></div>
             <div className={styles.iosNotice}>
-              <strong>暂未开放下载</strong>
-              <span>iPhone 不能安装 Android APK 或 Mac DMG，请勿下载其他平台的包。</span>
+              <strong>iPhone App 暂未开放下载</strong>
+              <span>可通过 Safari 分享菜单，将官网添加到主屏幕。完整功能仍需客户端。</span>
             </div>
           </article>
           <article id="download-mac" className={`${styles.platformCard} ${styles.macCard}`}>
@@ -310,7 +313,7 @@ function MobileShowcase({ androidHref }: { androidHref: string }) {
           <div><BookOpenText size={21} aria-hidden="true" /><span><strong>随时翻，接着问</strong><p>用同一账号，在手机上继续阅读资料和提问。</p></span></div>
           <div><Target size={21} aria-hidden="true" /><span><strong>今天要做什么，打开就知道</strong><p>把行动计划带在身边，一项项完成。</p></span></div>
         </div>
-        <div className={styles.mobileActions}><a href={androidHref}><DeviceMobile size={19} aria-hidden="true" />下载 Android 版 <ArrowRight size={17} aria-hidden="true" /></a><a href="#download-ios">iPhone 发布状态</a></div>
+        <div className={styles.mobileActions}><a href={androidHref}><DeviceMobile size={19} aria-hidden="true" />下载 Android 版 <ArrowRight size={17} aria-hidden="true" /></a><a href="#demo">iPhone 体验网页演示</a></div>
         <p className={styles.mobileNote}>Android 公测已开放。平台账号连接与采集由 Windows 手动发起。</p>
       </div>
       <figure className={styles.mobileGallery}>

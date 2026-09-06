@@ -24,5 +24,9 @@ for attempt in 1 2; do
   kill "$app_pid"
   wait "$app_pid" || true
   app_pid=''
+  if grep -Eq 'TypeError:|ReferenceError:|Error occurred in handler|渲染进程退出' "$package_root/smoke/launch-$attempt.log"; then
+    printf '%s\n' '启动日志存在应用运行错误，请检查构建产物日志。' >&2
+    exit 1
+  fi
 done
 printf '%s\n' 'Mac 安装包已完成两次启动与退出检查。'

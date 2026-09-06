@@ -4,6 +4,21 @@ const require = createRequire(import.meta.url);
 const { validateSchema } = require('app-builder-lib/out/util/config/schemaValidator.js');
 const schema = require('app-builder-lib/scheme.json');
 const { desktopBridgeDirectory, supportsDesktopBridge } = require('../dist/platform-runtime.js');
+const { applyWindowTheme } = require('../dist/window-theme.js');
+
+const backgrounds = [];
+const overlays = [];
+const macWindow = { setBackgroundColor: (color) => backgrounds.push(color) };
+assert.equal(applyWindowTheme('darwin', macWindow, 'dark'), true);
+assert.equal(applyWindowTheme('darwin', macWindow, 'light'), true);
+assert.deepEqual(backgrounds, ['#111714', '#f5f7f6']);
+assert.equal(applyWindowTheme('darwin', macWindow, 'invalid'), false);
+assert.equal(backgrounds.length, 2);
+const windowWithOverlay = { ...macWindow, setTitleBarOverlay: (options) => overlays.push(options) };
+applyWindowTheme('darwin', windowWithOverlay, 'dark');
+assert.equal(overlays.length, 0);
+applyWindowTheme('win32', windowWithOverlay, 'dark');
+assert.deepEqual(overlays, [{ color: '#111714', symbolColor: '#e9efeb', height: 34 }]);
 
 assert.equal(desktopBridgeDirectory('darwin', '/Users/test', 'C:\\ignored'),
   '/Users/test/Library/Application Support/Zhicui');

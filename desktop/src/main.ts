@@ -25,6 +25,7 @@ import {
 import { DesktopAgentActionBridge } from './agent-action-bridge';
 import { desktopBuildIdentity } from './build-identity';
 import { desktopBridgeDirectory } from './platform-runtime';
+import { applyWindowTheme } from './window-theme';
 import { readPackagedReleaseChannel } from './release-channel';
 import { DouyinDesktopLogin } from './douyin-login';
 import { DesktopMediaLibrary } from './media-library';
@@ -283,14 +284,8 @@ function registerIpc(): void {
       assertTrustedIpcSender(event);
       const owner = BrowserWindow.fromWebContents(event.sender);
       if (!owner || !['light', 'dark'].includes(theme)) return false;
-      const dark = theme === 'dark';
-      owner.setTitleBarOverlay({
-        color: dark ? '#111714' : '#f5f7f6',
-        symbolColor: dark ? '#e9efeb' : '#26312b',
-        height: 34,
-      });
-      owner.setBackgroundColor(dark ? '#111714' : '#f5f7f6');
-      return true;
+      if (process.platform === 'darwin') nativeTheme.themeSource = theme;
+      return applyWindowTheme(process.platform, owner, theme);
     },
   );
   ipcMain.handle('desktop:bind-agent-user', async (event, profileKey: string | null) => {

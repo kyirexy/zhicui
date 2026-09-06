@@ -82,7 +82,6 @@ import {
   isNativeMobileApp,
 } from '@/lib/douyinNative';
 import {
-  DESKTOP_DOWNLOAD_URL,
   detectDesktopRuntime,
   openInstalledDesktopApp,
 } from '@/lib/desktopRuntime';
@@ -1383,8 +1382,18 @@ export default function VideoLibraryPage() {
     setQrActionMessage('正在打开知萃桌面端；如果没有响应，请先下载安装。');
   };
 
-  const downloadDesktopApp = () => {
-    window.location.assign(DESKTOP_DOWNLOAD_URL);
+  const downloadDesktopApp = async () => {
+    const url = 'https://luxai.cn/#download';
+    if (isNativeMobileApp()) {
+      try {
+        const { Browser } = await import('@capacitor/browser');
+        await Browser.open({ url });
+      } catch {
+        setQrActionMessage('请在浏览器打开 luxai.cn，选择电脑对应的版本下载。');
+      }
+    } else {
+      window.location.assign(url);
+    }
   };
 
   const checkDesktopBinding = async () => {
@@ -1833,10 +1842,10 @@ export default function VideoLibraryPage() {
     setQrFallbackVisible(false);
     setQrActionMessage('');
     if (bindingClient === 'desktop-web') {
-      setLoginStatusMessage('请使用知萃 Windows 桌面端登录抖音');
+      setLoginStatusMessage('请使用知萃电脑端登录抖音');
       setNotice('已安装桌面端可以直接打开；未安装请先下载');
     } else {
-      setLoginStatusMessage('请在 Windows 桌面端扫码登录抖音');
+      setLoginStatusMessage('请在电脑端扫码登录抖音');
       setNotice('在电脑安装知萃桌面端并登录同一个知萃账号，即可完成绑定');
     }
   };
@@ -3117,10 +3126,10 @@ export default function VideoLibraryPage() {
               </span>
               <h2>
                 {bindingClient === 'desktop-web'
-                  ? '请使用知萃 Windows 桌面端'
-                  : '请在 Windows 电脑完成一次绑定'}
+                  ? '请使用知萃电脑端'
+                  : '请在电脑完成一次绑定'}
               </h2>
-              <p>桌面端会打开你电脑上的 Chrome，不会再跳转 localhost，也不会显示服务器 Linux 位置。</p>
+              <p>在电脑上的浏览器确认登录，手机即可使用绑定后的资料。</p>
             </div>
             <button type="button" onClick={closeQrLogin} aria-label="关闭扫码登录">
               <X size={18} />
@@ -3130,7 +3139,7 @@ export default function VideoLibraryPage() {
             <div className="library-qr-frame">
               <div className="library-browser-login is-open">
                 <ExternalLink size={30} aria-hidden="true" />
-                <strong>知萃 Windows 桌面端</strong>
+                <strong>知萃电脑端 · Windows / Mac</strong>
                 <span>安装一次，之后直接使用本机 Chrome 扫码登录。</span>
               </div>
             </div>
@@ -3139,12 +3148,12 @@ export default function VideoLibraryPage() {
                 className={`library-qr-capability is-${bindingClient}`}
                 role={bindingClient === 'mobile-web' ? 'note' : undefined}
               >
-                {bindingClient === 'desktop-web' && '已安装可直接打开；未安装请先下载 Windows 版。'}
+                {bindingClient === 'desktop-web' && '已安装可直接打开；未安装请先选择适合电脑的版本。'}
                 {bindingClient === 'mobile-app' && '手机端登录同一个知萃账号，电脑绑定成功后这里会自动生效。'}
                 {bindingClient === 'mobile-web' && '电脑和手机登录同一个知萃账号，绑定一次即可跨端使用。'}
               </p>
               <ol>
-                <li>下载并安装“知萃 Windows 桌面端”</li>
+                <li>下载并安装知萃 Windows 版或 Mac 测试版</li>
                 <li>登录与当前页面完全相同的知萃账号</li>
                 <li>进入视频资料并点击“扫码登录抖音”</li>
                 <li>在本机 Chrome 扫码确认；绑定状态会自动更新，但不会自动抓取视频</li>
@@ -3163,7 +3172,7 @@ export default function VideoLibraryPage() {
                   onClick={downloadDesktopApp}
                 >
                   <Download size={17} />
-                  下载 Windows 版
+                  选择电脑版
                 </button>
               </div>
               {bindingClient !== 'desktop-web' && (

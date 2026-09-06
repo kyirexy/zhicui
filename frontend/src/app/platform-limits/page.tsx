@@ -11,8 +11,8 @@ export default function PlatformLimitsPage() {
       sections={[
         {
           id: 'clients',
-          title: '1. Web、Windows 与 Android 的能力',
-          content: <ul><li>Windows：适合绑定平台账号、手动同步喜欢/收藏/作品、批量整理和深度问答。</li><li>Android：支持粘贴分享链接、跨端查看资料、提问和执行计划；平台账号会话采集仍需 Windows。</li><li>Web：支持登录、查看跨端资料、粘贴链接、提问与计划；账号同步能力取决于已连接的 Windows 会话。</li><li>当前没有 iOS 客户端。</li></ul>,
+          title: '1. 各客户端的能力',
+          content: <ul><li>Windows 和 Mac：适合绑定平台账号、手动同步喜欢/收藏/作品、批量整理和深度问答。Mac 目前为测试渠道。</li><li>Android：支持粘贴分享链接、跨端查看资料、提问和执行计划；平台账号绑定需在电脑端完成。</li><li>iPhone：客户端处于开发测试阶段，已接入资料、问答、计划、扫码和系统分享，尚未开放公开安装。</li><li>Web：提供产品演示、下载、登录授权与帮助。完整工作台请在客户端使用。</li></ul>,
         },
         {
           id: 'manual',
@@ -37,7 +37,7 @@ export default function PlatformLimitsPage() {
         {
           id: 'next-step',
           title: '6. 出现限制时怎么做',
-          content: <ul><li>平台限制：等待界面给出的冷却时间后手动重试。</li><li>需要登录：在 Windows 客户端重新连接并等待确认完成。</li><li>连接器不可用：稍后重试；已有资料和文稿不受影响。</li><li>资料质量不足：打开原视频或重新读取，不要反复批量同步。</li></ul>,
+          content: <ul><li>平台限制：等待界面给出的冷却时间后手动重试。</li><li>需要登录：在电脑客户端重新连接并等待确认完成。</li><li>连接器不可用：稍后重试；已有资料和文稿不受影响。</li><li>资料质量不足：打开原视频或重新读取，不要反复批量同步。</li></ul>,
         },
       ]}
     />

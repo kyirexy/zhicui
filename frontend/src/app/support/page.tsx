@@ -17,7 +17,7 @@ export default function SupportPage() {
         {
           id: 'details',
           title: '2. 提交问题时建议包含',
-          content: <ul><li>发生时间、使用的 Web/Windows/Android 客户端和版本。</li><li>可复现步骤、界面错误文字和必要的脱敏截图。</li><li>不要发送密码、Cookie、验证码、平台登录凭据或 API 密钥。</li></ul>,
+          content: <ul><li>发生时间、使用的 Web、Windows、Mac、Android 或 iPhone 客户端和版本。</li><li>可复现步骤、界面错误文字和必要的脱敏截图。</li><li>不要发送密码、Cookie、验证码、平台登录凭据或 API 密钥。</li></ul>,
         },
         {
           id: 'complaints',

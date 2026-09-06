@@ -1,8 +1,8 @@
 export const CURRENT_LEGAL_VERSIONS = {
   terms: '2026-08-28',
   privacy: '2026-09-06',
-  platformLimits: '2026-08-28',
-  support: '2026-08-28',
+  platformLimits: '2026-09-06',
+  support: '2026-09-06',
 } as const;
 
 export const LEGAL_EFFECTIVE_DATE = '2026 年 8 月 28 日';

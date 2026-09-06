@@ -50,7 +50,7 @@ test('注册必须由用户主动勾选当前协议版本', () => {
   assert.match(authContext, /accepted_privacy:\s*true/);
   assert.match(authContext, /terms_version:\s*consent\.termsVersion/);
   assert.match(authContext, /privacy_version:\s*consent\.privacyVersion/);
-  assert.match(authContext, /client_type:\s*currentClientType\(\)/);
+  assert.match(authContext, /client_type:\s*await currentClientType\(\)/);
   assert.match(versions, /terms:\s*'2026-08-28'/);
   assert.match(versions, /privacy:\s*'2026-09-06'/);
 });

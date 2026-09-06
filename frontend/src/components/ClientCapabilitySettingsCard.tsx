@@ -9,15 +9,27 @@ const CLIENTS = [
     Icon: Monitor,
   },
   {
+    name: 'Mac',
+    channel: '测试渠道',
+    detail: '与电脑端共用资料、问答和计划，支持本机浏览器绑定与手动同步。',
+    Icon: Monitor,
+  },
+  {
     name: 'Android',
     channel: '公测渠道',
-    detail: '分享链接导入、跨端查看、问答和计划；平台账号会话采集需在 Windows 完成。',
+    detail: '分享链接导入、跨端查看、问答和计划；平台账号绑定需在电脑端完成。',
+    Icon: Smartphone,
+  },
+  {
+    name: 'iPhone',
+    channel: '开发测试中',
+    detail: '已接入资料、问答、计划、扫码和系统分享，尚未开放公开安装。',
     Icon: Smartphone,
   },
   {
     name: 'Web',
     channel: '在线最新版',
-    detail: '登录、分享链接导入、跨端查看、问答和计划；不在网页中独立采集平台账号会话。',
+    detail: '产品演示、客户端下载、登录授权与帮助；完整工作台请使用客户端。',
     Icon: Globe2,
   },
 ] as const;

@@ -167,9 +167,10 @@ export default function AppUpdateSettingsCard() {
   const desktopDownloaded = desktopUpdate?.status === 'downloaded';
   const desktopDownloading = desktopUpdate?.status === 'downloading';
   const progress = Math.round(desktopUpdate?.percent || 0);
+  const desktopLabel = desktopInfo?.platform === 'darwin' ? 'Mac' : 'Windows';
 
   const title = mode === 'desktop'
-    ? 'Windows 桌面端'
+    ? `${desktopLabel} 桌面端`
     : mode === 'ios'
       ? 'iOS 版本与更新'
     : mode === 'android'
@@ -194,7 +195,7 @@ export default function AppUpdateSettingsCard() {
           <h2 className="text-base font-semibold text-foreground text-balance">{title}</h2>
           <p className="mt-1 text-sm leading-6 text-foreground-muted text-pretty">
             {mode === 'desktop'
-              ? `当前安装 ${desktopInfo?.version || desktopUpdate?.installedVersion || '未知版本'} · ${desktopInfo?.channel === 'stable' ? '正式版' : desktopInfo?.channel === 'beta' ? '公测版' : '开发版'}。网页功能刷新即可更新；Windows 程序更新会在后台下载，完成后由你决定何时重启安装。`
+              ? `当前安装 ${desktopInfo?.version || desktopUpdate?.installedVersion || '未知版本'} · ${desktopInfo?.channel === 'stable' ? '正式版' : desktopInfo?.channel === 'beta' ? '公测版' : '开发版'}。${desktopInfo?.platform === 'darwin' ? 'Mac 测试包请从原下载渠道获取更新。' : '程序更新下载完成后，由你决定何时重启安装。'}`
               : mode === 'android'
                 ? androidResult
                   ? `当前安装 ${androidResult.installed.version} (${androidResult.installed.build}) · ${releaseChannelLabel(androidResult.release?.channel || CLIENT_RELEASE_CHANNEL)}。启动时只检查同一渠道的新版。`

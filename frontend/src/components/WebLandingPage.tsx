@@ -12,7 +12,7 @@ import MobileDownloadHelp from './MobileDownloadHelp';
 import styles from './WebLandingPage.module.css';
 
 // 保留已经发布的双架构测试产物与真实发布状态。
-const MAC_TEST_DOWNLOAD_ROOT = 'https://luxai.cn/download/mac/test/dccfdecdcb7879746a031053047697822c3b6096';
+const MAC_TEST_DOWNLOAD_ROOT = 'https://luxai.cn/download/mac/test/517f5921d14328b8bfe37512a8709cec4f2123b4';
 
 export default function WebLandingPage() {
   const rootRef = useRef<HTMLDivElement>(null);

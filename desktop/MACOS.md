@@ -57,6 +57,8 @@ npm run dist:mac -- --arch=x64
 
 ## Mac 验收记录（待执行）
 
+2026-09-06 更新：[运行 34028387594](https://github.com/kyirexy/zhicui/actions/runs/34028387594) 已分别在 Apple Silicon 与 Intel 原生云端机器构建并完成两次页面加载、启动和退出，截图显示登录界面。修复了 macOS 标题栏调用 Windows overlay API 的运行错误。提交为 `517f5921d14328b8bfe37512a8709cec4f2123b4`。下列涉及真实账号、外部平台、签名与系统权限的交互仍需验收。
+
 - Intel 和 Apple Silicon 分别安装、启动与退出。
 - Command+C/V、撤销、全屏；关闭窗口后 Dock 重开。
 - 账号登录、协议链接冷启动；手机扫电脑登录手机的反向授权需求仍属另一个登录变更，不能用现有登录电脑流程代替。

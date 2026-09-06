@@ -11,7 +11,9 @@
 
 在 frontend 运行 `npm ci`，再执行 `npm run ios:build:prod`。Windows 可以生成静态资源和工程，缺 Xcode/CocoaPods 时会明确跳过原生编译。
 
-云端使用 `.github/workflows/build-ios-mobile.yml`：安装依赖、构建生产静态资源、CocoaPods 同步、Xcode 模拟器无签名编译。产物仅为模拟器 App，保留 14 天。CI 不上传 App Store，也不提供无签名 IPA。
+云端使用 `.github/workflows/build-ios-mobile.yml`：安装依赖、构建生产静态资源、CocoaPods 同步、Xcode 模拟器无签名编译，随后启动模拟器、安装 App、验证运行并保存截图。产物仅为模拟器 App，保留 14 天。CI 不上传 App Store，也不提供无签名 IPA。
+
+2026-09-06 最新验证：[运行 34027535273](https://github.com/kyirexy/zhicui/actions/runs/34027535273)，提交 `cef7294b5e409f36e93056bf59e4ddb1fc59ce27`。长图与个人数据导出使用系统保存/分享面板；iPhone 前后台恢复账号绑定状态，新增文件时间戳用途隐私清单。保存/分享插件与隐私清单已核对包含在实际模拟器 App 内。真机相机与系统分享目标仍按下方清单验收。
 
 ## 真机 / TestFlight 放行（需要账号持有人）
 

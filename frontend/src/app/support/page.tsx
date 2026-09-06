@@ -12,7 +12,7 @@ export default function SupportPage() {
         {
           id: 'channels',
           title: '1. 联系渠道',
-          content: <ul><li>应用内：点击“反馈”，选择问题、建议、内容或账号类别。</li><li>电子邮件：<a href="mailto:support@luxai.cn">support@luxai.cn</a>。</li><li>隐私与数据请求：在邮件标题注明“隐私请求”，或直接使用设置中的导出/注销功能。</li></ul>,
+          content: <ul><li>应用内：点击“反馈”，选择问题、建议、内容或账号类别。</li><li>电子邮件：<a href="mailto:1592880030@qq.com">1592880030@qq.com</a>。</li><li>隐私与数据请求：在邮件标题注明“隐私请求”，或直接使用设置中的导出/注销功能。</li></ul>,
         },
         {
           id: 'details',

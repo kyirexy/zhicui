@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes import router
 from app.api.desktop_login_routes import router as desktop_login_router
+from app.api.phone_login_routes import router as phone_login_router
 from app.api.agent_routes import router as agent_router
 from app.api.video_analysis_routes import router as video_analysis_router
 from app.api.ops_routes import router as ops_router
@@ -376,6 +377,7 @@ def create_app() -> FastAPI:
     # Register routes
     app.include_router(router)
     app.include_router(desktop_login_router)
+    app.include_router(phone_login_router)
     app.include_router(agent_router)
     app.include_router(video_analysis_router)
     app.include_router(ops_router)

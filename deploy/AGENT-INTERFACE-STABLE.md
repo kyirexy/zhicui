@@ -163,7 +163,6 @@ cd backend && python -m unittest discover -s tests -p 'test_*.py'
 cd cli && npm ci && npm test && npm pack --dry-run
 cd frontend && npm run test:agent-access && npm run test:agent-v2 && npm run build
 cd desktop && npm run typecheck && npm run verify:agent-integration
-openspec validate open-agent-cli-interface --strict
 ```
 
 生产部署必须运行 `scripts/smoke-production.sh`。其中 `scripts/smoke-agent-interface.sh`

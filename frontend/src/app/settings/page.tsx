@@ -36,6 +36,7 @@ import LocalDataSettingsCard from '@/components/LocalDataSettingsCard';
 import MobileDesktopLoginScanner, {
   type MobileDesktopLoginPreview,
 } from '@/components/MobileDesktopLoginScanner';
+import DesktopPhoneLoginCard from '@/components/DesktopPhoneLoginCard';
 import QuickSyncSettingsCard from '@/components/QuickSyncSettingsCard';
 import UserCustomModelsSettingsCard from '@/components/UserCustomModelsSettingsCard';
 import UserVisionProviderSettingsCard from '@/components/UserVisionProviderSettingsCard';
@@ -303,6 +304,7 @@ function SettingsWorkspace() {
                 </section>
 
                 <ClientCapabilitySettingsCard />
+                {isDesktop && user ? <DesktopPhoneLoginCard /> : null}
 
                 <section className={styles.mobileActions} aria-label="账号与帮助">
                   <div className={styles.mobileAccount}>

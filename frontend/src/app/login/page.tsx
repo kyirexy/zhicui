@@ -17,6 +17,7 @@ import {
   User,
 } from 'lucide-react';
 import DesktopQrLoginCard from '@/components/DesktopQrLoginCard';
+import PhoneQrLogin from '@/components/PhoneQrLogin';
 import MobileDesktopLoginScanner, {
   type MobileDesktopLoginPreview,
 } from '@/components/MobileDesktopLoginScanner';
@@ -434,7 +435,7 @@ export default function LoginPage() {
 
           {nativeMobile ? (
             <section className="relative mb-4 rounded-2xl border border-accent-brand/15 bg-accent-brand/[0.045] p-3.5">
-              <MobileDesktopLoginScanner
+              {pendingDesktopApproval ? <MobileDesktopLoginScanner
                 isAuthenticated={Boolean(user)}
                 currentAccountLabel={user?.username || user?.email}
                 initialReference={pendingDesktopApproval}
@@ -449,7 +450,7 @@ export default function LoginPage() {
                 onDismiss={finishDesktopApproval}
                 label="扫描电脑登录码"
                 variant="primary"
-              />
+              /> : <PhoneQrLogin onSession={(session) => { acceptSession(session); router.replace('/'); }} />}
               <div className="mt-3 flex items-center gap-3 text-[11px] text-foreground-muted" aria-hidden="true">
                 <span className="h-px flex-1 bg-card-border" />
                 或使用账号密码

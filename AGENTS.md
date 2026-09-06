@@ -46,9 +46,9 @@ No test runner or linter is configured. There are no `test`/`lint` scripts in ei
 7. **README/DEVELOPMENT_SPEC mention "Next.js 15"** — actual is Next.js **16.2.7** + React **19.2.4** (see `frontend/package.json`). Treat README versions as stale.
 8. **Default SQLite file is `zhicui.db`** (in `config.py`), **not** `videocapsule.db` as the stale `.env.example` claims. Prod uses PostgreSQL (`postgresql://zhicui:...@localhost:5432/zhicui`).
 
-## OpenSpec workflow
+## Change workflow
 
-The project uses OpenSpec for change tracking (`openspec/changes/`, `.Codex/skills/openspec-*`, `.Codex/commands/opsx`). For any new feature/spec change, the convention is **propose → apply → archive**, not direct edits to `openspec/specs/`. The skills `openspec-propose`, `openspec-apply-change`, and `openspec-archive-change` are wired up under `.Codex/skills/`.
+按项目所有者要求，直接实现需求、运行相关测试并记录发布结果，不再使用 OpenSpec 或生成提案/归档目录。重要验收和待办记录放在 `docs/` 或 `deploy/`；生产权限、签名、备份和发布验证仍按现有脚本执行，不因移除文档工作流而跳过。
 
 ## Monorepo layout
 
@@ -58,7 +58,6 @@ frontend/         Next.js 16 App Router (port 3000) — all client components, T
 douyin-mcp-server/  Cloned dependency; backend imports DouyinProcessor from it
 deploy/           systemd units, nginx conf, deploy.sh, requirements-server.txt (slim prod deps)
 scripts/          build-apk.sh — local APK build (server lacks Android SDK)
-openspec/         OpenSpec change tracking (specs/ + changes/)
 .env.example      Stale env template (see gotchas) — copy to .env and fix per config.py
 ```
 

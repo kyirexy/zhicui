@@ -37,6 +37,9 @@ class RatePolicy:
 
 
 POLICIES: tuple[RatePolicy, ...] = (
+    RatePolicy("phone_login_create", "POST", "/api/auth/phone-login/sessions", 12, 300, "user"),
+    RatePolicy("phone_login_claim", "POST", "/api/auth/phone-login/sessions", 60, 300),
+    RatePolicy("phone_login_poll", "POST", "/api/auth/phone-login/sessions", 1200, 300),
     RatePolicy("auth_login", "POST", "/api/auth/login", 12, 5 * 60),
     RatePolicy("auth_register", "POST", "/api/auth/register", 5, 60 * 60),
     RatePolicy(
@@ -162,6 +165,12 @@ def _matches(policy: RatePolicy, request: Request) -> bool:
     if request.method.upper() != policy.method:
         return False
     path = request.url.path
+    if policy.name == "phone_login_create":
+        return path == policy.path_prefix
+    if policy.name == "phone_login_claim":
+        return path.startswith(policy.path_prefix + "/") and path.endswith(("/claim", "/decision"))
+    if policy.name == "phone_login_poll":
+        return path.startswith(policy.path_prefix + "/") and path.endswith(("/status", "/token"))
     if policy.name == "desktop_login_create":
         return path == policy.path_prefix
     if policy.name == "desktop_login_approval":

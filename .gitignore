@@ -64,8 +64,8 @@ videos/
 # Third-party reference projects (not part of this repo)
 参考项目/
 
-# OpenSpec (keep changes tracked)
-# openspec/changes/ - tracked for project history
+# 已停用的规划工作流，防止工具意外重新生成
+openspec/
 
 # 打包文件
 zhicui.tar.gz

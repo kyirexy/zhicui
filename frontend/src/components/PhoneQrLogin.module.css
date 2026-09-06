@@ -1,0 +1,12 @@
+.card { padding: 20px; border: 1px solid var(--card-border); border-radius: 16px; background: var(--card-bg); color: var(--foreground); }
+.heading { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 600; text-wrap: balance; }
+.card p { font-size: 14px; line-height: 1.6; color: var(--foreground-muted); margin: 10px 0; text-wrap: pretty; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.actions button { min-height: 44px; padding: 8px 16px; border: 1px solid var(--card-border); border-radius: 12px; font-size: 14px; background: var(--card-bg); cursor: pointer; }
+.actions .primary { background: var(--accent-brand-soft); border-color: var(--accent-brand-dim); color: var(--accent-brand); }
+.actions button:disabled { opacity: .5; cursor: default; }
+.actions button:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 3px; }
+.qr { display: grid; place-items: center; width: fit-content; padding: 12px; margin: 16px auto; background: white; border-radius: 12px; }
+.code { display: block; font-size: 32px; font-variant-numeric: tabular-nums; margin: 12px 0; }
+.error { color: var(--accent-red, #b64444) !important; }
+.waiting { text-align: center; padding: 16px 8px; }

@@ -26,6 +26,7 @@ import {
   type DesktopLoginApprovalReference,
 } from '@/lib/desktopLogin';
 import styles from './MobileDesktopLoginScanner.module.css';
+import { parsePhoneLoginQr, type PhoneLoginReference } from '@/lib/phoneLogin';
 
 type ScannerModule = typeof import('@capacitor-mlkit/barcode-scanning');
 
@@ -66,6 +67,7 @@ interface MobileDesktopLoginScannerProps {
   label?: string;
   variant?: 'primary' | 'secondary' | 'settings';
   className?: string;
+  onPhoneLoginScan?: (reference: PhoneLoginReference) => Promise<void>;
 }
 
 type ViewState =
@@ -154,6 +156,7 @@ export default function MobileDesktopLoginScanner({
   label = '扫码登录电脑',
   variant = 'secondary',
   className = '',
+  onPhoneLoginScan,
 }: MobileDesktopLoginScannerProps) {
   const [nativeMobile, setNativeMobile] = useState(false);
   const [viewState, setViewState] = useState<ViewState>('closed');
@@ -284,6 +287,26 @@ export default function MobileDesktopLoginScanner({
   const handleRawCode = useCallback(async (rawValue: string) => {
     if (processingRef.current) return;
 
+    if (onPhoneLoginScan) {
+      const phoneReference = parsePhoneLoginQr(rawValue);
+      if (!phoneReference) {
+        setMessage('请扫描电脑设置中“登录手机”的二维码');
+        return;
+      }
+      processingRef.current = true;
+      const generation = ++scanGenerationRef.current;
+      setViewState('previewing');
+      await stopScanner();
+      if (!mountedRef.current || generation !== scanGenerationRef.current) return;
+      try {
+        await onPhoneLoginScan(phoneReference);
+        if (mountedRef.current && generation === scanGenerationRef.current) await closeOverlay(false);
+      } catch (cause) {
+        await showFailure('error', cause instanceof Error ? cause.message : '扫码失败，请重试', generation);
+      }
+      return;
+    }
+
     let parsed: DesktopLoginApprovalReference | null = null;
     try {
       parsed = parseDesktopLoginQr(rawValue);
@@ -300,7 +323,7 @@ export default function MobileDesktopLoginScanner({
     }
 
     await reviewReference(parsed);
-  }, [reviewReference]);
+  }, [reviewReference, onPhoneLoginScan, stopScanner, closeOverlay, showFailure]);
 
   const startScanner = useCallback(async () => {
     if (!isNativeMobileScanner()) {
@@ -569,7 +592,7 @@ export default function MobileDesktopLoginScanner({
         className={`${styles.overlay} ${overlayOpen ? styles.overlayOpen : ''} ${cameraVisible ? styles.cameraMode : styles.panelMode}`}
         role="dialog"
         aria-modal={overlayOpen ? 'true' : undefined}
-        aria-label="扫码登录电脑"
+        aria-label={label}
         aria-hidden={!overlayOpen}
       >
         <header className={styles.scannerHeader}>
@@ -582,7 +605,7 @@ export default function MobileDesktopLoginScanner({
           >
             <X size={22} />
           </button>
-          <strong>扫码登录电脑</strong>
+          <strong>{label}</strong>
           {viewState === 'scanning' ? (
             <button
               type="button"

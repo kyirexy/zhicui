@@ -17,7 +17,7 @@
     {"pattern": "^/api/(?:video/proxy|library/imports/[^/]+/(?:cover|media)|library/douyin/(?:media|cover|gallery)/|client-downloads/)", "classification": "resource_stream", "reason": "Authenticated or public resource bytes, not a tool"},
     {"pattern": "^/api/(?:extract/stream|agent/threads/[^/]+/(?:messages/stream|turns/[^/]+/(?:stream|events)))(?:/|$)", "classification": "resource_stream", "reason": "Legacy SSE/event transport, represented by Action Runs"},
 
-    {"pattern": "^/api/auth/(?:desktop-handoff|dev-session)", "classification": "transport_internal", "reason": "Trusted client login handoff, never exposed as a tool"},
+    {"pattern": "^/api/auth/(?:desktop-handoff|desktop-login|phone-login|dev-session)", "classification": "transport_internal", "reason": "Trusted client login handoff, never exposed as a tool"},
     {"pattern": "^/api/library/douyin/(?:local-handoff|local-sync|login/qr)", "classification": "transport_internal", "reason": "Desktop-private session/cookie/media transport"},
     {"pattern": "^/api/client-errors$", "classification": "transport_internal", "reason": "Client diagnostics ingestion"},
 

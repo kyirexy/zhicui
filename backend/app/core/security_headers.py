@@ -23,7 +23,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
         )
         response.headers.setdefault("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
-        if request.url.path.startswith("/api/auth/desktop-login/sessions"):
+        if request.url.path.startswith(("/api/auth/desktop-login/sessions", "/api/auth/phone-login/sessions")):
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
             response.headers["Pragma"] = "no-cache"
         forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()

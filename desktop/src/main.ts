@@ -254,6 +254,14 @@ function createMainWindow(): BrowserWindow {
     }
   });
   window.once('ready-to-show', () => window.show());
+  if (process.env.ZHICUI_DESKTOP_SMOKE === '1') {
+    window.webContents.once('did-finish-load', () => {
+      if (!isTrustedAppUrl(window.webContents.getURL())) return;
+      window.show();
+      window.focus();
+      console.log('[desktop-smoke] 页面加载完成');
+    });
+  }
   window.on('closed', () => {
     stopDesktopUpdateChecks?.();
     stopDesktopUpdateChecks = null;

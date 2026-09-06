@@ -91,6 +91,10 @@ class Settings(BaseSettings):
     # 成功代理的公开封面可缓存在应用服务器；留空时生产环境使用持久目录，
     # 开发环境使用仓库内目录。
     COVER_CACHE_DIR: str = ""
+    # 官网案例媒体使用私有持久目录，通过发布状态受控提供文件。
+    CASE_MEDIA_DIR: str = ""
+    CASE_MEDIA_MAX_TOTAL_MB: int = 1024
+    CASE_MEDIA_MIN_FREE_MB: int = 512
     # Production release readiness fails closed until an encrypted backup and
     # its separately encrypted recovery material are verified in another
     # failure domain. SQLite development remains not_applicable.

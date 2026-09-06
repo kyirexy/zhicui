@@ -69,6 +69,7 @@ export default function AppHeader() {
 
           <div className={styles.links}>
             <a href="/#demo">产品演示</a>
+            <a href="/#real-case">真实案例</a>
             <a href="/#mobile">手机体验</a>
             <a href="/#product">使用场景</a>
           </div>

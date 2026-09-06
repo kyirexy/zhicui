@@ -7,7 +7,7 @@ import Link from 'next/link';
 import { CLIENT_RELEASE_FALLBACKS, countedClientDownloadUrl, detectPreferredClient, formatReleaseSize, loadClientReleaseCatalog, toAbsoluteDownloadUrl, type ClientPlatform } from '@/lib/clientReleases';
 import { detectMobileDownloadPlatform } from '@/lib/mobilePlatform';
 import LandingProductDemo from './LandingProductDemo';
-import LandingRealCase from './LandingRealCase';
+import LandingShowcase from './LandingShowcase';
 import styles from './WebLandingPage.module.css';
 
 // 保留已经发布的双架构测试产物与真实发布状态。
@@ -91,7 +91,7 @@ export default function WebLandingPage() {
     <div ref={rootRef} className={`${styles.page} marketing-home`} data-mobile-platform={mobilePlatform ?? undefined}>
       <section className={styles.hero} aria-labelledby="landing-title">
         <div className={styles.heroCopy}>
-          <p className={styles.eyebrow}><span /> 给每一次「先收藏」，一个下一步</p>
+          <p className={styles.eyebrow}><span /> 写给爱收藏、有点「仓鼠型」的你</p>
           <h1 id="landing-title"><span className={styles.heroInk}>让收藏的视频，</span><span>变成你的知识。</span></h1>
           <p className={styles.heroLead}>看过的教程、记不住的观点、来不及整理的收藏。<br className={styles.desktopBreak} />交给知萃，留下完整文案，问清重点，再变成能执行的计划。</p>
           <div className={styles.heroActions}>
@@ -115,7 +115,21 @@ export default function WebLandingPage() {
         <a href="/platform-limits">查看支持范围 <ArrowRight size={14} aria-hidden="true" /></a>
       </div>
 
-      <LandingRealCase />
+      <section className={styles.collectorSection} aria-labelledby="collector-title">
+        <div className={styles.collectorIntro}>
+          <p className={styles.kicker}>好奇心很多，消化内容的时间很少</p>
+          <h2 id="collector-title">有点「仓鼠型」？<br />好内容，值得慢慢消化。</h2>
+          <p>看见好教程先收藏，刷到好观点舍不得划走，总觉得「以后会用到」。这里说的仓鼠型，就是这种爱积累资料的习惯。</p>
+          <a href="#real-case">看看收藏怎么用起来 <ArrowRight size={16} aria-hidden="true" /></a>
+        </div>
+        <ol className={styles.collectorList}>
+          <li><span>01</span><div><h3>先存着，再也不用从头翻</h3><p>把选中的视频整理成完整文案，想起某句话时，有内容可回看。</p></div></li>
+          <li><span>02</span><div><h3>不急着看完，先问最关心的</h3><p>带着一个具体问题，读一条或多条视频，留下有依据的重点。</p></div></li>
+          <li><span>03</span><div><h3>今天用一点，收藏就有意义</h3><p>留下一张知识卡片、一份行动计划，在手机上接着看、接着做。</p></div></li>
+        </ol>
+      </section>
+
+      <LandingShowcase />
 
       <section id="product" className={styles.scenarios} aria-labelledby="scenarios-title">
         <header className={styles.sectionHeading} data-reveal><p>留住内容，更要用好内容</p><h2 id="scenarios-title">那些「以后再看」，<br />现在有了用法。</h2></header>

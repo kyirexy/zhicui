@@ -21,7 +21,9 @@ for required in \
   deploy/videocapsule-frontend.service deploy/nginx-security-headers.conf \
   deploy/nginx-windows-updates.conf deploy/nginx-videocapsule.conf \
   deploy/agent-interface-kill-switch.sh deploy/jenkins-videocapsule.sudoers \
-  deploy/release-evidence-store.py; do
+  deploy/release-evidence-store.py deploy/install-case-media.sh \
+  deploy/case-media-maintenance.py deploy/zhicui-case-media-backup.service \
+  deploy/zhicui-case-media-backup.timer; do
   [[ -f "$SOURCE_ROOT/$required" ]] || { echo "发行缺少运维资产：$required" >&2; exit 1; }
 done
 [[ -s /etc/letsencrypt/live/luxai.cn/fullchain.pem && -s /etc/letsencrypt/live/luxai.cn/privkey.pem ]] || {
@@ -48,6 +50,7 @@ case "$current_target" in
 esac
 
 bash "$SOURCE_ROOT/deploy/backup/install.sh"
+bash "$SOURCE_ROOT/deploy/install-case-media.sh"
 install -d -o root -g root -m 0700 /var/lib/zhicui-deployments
 install -d -o ubuntu -g ubuntu -m 0770 /var/lib/zhicui-cover-cache
 install -d -o root -g root -m 0755 /etc/zhicui /usr/local/lib/zhicui-deploy

@@ -16,6 +16,7 @@ AGENT_RELEASE_MODE="${AGENT_RELEASE_MODE:-dark}"
 AGENT_KILL_SWITCH_FILE="/etc/zhicui/agent-interface.env"
 AGENT_KILL_SWITCH_HELPER="/usr/local/lib/zhicui-deploy/agent-interface-kill-switch.sh"
 RELEASE_EVIDENCE_HELPER="/usr/local/lib/zhicui-deploy/release-evidence-store.py"
+CASE_MEDIA_HELPER="/usr/local/lib/zhicui-deploy/case-media-maintenance.py"
 PIP_BOOTSTRAP_VERSION="26.2.1"
 PYPI_INDEX_URL="${ZHICUI_PYPI_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 PIP_NETWORK_TIMEOUT="${ZHICUI_PIP_TIMEOUT_SECONDS:-60}"
@@ -687,6 +688,9 @@ for pair in \
   "$RELEASE_DIR/deploy/videocapsule-frontend.service:/etc/systemd/system/videocapsule-frontend.service" \
   "$RELEASE_DIR/deploy/agent-interface-kill-switch.sh:$AGENT_KILL_SWITCH_HELPER" \
   "$RELEASE_DIR/deploy/release-evidence-store.py:$RELEASE_EVIDENCE_HELPER" \
+  "$RELEASE_DIR/deploy/case-media-maintenance.py:$CASE_MEDIA_HELPER" \
+  "$RELEASE_DIR/deploy/zhicui-case-media-backup.service:/etc/systemd/system/zhicui-case-media-backup.service" \
+  "$RELEASE_DIR/deploy/zhicui-case-media-backup.timer:/etc/systemd/system/zhicui-case-media-backup.timer" \
   "$RELEASE_DIR/deploy/backup/postgres-backup.sh:/usr/local/lib/zhicui-backup/postgres-backup.sh" \
   "$RELEASE_DIR/deploy/backup/postgres-restore-verify.sh:/usr/local/lib/zhicui-backup/postgres-restore-verify.sh" \
   "$RELEASE_DIR/deploy/backup/postgres-offsite-replicate.sh:/usr/local/lib/zhicui-backup/postgres-offsite-replicate.sh" \
@@ -708,6 +712,13 @@ if [[ ! -d /usr/local/share/zhicui-deploy/backup ]] ||
 fi
 sudo -n /usr/sbin/nginx -t
 record_gate production_assets pass 'systemd、Nginx、SSE 与下载规则一致'
+
+sudo -n /bin/systemctl start zhicui-case-media-backup.service || err '案例表与媒体一致加密快照失败'
+CASE_MEDIA_EVIDENCE="$(sudo -n "$CASE_MEDIA_HELPER" verify)" || err '案例媒体快照解密与逐文件校验失败'
+record_gate case_media_backup pass "$CASE_MEDIA_EVIDENCE"
+# 快照本身会占用空间，所以在快照完成后检查构建余量；不擅自清理旧版本或用户文件。
+sudo -n "$CASE_MEDIA_HELPER" preflight || err '案例媒体依赖、私有目录或构建磁盘余量不足'
+record_gate case_media_storage pass '私有持久目录、FFmpeg/FFprobe、1 GiB 媒体额度与 2.5 GiB 构建余量通过'
 
 ZHICUI_DOWNLOAD_ROOT="$DOWNLOAD_ROOT" node "$RELEASE_DIR/scripts/verify-release-manifests.mjs"
 record_gate release_manifests pass 'beta/stable 清单与 Android beta 产物一致'
@@ -858,7 +869,7 @@ write_evidence 0 || err '成功部署证据无法写入 root-owned 哈希仓；�
 EVIDENCE_WRITTEN=1
 DEPLOY_SUCCEEDED=1
 if prune_reproducible_release_artifacts; then
-  record_gate release_retention pass '仅保留当前与上一版 runtime，并清理 npm 可再生成缓存'
+  record_gate release_retention pass '保留当前与前版，清理其他 manual runtime 与 npm 可再生成缓存；Jenkins 历史版本需单独审核'
 else
   warn '发布已成功，但旧 runtime 或 npm 缓存未能完全清理'
   record_gate release_retention warning '发布成功；可再生成缓存需要后续人工清理'

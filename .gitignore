@@ -36,6 +36,7 @@ Thumbs.db
 douyin-mcp-server/
 backend/.modelcache/
 backend/.cover-cache/
+backend/data/case-media/
 backend/static/uploads/
 *.mp4
 *.mp3

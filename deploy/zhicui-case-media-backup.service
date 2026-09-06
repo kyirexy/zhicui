@@ -1,0 +1,16 @@
+[Unit]
+Description=知萃案例媒体加密备份与完整性校验
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/local/lib/zhicui-deploy/case-media-maintenance.py backup
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/var/lib/zhicui-case-media /etc/zhicui/backup.key
+ReadWritePaths=/var/backups/zhicui-case-media
+TimeoutStartSec=900

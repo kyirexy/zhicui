@@ -84,13 +84,14 @@ import { getPlanProgress, type NoteDetail, type PlanData } from '@/lib/types';
 import AdminLlmConfigPanel from '@/components/admin/AdminLlmConfigPanel';
 import AdminObservabilityPanel, { ADMIN_ACTION_LABELS } from '@/components/admin/AdminObservabilityPanel';
 import AdminFeedbackPanel from '@/components/admin/AdminFeedbackPanel';
+import AdminShowcaseCasesPanel from '@/components/admin/AdminShowcaseCasesPanel';
 import AdminAnalysisAccountCard from '@/components/admin/AdminAnalysisAccountCard';
 import AdminVideoAnalysisPanel from '@/components/admin/AdminVideoAnalysisPanel';
 import AdminChatModelPanel, { type AdminChatModelPanelHandle } from '@/components/admin/AdminChatModelPanel';
 import AdminOmniroutePanel from '@/components/admin/AdminOmniroutePanel';
 import styles from '../AdminWorkspace.module.css';
 
-type Tab = 'dashboard' | 'users' | 'feedback' | 'notes' | 'plans' | 'export' | 'ops' | 'models' | 'llm' | 'asr' | 'observability' | 'settings';
+type Tab = 'dashboard' | 'users' | 'feedback' | 'showcase-cases' | 'notes' | 'plans' | 'export' | 'ops' | 'models' | 'llm' | 'asr' | 'observability' | 'settings';
 
 interface AdminNavItem {
   key: Tab;
@@ -111,6 +112,7 @@ const NAV_GROUPS: Array<{ label: string; items: AdminNavItem[] }> = [
     items: [
       { key: 'users', label: '用户管理', description: '账号、权限与状态', icon: Users },
       { key: 'feedback', label: '用户反馈', description: '问题、建议与回复', icon: MessageSquareText },
+      { key: 'showcase-cases', label: '首页案例', description: '真实案例、演示素材与发布', icon: LayoutDashboard },
       { key: 'notes', label: '笔记管理', description: '内容检查与重新生成', icon: FileText },
       { key: 'plans', label: '计划管理', description: '行动计划与完成状态', icon: ListTodo },
       { key: 'export', label: '数据导出', description: '按当前条件导出 CSV', icon: Download },
@@ -872,6 +874,7 @@ export default function AdminPage() {
 
           {/* 用户反馈 */}
           {tab === 'feedback' && <AdminFeedbackPanel />}
+          {tab === 'showcase-cases' && <AdminShowcaseCasesPanel />}
 
           {/* 笔记管理 */}
           {tab === 'notes' && (

@@ -4,6 +4,7 @@ const ADMIN_SECTIONS = [
   'dashboard',
   'users',
   'feedback',
+  'showcase-cases',
   'notes',
   'plans',
   'export',

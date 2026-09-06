@@ -11,6 +11,9 @@ EnvironmentFile=/opt/zhicui/backend/.env
 # 该 root-owned 文件最后加载，是生产 AGENT_INTERFACE_ENABLED 的唯一来源；
 # 发布失败时 deploy.sh 会先将它原子恢复为 false，再切回旧 runtime。
 EnvironmentFile=/etc/zhicui/agent-interface.env
+Environment=CASE_MEDIA_DIR=/var/lib/zhicui-case-media
+Environment=CASE_MEDIA_MAX_TOTAL_MB=1024
+Environment=CASE_MEDIA_MIN_FREE_MB=512
 ExecStart=/opt/zhicui-runtime/current/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
 Restart=on-failure
 RestartSec=5

@@ -26,6 +26,7 @@ from app.api.video_analysis_routes import router as video_analysis_router
 from app.api.ops_routes import router as ops_router
 from app.api.privacy_account_routes import router as privacy_account_router
 from app.api.catalog_quality_routes import router as catalog_quality_router
+from app.api.showcase_case_routes import router as showcase_case_router
 from app.api.agent_interface_routes import (
     router as agent_interface_router,
     mcp_router as agent_mcp_router,
@@ -42,6 +43,7 @@ from app.models.plan import Plan  # noqa: F401
 from app.models.user import User  # noqa: F401
 from app.models.system_setting import SystemSetting  # noqa: F401
 from app.models.admin_audit_log import AdminAuditLog  # noqa: F401
+from app.models.showcase_case import ShowcaseCase  # noqa: F401
 from app.models.llm_usage_log import LlmUsageLog  # noqa: F401
 from app.models.user_activity_log import UserActivityLog  # noqa: F401
 from app.models.application_error_log import ApplicationErrorLog  # noqa: F401
@@ -203,6 +205,9 @@ def create_app() -> FastAPI:
                 status_code=exc.status_code,
                 **request_log_context(request),
             )
+        if request.url.path.startswith(("/api/showcase-cases", "/api/admin/showcase-cases")):
+            return JSONResponse(status_code=exc.status_code, headers={"Cache-Control": "no-store", **(exc.headers or {})},
+                                content={"success": False, "data": None, "error": str(exc.detail)})
         return await http_exception_handler(request, exc)
 
     @app.exception_handler(RequestValidationError)
@@ -222,6 +227,9 @@ def create_app() -> FastAPI:
             }
             for issue in exc.errors()[:12]
         ]
+        if request.url.path.startswith(("/api/showcase-cases", "/api/admin/showcase-cases")):
+            return JSONResponse(status_code=422, headers={"Cache-Control": "no-store"},
+                                content={"success": False, "data": None, "error": "案例字段格式不正确，请检查内容长度、来源链接与排序"})
         if request.url.path == "/mcp":
             return JSONResponse(
                 status_code=400,
@@ -329,7 +337,9 @@ def create_app() -> FastAPI:
         )
         return JSONResponse(
             status_code=500,
-            content={"detail": "Internal Server Error"},
+            content={"success": False, "data": None, "error": "案例保存暂时失败，请稍后重试"}
+            if request.url.path.startswith(("/api/showcase-cases", "/api/admin/showcase-cases"))
+            else {"detail": "Internal Server Error"},
         )
 
     @app.middleware("http")
@@ -383,6 +393,7 @@ def create_app() -> FastAPI:
     app.include_router(ops_router)
     app.include_router(privacy_account_router)
     app.include_router(catalog_quality_router)
+    app.include_router(showcase_case_router)
     app.include_router(agent_interface_router)
     app.include_router(agent_secure_router)
     app.include_router(agent_mcp_router)

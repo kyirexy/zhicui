@@ -21,6 +21,8 @@
     {"pattern": "^/api/library/douyin/(?:local-handoff|local-sync|login/qr)", "classification": "transport_internal", "reason": "Desktop-private session/cookie/media transport"},
     {"pattern": "^/api/client-errors$", "classification": "transport_internal", "reason": "Client diagnostics ingestion"},
 
+    {"pattern": "^/api/showcase-cases/[^/]+/(?:media|poster)$", "classification": "resource_stream", "reason": "仅已发布官网案例的公开媒体，非 Agent Action"},
+    {"pattern": "^/api/showcase-cases(?:/|$)", "classification": "public", "reason": "公开官网案例与受发布状态控制的媒体，不提供 Agent 写入能力"},
     {"pattern": "^/api/(?:health|readiness|legal/documents/current|app/releases/latest)$", "classification": "public", "reason": "Public health, legal or release metadata"},
     {"pattern": "^/api/auth/(?:register|login)$", "classification": "public", "reason": "Interactive product authentication, not an Agent Action"},
     {"pattern": "^/api/auth/me$", "classification": "action", "domain": "account"},

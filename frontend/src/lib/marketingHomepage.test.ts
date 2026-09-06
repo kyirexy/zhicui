@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { LANDING_DEMO } from './landingDemo.ts';
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 const sourceRoot = resolve(testDirectory, '..');
@@ -37,15 +38,25 @@ test('官网用真实能力介绍博主整理和多视频提问', () => {
   assert.doesNotMatch(landingPage, /自动追更|自动同步博主全部视频/);
 });
 
-test('演示位可直接替换为低负载带字幕视频', () => {
-  assert.match(landingPage, /controls/);
-  assert.match(landingPage, /playsInline/);
-  assert.match(landingPage, /preload="none"/);
-  assert.match(landingPage, /kind="captions"/);
-  assert.match(landingPage, /data-static=\{!story\.videoSrc/);
-  assert.match(landingPage, /story\.videoSrc \? '功能演示' : '界面示意'/);
-  assert.doesNotMatch(landingPage, /demoPlayLabel/);
-  assert.match(landingStyles, /\.demoMedia\s*\{[\s\S]*?aspect-ratio:\s*16\s*\/\s*9/);
+test('示例观点和行动引用始终对应可阅读的原文段落', () => {
+  assert.ok(LANDING_DEMO.sourceLabel.trim());
+  assert.ok(LANDING_DEMO.paragraphs.length > 0);
+  assert.ok(LANDING_DEMO.points.length > 0);
+  assert.ok(LANDING_DEMO.tasks.length > 0);
+
+  for (const item of [...LANDING_DEMO.points, ...LANDING_DEMO.tasks]) {
+    assert.ok(Number.isInteger(item.source), `${item.title} 的来源必须是整数段号`);
+    assert.ok(item.source >= 1 && item.source <= LANDING_DEMO.paragraphs.length,
+      `${item.title} 的来源段号超出原文范围`);
+    assert.ok(LANDING_DEMO.paragraphs[item.source - 1]?.trim(),
+      `${item.title} 的原文依据不能为空`);
+  }
+});
+
+test('示例行动具有独立标识，勾选一项不会同时完成其他任务', () => {
+  const taskIds = LANDING_DEMO.tasks.map((task) => task.id);
+  assert.equal(new Set(taskIds).size, taskIds.length);
+  assert.ok(taskIds.every((id) => id.trim().length > 0));
 });
 
 test('首屏中文标题收住字号和负字距', () => {

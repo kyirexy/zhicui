@@ -68,7 +68,9 @@ export default function AppHeader() {
           </a>
 
           <div className={styles.links}>
-            <a href="/#product">核心功能</a>
+            <a href="/#demo">产品演示</a>
+            <a href="/#mobile">手机体验</a>
+            <a href="/#product">使用场景</a>
           </div>
 
           <div className={styles.actions}>

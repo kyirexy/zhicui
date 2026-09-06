@@ -14,7 +14,7 @@
 .nav {
   display: flex;
   min-width: 0;
-  width: min(100%, 88rem);
+  width: min(100%, 78rem);
   min-height: 4.5rem;
   margin-inline: auto;
   align-items: center;

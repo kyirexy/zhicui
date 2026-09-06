@@ -1,96 +1,17 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import {
-  ArrowDown,
-  AppleLogo,
-  ChatCenteredText,
-  CheckCircle,
-  DeviceMobile,
-  DownloadSimple,
-  FileText,
-  Monitor,
-  Play,
-  Sparkle,
-  Target,
-} from '@phosphor-icons/react';
+import { ArrowDown, ArrowRight, AppleLogo, BookOpenText, CheckCircle, DeviceMobile, DownloadSimple, Monitor, Play, Quotes, Stack, Target } from '@phosphor-icons/react';
 import { QRCodeSVG } from 'qrcode.react';
 import Link from 'next/link';
-import {
-  CLIENT_RELEASE_FALLBACKS,
-  countedClientDownloadUrl,
-  detectPreferredClient,
-  formatReleaseSize,
-  loadClientReleaseCatalog,
-  toAbsoluteDownloadUrl,
-  type ClientPlatform,
-} from '@/lib/clientReleases';
-import styles from './WebLandingPage.module.css';
+import { CLIENT_RELEASE_FALLBACKS, countedClientDownloadUrl, detectPreferredClient, formatReleaseSize, loadClientReleaseCatalog, toAbsoluteDownloadUrl, type ClientPlatform } from '@/lib/clientReleases';
 import { detectMobileDownloadPlatform } from '@/lib/mobilePlatform';
+import LandingProductDemo from './LandingProductDemo';
+import LandingRealCase from './LandingRealCase';
+import styles from './WebLandingPage.module.css';
 
-// 只引用已发布并校验过的测试产物，不能改指向正式更新通道。
+// 保留已经发布的双架构测试产物与真实发布状态。
 const MAC_TEST_DOWNLOAD_ROOT = 'https://luxai.cn/download/mac/test/dccfdecdcb7879746a031053047697822c3b6096';
-
-const CORE_FEATURES = [
-  {
-    title: '视频变成完整文案',
-    description: '从收藏、喜欢、博主作品或分享链接手动挑选，处理好一条就先显示一条。',
-    Icon: FileText,
-  },
-  {
-    title: '对视频直接提问',
-    description: '可以单选或多选视频，AI 基于完整文案回答，并保留对应的原文依据。',
-    Icon: ChatCenteredText,
-  },
-  {
-    title: '把结论变成行动',
-    description: '把有用结论保存为知识，或直接转成今天能执行的计划。',
-    Icon: Target,
-  },
-] as const;
-
-type ProductDemoKind = 'creator' | 'multi-video';
-
-interface ProductStory {
-  kind: ProductDemoKind;
-  title: string;
-  description: string;
-  facts: readonly string[];
-  demoTitle: string;
-  demoCaption: string;
-  videoSrc?: string;
-  posterSrc?: string;
-  captionsSrc?: string;
-}
-
-// 将录屏放入 public/videos 后，在对应项填写 videoSrc、posterSrc 和 captionsSrc，
-// 页面会自动用真实视频替换当前的静态功能演示。
-const PRODUCT_STORIES: readonly ProductStory[] = [
-  {
-    kind: 'creator',
-    title: '只整理你关心的博主',
-    description: '连接可用时，粘贴公开博主主页，可以直接准备近期 20/50/100 条文稿；也可以先刷新全部公开作品清单，再勾选需要的视频，单次最多 50 条。所有同步都由你手动发起。',
-    facts: [
-      '先看作品清单，再决定提取哪些视频',
-      '全量刷新只保存公开元数据，不会自动转写全部作品',
-      '文案完成一条，就先在视频资料中显示一条',
-    ],
-    demoTitle: '定向整理博主视频功能演示',
-    demoCaption: '从识别博主主页，到勾选作品并准备完整文案。',
-  },
-  {
-    kind: 'multi-video',
-    title: '多选视频，一次问清楚',
-    description: '在视频资料中勾选同一主题的多条视频，带入知萃 AI 进行一次提问。回答基于已就绪的完整文案，可以继续追问共识、差异和下一步。',
-    facts: [
-      '支持点选或框选多条视频',
-      '回答保留对应视频和原文依据',
-      '有用结论可以保存为知识或行动计划',
-    ],
-    demoTitle: '多选视频集中提问功能演示',
-    demoCaption: '选中一组视频，带着完整文案进入同一次提问。',
-  },
-] as const;
 
 export default function WebLandingPage() {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -147,7 +68,7 @@ export default function WebLandingPage() {
   }, []);
 
   useEffect(() => {
-    if (!['#download', '#download-mac', '#download-ios'].includes(window.location.hash)) return undefined;
+    if (!['#demo', '#real-case', '#mobile', '#product', '#download', '#download-mac', '#download-ios'].includes(window.location.hash)) return undefined;
     const sectionId = window.location.hash.slice(1);
     const timeoutId = window.setTimeout(() => {
       document.getElementById(sectionId)?.scrollIntoView({
@@ -169,115 +90,61 @@ export default function WebLandingPage() {
   return (
     <div ref={rootRef} className={`${styles.page} marketing-home`} data-mobile-platform={mobilePlatform ?? undefined}>
       <section className={styles.hero} aria-labelledby="landing-title">
-        <div className={styles.heroCopy} data-reveal>
-          <h1 id="landing-title">
-            <span className={styles.heroInk}>把收藏视频，</span>
-            <span>变成能问、能用的知识。</span>
-          </h1>
-          <p className={styles.heroLead}>
-            从喜欢、收藏、博主作品或分享链接中手动选择视频，生成完整文案；可以一次选多条提问，再把有用结论保存为知识或行动计划。
-          </p>
-
+        <div className={styles.heroCopy}>
+          <p className={styles.eyebrow}><span /> 给每一次「先收藏」，一个下一步</p>
+          <h1 id="landing-title"><span className={styles.heroInk}>让收藏的视频，</span><span>变成你的知识。</span></h1>
+          <p className={styles.heroLead}>看过的教程、记不住的观点、来不及整理的收藏。<br className={styles.desktopBreak} />交给知萃，留下完整文案，问清重点，再变成能执行的计划。</p>
           <div className={styles.heroActions}>
-            <a
-              className={preferredClient === 'android' || mobilePlatform === 'ios' ? styles.secondaryAction : styles.primaryAction}
-              data-platform="windows"
-              href={windowsDownloadHref}
-              aria-label={`下载 Windows 桌面端 v${releases.windows.version}`}
-            >
-              <Monitor size={20} weight="light" aria-hidden="true" />
-              <span>
-                <strong>下载 Windows 版</strong>
-                <small>
-                  {preferredClient === 'windows' ? '本机推荐 · ' : ''}
-                  v{releases.windows.version} · {windowsSize}
-                </small>
-              </span>
-              <i aria-hidden="true"><ArrowDown size={16} weight="bold" /></i>
-            </a>
-            <a
-              className={preferredClient === 'android' ? styles.primaryAction : styles.secondaryAction}
-              data-platform="android"
-              href={androidDownloadHref}
-              aria-label={`下载 Android 移动端 v${releases.android.version}`}
-            >
-              <DeviceMobile size={20} weight="light" aria-hidden="true" />
-              <span>
-                <strong>下载 Android 版</strong>
-                <small>
-                  {preferredClient === 'android' ? '本机推荐 · ' : ''}
-                  v{releases.android.version} · {androidSize}
-                </small>
-              </span>
-              <i aria-hidden="true"><ArrowDown size={16} weight="bold" /></i>
-            </a>
-            <a className={styles.secondaryAction} data-platform="ios" href="#download-ios">
-              <AppleLogo size={20} weight="light" aria-hidden="true" />
-              <span>
-                <strong>iPhone 版</strong>
-                <small>正在准备 · 查看发布状态</small>
-              </span>
-              <i aria-hidden="true"><ArrowDown size={16} weight="bold" /></i>
-            </a>
-            <a className={styles.secondaryAction} data-platform="mac" href="#download-mac">
-              <AppleLogo size={20} weight="light" aria-hidden="true" />
-              <span>
-                <strong>下载 Mac 版</strong>
-                <small>Apple Silicon / Intel · 测试版</small>
-              </span>
-              <i aria-hidden="true"><ArrowDown size={16} weight="bold" /></i>
-            </a>
+            <a className={styles.primaryAction} href="#download"><DownloadSimple size={20} aria-hidden="true" /><strong>下载知萃，开始整理</strong><ArrowRight size={18} aria-hidden="true" /></a>
+            <a className={styles.secondaryAction} href="#demo"><Play size={17} weight="fill" aria-hidden="true" /><strong>先试试交互示例</strong></a>
+          </div>
+          <p className={styles.heroNote}>示例无需登录 · 支持 Windows 与 Android</p>
+          <div className={styles.morePlatforms}><a href="#download-mac">Mac 测试版</a><span aria-hidden="true">/</span><a href="#download-ios">iPhone 版准备中</a></div>
+          <div className={styles.heroPromise}><span><CheckCircle size={16} aria-hidden="true" /> 文案随时回看</span><span><CheckCircle size={16} aria-hidden="true" /> 回答有原文依据</span><span><CheckCircle size={16} aria-hidden="true" /> 结论接着做</span></div>
+        </div>
+        <div className={styles.heroVisual}>
+          <div className={styles.visualCaption}><span>从「看过了」到「我会用了」</span><span>↓ 点一点，亲自试试</span></div>
+          <LandingProductDemo />
+        </div>
+      </section>
+
+      <div className={styles.platformStrip} aria-label="支持的内容入口">
+        <span>你喜欢的内容，从这里开始</span>
+        <strong>抖音</strong><strong>哔哩哔哩</strong><span className={styles.stripDivider} aria-hidden="true" />
+        <span>分享链接</span><span>收藏与喜欢</span><span>博主作品</span>
+        <a href="/platform-limits">查看支持范围 <ArrowRight size={14} aria-hidden="true" /></a>
+      </div>
+
+      <LandingRealCase />
+
+      <section id="product" className={styles.scenarios} aria-labelledby="scenarios-title">
+        <header className={styles.sectionHeading} data-reveal><p>留住内容，更要用好内容</p><h2 id="scenarios-title">那些「以后再看」，<br />现在有了用法。</h2></header>
+        <div className={styles.scenarioGrid}>
+          <article className={styles.featuredScenario} data-reveal>
+            <span className={styles.scenarioNumber}>01 / 学一个新东西</span>
+            <h3>教程看了很多，<br />从哪里开始？</h3>
+            <p>把同一主题的几条视频放在一起，带着你的问题读。问清共识与差异，再留下自己的行动清单。</p>
+            <div className={styles.promptSample}><Quotes size={22} weight="fill" aria-hidden="true" /><span>这几条教程里，哪些方法适合零基础？帮我安排第一步。</span></div>
+            <span className={styles.scenarioOutcome}><Target size={17} aria-hidden="true" /> 从一组视频，到一份学习计划</span>
+          </article>
+          <div className={styles.scenarioSide}>
+            <article data-reveal><span className={styles.scenarioNumber}>02 / 找回一个好观点</span><h3>记得讲过，却找不到那句话。</h3><p>在已整理的完整文案里找内容，让回答带上原文依据。有用的结论，存进自己的知识库。</p><span className={styles.scenarioOutcome}><BookOpenText size={17} aria-hidden="true" /> 从模糊印象，到可回看的知识</span></article>
+            <article data-reveal><span className={styles.scenarioNumber}>03 / 研究一位创作者</span><h3>喜欢一个博主，想系统地看。</h3><p>选择想整理的作品，准备完整文案，再围绕同一主题提问。看懂思路，也看清不同视频之间的联系。</p><span className={styles.scenarioOutcome}><Stack size={17} aria-hidden="true" /> 从零散作品，到自己的主题资料</span></article>
           </div>
         </div>
-
-        <ProductStage />
       </section>
 
-      <section id="product" className={styles.core} aria-labelledby="core-title">
-        <header className={styles.sectionHeading} data-reveal>
-          <p>核心功能</p>
-          <h2 id="core-title">从视频到行动，只做三件事</h2>
-        </header>
-
-        <ul className={styles.coreList}>
-          {CORE_FEATURES.map(({ title, description, Icon }) => (
-            <li key={title} data-reveal>
-              <span className={styles.coreIcon} aria-hidden="true">
-                <Icon size={23} weight="light" />
-              </span>
-              <h3>{title}</h3>
-              <p>{description}</p>
-            </li>
-          ))}
-        </ul>
+      <section className={styles.workflow} aria-labelledby="workflow-title">
+        <div className={styles.workflowHeading} data-reveal><p className={styles.kicker}>操作很轻，收获很具体</p><h2 id="workflow-title">只整理你关心的博主，<br />多选视频，一次问清楚。</h2><p>先选资料，再问问题。每一步都由你决定。</p></div>
+        <ol className={styles.workflowList}>
+          <li data-reveal><span>01</span><div><h3>选中你想留下的内容</h3><p>粘贴分享链接，或在 Windows 端连接平台账号，从收藏、喜欢和博主作品中手动挑选。</p></div></li>
+          <li data-reveal><span>02</span><div><h3>带着问题，读一条或多条视频</h3><p>文案完成一条，就能先看一条。回答保留对应视频和原文依据，方便你继续追问和核对。</p></div></li>
+          <li data-reveal><span>03</span><div><h3>把结论放进自己的生活</h3><p>将有用内容保存为知识，或转成行动计划。在手机上接着看、接着做。</p></div></li>
+        </ol>
+        <details className={styles.syncDetails}><summary>博主整理具体支持什么？</summary><p>连接可用时，可以直接准备近期 20/50/100 条文稿；也可以先刷新全部公开作品清单，再勾选所需视频，单次最多 50 条。所有同步都由你手动发起。全量刷新只保存公开元数据，不会自动转写全部作品。</p><Link href="/platform-limits">查看平台与客户端限制 <ArrowRight size={14} aria-hidden="true" /></Link></details>
       </section>
 
-      <section className={styles.useCases} aria-labelledby="use-cases-title">
-        <header className={styles.useCaseHeading} data-reveal>
-          <h2 id="use-cases-title">从一个博主，到一组视频</h2>
-          <p>两种常用方式，都从你主动选择资料开始。</p>
-        </header>
-
-        <div className={styles.useCaseList}>
-          {PRODUCT_STORIES.map((story) => (
-            <article key={story.kind} className={styles.useCase} data-reveal>
-              <div className={styles.useCaseCopy}>
-                <h3>{story.title}</h3>
-                <p>{story.description}</p>
-                <ul>
-                  {story.facts.map((fact) => (
-                    <li key={fact}>
-                      <CheckCircle size={18} weight="fill" aria-hidden="true" />
-                      <span>{fact}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              <ProductDemoMedia story={story} />
-            </article>
-          ))}
-        </div>
-      </section>
+      <MobileShowcase androidHref={androidDownloadHref} />
 
       <section id="download" className={styles.downloadSection} aria-labelledby="download-title">
         <header className={styles.sectionHeading} data-reveal>
@@ -408,161 +275,27 @@ export default function WebLandingPage() {
   );
 }
 
-function ProductStage() {
-  const videos = [
-    { title: '新手健身先练什么', state: '文案已就绪', tone: 'mint' },
-    { title: '三步做好一周备菜', state: '正在提取文案', tone: 'sand' },
-    { title: '产品演示如何开场', state: '文案已就绪', tone: 'paper' },
-  ] as const;
-
+function MobileShowcase({ androidHref }: { androidHref: string }) {
+  const [view, setView] = useState<'home' | 'plan'>('home');
+  const imageSrc = view === 'home' ? '/images/product/android-home-sep2026.png' : '/images/product/android-plan-example-sep2026.png';
   return (
-    <div
-      className={styles.stage}
-      data-reveal
-      role="img"
-      aria-label="知萃展示三条视频资料并基于完整文案回答问题的界面示意"
-    >
-      <div className={styles.stageGlow} aria-hidden="true" />
-      <div className={styles.stageShell} aria-hidden="true">
-        <div className={styles.stageWindow}>
-          <header>
-            <div className={styles.windowDots} aria-hidden="true"><i /><i /><i /></div>
-            <span>知萃 · 视频知识工作台</span>
-            <b>云端已同步</b>
-          </header>
-          <div className={styles.windowBody}>
-            <aside aria-hidden="true">
-              <img src="/logo.png" alt="" />
-              <i /><i className={styles.activeNav} /><i /><i /><i />
-            </aside>
-            <div className={styles.windowMain}>
-              <div className={styles.libraryTop}>
-                <div>
-                  <span>批量视频库</span>
-                  <strong>最近收藏</strong>
-                </div>
-                <span className={styles.previewSync}>同步 50 条</span>
-              </div>
-              <div className={styles.videoStrip}>
-                {videos.map((video, index) => (
-                  <article key={video.title}>
-                    <div className={`${styles.videoCover} ${styles[video.tone]}`}>
-                      <span>0{index + 1}</span>
-                      <i><Play size={15} weight="fill" /></i>
-                    </div>
-                    <strong>{video.title}</strong>
-                    <small>{video.state}</small>
-                  </article>
-                ))}
-              </div>
-              <section className={styles.agentPreview}>
-                <header>
-                  <Sparkle size={16} weight="fill" />
-                  <strong>向这些视频提问</strong>
-                  <span>参考 3 条完整文案</span>
-                </header>
-                <p>这三条内容里，今天最值得先做什么？</p>
-                <div>
-                  <strong>先完成一个 20 分钟、能立即开始的小行动。</strong>
-                  <span>回答已核对原文依据</span>
-                </div>
-              </section>
-            </div>
-          </div>
+    <section id="mobile" className={styles.mobileSection} aria-labelledby="mobile-title">
+      <div className={styles.mobileCopy} data-reveal>
+        <p className={styles.kicker}>随身带着，你积累的好内容</p>
+        <h2 id="mobile-title">在电脑前整理，<br />在生活里用起来。</h2>
+        <p className={styles.mobileLead}>通勤时回看一段文案，遇到问题就追问，晚上完成计划里的一个小行动。手机端，让知识跟着你走。</p>
+        <div className={styles.mobileSteps}>
+          <div><BookOpenText size={21} aria-hidden="true" /><span><strong>随时翻，接着问</strong><p>用同一账号，在手机上继续阅读资料和提问。</p></span></div>
+          <div><Target size={21} aria-hidden="true" /><span><strong>今天要做什么，打开就知道</strong><p>把行动计划带在身边，一项项完成。</p></span></div>
         </div>
+        <div className={styles.mobileActions}><a href={androidHref}><DeviceMobile size={19} aria-hidden="true" />下载 Android 版 <ArrowRight size={17} aria-hidden="true" /></a><a href="#download-ios">iPhone 发布状态</a></div>
+        <p className={styles.mobileNote}>Android 公测已开放。平台账号连接与采集由 Windows 手动发起。</p>
       </div>
-      <div className={styles.floatingCard} aria-hidden="true">
-        <CheckCircle size={18} weight="fill" />
-        <span><strong>完整文案已就绪</strong><small>现在可以直接提问</small></span>
-      </div>
-    </div>
-  );
-}
-
-function ProductDemoMedia({ story }: { story: ProductStory }) {
-  return (
-    <figure className={styles.demoFigure}>
-      <div className={styles.demoMedia} data-static={!story.videoSrc ? 'true' : undefined}>
-        {story.videoSrc ? (
-          <video
-            controls
-            playsInline
-            preload="none"
-            poster={story.posterSrc}
-            aria-label={story.demoTitle}
-          >
-            <source src={story.videoSrc} type="video/mp4" />
-            {story.captionsSrc ? (
-              <track
-                default
-                kind="captions"
-                src={story.captionsSrc}
-                srcLang="zh-CN"
-                label="中文"
-              />
-            ) : null}
-            你的浏览器暂不支持视频播放。
-          </video>
-        ) : (
-          <DemoPoster kind={story.kind} title={story.demoTitle} />
-        )}
-      </div>
-      <figcaption>
-        {story.videoSrc ? (
-          <Play size={16} weight="fill" aria-hidden="true" />
-        ) : (
-          <FileText size={16} weight="fill" aria-hidden="true" />
-        )}
-        <span>
-          <strong>{story.videoSrc ? '功能演示' : '界面示意'}</strong>
-          {story.demoCaption}
-        </span>
-      </figcaption>
-    </figure>
-  );
-}
-
-function DemoPoster({ kind, title }: { kind: ProductDemoKind; title: string }) {
-  if (kind === 'creator') {
-    return (
-      <div className={styles.demoPoster} data-kind={kind} role="img" aria-label={title}>
-        <div className={styles.demoTopbar}>
-          <span>博主作品</span>
-          <small>选择要整理的视频</small>
-        </div>
-        <div className={styles.creatorSummary}>
-          <span className={styles.creatorAvatar} aria-hidden="true">新</span>
-          <span><strong>新儿说游</strong><small>已读取 86 条公开作品</small></span>
-          <b>近期 20 条</b>
-        </div>
-        <div className={styles.creatorRows} aria-hidden="true">
-          {['关卡设计为什么会让人上瘾', '独立游戏如何做好新手引导', '从完整流程拆解游戏制作'].map((item, index) => (
-            <span key={item}>
-              <i data-checked={index !== 1 ? 'true' : undefined}>{index !== 1 ? '✓' : ''}</i>
-              <strong>{item}</strong>
-              <small>{index === 2 ? '待准备' : '文案已就绪'}</small>
-            </span>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className={styles.demoPoster} data-kind={kind} role="img" aria-label={title}>
-      <div className={styles.demoTopbar}>
-        <span>视频资料</span>
-        <small>已选 3 条</small>
-      </div>
-      <div className={styles.selectedVideos} aria-hidden="true">
-        {['定价的底层逻辑', '用户为什么会买', '三种产品叙事'].map((item) => (
-          <span key={item}><i>✓</i><strong>{item}</strong></span>
-        ))}
-      </div>
-      <div className={styles.demoQuestion} aria-hidden="true">
-        <span>这三条视频对“用户为什么买单”有哪些共识？</span>
-        <strong>回答将核对 3 条完整文案</strong>
-      </div>
-    </div>
+      <figure className={styles.mobileGallery}>
+        <div className={styles.mobileTabs} aria-label="切换手机实机截图"><button type="button" aria-pressed={view === 'home'} onClick={() => setView('home')}>手机首页</button><button type="button" aria-pressed={view === 'plan'} onClick={() => setView('plan')}>行动计划</button></div>
+        <a className={styles.phone} href={imageSrc} target="_blank" rel="noopener noreferrer" aria-label={`查看${view === 'home' ? '手机首页' : '行动计划'}实机截图原图（新窗口）`}><img src={imageSrc} width="1080" height="2400" loading="lazy" decoding="async" alt={view === 'home' ? '知萃 Android 实机首页：粘贴链接、去提问、管理资料和底部导航' : '知萃 Android 实机行动计划：今日任务清单，展示预置的英语与备菜示例计划'} /></a>
+        <figcaption>Android 实机界面 · 2026.09<br /><span>{view === 'home' ? '资料数量为截图时状态' : '演示账号的示例计划与历史日期'} · 点击查看原图</span></figcaption>
+      </figure>
+    </section>
   );
 }

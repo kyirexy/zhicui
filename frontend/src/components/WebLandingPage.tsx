@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowRight, AppleLogo, BookOpenText, DeviceMobile, DownloadSimple, Monitor, Play, Quotes, Stack, Target } from '@phosphor-icons/react';
+import { AndroidLogo, WindowsLogo, ArrowDown, ArrowRight, AppleLogo, BookOpenText, DeviceMobile, DownloadSimple, Monitor, Play, Quotes, Stack, Target } from '@phosphor-icons/react';
 import { QRCodeSVG } from 'qrcode.react';
 import Link from 'next/link';
 import { CLIENT_RELEASE_FALLBACKS, countedClientDownloadUrl, detectPreferredClient, formatReleaseSize, loadClientReleaseCatalog, toAbsoluteDownloadUrl, type ClientPlatform } from '@/lib/clientReleases';
@@ -94,10 +94,21 @@ export default function WebLandingPage() {
           <p className={styles.eyebrow}><span /> 写给爱收藏、有点「仓鼠型」的你</p>
           <h1 id="landing-title"><span className={styles.heroInk}>让收藏的视频，</span><span>变成你的知识。</span></h1>
           <p className={styles.heroLead}>看过的教程、记不住的观点、来不及整理的收藏。<br className={styles.desktopBreak} />交给知萃，留下完整文案，问清重点，再变成能执行的计划。</p>
-          <div className={styles.heroActions}>
-            <a className={styles.primaryAction} href="#download"><DownloadSimple size={20} aria-hidden="true" /><strong>下载知萃，开始整理</strong><ArrowRight size={18} aria-hidden="true" /></a>
-            <a className={styles.secondaryAction} href="#demo"><Play size={17} weight="fill" aria-hidden="true" /><strong>先试试交互示例</strong></a>
-          </div>
+          <nav className={styles.heroDownloads} aria-label="选择客户端下载渠道">
+            <a className={`${styles.heroDownload} ${styles.heroDownloadPrimary}`} href={windowsDownloadHref}>
+              <WindowsLogo size={28} aria-hidden="true" /><span><strong>Windows</strong><small>立即下载</small></span><DownloadSimple size={20} aria-hidden="true" />
+            </a>
+            <a className={styles.heroDownload} href={androidDownloadHref}>
+              <AndroidLogo size={28} aria-hidden="true" /><span><strong>Android</strong><small>立即下载</small></span><DownloadSimple size={20} aria-hidden="true" />
+            </a>
+            <a className={styles.heroDownload} href="#download-mac">
+              <AppleLogo size={28} aria-hidden="true" /><span><strong>Mac</strong><small>测试版 · 选择版本</small></span><ArrowRight size={20} aria-hidden="true" />
+            </a>
+            <a className={`${styles.heroDownload} ${styles.heroDownloadUpcoming}`} href="#download-ios">
+              <DeviceMobile size={28} aria-hidden="true" /><span><strong>iPhone</strong><small>即将上线</small></span><ArrowRight size={20} aria-hidden="true" />
+            </a>
+          </nav>
+          <a className={styles.heroDemoLink} href="#demo"><Play size={18} weight="fill" aria-hidden="true" />先试试交互示例<ArrowRight size={18} aria-hidden="true" /></a>
         </div>
         <div className={styles.heroVisual}>
           <div className={styles.visualCaption}><span>从「看过了」到「我会用了」</span><span>↓ 点一点，亲自试试</span></div>

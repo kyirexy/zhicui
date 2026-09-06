@@ -180,3 +180,20 @@
  .page *,.page *::before,.page *::after { scroll-behavior:auto !important; transition:none !important; animation:none !important; }
  .page[data-motion='ready'] [data-reveal]:not([data-visible='true']) { opacity:1; transform:none; }
 }
+
+.heroDownloads { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:30px; max-width:34rem; }
+.heroDownload { display:flex; align-items:center; gap:12px; min-height:88px; padding:16px 18px; border:1px solid #dce4ed; border-radius:14px; background:#f8fafc; color:#365579; transition:background 180ms,border-color 180ms; }
+.heroDownload > svg { flex-shrink:0; }
+.heroDownload > svg:last-child { margin-left:auto; }
+.heroDownload > span { display:grid; gap:5px; min-width:0; }
+.heroDownload strong { font-size:20px; font-weight:650; line-height:1.25; }
+.heroDownload small { font-size:13px; line-height:1.5; color:#62758a; }
+.heroDownload:hover { background:#edf3fa; border-color:#afc3dc; }
+.heroDownloadPrimary { color:#fff; background:#365e96; border-color:#365e96; }
+.heroDownloadPrimary small { color:#e4edfa; }
+.heroDownloadPrimary:hover { background:#2c5082; border-color:#2c5082; }
+.heroDownloadUpcoming { background:#fff; color:#68788c; }
+.heroDemoLink { display:inline-flex; align-items:center; gap:9px; min-height:48px; margin-top:12px; color:#426aa5; font-size:16px; font-weight:550; }
+.heroDemoLink:hover { color:#263f67; }
+@media (max-width:1100px) { .heroDownload { padding:14px 12px; gap:9px; } .heroDownload > svg:last-child { width:16px; } }
+@media (max-width:480px) { .heroDownloads { gap:10px; margin-top:24px; } .heroDownload { min-height:82px; padding:12px; gap:9px; } .heroDownload strong { font-size:18px; } .heroDownload small { font-size:12px; } .heroDownload > svg:first-child { width:24px; } .heroDownload > svg:last-child { display:none; } .heroDemoLink { font-size:15px; } }

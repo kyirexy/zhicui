@@ -30,6 +30,10 @@ export const metadata: Metadata = {
   description: '同步你选择的抖音收藏、喜欢或作品，自动提取完整文稿，基于一条或多条视频提问，并把有用内容转成行动计划。',
   keywords: ['知萃', '抖音收藏整理', '批量视频文案', 'AI视频问答', '视频资料助手', '行动计划'],
   manifest: '/manifest.json',
+  icons: {
+    icon: { url: '/icons/icon-192.png?v=green-leaf-20260907', type: 'image/png', sizes: '192x192' },
+    shortcut: '/icons/icon-192.png?v=green-leaf-20260907',
+  },
 };
 
 export default function RootLayout({
@@ -49,7 +53,6 @@ export default function RootLayout({
     >
       <head>
         <meta name="google" content="notranslate" />
-        <link rel="icon" href="/icons/icon-192.png" type="image/png" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />

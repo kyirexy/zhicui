@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,13 @@ import { LANDING_DEMO } from './landingDemo.ts';
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 const sourceRoot = resolve(testDirectory, '..');
+test('浏览器标签统一使用绿色叶片图标，不再被蓝色文件图标覆盖', () => {
+  const layout = readFileSync(resolve(sourceRoot, 'app', 'layout.tsx'), 'utf8');
+  assert.match(layout, /icons:\s*\{/);
+  assert.match(layout, /\/icons\/icon-192\.png\?v=green-leaf-20260907/);
+  assert.doesNotMatch(layout, /<link rel="icon"/);
+  assert.equal(existsSync(resolve(sourceRoot, 'app', 'icon.svg')), false);
+});
 const landingPage = readFileSync(
   resolve(sourceRoot, 'components', 'WebLandingPage.tsx'),
   'utf8',

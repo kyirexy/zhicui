@@ -18,6 +18,7 @@ import {
   ShieldCheck,
   LogOut,
   Settings,
+  MessageCircle,
 } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import {
@@ -127,6 +128,9 @@ function DesktopNavigation() {
         </nav>
 
         <nav className="desktop-sidebar__utility" aria-label="应用与支持">
+          <Link href="/community" className="desktop-sidebar__nav-item">
+            <MessageCircle size={20} aria-hidden="true" /><span>加入交流群</span>
+          </Link>
           <QRModal triggerVariant="sidebar" />
         </nav>
 

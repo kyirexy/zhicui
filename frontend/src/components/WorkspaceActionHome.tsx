@@ -398,6 +398,9 @@ export default function WorkspaceActionHome() {
           <strong>知萃</strong>
         </Link>
         <div className={styles.mobileHeaderActions}>
+          <Link href="/community" className={styles.mobileFeedback} aria-label="加入交流群">
+            <ChatCircleDots size={19} aria-hidden="true" /><span>交流群</span>
+          </Link>
           <button
             type="button"
             className={styles.mobileFeedback}

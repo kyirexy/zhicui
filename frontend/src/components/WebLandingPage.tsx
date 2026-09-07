@@ -9,6 +9,7 @@ import { detectMobileDownloadPlatform } from '@/lib/mobilePlatform';
 import LandingProductDemo from './LandingProductDemo';
 import LandingShowcase from './LandingShowcase';
 import MobileDownloadHelp from './MobileDownloadHelp';
+import CommunityPanel from './CommunityPanel';
 import styles from './WebLandingPage.module.css';
 
 // 保留已经发布的双架构测试产物与真实发布状态。
@@ -125,6 +126,10 @@ export default function WebLandingPage() {
         <a href="/platform-limits">查看支持范围 <ArrowRight size={14} aria-hidden="true" /></a>
       </div>
 
+      <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-4 text-sm">
+        <span className="text-foreground-secondary">交流用法、反馈问题，一起把知萃做得更好。</span>
+        <Link href="/community" className="inline-flex min-h-11 items-center rounded-xl border border-card-border bg-accent-sky-soft px-4 font-semibold text-accent-brand">加入交流群 →</Link>
+      </div>
       <section className={styles.collectorSection} aria-labelledby="collector-title">
         <div className={styles.collectorIntro}>
           <p className={styles.kicker}>好奇心很多，消化内容的时间很少</p>
@@ -295,6 +300,10 @@ export default function WebLandingPage() {
           平台访问可能受登录状态和平台规则影响；已有资料不会因临时限制而丢失。
           <Link href="/platform-limits">查看平台与客户端限制</Link>
         </p>
+      </section>
+      <section id="community" aria-labelledby="community-title" className="mx-auto w-full max-w-6xl px-4 py-12">
+        <h2 id="community-title" className="text-2xl font-bold text-balance">一起把知萃做得更好</h2>
+        <CommunityPanel />
       </section>
     </div>
   );

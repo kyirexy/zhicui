@@ -8,6 +8,7 @@ import {
   type MouseEvent,
 } from 'react';
 import { Capacitor } from '@capacitor/core';
+import Link from 'next/link';
 import {
   CheckCircle2,
   Clock3,
@@ -211,6 +212,9 @@ export default function FeedbackButton() {
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
+            <Link href="/community" onClick={closeDialog} className="mb-4 flex min-h-11 items-center gap-2 rounded-xl border border-card-border px-3 text-sm text-accent-brand">
+              <MessageCircle size={18} aria-hidden="true" />加入交流群，一起交流建议
+            </Link>
             {(error || success) && (
               <div
                 role={error ? 'alert' : 'status'}

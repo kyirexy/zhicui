@@ -5,6 +5,7 @@ const ALWAYS_PUBLIC = [
   '/legal/terms',
   '/legal/privacy',
   '/support',
+  '/community',
   '/platform-limits',
 ];
 const CLIENT_ONLY_PATHS = [

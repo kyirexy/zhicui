@@ -34,6 +34,7 @@ export default function AppFooter() {
             </div>
           </div>
           <nav aria-label="页脚导航">
+            <Link href="/community">加入交流群</Link>
             <a href="/#download">
               <DownloadSimple size={16} weight="light" />
               下载客户端
@@ -67,6 +68,7 @@ export default function AppFooter() {
           <span>知萃 · 把收藏变成行动</span>
         </p>
         <nav className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2" aria-label="法律与支持">
+          <Link href="/community" className="min-h-11 inline-flex items-center hover:text-foreground">加入交流群</Link>
           {PUBLIC_INFORMATION_LINKS.map((item) => (
             <Link key={item.href} href={item.href} className="min-h-11 inline-flex items-center hover:text-foreground">
               {item.label}

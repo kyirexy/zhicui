@@ -1,4 +1,5 @@
 import PublicDocumentPage from '@/components/PublicDocumentPage';
+import CommunityPanel from '@/components/CommunityPanel';
 import { CURRENT_LEGAL_VERSIONS } from '@/lib/legalDocuments';
 
 export default function SupportPage() {
@@ -9,6 +10,11 @@ export default function SupportPage() {
       version={CURRENT_LEGAL_VERSIONS.support}
       intro="使用问题可优先通过应用内“反馈”提交；账号、隐私和投诉请求也可以通过下列渠道联系。"
       sections={[
+        {
+          id: 'community',
+          title: '加入交流群',
+          content: <CommunityPanel />,
+        },
         {
           id: 'channels',
           title: '1. 联系渠道',

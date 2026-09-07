@@ -72,6 +72,7 @@ export default function AppHeader() {
             <a href="/#real-case">真实案例</a>
             <a href="/#mobile">手机体验</a>
             <a href="/#product">使用场景</a>
+            <Link href="/community">加入交流群</Link>
           </div>
 
           <div className={styles.actions}>

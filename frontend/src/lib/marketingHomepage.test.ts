@@ -58,6 +58,19 @@ test('示例行动具有独立标识，勾选一项不会同时完成其他任�
   assert.ok(taskIds.every((id) => id.trim().length > 0));
 });
 
+test('演示步骤共用稳定网格，隐藏内容不参与交互', () => {
+  const component = readFileSync(resolve(sourceRoot, 'components', 'LandingProductDemo.tsx'), 'utf8');
+  const css = readFileSync(resolve(sourceRoot, 'components', 'LandingProductDemo.module.css'), 'utf8');
+  for (const step of [0, 1, 2]) {
+    assert.ok(component.includes(`aria-hidden={step !== ${step}} inert={step !== ${step}}`));
+    assert.ok(!component.includes(`step === ${step} && (`), '步骤不能卸载，否则高度会跳变');
+  }
+  assert.match(css, /\.panel\s*\{[^}]*display:\s*grid/);
+  assert.match(css, /\.panel > div\s*\{[^}]*grid-area:\s*1 \/ 1/);
+  assert.match(css, /\[aria-hidden='true'\]\s*\{[^}]*visibility:\s*hidden/);
+  assert.doesNotMatch(component, /setSource\(null\)/, '切换步骤和播放不应收起原文导致高度改变');
+});
+
 test('首屏中文标题收住字号和负字距', () => {
   const heroHeading = landingStyles.slice(
     landingStyles.indexOf('.hero h1 {'),

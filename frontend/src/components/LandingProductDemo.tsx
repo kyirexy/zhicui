@@ -45,7 +45,6 @@ export default function LandingProductDemo() {
 
   const selectStep = (next: number) => {
     setPlaying(false);
-    setSource(null);
     setStep(next);
   };
 
@@ -68,16 +67,13 @@ export default function LandingProductDemo() {
           <div><small>{demo.sourceLabel}</small><h2>{demo.title}</h2></div>
         </div>
         <div className={styles.panel} aria-live="polite" aria-atomic="true">
-          {step === 0 && (
-            <div className={styles.transcript}>
+            <div className={styles.transcript} aria-hidden={step !== 0} inert={step !== 0}>
               <p className={styles.panelLabel}>原文在这里，随时可以核对</p>
               {demo.paragraphs.map((paragraph, index) => (
                 <p key={paragraph}><span>0{index + 1}</span>{paragraph}</p>
               ))}
             </div>
-          )}
-          {step === 1 && (
-            <div className={styles.answer}>
+            <div className={styles.answer} aria-hidden={step !== 1} inert={step !== 1}>
               <div className={styles.question}>{demo.question}<ArrowRight size={18} aria-hidden="true" /></div>
               <div className={styles.answerHeading}><Sparkle size={18} weight="fill" aria-hidden="true" /><span>把重点，变成下一步</span></div>
               <p className={styles.answerLead}>{demo.answer}</p>
@@ -90,10 +86,13 @@ export default function LandingProductDemo() {
                   </li>
                 ))}
               </ol>
+              {source !== null && (
+                <aside className={styles.evidence} aria-label={`第 ${source} 段原文`}>
+                  <Quotes size={18} weight="fill" aria-hidden="true" /><p><strong>原文依据 [{source}]</strong>{demo.paragraphs[source - 1]}</p>
+                </aside>
+              )}
             </div>
-          )}
-          {step === 2 && (
-            <div className={styles.plan}>
+            <div className={styles.plan} aria-hidden={step !== 2} inert={step !== 2}>
               <p className={styles.panelLabel}>今日行动 · 示例计划</p>
               <h3>把一条收藏，真正用一次。</h3>
               <div className={styles.progress}><span>已完成 {checked.length} / {demo.tasks.length}</span><progress value={checked.length} max={demo.tasks.length} aria-label="示例计划完成进度" /></div>
@@ -107,17 +106,11 @@ export default function LandingProductDemo() {
               </div>
               <p className={styles.planNote}><Check size={15} aria-hidden="true" />可以勾选试试，体验进度变化。</p>
             </div>
-          )}
         </div>
-        {source !== null && step === 1 && (
-          <aside className={styles.evidence} aria-label={`第 ${source} 段原文`}>
-            <Quotes size={18} weight="fill" aria-hidden="true" /><p><strong>原文依据 [{source}]</strong>{demo.paragraphs[source - 1]}</p>
-          </aside>
-        )}
       </div>
       <footer className={styles.footer}>
         <p>原创素材 · 预设回答<br /><span>仅供体验，不调用 AI 或保存数据</span></p>
-        <button type="button" onClick={() => { if (playing) setPlaying(false); else { setStep(0); setSource(null); setPlaying(true); } }} aria-label={playing ? '暂停分步演示' : '播放分步演示'}>
+        <button type="button" onClick={() => { if (playing) setPlaying(false); else { setStep(0); setPlaying(true); } }} aria-label={playing ? '暂停分步演示' : '播放分步演示'}>
           {playing ? <Pause size={15} weight="fill" aria-hidden="true" /> : <Play size={15} weight="fill" aria-hidden="true" />}
           {playing ? '暂停演示' : '播放演示'}
         </button>

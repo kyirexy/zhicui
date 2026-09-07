@@ -15,7 +15,10 @@
 .sourceIcon { display: grid; place-items: center; width: 44px; height: 51px; flex: none; border-radius: 7px; color: #5e7386; background: #edf1f3; }
 .sourceCard small { display: block; margin-bottom: 5px; font-size: 11px; color: #5e6f7e; }
 .sourceCard h2 { margin: 0; font-size: 15px; line-height: 1.6; font-weight: 650; letter-spacing: -.02em; }
-.panel { min-height: 320px; }
+/* 三个步骤共享网格，以最高内容撑开空间；切换不改变卡片和首屏的位置。 */
+.panel { display: grid; min-height: 320px; }
+.panel > div { grid-area: 1 / 1; min-width: 0; align-self: start; }
+.panel > div[aria-hidden='true'] { visibility: hidden; pointer-events: none; }
 .question { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 17px; border-radius: 10px; background: #f0f4f9; color: #42566d; font-size: 13px; line-height: 1.7; }
 .question svg { flex: none; }
 .answerHeading { display: flex; gap: 8px; align-items: center; margin: 23px 0 10px; color: #426ba8; font-size: 12px; font-weight: 600; }

@@ -2049,6 +2049,20 @@ export interface AdminStats {
   };
 }
 
+export interface AdminBusinessOverview {
+  days: number; since: string; as_of: string; page: number; per_page: number;
+  metrics: Record<'new_users' | 'new_notes' | 'transcripts_ready' | 'summaries_ready' | 'new_plans' | 'new_knowledge' | 'new_creators' | 'model_calls' | 'tokens' | 'model_users' | 'errors' | 'feedback' | 'analysis_points', number>;
+  platforms: { name: string; count: number }[];
+  tasks: Record<'library' | 'creator' | 'vision', { status: string; count: number }[]>;
+  models: { name: string; calls: number; tokens: number }[];
+  recent_tasks: { id: string; title: string; username: string; status: string; transcript_chars: number; updated_at: string }[];
+  recent_notes: { id: string; title: string; username: string; platform: string; transcript_chars: number; summary_ready: boolean; created_at: string }[];
+}
+
+export function getAdminBusinessOverview(days: number, page: number): Promise<ApiResponse<AdminBusinessOverview>> {
+  return request<AdminBusinessOverview>(`/api/admin/business-overview?days=${days}&page=${page}`);
+}
+
 export interface AdminNoteItem {
   id: string;
   video_title: string;

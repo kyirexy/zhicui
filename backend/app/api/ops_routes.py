@@ -15,6 +15,19 @@ from app.services import operational_alert_service, readiness_service
 router = APIRouter(tags=["operations"])
 
 
+@router.get("/api/admin/business-overview")
+def admin_business_overview(
+    days: int = Query(7, ge=1, le=30),
+    page: int = Query(1, ge=1, le=10000),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin),
+):
+    from app.services.admin_overview_service import overview
+    if days not in (1, 7, 30):
+        raise HTTPException(status_code=422, detail="仅支持近 24 小时、7 天或 30 天")
+    return JSONResponse(content=_ok(overview(db, days=days, page=page)), headers={"Cache-Control": "no-store"})
+
+
 def _ok(data: object) -> dict[str, object]:
     return {"success": True, "data": data, "error": None}
 

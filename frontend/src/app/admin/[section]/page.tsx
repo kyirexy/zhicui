@@ -89,6 +89,7 @@ import AdminAnalysisAccountCard from '@/components/admin/AdminAnalysisAccountCar
 import AdminVideoAnalysisPanel from '@/components/admin/AdminVideoAnalysisPanel';
 import AdminChatModelPanel, { type AdminChatModelPanelHandle } from '@/components/admin/AdminChatModelPanel';
 import AdminOmniroutePanel from '@/components/admin/AdminOmniroutePanel';
+import AdminBusinessOverviewPanel from '@/components/admin/AdminBusinessOverviewPanel';
 import styles from '../AdminWorkspace.module.css';
 
 type Tab = 'dashboard' | 'users' | 'feedback' | 'showcase-cases' | 'notes' | 'plans' | 'export' | 'ops' | 'models' | 'llm' | 'asr' | 'observability' | 'settings';
@@ -202,6 +203,7 @@ export default function AdminPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const [stats, setStats] = useState<AdminStats | null>(null);
+  const [businessRefresh, setBusinessRefresh] = useState(0);
   const [recentActivity, setRecentActivity] = useState<AdminAuditLog[]>([]);
 
   // 用户管理（后端搜索分页）
@@ -616,6 +618,7 @@ export default function AdminPage() {
                   type="button"
                   onClick={() => {
                     void refreshStats();
+                    setBusinessRefresh((value) => value + 1);
                     void refreshRecentActivity();
                     void refreshOps();
                     void refreshDashboardExtras();
@@ -654,6 +657,7 @@ export default function AdminPage() {
                   )}
                 </section>
               </div>
+              <AdminBusinessOverviewPanel refreshToken={businessRefresh} />
               <section className="admin-panel p-4" aria-label="客户端下载统计">
                 <div className={styles.panelTitle}>
                   <span><Download size={17} aria-hidden="true" /><strong>客户端下载量</strong></span>

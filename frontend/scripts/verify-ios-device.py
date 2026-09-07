@@ -25,9 +25,15 @@ def inspect_archive(archive, version, build, architectures):
                and "C617.1" in item.get("NSPrivacyAccessedAPITypeReasons", [])
                for item in privacy.get("NSPrivacyAccessedAPITypes", [])):
         raise ValueError("文件导出用途隐私声明缺失")
-    for plugin in ("CapacitorFilesystem", "CapacitorShare", "CapacitorMlkitBarcodeScanning"):
+    for plugin in ("CapacitorFilesystem", "CapacitorShare"):
         if not (app / "Frameworks" / f"{plugin}.framework" / plugin).is_file():
             raise ValueError(f"原生插件缺失：{plugin}")
+    # 扫码 Pod 声明 static_framework，Objective-C 类随主程序链接，不生成嵌入框架。
+    executable = info.get("CFBundleExecutable", "")
+    if not executable or Path(executable).name != executable:
+        raise ValueError("可执行文件名无效")
+    if b"BarcodeScannerPlugin\x00" not in (app / executable).read_bytes():
+        raise ValueError("静态扫码插件缺失")
     return {"bundle_id": info["CFBundleIdentifier"], "version": version, "build": build,
             "platform": "iPhoneOS", "architectures": architectures, "privacy_and_plugins": "pass",
             "distribution_verified": False, "notice": "仅验证归档内容，未完成签名分发或真机安装验收"}

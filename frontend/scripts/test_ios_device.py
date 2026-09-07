@@ -17,12 +17,13 @@ class DeviceArchiveTests(unittest.TestCase):
         self.app = self.root / "Products/Applications/App.app"
         self.app.mkdir(parents=True)
         self.info = {"CFBundleSupportedPlatforms": ["iPhoneOS"], "CFBundleIdentifier": "com.videocapsule.app",
-                     "CFBundleShortVersionString": "1.1.10", "CFBundleVersion": "12"}
+                     "CFBundleShortVersionString": "1.1.10", "CFBundleVersion": "12", "CFBundleExecutable": "App"}
+        (self.app / "App").write_bytes(b"fixture\x00BarcodeScannerPlugin\x00")
         self.write_info()
         (self.app / "PrivacyInfo.xcprivacy").write_bytes(plistlib.dumps({"NSPrivacyAccessedAPITypes": [{
             "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryFileTimestamp",
             "NSPrivacyAccessedAPITypeReasons": ["C617.1"]}]}))
-        for plugin in ("CapacitorFilesystem", "CapacitorShare", "CapacitorMlkitBarcodeScanning"):
+        for plugin in ("CapacitorFilesystem", "CapacitorShare"):
             file = self.app / "Frameworks" / f"{plugin}.framework" / plugin
             file.parent.mkdir(parents=True)
             file.write_bytes(b"test fixture")
@@ -35,6 +36,10 @@ class DeviceArchiveTests(unittest.TestCase):
 
     def test_valid_archive_does_not_claim_distribution(self):
         self.assertFalse(self.check()["distribution_verified"])
+
+    def test_missing_static_scanner_blocks_release(self):
+        (self.app / "App").write_bytes(b"fixture")
+        with self.assertRaisesRegex(ValueError, "静态扫码插件缺失"): self.check()
 
     def test_reject_simulator_wrong_version_and_architecture(self):
         for key, value in (("CFBundleSupportedPlatforms", ["iPhoneSimulator"]),

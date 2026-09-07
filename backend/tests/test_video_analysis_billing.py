@@ -124,6 +124,39 @@ class VideoAnalysisBillingTests(unittest.TestCase):
         Base.metadata.drop_all(self.engine)
         self.engine.dispose()
 
+    def test_byok_quote_does_not_use_platform_free_quota(self) -> None:
+        self.version.free_quota_json = json.dumps({"period": "day", "unit": "run", "units": 1})
+        self.version.pricing_json = json.dumps({"base_points": 100, "byok_processing_points": 5})
+        self.db.commit()
+        platform = billing.quote_item(
+            self.db, user_id=self.user.id, version=self.version,
+            duration_ms=120_000, use_byok=False,
+        )
+        byok = billing.quote_item(
+            self.db, user_id=self.user.id, version=self.version,
+            duration_ms=120_000, use_byok=True,
+        )
+        self.assertEqual(platform["free_units"], 1)
+        self.assertEqual(platform["quoted_points"], 0)
+        self.assertEqual(byok["free_units"], 0)
+        self.assertEqual(byok["quota_snapshot"], {})
+        self.assertEqual(byok["quoted_points"], 5)
+
+    def test_zero_price_quota_exhaustion_is_rejected_by_prepare(self) -> None:
+        self.offering = catalog.update_offering(
+            self.db, self.offering, pricing={"base_points": 0},
+            free_quota={"period": "day", "unit": "run", "units": 1},
+        )
+        self.version = catalog.publish_offering(self.db, self.offering, admin_user_id=self.admin.id)
+        first = self._prepare()
+        self._confirm(first, "reserve-only-free-unit")
+        with self.assertRaises(analysis.VideoAnalysisServiceError) as raised:
+            analysis.prepare_run(
+                self.db, user_id=self.user.id, note_ids=[self.note.id],
+                offering_id=self.offering.id, trigger="batch",
+            )
+        self.assertEqual(raised.exception.code, "free_quota_exhausted")
+
     def _prepare(self, *, trigger: str = "manual") -> dict:
         return analysis.prepare_run(
             self.db,

@@ -351,7 +351,8 @@ def quote_item(
         media_units=limits["max_provider_calls"],
         use_byok=use_byok,
     )
-    quota = catalog._normalize_free_quota(version.free_quota_json, version.code)
+    # 平台赠送的模型额度不替用户的供应商账户结算，也不被自带模型占用。
+    quota = {} if use_byok else catalog._normalize_free_quota(version.free_quota_json, version.code)
     quota_snapshot: dict[str, Any] = {}
     free_units = 0
     if quota:

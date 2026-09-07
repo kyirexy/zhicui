@@ -208,8 +208,8 @@ export default function UserVisionProviderSettingsCard() {
                 <input type="radio" name="vision-provider-mode" checked={!enabled} onChange={() => chooseMode(false)} />
                 <span className={styles.modeIcon}><Server size={18} aria-hidden="true" /></span>
                 <span className={styles.modeCopy}>
-                  <span className={styles.modeTitle}><strong>使用平台能力</strong><em>推荐</em></span>
-                  <small>无需配置，详细解析时自动选择可用方案</small>
+                  <span className={styles.modeTitle}><strong>使用平台模型</strong></span>
+                  <small>选择已发布方案，先确认免费额度或萃点报价</small>
                 </span>
                 <span className={styles.modeCheck} aria-hidden="true">{!enabled ? <Check size={15} /> : null}</span>
               </label>

@@ -7,6 +7,8 @@ import ipaddress
 import json
 import re
 import socket
+import struct
+import zlib
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 from urllib.parse import urlparse
@@ -84,12 +86,22 @@ DEFAULT_FALLBACK = {"mode": "reject"}
 _CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{1,63}$")
 _MODEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$")
 
-# One real 1x1 PNG, used only inside provider capability tests.  It is never
-# returned, logged, or persisted.
-_TEST_PNG = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2"
-    "mQAAAABJRU5ErkJggg=="
-)
+def _vision_test_png() -> bytes:
+    """生成校验码正确、分辨率足够的双色图片，用于真实视觉能力测试。"""
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    row = b"\x00" + bytes((0, 255, 255)) * 48 + bytes((255, 0, 0)) * 48
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 96, 96, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(row * 96))
+        + chunk(b"IEND", b"")
+    )
+
+
+# 只用于显式能力测试，不包含用户图片，也不保存到知识库。
+_TEST_PNG = _vision_test_png()
 
 
 class VideoAnalysisCatalogError(ValueError):
@@ -930,11 +942,11 @@ def _test_image_completion(
         "messages": [{
             "role": "user",
             "content": [
-                {"type": "text", "text": "请只回复：图片可见"},
+                {"type": "text", "text": '识别图片左右两半的颜色。只输出 JSON，键为 left 和 right，值为英文颜色名。'},
                 {"type": "image_url", "image_url": {"url": image_data}},
             ],
         }],
-        "max_tokens": 16,
+        "max_tokens": 128,
         "temperature": 0,
         "timeout": 30,
         # Connection tests are explicit single-shot probes. Hidden SDK
@@ -947,8 +959,15 @@ def _test_image_completion(
         kwargs["api_key"] = api_key
     response = completion(**kwargs)
     message = response.choices[0].message
-    if not str(getattr(message, "content", "") or "").strip():
-        raise RuntimeError("图片模型没有返回可见内容")
+    content = str(getattr(message, "content", "") or "").strip()
+    # 仅回复“图片可见”不能证明模型真的看到了图片。
+    match = re.search(r"\{[^{}]*\}", content)
+    try:
+        colors = json.loads(match.group(0)) if match else {}
+    except (ValueError, TypeError):
+        colors = {}
+    if str(colors.get("left", "")).lower() not in {"cyan", "aqua", "青色"} or str(colors.get("right", "")).lower() not in {"red", "红色"}:
+        raise RuntimeError("图片模型未正确识别测试图片")
 
 
 def test_provider(

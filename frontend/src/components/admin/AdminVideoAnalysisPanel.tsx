@@ -352,6 +352,11 @@ export default function AdminVideoAnalysisPanel({
                       <small className="mt-1 block text-xs text-foreground-muted">
                         {METHOD_LABELS[offering.method]} · v{offering.version || Math.max(0, Number(offering.next_version || 1) - 1)} · {free ? '0 萃点' : `基础 ${formatPoints(price.base_points || offering.base_points || 0)}`}
                       </small>
+                      <span className="mt-2 flex flex-wrap gap-2">
+                        <Tag>平台模型</Tag>
+                        {(offering.byok_allowed ?? offering.allow_byok ?? offering.supports_byok) && <Tag>支持自带模型</Tag>}
+                        {Number(offering.free_quota?.units || 0) > 0 && <Tag>已配置平台免费额度</Tag>}
+                      </span>
                     </button>
                     <ChevronRight size={16} className="mt-1 shrink-0 text-foreground-muted" />
                   </div>
@@ -545,7 +550,7 @@ function OfferingEditor({ value, providers, onClose, onSaved, onError }: { value
   });
   const [saving, setSaving] = useState(false);
   const update = <K extends keyof typeof form>(key: K, next: (typeof form)[K]) => setForm(current => ({ ...current, [key]: next }));
-  const totalPrice = form.base_points + form.per_minute_points + form.per_frame_points + form.per_media_unit_points + form.min_points + form.byok_processing_points;
+  const totalPrice = form.base_points + form.per_minute_points + form.per_frame_points + form.per_media_unit_points + form.min_points;
   const save = async () => {
     setSaving(true);
     const triggers = ([form.manual && 'manual', form.batch && 'batch', form.agent && 'agent'].filter(Boolean)) as VideoAnalysisTrigger[];
@@ -575,7 +580,6 @@ function OfferingEditor({ value, providers, onClose, onSaved, onError }: { value
           <TextField label="方案模型（可覆盖 Provider 默认值）" value={form.model} onChange={next => update('model', next)} placeholder="留空使用 Provider 默认模型" />
           <NumberEditor label="展示顺序" value={form.sort_order} onChange={next => update('sort_order', next)} />
           <CheckField label="设为推荐方案" checked={form.recommended} onChange={next => update('recommended', next)} />
-          <CheckField label="允许使用用户自己的视觉模型" checked={form.byok_allowed} onChange={next => update('byok_allowed', next)} />
         </EditorGroup>
         <EditorGroup title="允许触发">
           <CheckField label="单条手动" checked={form.manual} onChange={next => update('manual', next)} />
@@ -588,20 +592,25 @@ function OfferingEditor({ value, providers, onClose, onSaved, onError }: { value
           <NumberEditor label="最大模型调用次数" value={form.max_model_calls} min={0} max={32} onChange={next => update('max_model_calls', next)} />
           <NumberEditor label="超时（秒）" value={form.timeout_seconds} min={10} onChange={next => update('timeout_seconds', next)} />
         </EditorGroup>
-        <EditorGroup title="萃点价格">
-          <NumberEditor label="基础萃点" value={form.base_points} onChange={next => update('base_points', next)} />
+        <EditorGroup title="平台模型价格与公共处理费">
+          <NumberEditor label="平台模型基础萃点" value={form.base_points} onChange={next => update('base_points', next)} />
           <NumberEditor label="每计费分钟" value={form.per_minute_points} onChange={next => update('per_minute_points', next)} />
           <NumberEditor label="每帧" value={form.per_frame_points} onChange={next => update('per_frame_points', next)} />
           <NumberEditor label="每媒体单位" value={form.per_media_unit_points} onChange={next => update('per_media_unit_points', next)} />
           <NumberEditor label="单条最低" value={form.min_points} onChange={next => update('min_points', next)} />
           <NumberEditor label="单条最高（0=不另设）" value={form.max_points} onChange={next => update('max_points', next)} />
-          <NumberEditor label="BYOK 平台处理费" value={form.byok_processing_points} onChange={next => update('byok_processing_points', next)} />
-          <p className="col-span-full text-xs leading-5 text-foreground-muted">所有价格均为整数萃点。价格全部为 0 时才是免费方案，免费方案不会消耗统一萃点余额。</p>
+          <p className="col-span-full text-xs leading-5 text-foreground-muted">按分钟、画面及媒体单位的处理费和上下限适用于两种模式。平台模式基础费为 0，且其他处理费均为 0 时，不扣萃点。</p>
         </EditorGroup>
-        <EditorGroup title="免费额度与降级">
+        <EditorGroup title="用户自带多模态模型">
+          <CheckField label="允许用户选择自己的模型" checked={form.byok_allowed} onChange={next => update('byok_allowed', next)} />
+          <NumberEditor label="自带模型基础处理费（萃点）" value={form.byok_processing_points} onChange={next => update('byok_processing_points', next)} />
+          <p className="col-span-full text-xs leading-5 text-foreground-muted">仅支持关键帧图片解析。供应商费用由用户自行承担；不使用平台密钥，也不占用平台免费额度。处理费会在执行前报价。</p>
+        </EditorGroup>
+        <EditorGroup title="平台免费额度与降级">
           <SelectField label="额度周期" value={form.quota_period} onChange={next => update('quota_period', next)} options={[["", '不限制独立免费额度'], ['day', '每日'], ['month', '每月'], ['lifetime', '长期总量']]} />
           <SelectField label="额度单位" value={form.quota_unit} onChange={next => update('quota_unit', next)} options={[['run', '次数'], ['minute', '视频分钟']]} />
           <NumberEditor label="额度数量" value={form.quota_units} onChange={next => update('quota_units', next)} />
+          <p className="col-span-full text-xs leading-5 text-foreground-muted">免费方案额度用完即停止；收费方案用完赠送额度后，按价格重新报价并等待确认。修改只影响发布后的新报价。</p>
           <SelectField label="Provider 不可用时" value={form.fallback_mode} onChange={next => update('fallback_mode', next)} options={[['reject', '明确不可用'], ['local_scene', '降级到本地基础解析']]} />
         </EditorGroup>
         {form.method === 'native_video' && <Warning text="原生视频方案会保留在管理端，但只有适配器安装并通过测试后才能发布，未配置时用户侧不显示。" />}

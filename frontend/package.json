@@ -28,6 +28,8 @@
     "ios:build:prod": "node scripts/build-ios-web.mjs",
     "ios:sync": "cap sync ios",
     "ios:open": "cap open ios",
+    "ios:archive": "node scripts/build-ios-device.mjs",
+    "test:ios-release": "node --test scripts/ios-release-config.test.mjs",
     "test:ios": "node --experimental-strip-types --test src/lib/iosMobile.test.ts",
     "test:file-export": "node --experimental-strip-types --test src/lib/fileExportCore.test.ts",
     "cap:run:live": "cap run android --live-reload --host 127.0.0.1 --port 3000 --forwardPorts 3000:3000 --forwardPorts 8000:8000",

@@ -23,3 +23,15 @@
 - JWT 当前有效期为 30 天，不是永久免登录，也没有本轮新增的自动续期。
 - 退出清理当前设备本地会话，不是服务器全设备 JWT 撤销。
 - 安卓发行版本与安装验证结果在构建完成后补充，不把浏览器视口模拟当作真机测试。
+
+## 发行与安装
+
+- 源码：`8e5f6856d2f37097aa04bc996fde0e2a69b99816`；Jenkins #207 成功，公网 build-version 与该源码一致，health 正常。
+- 官方隔离构建：Android Beta 1.3.6 / build 28，`PUBLISH=0`，API `https://luxai.cn`，Next 静态构建、TypeScript、Gradle 和发行签名验证通过。
+- APK：34,389,669 bytes；SHA256 `e9e35ea12eca7b05def88063532f693f4445a6b8bae1920277d8b4ed4f21d022`。
+- Android Debug 证书 SHA256 `7504a84b00b13dcb73ce51f87d27dee587a310f47b11a6ae319b19f0e3075136`，与旧版一致；属于 Beta，不是签名正式渠道。
+- 模拟器 `MoriFit_API_35` / `emulator-5554`：`adb install -r` 从 1.3.5(27) 升至 1.3.6(28) 成功；firstInstallTime 仍为 `2026-09-01 03:27:18`，未卸载、未清数据。
+- 安装前该模拟器已是未登录状态，不能据此声称覆盖升级验证了真实账号会话恢复。会话恢复采用上面的真实 Provider + 全 mock API 集成测试。
+- 新登录页实际 APK 截图：`.tmp/android-1.3.6-28-validation/login-first-screen.png`。
+- 同一 APK 的密码隐藏→显示→再隐藏通过（仅测试串，未提交登录）；原生相机扫码框打开/取消正常，返回原登录页并保留输入，无透明页或遮罩残留。模拟器已有相机权限，因此未验证首次授权弹窗，也未测试真实二维码识别。
+- 再次重启 APP 后回到干净的新登录页；模拟器保持运行，未清应用数据。完整安装验收记录：`.tmp/android-1.3.6-28-validation/receipt.json`。

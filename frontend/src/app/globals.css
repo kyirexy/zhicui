@@ -1614,6 +1614,12 @@ body:has(.admin-workspace-root) .app-main {
 
 /* The browser homepage is a focused product site. Desktop Electron and the
    Capacitor app keep their own application shells and are not affected. */
+html[data-capacitor="true"] .browser-home-bootstrap,
+html[data-desktop-app="pending"] .browser-home-bootstrap,
+html[data-desktop-app="true"] .browser-home-bootstrap {
+  display: none;
+}
+
 html:not([data-desktop-app="true"]):not([data-capacitor="true"]) body:has(.marketing-home) {
   background: #ffffff;
   max-width: 100%;

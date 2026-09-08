@@ -19,16 +19,19 @@ export default function HomePage() {
     setNativeMobile(isDevelopmentMobilePreview || isNativeMobileApp());
   }, []);
 
-  if (!resolved || nativeMobile === null) {
-    return <div className="min-h-[68dvh]" aria-hidden="true" />;
+  const runtimePending = !resolved || nativeMobile === null;
+  if (runtimePending || (!isDesktop && !nativeMobile)) {
+    // 服务端首屏直接输出官网；原生启动标记会隐藏这层公开内容，避免闪屏。
+    // 检测完成后保留同一棵官网节点，不重复挂载演示和下载组件。
+    return (
+      <div className={runtimePending ? 'browser-home-bootstrap' : undefined}>
+        <WebLandingPage />
+      </div>
+    );
   }
 
   if (isDesktop) {
     return <DesktopWorkspaceHome />;
-  }
-
-  if (!nativeMobile) {
-    return <WebLandingPage />;
   }
 
   return (

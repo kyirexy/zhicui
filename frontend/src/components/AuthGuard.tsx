@@ -44,6 +44,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
       router.replace(`/login?redirect=${encodeURIComponent(requestedPath)}`);
     }
   }, [
+    desktopResolved,
     clientGateActive,
     policy.publicRoute,
     user,
@@ -77,7 +78,10 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   );
 
   if (!desktopResolved) {
-    return startup('正在启动客户端…');
+    // 首页在运行环境确认前只渲染公开官网，下载入口不必等待客户端检测。
+    // 其他页面仍关闭门禁，不能提前挂载私有工作区。
+    if (pathname === '/') return <>{children}</>;
+    return <div className="min-h-[68dvh]" aria-hidden="true" />;
   }
 
   if (clientGateActive) {

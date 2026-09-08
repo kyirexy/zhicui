@@ -1,6 +1,16 @@
 @import "tailwindcss";
 @source "../../node_modules/streamdown/dist/*.js";
 
+/* 原生扫码相机透出 WebView；全局宿主规则不能放在 CSS Module 中。 */
+html.zhicui-desktop-login-scanner-active,
+body.zhicui-desktop-login-scanner-active {
+  background: transparent !important;
+}
+body.zhicui-desktop-login-scanner-active {
+  overflow: hidden !important;
+  visibility: hidden;
+}
+
 /* ========== Theme Variables ========== */
 :root {
   --mobile-nav-height: 64px;

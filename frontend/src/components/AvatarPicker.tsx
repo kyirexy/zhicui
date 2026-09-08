@@ -9,7 +9,7 @@ import styles from './AvatarPicker.module.css';
 const names = ['圆框眼镜', '齐肩短发', '卷发青年', '高马尾', '清爽寸头', '波浪长发', '银发女士', '灰发先生', '短卷发', '休闲短发', '双丸子头', '微卷偏分'];
 
 export default function AvatarPicker() {
-  const { user, token, acceptSession } = useAuth();
+  const { user, token, updateCurrentUser } = useAuth();
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
@@ -25,7 +25,7 @@ export default function AvatarPicker() {
       });
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error(result.error || '头像保存失败，请重试');
-      acceptSession({ token, user: result.data });
+      if (!updateCurrentUser(token, result.data)) return;
       setMessage('头像已保存');
     } catch (error) { setMessage(error instanceof Error ? error.message : '头像保存失败，请重试'); }
     finally { setSaving(false); }

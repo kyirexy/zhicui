@@ -35,6 +35,21 @@
   background: var(--accent-brand-strong);
 }
 
+.login {
+  width: 100%;
+  min-height: 54px;
+  padding: 10px 16px;
+  border: 1px solid var(--input-border);
+  border-radius: 12px;
+  background: var(--card-bg);
+  color: var(--foreground);
+  font-size: 15px;
+}
+
+.login .triggerIcon { width: 24px; height: 24px; flex-basis: 24px; color: var(--login-accent, var(--accent-brand)); background: transparent; }
+.login:hover { background: var(--background-secondary); }
+.login:focus-visible { outline: 2px solid var(--login-accent, var(--accent-brand)); outline-offset: 3px; }
+
 .secondary {
   width: 100%;
   color: var(--ui-text);
@@ -407,16 +422,6 @@
 
 @keyframes spin {
   to { transform: rotate(360deg); }
-}
-
-:global(html.zhicui-desktop-login-scanner-active),
-:global(body.zhicui-desktop-login-scanner-active) {
-  background: transparent !important;
-}
-
-:global(body.zhicui-desktop-login-scanner-active) {
-  overflow: hidden !important;
-  visibility: hidden;
 }
 
 :global(body.zhicui-desktop-login-scanner-active) .overlayOpen {

@@ -70,3 +70,17 @@ test('Android 登录页与设置页都提供原生 QR 扫码且不使用 body po
   assert.match(manifest, /android\.permission\.CAMERA/);
   assert.match(manifest, /android\.hardware\.camera\.any/);
 });
+
+test('网页登录交接的等待和失败状态不会被普通登录跳转吞掉', () => {
+  const login = read('app/login/page.tsx');
+  const redirectEffect = login.slice(login.indexOf('// 有交接票据时始终留页'), login.indexOf('const previewDesktopApproval'));
+  assert.match(redirectEffect, /if \(desktopSession\) return;/);
+  assert.doesNotMatch(redirectEffect, /claimState === 'claimed'/);
+  const handoffPage = login.indexOf('if (desktopSession && user && !loading)');
+  assert.ok(handoffPage >= 0 && handoffPage < login.indexOf('if (loading ||'));
+  assert.match(login, /电脑登录未完成/);
+  assert.match(login, /重试登录电脑/);
+  assert.match(login, /正在登录电脑/);
+  assert.match(login, /signal: AbortSignal\.any\(\[controller\.signal, AbortSignal\.timeout\(10000\)\]\)/);
+  assert.match(login, /useEffect\(\(\) => \(\) => \{ claimRequest\.current\?\.abort\(\); \}, \[desktopSession, user\?\.id\]\)/);
+});

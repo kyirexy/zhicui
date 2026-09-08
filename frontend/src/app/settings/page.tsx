@@ -35,6 +35,7 @@ import AgentAccessSettingsCard from '@/components/AgentAccessSettingsCard';
 import AutoSyncSettingsCard from '@/components/AutoSyncSettingsCard';
 import DesktopMediaSettingsCard from '@/components/DesktopMediaSettingsCard';
 import LocalDataSettingsCard from '@/components/LocalDataSettingsCard';
+import NativeModal from '@/components/NativeModal';
 import MobileDesktopLoginScanner, {
   type MobileDesktopLoginPreview,
 } from '@/components/MobileDesktopLoginScanner';
@@ -158,6 +159,7 @@ function SettingsWorkspace() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [query, setQuery] = useState('');
+  const [logoutOpen, setLogoutOpen] = useState(false);
   const [nativeAndroid, setNativeAndroid] = useState<boolean | null>(null);
   const [nativeMobile, setNativeMobile] = useState(false);
   const sectionParam = searchParams.get('section');
@@ -197,6 +199,12 @@ function SettingsWorkspace() {
   const selectSection = (id: SettingsSectionId) => {
     setQuery('');
     router.replace(`/settings?section=${id}`, { scroll: false });
+  };
+
+  const confirmLogout = () => {
+    setLogoutOpen(false);
+    logout();
+    router.replace('/login');
   };
 
   const previewDesktopApproval = useCallback(async (
@@ -278,6 +286,29 @@ function SettingsWorkspace() {
         <div className={styles.contentInner}>
           <h1 className="sr-only">{activeSection.label}</h1>
 
+          <section className={styles.accountBar} aria-label="当前账号">
+            <div className={styles.accountIdentity}>
+              {user ? <UserAvatar user={user} size={44} /> : <UserCircle size={44} aria-hidden="true" />}
+              <div className={styles.accountCopy}>
+                <strong>{user?.username || '尚未登录'}</strong>
+                <span>{user?.email || '登录后查看账号内容'}</span>
+              </div>
+            </div>
+            {user ? (
+              <button
+                type="button"
+                className={styles.accountAction}
+                aria-haspopup="dialog"
+                onClick={() => setLogoutOpen(true)}
+              >
+                <SignOut size={18} aria-hidden="true" />
+                退出登录
+              </button>
+            ) : (
+              <Link href="/login" className={styles.accountAction}>登录账号</Link>
+            )}
+          </section>
+
           <div className={styles.sectionStack}>
             {activeSection.id === 'general' && (
               <>
@@ -309,14 +340,7 @@ function SettingsWorkspace() {
                 <ClientCapabilitySettingsCard />
                 {isDesktop && user ? <DesktopPhoneLoginCard /> : null}
 
-                <section className={styles.mobileActions} aria-label="账号与帮助">
-                  <div className={styles.mobileAccount}>
-                    <UserAvatar user={user} size={40} />
-                    <div>
-                      <strong>{user?.username || '我的账号'}</strong>
-                      <small>{user?.email || '内容已安全同步'}</small>
-                    </div>
-                  </div>
+                <section className={styles.mobileActions} aria-label="扫码与帮助">
                   {nativeMobile ? (
                     <MobileDesktopLoginScanner
                       className={styles.mobileScanner}
@@ -338,17 +362,6 @@ function SettingsWorkspace() {
                   <button type="button" onClick={() => selectSection('about')}>
                     <Info size={19} aria-hidden="true" />
                     <span>检查更新</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={styles.mobileLogout}
-                    onClick={() => {
-                      logout();
-                      router.replace('/login');
-                    }}
-                  >
-                    <SignOut size={19} aria-hidden="true" />
-                    <span>退出登录</span>
                   </button>
                 </section>
               </>
@@ -444,6 +457,19 @@ function SettingsWorkspace() {
           </div>
         </div>
       </main>
+      <NativeModal open={logoutOpen} title="退出当前账号？" onClose={() => setLogoutOpen(false)}>
+        <div className={styles.logoutBody}>
+          <p>只退出这台设备，云端的视频资料、知识和计划不会删除。</p>
+          <div className={styles.logoutActions}>
+            <button type="button" className={styles.accountAction} onClick={() => setLogoutOpen(false)}>
+              取消
+            </button>
+            <button type="button" className={`${styles.accountAction} ${styles.logoutConfirm}`} onClick={confirmLogout}>
+              退出登录
+            </button>
+          </div>
+        </div>
+      </NativeModal>
     </div>
   );
 }

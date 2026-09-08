@@ -65,7 +65,7 @@ interface MobileDesktopLoginScannerProps {
   onDismiss?: () => void;
   onApproved?: () => void;
   label?: string;
-  variant?: 'primary' | 'secondary' | 'settings';
+  variant?: 'primary' | 'secondary' | 'settings' | 'login';
   className?: string;
   onPhoneLoginScan?: (reference: PhoneLoginReference) => Promise<void>;
 }
@@ -204,13 +204,14 @@ export default function MobileDesktopLoginScanner({
   const closeOverlay = useCallback(async (notifyDismiss = true) => {
     scanGenerationRef.current += 1;
     processingRef.current = false;
+    // 用户关闭必须立即取消上层请求；成功交接使用 closeOverlay(false)，不清掉新 pending。
+    if (notifyDismiss) onDismiss?.();
     await stopScanner();
     if (!mountedRef.current) return;
     setViewState('closed');
     setMessage('');
     setPreview(null);
     setReference(null);
-    if (notifyDismiss) onDismiss?.();
     window.requestAnimationFrame(() => triggerRef.current?.focus());
   }, [onDismiss, stopScanner]);
 

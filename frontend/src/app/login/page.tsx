@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -9,6 +9,8 @@ import {
   CheckCircle2,
   ChevronDown,
   Code2,
+  Eye,
+  EyeOff,
   LoaderCircle,
   Lock,
   Mail,
@@ -35,6 +37,7 @@ import {
 } from '@/lib/desktopLogin';
 import { isNativeMobileApp } from '@/lib/douyinNative';
 import { CURRENT_LEGAL_VERSIONS } from '@/lib/legalDocuments';
+import styles from './Login.module.css';
 
 const IS_DEV = process.env.NODE_ENV === 'development';
 const DEV_AUTH_AUTO = IS_DEV && process.env.NEXT_PUBLIC_DEV_AUTH_AUTO === 'true';
@@ -70,6 +73,7 @@ export default function LoginPage() {
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [username, setUsername] = useState('');
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [showStandardAuth, setShowStandardAuth] = useState(!DEV_AUTH_AUTO);
@@ -87,6 +91,7 @@ export default function LoginPage() {
   const [claimState, setClaimState] = useState<
     'idle' | 'claiming' | 'claimed' | 'failed'
   >('idle');
+  const claimRequest = useRef<AbortController | null>(null);
   const [desktopStatus, setDesktopStatus] = useState<DesktopZhicuiLoginStatus | null>(null);
   const [desktopStarting, setDesktopStarting] = useState(false);
   const isDesktopRuntime =
@@ -133,7 +138,12 @@ export default function LoginPage() {
   }, [isDesktopRuntime]);
 
   const claimDesktopSession = useCallback(async (tokenValue: string) => {
+    if (!desktopSession) return;
+    claimRequest.current?.abort();
+    const controller = new AbortController();
+    claimRequest.current = controller;
     setClaimState('claiming');
+    setFieldError('');
     try {
       const response = await fetch(
         `${API_BASE}/api/auth/desktop-handoff/claim`,
@@ -144,6 +154,7 @@ export default function LoginPage() {
             Authorization: `Bearer ${tokenValue}`,
           },
           body: JSON.stringify({ session_id: desktopSession }),
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
         },
       );
       const payload = await response.json().catch(() => null) as {
@@ -151,6 +162,7 @@ export default function LoginPage() {
         error?: string;
         detail?: string;
       } | null;
+      if (controller.signal.aborted) return;
       if (response.ok && payload?.success) {
         setClaimState('claimed');
         return;
@@ -164,26 +176,34 @@ export default function LoginPage() {
           : '登录交接失败，请返回客户端重新发起'),
       );
     } catch {
+      if (controller.signal.aborted) return;
       setClaimState('failed');
       setFieldError('登录交接失败，请检查网络后重试');
+    } finally {
+      if (claimRequest.current === controller) claimRequest.current = null;
     }
   }, [desktopSession]);
+
+  useEffect(() => () => { claimRequest.current?.abort(); }, [desktopSession, user?.id]);
 
   // 登录成功且带票据时，把身份交接给客户端（票据一次性）
   useEffect(() => {
     if (!desktopSession || !user || claimState !== 'idle') return;
     const stored = readStoredToken();
     if (stored) void claimDesktopSession(stored);
+    else {
+      setClaimState('failed');
+      setFieldError('无法读取登录状态，请返回客户端重新发起登录');
+    }
   }, [desktopSession, user, claimState, claimDesktopSession]);
 
-  // 登录成功后跳转；网页联动登录成功后停留在「请回到客户端」成功页
+  // 有交接票据时始终留页：等待、失败重试和成功都不能被普通登录跳转打断。
   useEffect(() => {
     if (!runtimeReady || loading || !user) return;
     if (nativeMobile && pendingDesktopApproval) return;
-    if (desktopSession && claimState === 'claimed') return;
+    if (desktopSession) return;
     router.replace(getSafeRedirect('/'));
   }, [
-    claimState,
     desktopSession,
     loading,
     nativeMobile,
@@ -271,8 +291,10 @@ export default function LoginPage() {
     }
   };
 
-  // 网页联动登录成功：提示回到客户端
-  if (desktopSession && claimState === 'claimed') {
+  // 网页账号已登录后，在同一状态页完成电脑交接，失败时保留重试入口。
+  if (desktopSession && user && !loading) {
+    const claimed = claimState === 'claimed';
+    const failed = claimState === 'failed';
     return (
       <div className="relative flex min-h-[70vh] items-center justify-center px-5 py-10">
         <div
@@ -285,16 +307,29 @@ export default function LoginPage() {
               className="pointer-events-none absolute -top-16 left-1/2 h-36 w-72 -translate-x-1/2 rounded-full bg-accent-brand/[0.09] blur-2xl"
               aria-hidden="true"
             />
-            <div className="relative">
+            <div className="relative" aria-live="polite" aria-busy={!claimed && !failed}>
               <span className="mx-auto flex size-14 items-center justify-center rounded-full bg-accent-brand/[0.1] text-accent-brand">
-                <CheckCircle2 size={28} aria-hidden="true" />
+                {claimed ? <CheckCircle2 size={28} aria-hidden="true" /> : failed ? (
+                  <MonitorUp size={28} aria-hidden="true" />
+                ) : <LoaderCircle size={28} aria-hidden="true" className="animate-spin motion-reduce:animate-none" />}
               </span>
               <h1 className="mt-5 text-balance text-xl font-bold tracking-tight text-foreground">
-                登录成功
+                {claimed ? '登录成功' : failed ? '电脑登录未完成' : '正在登录电脑'}
               </h1>
-              <p className="mx-auto mt-2 max-w-[18rem] text-pretty text-sm leading-6 text-foreground-muted">
-                网页登录已完成，现在可以回到知萃客户端继续使用了。
+              <p className="mx-auto mt-2 max-w-[18rem] text-pretty text-sm leading-6 text-foreground-muted" role={failed ? 'alert' : undefined}>
+                {claimed ? '网页登录已完成，现在可以回到知萃客户端继续使用了。'
+                  : failed ? fieldError || '登录交接失败，请重试或返回客户端重新发起。'
+                    : '正在将登录状态交接给客户端，请稍候。'}
               </p>
+              {failed ? <button
+                type="button"
+                className={`${styles.submit} mt-5 w-full`}
+                onClick={() => {
+                  const stored = readStoredToken();
+                  if (stored) void claimDesktopSession(stored);
+                  else setFieldError('无法读取登录状态，请返回客户端重新发起登录');
+                }}
+              >重试登录电脑</button> : null}
             </div>
           </div>
         </div>
@@ -395,12 +430,8 @@ export default function LoginPage() {
   // 注意：本地开发入口（IS_DEV）只在 development 构建出现；生产构建不渲染，
   // 且后端 /api/auth/dev-session 在未设置 DEV_AUTH_BYPASS 时返回 404，双保险。
   return (
-    <div className="relative flex min-h-[70vh] items-center justify-center px-5 py-10">
-      <div
-        className="pointer-events-none absolute -top-24 left-1/2 h-56 w-96 -translate-x-1/2 rounded-full bg-accent-brand/[0.07] blur-3xl"
-        aria-hidden="true"
-      />
-      <div className="relative w-full max-w-sm">
+    <div className={styles.page}>
+      <div className={styles.content}>
         {desktopSession && (
           <div className="mb-4 flex items-center justify-center gap-2 rounded-full border border-accent-brand/15 bg-accent-brand/[0.06] px-4 py-2 text-xs font-medium text-accent-brand">
             <MonitorUp size={14} aria-hidden="true" />
@@ -408,33 +439,29 @@ export default function LoginPage() {
           </div>
         )}
 
-        <div className="relative overflow-hidden rounded-[1.75rem] border border-card-border bg-card-bg/90 p-6 shadow-[0_24px_80px_-40px_rgba(16,24,40,0.4)] backdrop-blur-xl md:p-7">
-          <div
-            className="pointer-events-none absolute -top-16 left-1/2 h-36 w-72 -translate-x-1/2 rounded-full bg-accent-brand/[0.09] blur-2xl"
-            aria-hidden="true"
-          />
-
-          <div className="relative mb-6 text-center">
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-[1.2rem] bg-accent-brand/[0.08] ring-1 ring-accent-brand/15">
+        <div>
+          <header className={styles.header}>
+            <div className={styles.brand}>
               <Image
                 src="/logo.png"
-                alt="知萃"
-                width={36}
-                height={36}
-                className="h-9 w-9 object-contain"
+                alt=""
+                width={44}
+                height={44}
+                className={styles.logo}
                 priority
               />
+              <span>知萃</span>
             </div>
-            <h1 className="mt-4 text-balance text-[1.25rem] font-bold tracking-tight text-foreground">
-              登录知萃
+            <h1 className={styles.title}>
+              {mode === 'login' ? '欢迎回来' : '创建你的账号'}
             </h1>
-            <p className="mx-auto mt-1.5 max-w-[20rem] text-pretty text-xs leading-5 text-foreground-muted">
-              登录后继续整理你的知识卡片与行动计划
+            <p className={styles.subtitle}>
+              {mode === 'login' ? '继续整理你的知识与灵感' : '把收藏变成自己的知识'}
             </p>
-          </div>
+          </header>
 
           {nativeMobile ? (
-            <section className="relative mb-4 rounded-2xl border border-accent-brand/15 bg-accent-brand/[0.045] p-3.5">
+            <section className={styles.scanSection} aria-label="扫码登录">
               {pendingDesktopApproval ? <MobileDesktopLoginScanner
                 isAuthenticated={Boolean(user)}
                 currentAccountLabel={user?.username || user?.email}
@@ -450,12 +477,9 @@ export default function LoginPage() {
                 onDismiss={finishDesktopApproval}
                 label="扫描电脑登录码"
                 variant="primary"
-              /> : <PhoneQrLogin onSession={(session) => { acceptSession(session); router.replace('/'); }} />}
-              <div className="mt-3 flex items-center gap-3 text-[11px] text-foreground-muted" aria-hidden="true">
-                <span className="h-px flex-1 bg-card-border" />
-                或使用账号密码
-                <span className="h-px flex-1 bg-card-border" />
-              </div>
+              /> : <PhoneQrLogin variant="login" onSession={(session) => { acceptSession(session); router.replace('/'); }} />}
+              {!pendingDesktopApproval ? <p className={styles.scanHint}>扫描已登录电脑上的二维码</p> : null}
+              <div className={styles.divider} aria-hidden="true">或使用账号登录</div>
               {pendingDesktopApproval && !user ? (
                 <p className="mt-2 text-center text-xs font-medium text-accent-brand" role="status">
                   登录后继续确认这台电脑
@@ -533,12 +557,16 @@ export default function LoginPage() {
           {(showStandardAuth || !IS_DEV) && (
             <section
               id="standard-auth-form"
-              className={`relative ${IS_DEV ? 'mt-4' : ''} rounded-2xl border border-card-border p-4`}
+              className={`${styles.formSection} ${IS_DEV ? 'mt-4' : ''}`}
             >
-              <form onSubmit={handleSubmit} className="space-y-3.5">
-                <div className="relative">
-                  <Mail size={16} aria-hidden="true" className="absolute left-3.5 top-1/2 -translate-y-1/2 text-foreground-muted" />
+              <form onSubmit={handleSubmit} className={styles.form} aria-busy={submitting}>
+                <div className={styles.field}>
+                  <label htmlFor="login-account">{mode === 'login' ? '邮箱 / 用户名' : '邮箱'}</label>
+                  <div className={styles.inputWrap}>
+                  <Mail size={18} aria-hidden="true" className={styles.fieldIcon} />
                   <input
+                    id="login-account"
+                    name="username"
                     type="text"
                     value={email}
                     onChange={(event) => {
@@ -546,34 +574,49 @@ export default function LoginPage() {
                       setFieldError('');
                       clearError();
                     }}
-                    placeholder="邮箱或用户名"
-                    aria-label="邮箱或用户名"
-                    className="w-full rounded-xl border border-card-border bg-background py-3 pl-10 pr-4 text-sm text-foreground outline-none transition-colors duration-150 placeholder:text-foreground-muted/50 focus:border-accent-brand/50 focus:ring-[3px] focus:ring-accent-brand/10"
+                    placeholder={mode === 'login' ? '输入邮箱或用户名' : '输入邮箱地址'}
+                    className={styles.input}
                     autoComplete="username"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    enterKeyHint="next"
                   />
+                  </div>
                 </div>
 
-                <div className="relative">
-                  <Lock size={16} aria-hidden="true" className="absolute left-3.5 top-1/2 -translate-y-1/2 text-foreground-muted" />
+                <div className={styles.field}>
+                  <label htmlFor="login-password">密码</label>
+                  <div className={styles.inputWrap}>
+                  <Lock size={18} aria-hidden="true" className={styles.fieldIcon} />
                   <input
-                    type="password"
+                    id="login-password"
+                    name="password"
+                    type={passwordVisible ? 'text' : 'password'}
                     value={password}
                     onChange={(event) => {
                       setPassword(event.target.value);
                       setFieldError('');
                       clearError();
                     }}
-                    placeholder={mode === 'login' ? '密码' : '密码（至少 6 位）'}
-                    aria-label="密码"
-                    className="w-full rounded-xl border border-card-border bg-background py-3 pl-10 pr-4 text-sm text-foreground outline-none transition-colors duration-150 placeholder:text-foreground-muted/50 focus:border-accent-brand/50 focus:ring-[3px] focus:ring-accent-brand/10"
+                    placeholder={mode === 'login' ? '输入密码' : '至少 6 位字符'}
+                    className={`${styles.input} ${styles.passwordInput}`}
                     autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                    enterKeyHint={mode === 'login' ? 'go' : 'next'}
                   />
+                  <button type="button" className={styles.passwordToggle} aria-label={passwordVisible ? '隐藏密码' : '显示密码'} aria-pressed={passwordVisible} onClick={() => setPasswordVisible((visible) => !visible)}>
+                    {passwordVisible ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}
+                  </button>
+                  </div>
                 </div>
 
                 {mode === 'register' && (
-                  <div className="relative">
-                    <User size={16} aria-hidden="true" className="absolute left-3.5 top-1/2 -translate-y-1/2 text-foreground-muted" />
+                  <div className={styles.field}>
+                    <label htmlFor="register-username">用户名</label>
+                    <div className={styles.inputWrap}>
+                    <User size={18} aria-hidden="true" className={styles.fieldIcon} />
                     <input
+                      id="register-username"
+                      name="new-username"
                       type="text"
                       value={username}
                       onChange={(event) => {
@@ -582,10 +625,12 @@ export default function LoginPage() {
                         clearError();
                       }}
                       placeholder="用户名（至少 2 位，不可重复）"
-                      aria-label="用户名"
-                      className="w-full rounded-xl border border-card-border bg-background py-3 pl-10 pr-4 text-sm text-foreground outline-none transition-colors duration-150 placeholder:text-foreground-muted/50 focus:border-accent-brand/50 focus:ring-[3px] focus:ring-accent-brand/10"
+                      className={styles.input}
                       autoComplete="username"
+                      autoCapitalize="none"
+                      spellCheck={false}
                     />
+                    </div>
                   </div>
                 )}
 
@@ -624,7 +669,7 @@ export default function LoginPage() {
                 <button
                   type="submit"
                   disabled={submitting || (desktopSession ? claimState === 'claiming' : false)}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent-brand py-3 text-sm font-semibold text-white shadow-[0_1px_2px_rgba(16,24,40,0.08),0_6px_16px_-4px_color-mix(in_srgb,var(--accent-brand)_45%,transparent)] transition-opacity duration-150 hover:opacity-90 disabled:opacity-50"
+                  className={styles.submit}
                 >
                   {submitting
                     ? '处理中…'
@@ -637,16 +682,18 @@ export default function LoginPage() {
                 </button>
               </form>
 
-              <p className="mt-4 text-center text-xs text-foreground-muted">
+              {mode === 'login' ? <p className={styles.sessionHint}>登录后自动保留登录状态</p> : null}
+              <p className={styles.modeSwitch}>
                 {mode === 'login' ? '还没有账号？' : '已有账号？'}
                 <button
                   type="button"
                   onClick={() => {
                     setMode(mode === 'login' ? 'register' : 'login');
+                    setPasswordVisible(false);
                     clearError();
                     setFieldError('');
                   }}
-                  className="ml-1 font-medium text-accent-brand hover:underline"
+                  className={styles.textButton}
                 >
                   {mode === 'login' ? '立即注册' : '去登录'}
                 </button>

@@ -6,24 +6,30 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
 import { API_BASE } from '@/lib/api';
 import { currentClientType } from '@/lib/clientIdentity';
 import { shouldDiscardDevelopmentSession } from '@/lib/clientAuthPolicy';
-
-export interface AuthUser {
-  id: string;
-  email: string;
-  username: string | null;
-  avatar_id?: string | null;
-  is_active: boolean;
-  is_admin: boolean;
-  email_verified: boolean;
-  agent_profile_key?: string;
-  created_at: string;
-}
+import { clearPendingDesktopLoginApproval } from '@/lib/desktopLogin';
+import {
+  canUpdateCurrentUser,
+  clearStoredSession,
+  createSessionEpoch,
+  isSessionExpired,
+  readCachedUser,
+  readStoredToken,
+  SESSION_REJECTED_EVENT,
+  sessionExpiresAt,
+  storedSessionChange,
+  TOKEN_STORAGE_KEY,
+  writeCachedUser,
+  writeStoredSession,
+  type AuthUser,
+} from '@/lib/authSession';
+export type { AuthUser } from '@/lib/authSession';
 
 interface AuthState {
   user: AuthUser | null;
@@ -40,6 +46,7 @@ interface AuthState {
     consent: { termsVersion: string; privacyVersion: string },
   ) => Promise<AuthUser | null>;
   acceptSession: (session: AuthSession) => AuthUser;
+  updateCurrentUser: (expectedToken: string, updatedUser: AuthUser) => boolean;
   logout: () => void;
   clearError: () => void;
 }
@@ -67,13 +74,13 @@ const AuthContext = createContext<AuthState>({
   login: async () => null,
   register: async () => null,
   acceptSession: (session) => session.user,
+  updateCurrentUser: () => false,
   logout: () => {},
   clearError: () => {},
 });
 
 const IS_DEV = process.env.NODE_ENV === 'development';
 const DEV_AUTH_AUTO = IS_DEV && process.env.NEXT_PUBLIC_DEV_AUTH_AUTO === 'true';
-const TOKEN_STORAGE_KEY = 'zhicui_token';
 const AUTH_REQUEST_TIMEOUT_MS = 10_000;
 const AUTH_RESTORE_TIMEOUT_MS = 6_000;
 const DEV_SESSION_TIMEOUT_MS = 5_000;
@@ -97,30 +104,6 @@ function wait(delay: number, signal: AbortSignal): Promise<boolean> {
     }, delay);
     signal.addEventListener('abort', handleAbort, { once: true });
   });
-}
-
-function readStoredToken(): string | null {
-  try {
-    return localStorage.getItem(TOKEN_STORAGE_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function writeStoredToken(token: string): void {
-  try {
-    localStorage.setItem(TOKEN_STORAGE_KEY, token);
-  } catch {
-    // The in-memory session still works when browser storage is unavailable.
-  }
-}
-
-function removeStoredToken(): void {
-  try {
-    localStorage.removeItem(TOKEN_STORAGE_KEY);
-  } catch {
-    // Storage may be disabled; state cleanup below remains authoritative.
-  }
 }
 
 function resolveAuthError<T>(
@@ -207,12 +190,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [enteringDevelopmentSession, setEnteringDevelopmentSession] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const sessionEpoch = useRef(createSessionEpoch());
+  const currentToken = useRef<string | null>(null);
+  const restoringToken = useRef<string | null>(null);
+
+  const clearSession = useCallback((message: string | null = null) => {
+    sessionEpoch.current.begin();
+    currentToken.current = null;
+    clearStoredSession();
+    clearPendingDesktopLoginApproval();
+    setToken(null);
+    setUser(null);
+    setError(message);
+    setLoading(false);
+    setEnteringDevelopmentSession(false);
+  }, []);
 
   const applySession = useCallback((session: AuthSession) => {
-    writeStoredToken(session.token);
+    sessionEpoch.current.begin();
+    currentToken.current = session.token;
+    writeStoredSession(session.token, session.user);
     setToken(session.token);
     setUser(session.user);
     setError(null);
+    setLoading(false);
+    setEnteringDevelopmentSession(false);
   }, []);
 
   const acceptSession = useCallback((session: AuthSession) => {
@@ -220,30 +222,94 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return session.user;
   }, [applySession]);
 
+  // 资料响应只能更新仍然登录的同一账号，不能创建或恢复会话。
+  const updateCurrentUser = useCallback((expectedToken: string, updatedUser: AuthUser) => {
+    if (!canUpdateCurrentUser(expectedToken, currentToken.current, user?.id, updatedUser.id)) return false;
+    writeCachedUser(updatedUser);
+    setUser(updatedUser);
+    return true;
+  }, [user?.id]);
+
   // 回到应用时重新读取账号资料，使其他设备更换的头像同步到当前端。
   useEffect(() => {
     if (!token) return;
     const controller = new AbortController();
     let pending = false;
     const refresh = async () => {
-      if (document.visibilityState === 'hidden' || pending) return;
+      if (document.visibilityState === 'hidden' || pending || restoringToken.current === token) return;
+      if (currentToken.current !== token) return;
+      if (isSessionExpired(token)) {
+        clearSession('登录已过期，请重新登录');
+        return;
+      }
+      const epoch = sessionEpoch.current.current();
       pending = true;
       try {
         const response = await authRequest<AuthUser>('/api/auth/me', {
           headers: { Authorization: `Bearer ${token}` }, signal: controller.signal,
         });
-        if (!controller.signal.aborted && response.success && response.data) setUser(response.data);
+        if (controller.signal.aborted || !sessionEpoch.current.isCurrent(epoch)) return;
+        if (response.success && response.data) {
+          if (shouldDiscardDevelopmentSession(response.data, {
+            desktop: Boolean(window.zhicuiDesktop), development: IS_DEV, automaticDevAuth: DEV_AUTH_AUTO,
+          })) { clearSession(); return; }
+          writeStoredSession(token, response.data);
+          setUser(response.data);
+          setError(null);
+        } else if (response.status === 401) {
+          clearSession('登录已过期，请重新登录');
+        }
       } finally { pending = false; }
     };
     void refresh();
     window.addEventListener('focus', refresh);
+    window.addEventListener('online', refresh);
     document.addEventListener('visibilitychange', refresh);
+    let expirationTimer: ReturnType<typeof setTimeout>;
+    const checkExpiry = () => {
+      if (currentToken.current !== token) return;
+      const remaining = sessionExpiresAt(token) - Date.now();
+      if (remaining <= 0) { clearSession('登录已过期，请重新登录'); return; }
+      expirationTimer = setTimeout(checkExpiry, Math.min(remaining, 2_147_483_647));
+    };
+    checkExpiry();
     return () => {
       controller.abort();
+      clearTimeout(expirationTimer);
       window.removeEventListener('focus', refresh);
+      window.removeEventListener('online', refresh);
       document.removeEventListener('visibilitychange', refresh);
     };
-  }, [token]);
+  }, [clearSession, token]);
+
+  useEffect(() => {
+    const rejected = (event: Event) => {
+      if ((event as CustomEvent<{ token: string }>).detail?.token === currentToken.current) {
+        clearSession('登录已过期，请重新登录');
+      }
+    };
+    const stored = (event: StorageEvent) => {
+      if (event.key !== TOKEN_STORAGE_KEY && event.key !== null) return;
+      const change = storedSessionChange(currentToken.current, readStoredToken());
+      if (change === 'clear') clearSession();
+      if (change === 'reload') {
+        // 别的标签切换账号后，不能让 A 的界面继续使用 B 的请求凭据。
+        // 保留新 token，重新走同一启动恢复流程；同 token 不重复刷新。
+        sessionEpoch.current.begin();
+        currentToken.current = null;
+        setUser(null);
+        setToken(null);
+        setLoading(true);
+        window.location.reload();
+      }
+    };
+    window.addEventListener(SESSION_REJECTED_EVENT, rejected);
+    window.addEventListener('storage', stored);
+    return () => {
+      window.removeEventListener(SESSION_REJECTED_EVENT, rejected);
+      window.removeEventListener('storage', stored);
+    };
+  }, [clearSession]);
 
   const enterDevelopmentSession = useCallback(async () => {
     if (!IS_DEV) {
@@ -252,11 +318,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     setError(null);
+    const epoch = sessionEpoch.current.begin();
+    setLoading(false);
     setEnteringDevelopmentSession(true);
     try {
       const response = await authRequest<AuthSession>('/api/auth/dev-session', {
         method: 'POST',
       }, DEV_SESSION_TIMEOUT_MS);
+      if (!sessionEpoch.current.isCurrent(epoch)) return null;
       if (response.success && response.data) {
         applySession(response.data);
         return response.data.user;
@@ -264,7 +333,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setError(response.error || '开发会话连接失败，请确认本地后端已启动');
       return null;
     } finally {
-      setEnteringDevelopmentSession(false);
+      if (sessionEpoch.current.isCurrent(epoch)) setEnteringDevelopmentSession(false);
     }
   }, [applySession]);
 
@@ -275,43 +344,56 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
+    const epoch = sessionEpoch.current.current();
+    const isCurrent = () => !cancelled && sessionEpoch.current.isCurrent(epoch);
 
     const restore = async () => {
       const saved = readStoredToken();
       if (saved) {
+        if (isSessionExpired(saved)) {
+          clearSession('登录已过期，请重新登录');
+          return;
+        }
+        restoringToken.current = saved;
+        currentToken.current = saved;
+        const cachedCandidate = readCachedUser(saved);
+        const cached = cachedCandidate && !shouldDiscardDevelopmentSession(cachedCandidate, {
+          desktop: Boolean(window.zhicuiDesktop), development: IS_DEV, automaticDevAuth: DEV_AUTH_AUTO,
+        }) ? cachedCandidate : null;
+        if (cached) {
+          setToken(saved);
+          setUser(cached);
+          setLoading(false);
+        }
         const restored = await authRequest<AuthUser>('/api/auth/me', {
           headers: { Authorization: `Bearer ${saved}` },
           signal: controller.signal,
         }, AUTH_RESTORE_TIMEOUT_MS);
-        if (cancelled) return;
+        if (!isCurrent()) return;
         if (restored.success && restored.data) {
           if (shouldDiscardDevelopmentSession(restored.data, {
             desktop: typeof window !== 'undefined' && Boolean(window.zhicuiDesktop),
             development: IS_DEV,
             automaticDevAuth: DEV_AUTH_AUTO,
           })) {
-            removeStoredToken();
-            setToken(null);
-            setUser(null);
-            setError(null);
+            clearSession();
             return;
           }
           applySession({ token: saved, user: restored.data });
           return;
         }
 
-        const sessionRejected = restored.status === 401 || restored.status === 403;
+        const sessionRejected = restored.status === 401;
         if (sessionRejected) {
-          removeStoredToken();
-          setToken(null);
-          setUser(null);
-          setError('登录已过期，请重新登录');
+          clearSession('登录已过期，请重新登录');
+          return;
         } else {
           // A timeout or temporary server failure is not proof that the saved
           // session is invalid. Keep the token so a retry can recover it.
           setToken(saved);
-          setUser(null);
+          setUser(cached);
           setError(restored.error || '暂时无法确认登录状态，请稍后重试');
+          return;
         }
       }
 
@@ -320,13 +402,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         let lastDevelopmentError = '';
         for (const delay of DEV_SESSION_RETRY_DELAYS_MS) {
           if (delay > 0 && !(await wait(delay, controller.signal))) return;
-          if (cancelled) return;
+          if (!isCurrent()) return;
 
           const development = await authRequest<AuthSession>('/api/auth/dev-session', {
             method: 'POST',
             signal: controller.signal,
           }, DEV_SESSION_TIMEOUT_MS);
-          if (cancelled) return;
+          if (!isCurrent()) return;
           if (development.success && development.data) {
             applySession(development.data);
             return;
@@ -334,7 +416,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           lastDevelopmentError = development.error || '';
         }
 
-        if (!cancelled) {
+        if (isCurrent()) {
           setError(
             lastDevelopmentError
               || '开发会话连接失败，请确认本地后端已启动后重试',
@@ -345,7 +427,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     void restore()
       .catch((restoreError) => {
-        if (!cancelled) {
+        if (isCurrent()) {
           setError(
             restoreError instanceof Error
               ? restoreError.message
@@ -354,7 +436,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       })
       .finally(() => {
-        if (!cancelled) {
+        restoringToken.current = null;
+        if (isCurrent()) {
           setEnteringDevelopmentSession(false);
           setLoading(false);
         }
@@ -363,7 +446,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       controller.abort();
     };
-  }, [applySession]);
+  }, [applySession, clearSession]);
 
   // 桌面端联动登录：主进程在网页登录完成后把 JWT 会话回填给渲染进程。
   useEffect(() => {
@@ -404,12 +487,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [user?.agent_profile_key]);
 
   const login = useCallback(async (email: string, password: string) => {
+    const epoch = sessionEpoch.current.begin();
+    setLoading(false);
     setError(null);
     const response = await authRequest<AuthSession>('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
     });
+    if (!sessionEpoch.current.isCurrent(epoch)) return null;
     if (response.success && response.data) {
       applySession(response.data);
       return response.data.user;
@@ -424,6 +510,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     username: string,
     consent: { termsVersion: string; privacyVersion: string },
   ) => {
+    const epoch = sessionEpoch.current.begin();
+    setLoading(false);
     setError(null);
     const response = await authRequest<AuthSession>('/api/auth/register', {
       method: 'POST',
@@ -439,6 +527,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         client_type: await currentClientType(),
       }),
     });
+    if (!sessionEpoch.current.isCurrent(epoch)) return null;
     if (response.success && response.data) {
       applySession(response.data);
       return response.data.user;
@@ -448,11 +537,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [applySession]);
 
   const logout = useCallback(() => {
-    removeStoredToken();
-    setToken(null);
-    setUser(null);
-    setError(null);
-  }, []);
+    clearSession();
+  }, [clearSession]);
 
   const clearError = useCallback(() => setError(null), []);
   const contextValue = useMemo<AuthState>(() => ({
@@ -465,10 +551,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     login,
     register,
     acceptSession,
+    updateCurrentUser,
     logout,
     clearError,
   }), [
     acceptSession,
+    updateCurrentUser,
     clearError,
     enterDevelopmentSession,
     enteringDevelopmentSession,

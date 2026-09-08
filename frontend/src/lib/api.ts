@@ -91,6 +91,7 @@ import type {
 import { getEphemeralDouyinMediaSources } from './douyinDesktopSync';
 import { importPlatformBatches, platformImportBatchBody } from './platformImportBatch';
 import type { PlatformSyncSnapshot } from './platformSyncSnapshot';
+import { sessionFetch } from './authSession';
 export type { ApiResponse };
 
 // In Capacitor/static-export mode, NEXT_PUBLIC_API_URL is set explicitly
@@ -222,7 +223,7 @@ function requestFailureMessage(error: unknown): string {
 async function request<T>(endpoint: string, options?: RequestInit): Promise<ApiResponse<T>> {
   try {
     const { headers, ...rest } = options || {};
-    const response = await fetch(`${API_BASE}${endpoint}`, {
+    const response = await sessionFetch(`${API_BASE}${endpoint}`, {
       ...rest,
       headers: authHeaders(headers, typeof rest.body === 'string'),
     });
@@ -267,7 +268,7 @@ export async function downloadPersonalDataArchive(body: {
   client_type: ZhicuiClientType;
 }): Promise<ApiResponse<{ blob: Blob; filename: string }>> {
   try {
-    const response = await fetch(`${API_BASE}/api/account/data-export`, {
+    const response = await sessionFetch(`${API_BASE}/api/account/data-export`, {
       method: 'POST',
       headers: authHeaders(undefined, true),
       body: JSON.stringify(body),
@@ -424,7 +425,7 @@ export async function extractVideoStream(
 
   try {
     const sseBase = API_BASE || '';
-    const response = await fetch(`${sseBase}/api/extract/stream?url=${encoded}`, {
+    const response = await sessionFetch(`${sseBase}/api/extract/stream?url=${encoded}`, {
       headers: authHeaders({ Accept: 'text/event-stream' }),
       signal,
     });
@@ -1712,7 +1713,7 @@ export async function streamAgentMessage(
   signal?: AbortSignal,
 ): Promise<ApiResponse<AgentMessageResult>> {
   try {
-    const response = await fetch(
+    const response = await sessionFetch(
       `${API_BASE}/api/agent/threads/${encodeURIComponent(threadId)}/messages/stream`,
       {
         method: 'POST',
@@ -1743,7 +1744,7 @@ export async function resumeAgentTurnStream(
     const query = afterEventSeq > 0
       ? `?after_seq=${encodeURIComponent(String(afterEventSeq))}`
       : '';
-    const response = await fetch(
+    const response = await sessionFetch(
       `${API_BASE}/api/agent/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/stream${query}`,
       {
         method: 'GET',

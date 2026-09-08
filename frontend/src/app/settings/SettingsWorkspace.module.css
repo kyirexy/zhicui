@@ -161,6 +161,84 @@
   padding: 28px 48px 84px;
 }
 
+.accountBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.accountIdentity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  color: var(--foreground-secondary);
+}
+
+.accountIdentity > svg { flex-shrink: 0; }
+
+.accountCopy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.accountCopy strong,
+.accountCopy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountCopy strong {
+  color: var(--foreground);
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+.accountCopy span {
+  color: var(--foreground-secondary);
+  font-size: 0.8125rem;
+}
+
+.accountAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--foreground);
+  background: var(--card-bg);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+
+.accountAction:hover { background: var(--hover-bg); }
+.accountAction:active { background: var(--background-secondary); }
+.accountAction:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 3px; }
+
+.logoutBody { display: flex; flex-direction: column; gap: 24px; }
+.logoutBody p { margin: 0; color: var(--foreground-secondary); font-size: 0.875rem; line-height: 1.65; text-wrap: pretty; }
+.logoutActions { display: flex; justify-content: flex-end; gap: 12px; }
+.logoutActions > button { min-width: 100px; }
+.logoutConfirm { color: var(--ui-danger); border-color: color-mix(in srgb, var(--ui-danger) 35%, var(--border-color)); background: var(--ui-danger-soft); }
+.logoutConfirm:hover,
+.logoutConfirm:active { background: color-mix(in srgb, var(--ui-danger) 14%, var(--card-bg)); }
+
 .sectionStack {
   display: flex;
   flex-direction: column;
@@ -284,6 +362,10 @@
 @media (max-width: 767px) {
   .rail { position: sticky; top: 0; }
   .contentInner { padding-inline: 14px; }
+  .accountBar { gap: 12px; margin-bottom: 20px; padding-bottom: 16px; }
+  .accountIdentity { gap: 8px; }
+  .accountAction { gap: 6px; padding-inline: 10px; }
+  .logoutActions > button { flex: 1; }
   .summaryRow { padding-right: 14px; padding-left: 14px; gap: 12px; }
 
   .mobileActions {
@@ -291,44 +373,8 @@
     overflow: hidden;
     border: 1px solid var(--card-border);
     border-radius: 12px;
-    background: #fff;
+    background: var(--card-bg);
   }
-
-  .mobileAccount {
-    display: grid;
-    min-height: 68px;
-    padding: 12px 14px;
-    border-bottom: 1px solid var(--card-border);
-    grid-template-columns: 36px minmax(0, 1fr);
-    align-items: center;
-    gap: 10px;
-  }
-
-  .mobileAccount > span {
-    display: grid;
-    width: 36px;
-    height: 36px;
-    border-radius: 10px;
-    place-items: center;
-    color: var(--foreground-secondary);
-    background: var(--background-secondary);
-  }
-
-  .mobileAccount > div {
-    display: grid;
-    min-width: 0;
-    gap: 3px;
-  }
-
-  .mobileAccount strong,
-  .mobileAccount small {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .mobileAccount strong { font-size: .84rem; }
-  .mobileAccount small { color: var(--foreground-muted); font-size: .7rem; }
 
   .mobileActions > button {
     display: flex;
@@ -340,7 +386,7 @@
     align-items: center;
     gap: 10px;
     color: var(--foreground-secondary);
-    background: #fff;
+    background: var(--card-bg);
     font: inherit;
     font-size: .8rem;
     text-align: left;
@@ -348,13 +394,16 @@
 
   .mobileActions > button:last-child { border-bottom: 0; }
   .mobileActions > button:active { background: var(--background-secondary); }
-  .mobileActions > button.mobileLogout { color: var(--ui-danger); }
 
   .mobileScanner {
     min-height: 48px;
     padding: 0 10px;
     border-bottom: 1px solid var(--card-border);
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .accountAction { transition: none; }
 }
 
 @media (max-width: 767px) {

@@ -1,4 +1,5 @@
 import { API_BASE } from './api';
+import { sessionFetch } from './authSession';
 
 export const AGENT_INTERFACE_BASE = '/api/agent-interface/v1';
 export const REMOTE_AGENT_MCP_URL = 'https://luxai.cn/mcp';
@@ -173,7 +174,7 @@ async function requestAgentInterface<T>(
   init: RequestInit = {},
 ): Promise<T> {
   const hasBody = init.body !== undefined && init.body !== null;
-  const response = await fetch(`${API_BASE}${AGENT_INTERFACE_BASE}${path}`, {
+  const response = await sessionFetch(`${API_BASE}${AGENT_INTERFACE_BASE}${path}`, {
     ...init,
     headers: authHeaders(hasBody),
     cache: 'no-store',

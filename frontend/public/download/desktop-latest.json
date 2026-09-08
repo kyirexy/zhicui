@@ -5,16 +5,16 @@
   "platform": "windows",
   "architecture": "x64",
   "artifact_kind": "unsigned",
-  "version": "1.1.0",
-  "source_commit": "dccfdecdcb7879746a031053047697822c3b6096",
-  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.0-x64.exe",
-  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.0-x64.exe",
-  "size_bytes": 93579974,
-  "sha256": "ea3287a74b1b87f26b9f4951101cd81b0c863048760d43b540a9a79cea039b3a",
-  "published_at": "2026-09-05T06:58:33.8939913Z",
+  "version": "1.1.1",
+  "source_commit": "aebb39f5891554aac776550c46aaf4bbd4ea59f3",
+  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.1-x64.exe",
+  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.1-x64.exe",
+  "size_bytes": 93582312,
+  "sha256": "a13ca81724cf6f09f9b85e23a432e448de0b4e8e98fc40feb24736bfb3b44b0a",
+  "published_at": "2026-09-08T11:08:10.0178677Z",
   "notes": [
-    "修正抖音收藏、喜欢和作品分类。",
-    "改进本机 Agent 与跨平台桌面支持。"
+    "修复抖音与B站收藏、喜欢默认顺序。",
+    "改善分页同步与失败提示，完整文案复用更稳定。"
   ],
   "code_signed": false,
   "release_status": "beta_download"

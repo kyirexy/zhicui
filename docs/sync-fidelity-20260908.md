@@ -31,3 +31,15 @@
 - 经批准删除 Jenkins #192–#198 的旧运行构建，约释放 15 GB；保留当时当前版 #200、前版 #199、数据库、备份和安装包。
 - 头像版已由 Jenkins #201 成功上线；后续重复排队发布到 #204，功能源码一致。
 - 本次源码和安装包发布结果另记录在发行清单及部署回执；不能以源码提交代替上线成功。
+
+### 本轮发布核对
+
+- 源码：`aebb39f5891554aac776550c46aaf4bbd4ea59f3`，GitHub/Gitee master 均已推送。
+- Jenkins #205：SUCCESS；正式 runtime 指向 #205，Git revision 与源码一致，HTTPS `/api/health` 返回 ok。
+- 后端核心 85 项回归通过；平台导入/媒体能力/博主目录补充组合 53 项通过（与前者有重叠，不相加计数）。前端 28 项与全量 TypeScript 通过，桌面来源校验通过。
+- 浏览器打开正式登录页并检查截图，页面正常；不将登录页检查等同于真实平台收藏顺序验收。
+- 追加清理已不用的 Jenkins #199、#201、#203（约 6.6 GB），当前 #205、回退 #204 与较早 #200 保留。清理后根分区 65%，约 14 GB 可用。
+- Windows 1.1.1 Beta：官方隔离构建和 `-SkipBuild -Publish` 通过；未签名测试版，未伪装成 Stable。
+- Windows 公网完整回读：EXE 93,582,312 字节，SHA-256 `a13ca81724cf6f09f9b85e23a432e448de0b4e8e98fc40feb24736bfb3b44b0a`；manifest、beta.yml、blockmap 均 HTTP 200、字节哈希一致，feed 版本和 SHA-512 正确。未做 Windows 真实全新安装/升级界面冒烟。
+- Android 1.3.5 / build 27 Beta：隔离构建、静态导出、类型检查、Gradle 和签名校验通过；34,386,085 字节，SHA-256 `0b290aaa0fc2295743c19422da0574446c86212675fd1fcb420be749d94de580`。签名证书与 1.3.4 相同，保持覆盖升级能力。
+- Android 模拟器 emulator-5554：从 1.3.4(26) 执行 `adb install -r` 成功，MainActivity 冷启动 status ok；已确认安装版本 1.3.5(27)。未卸载、未清空账户数据，未测试真实平台账号完整同步。

@@ -1,4 +1,5 @@
 import type { DouyinLibraryItem } from './types';
+import { sourceSnapshotTime } from './platformSyncSnapshot.ts';
 
 export function hasReadyTranscript(item: DouyinLibraryItem): boolean {
   return Boolean(item.extracted_note_id) && item.transcript_chars > 0;
@@ -15,6 +16,8 @@ export function selectSyncedSourceScope(
   // 否则刚收藏的旧视频会因为发布时间较早而落在自动补文案范围之外。
   return [...(items || [])]
     .sort((left, right) => {
+      const snapshotOrder = sourceSnapshotTime(right.source_synced_at) - sourceSnapshotTime(left.source_synced_at);
+      if (snapshotOrder) return snapshotOrder;
       const leftRank = typeof left.source_rank === 'number'
         ? left.source_rank
         : Number.MAX_SAFE_INTEGER;

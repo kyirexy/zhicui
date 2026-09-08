@@ -114,6 +114,9 @@ import {
   writeLibraryListCache,
 } from '@/lib/libraryListCache';
 import { findNewLibraryItems } from '@/lib/librarySyncDiff';
+import { selectPlatformLibrarySource, type PlatformLibrarySourceFilter } from '@/lib/platformLibraryOrder';
+import { platformSyncWarning, withPlatformSyncWarning } from '@/lib/platformSyncFeedback';
+import { capturePlatformSyncSnapshot } from '@/lib/platformSyncSnapshot';
 import {
   hasReadyTranscript,
   selectSyncedSourceScope,
@@ -158,6 +161,8 @@ interface SyncCollectionModeResult {
   finalJob: DouyinCollectionJob | null;
   error: string;
   queueMayStillBeRunning?: boolean;
+  warning?: string;
+  syncedVideoIds?: string[];
 }
 
 interface CollectionProgressSnapshot {
@@ -374,10 +379,10 @@ export default function VideoLibraryPage() {
   const [sourceReadability, setSourceReadability] = useState<Partial<
     Record<DouyinSourceMode, SourceReadabilityState>
   >>({});
-  const [sourceSorts, setSourceSorts] = useLocalStorage(
-    'zhicui-library-source-sorts-v1',
-    DEFAULT_SOURCE_SORTS,
-  );
+  // 每次进入资料库默认使用平台顺序，发布时间只影响这次查看。
+  const [sourceSorts, setSourceSorts] = useState(DEFAULT_SOURCE_SORTS);
+  const sourceSortsRef = useRef(sourceSorts);
+  sourceSortsRef.current = sourceSorts;
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [syncCount, setSyncCount] = useState(() => readLibraryQuickSyncPreferences().count);
   const [items, setItems] = useState<DouyinLibraryItem[]>([]);
@@ -387,6 +392,7 @@ export default function VideoLibraryPage() {
   const [search, setSearch] = useState('');
   const [platformFilter, setPlatformFilter] = useState<LibraryPlatformFilter>('all');
   const [platformItems, setPlatformItems] = useState<PlatformLibraryItem[]>([]);
+  const [biliSourceMode, setBiliSourceMode] = useState<PlatformLibrarySourceFilter>('collect');
   const [previewTarget, setPreviewTarget] = useState<LibraryPreviewTarget | null>(null);
   const [initializingPlatformId, setInitializingPlatformId] = useState<string | null>(null);
   const [platformActionErrors, setPlatformActionErrors] = useState<Record<string, string>>({});
@@ -397,11 +403,18 @@ export default function VideoLibraryPage() {
 
   useEffect(() => {
     const syncPlatformFromLocation = () => {
-      const platform = new URL(window.location.href).searchParams.get('platform');
+      const params = new URL(window.location.href).searchParams;
+      const platform = params.get('platform');
+      const mode = params.get('mode');
       const nextFilter: LibraryPlatformFilter = platform === 'douyin' || platform === 'bilibili'
         ? platform
         : 'all';
       setPlatformFilter(nextFilter);
+      if (nextFilter === 'bilibili' && (mode === 'collect' || mode === 'like' || mode === 'import')) {
+        setBiliSourceMode(mode);
+      } else if (nextFilter === 'douyin' && isDouyinSourceMode(mode)) {
+        setSourceMode(mode);
+      }
       setPlatformActionErrors({});
       setPreviewTarget(null);
     };
@@ -409,7 +422,7 @@ export default function VideoLibraryPage() {
     syncPlatformFromLocation();
     window.addEventListener('popstate', syncPlatformFromLocation);
     return () => window.removeEventListener('popstate', syncPlatformFromLocation);
-  }, [user?.id]);
+  }, [setSourceMode, user?.id]);
 
   const [platformPanelVersion, setPlatformPanelVersion] = useState(0);
   const [sourceManagerOpen, setSourceManagerOpen] = useState(false);
@@ -469,6 +482,7 @@ export default function VideoLibraryPage() {
   const [statusError, setStatusError] = useState('');
   const [notice, setNotice] = useState('');
   const [sourceManagerNotice, setSourceManagerNotice] = useState('');
+  const [sourceSyncWarning, setSourceSyncWarning] = useState('');
   const [autoSyncing, setAutoSyncing] = useState(false);
   const activeRef = useRef(true);
   const batchExtractingRef = useRef(false);
@@ -746,7 +760,10 @@ export default function VideoLibraryPage() {
 
   const filteredPlatformItems = useMemo(() => {
     const keyword = search.trim().toLowerCase();
-    return platformItems.filter((item) => {
+    const sourceItems = platformFilter === 'bilibili'
+      ? selectPlatformLibrarySource(platformItems, biliSourceMode)
+      : platformItems;
+    return sourceItems.filter((item) => {
       if (platformFilter === 'douyin') return false;
       if (platformFilter !== 'all' && item.platform !== platformFilter) return false;
       if (!keyword) return true;
@@ -757,7 +774,7 @@ export default function VideoLibraryPage() {
         || item.tags.some((tag) => tag.toLowerCase().includes(keyword))
       );
     });
-  }, [platformFilter, platformItems, search]);
+  }, [biliSourceMode, platformFilter, platformItems, search]);
 
   const platformCounts = useMemo(() => ({
     all: items.length + platformItems.length,
@@ -912,6 +929,7 @@ export default function VideoLibraryPage() {
     const currentUrl = new URL(window.location.href);
     if (nextFilter === 'all') currentUrl.searchParams.delete('platform');
     else currentUrl.searchParams.set('platform', nextFilter);
+    currentUrl.searchParams.delete('mode');
     window.history.pushState({}, '', `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
   };
 
@@ -923,6 +941,15 @@ export default function VideoLibraryPage() {
     setPreviewTarget(null);
     setSortMenuOpen(false);
     setNotice(`已切换到抖音${SOURCE_MODES.find((mode) => mode.value === nextMode)?.label || '视频'}`);
+  };
+
+  const switchBiliSource = (nextMode: PlatformLibrarySourceFilter) => {
+    setBiliSourceMode(nextMode);
+    setSelectedPlatform(new Set());
+    setPreviewTarget(null);
+    const currentUrl = new URL(window.location.href);
+    currentUrl.searchParams.set('mode', nextMode);
+    window.history.replaceState({}, '', `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
   };
 
   const initializePlatformSummary = async (item: PlatformLibraryItem) => {
@@ -1075,23 +1102,28 @@ export default function VideoLibraryPage() {
       const requestedMode = sourceModeRef.current;
       const requestedSort: DouyinLibrarySort = requestedMode === 'post'
         ? 'published'
-        : sourceSorts[requestedMode] === 'published'
+        : sourceSortsRef.current[requestedMode] === 'published'
           ? 'published'
           : 'collection';
+      const requestId = ++libraryRequestRef.current;
       const response = await listDouyinLibraryItems(
         ALL_LIBRARY_ITEMS,
         requestedMode,
         requestedSort,
       );
-      if (!response.success || !response.data) return;
+      if (!response.success || !response.data) {
+        if (requestId === libraryRequestRef.current) setLoading(false);
+        return;
+      }
       writeLibraryListCache(
         user?.id,
         requestedMode,
         requestedSort,
         response.data,
       );
-      if (requestedMode === sourceModeRef.current) {
+      if (requestId === libraryRequestRef.current && requestedMode === sourceModeRef.current) {
         applyLibraryListResult(response.data);
+        setLoading(false);
       }
     };
     applyExtractionJob(current);
@@ -1099,7 +1131,7 @@ export default function VideoLibraryPage() {
       setNotice(
         current.operation === 'transcript'
           ? background
-            ? `视频已全部同步；后台文案已完成 ${current.success}/${current.total} 条，正在处理 ${current.active} 条`
+            ? `本次读取的视频已同步；后台文案已完成 ${current.success}/${current.total} 条，正在处理 ${current.active} 条`
             : `并发提取 ${current.total} 条完整文案：正在转写 ${current.active} 条，等待 ${current.queued} 条，已完成 ${current.success} 条`
           : current.operation === 'full'
             ? `结构化文案 ${current.total} 条：正在整理 ${current.active} 条，等待 ${current.queued} 条，已完成 ${current.success} 条`
@@ -1186,7 +1218,7 @@ export default function VideoLibraryPage() {
     setNotice(
       operation === 'transcript'
         ? background
-          ? `视频已全部同步；正在后台启动 ${pending.length} 条完整文案提取`
+          ? `本次读取的视频已同步；正在后台启动 ${pending.length} 条完整文案提取`
           : `正在同时启动 ${pending.length} 条视频的完整文案提取`
         : operation === 'full'
           ? `正在同时提取 ${pending.length} 条视频的结构化文案`
@@ -1211,7 +1243,7 @@ export default function VideoLibraryPage() {
       setBatchExtracting(false);
       setActiveBatchOperation(null);
       setNotice(background
-        ? `视频已全部同步；${response.error || '后台文案任务启动失败，可以稍后批量补提'}`
+        ? `本次读取的视频已同步；${response.error || '后台文案任务启动失败，可以稍后批量补提'}`
         : response.error || (
           operation === 'transcript'
             ? '批量文案任务启动失败'
@@ -1232,7 +1264,7 @@ export default function VideoLibraryPage() {
     setActiveBatchOperation(null);
     if (finalJob.status === 'running') {
       setNotice(background
-        ? '视频已全部同步；文案任务仍在后台运行，稍后回来即可查看'
+        ? '本次读取的视频已同步；文案任务仍在后台运行，稍后回来即可查看'
         : '批量任务仍在后台运行，刷新页面后可查看已完成的文案');
     } else if (finalJob.status === 'failed') {
       const interruptedMessage = finalJob.error || '文案任务已中断，可以稍后补提';
@@ -2102,12 +2134,14 @@ export default function VideoLibraryPage() {
         };
       }
       publishSourceManagerNotice(`正在本机读取抖音${requestedSourceLabel}…`);
+      const sourceSyncedAt = new Date().toISOString();
       const collected = await bridge.collectPlatformAccount({
         platform: 'douyin',
         profileKey: user.agent_profile_key || '',
         mode: requestedMode,
         limit: requestedCount,
       });
+      const snapshot = capturePlatformSyncSnapshot(collected, sourceSyncedAt);
       if (!collected.success || !collected.items?.length) {
         if (collected.error?.includes('重新登录')) {
           persistDesktopDouyinConnection(false);
@@ -2130,6 +2164,7 @@ export default function VideoLibraryPage() {
         requestedMode,
         toLocalDouyinSyncItems(collected.items),
         desktopVersion,
+        snapshot,
       );
       if (!ingested.success || !ingested.data) {
         return {
@@ -2184,6 +2219,8 @@ export default function VideoLibraryPage() {
         overview: refreshedResponse.data,
         finalJob: localJob,
         error: '',
+        warning: platformSyncWarning(collected),
+        syncedVideoIds: ingested.data.video_ids,
       };
     }
 
@@ -2365,6 +2402,7 @@ export default function VideoLibraryPage() {
       requestedCount,
     );
     setSyncCount(requestedCount);
+    setSourceSyncWarning('');
     setRefreshing(true);
     if (!batchExtractingRef.current) setExtractionJob(null);
     setPipelineStage('collect');
@@ -2501,12 +2539,23 @@ export default function VideoLibraryPage() {
       );
     }
 
+    const syncWarnings = successful.filter((result) => result.warning).map((result) => {
+      const label = SOURCE_MODES.find((mode) => mode.value === result.requestedMode)?.label || '视频';
+      return `抖音${label}：${result.warning}`;
+    });
+    // 独立保存读取范围警告，后台文案进度不能覆盖 partial/limited 的事实。
+    setSourceSyncWarning(syncWarnings.join('；'));
+
     // 手动同步后要补齐当前来源中所有仍缺文案的视频，而不仅是第一次出现的
     // 条目。否则重新绑定或升级旧版本后，已有视频会永久停在“待整理”。
     const transcriptTargets = selectTranscriptPreparationTargets(
       allRefreshed.map((result) => selectSyncedSourceScope(
-        result.refreshed,
-        requestedCount,
+        result.syncedVideoIds
+          ? result.refreshed?.filter((item) => result.syncedVideoIds!.includes(item.aweme_id))
+          : result.refreshed,
+        result.finalJob?.url === 'desktop-local'
+          ? Math.min(requestedCount, nonNegativeInteger(result.finalJob.total))
+          : requestedCount,
       )),
       MAX_TRANSCRIPT_PREPARATION,
     );
@@ -3645,10 +3694,10 @@ export default function VideoLibraryPage() {
           />
           </div>
         </div>
-        {sourceManagerNotice && sourceManagerView === 'douyin' && (
+        {(sourceManagerNotice || sourceSyncWarning) && sourceManagerView === 'douyin' && (
           <div className={styles.sourceNotice} role="status">
             <Info size={15} aria-hidden="true" />
-            <span>{sourceManagerNotice}</span>
+            <span>{withPlatformSyncWarning(sourceManagerNotice, sourceSyncWarning)}</span>
           </div>
         )}
         </div>
@@ -3747,6 +3796,30 @@ export default function VideoLibraryPage() {
               </button>
             ))}
           </div>
+
+          {platformFilter === 'bilibili' && (
+            <div className={styles.sourceFilterBar}>
+              <span className={styles.sourceFilterLabel}>B站来源</span>
+              <div className={styles.sourceFilter} role="group" aria-label="按B站来源筛选视频资料">
+                {([
+                  { value: 'collect', label: '收藏', Icon: Bookmark },
+                  { value: 'like', label: '喜欢', Icon: Heart },
+                  { value: 'import', label: '导入', Icon: Link2 },
+                ] as const).map(({ value, label, Icon }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={biliSourceMode === value}
+                    data-active={biliSourceMode === value}
+                    disabled={batchExtracting}
+                    onClick={() => switchBiliSource(value)}
+                  >
+                    <Icon size={14} aria-hidden="true" />{label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {showDouyinItems && (
             <div className={styles.sourceFilterBar}>
@@ -4030,10 +4103,10 @@ export default function VideoLibraryPage() {
             </aside>
           )}
 
-          {notice && (
+          {(notice || (showDouyinItems && sourceSyncWarning)) && (
             <div className="library-notice" role="status">
               <Info size={14} />
-              {notice}
+              {withPlatformSyncWarning(notice, showDouyinItems ? sourceSyncWarning : '')}
             </div>
           )}
           {batchExtracting && extractionJob && (

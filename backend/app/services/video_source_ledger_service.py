@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import case, func, select, update
+from sqlalchemy import and_, case, func, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
@@ -66,6 +66,12 @@ def legacy_source_meta(note: Note | None) -> dict[str, Any]:
     return dict(meta) if isinstance(meta, dict) else {}
 
 
+def source_timestamp(value: object) -> float:
+    """同一来源先按快照分组，不能把历史快照的 rank 0 混入新列表。"""
+    parsed = _parse_timestamp(value)
+    return parsed.timestamp() if parsed else 0
+
+
 def _validate_note_owner(
     db: Session,
     *,
@@ -121,6 +127,10 @@ def _upsert_statement(
             f"来源台账暂不支持数据库方言：{dialect}"
         )
 
+    newer_rank = and_(
+        insert_stmt.excluded.source_rank.is_not(None),
+        insert_stmt.excluded.source_synced_at >= VideoSourceLedger.source_synced_at,
+    )
     return insert_stmt.on_conflict_do_update(
         index_elements=["user_id", "video_id", "source_mode"],
         set_={
@@ -130,15 +140,17 @@ def _upsert_statement(
             ),
             "source_rank": case(
                 (
-                    insert_stmt.excluded.last_seen_at
-                    >= VideoSourceLedger.last_seen_at,
+                    newer_rank,
                     insert_stmt.excluded.source_rank,
                 ),
                 else_=VideoSourceLedger.source_rank,
             ),
             "first_seen_at": older_first_seen,
             "last_seen_at": newer_last_seen,
-            "source_synced_at": newer_synced,
+            "source_synced_at": case(
+                (newer_rank, newer_synced),
+                else_=VideoSourceLedger.source_synced_at,
+            ),
         },
     )
 

@@ -26,6 +26,7 @@ import {
 import LibraryCoverImage from '@/components/LibraryCoverImage';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import { buildHomeLinkDestination } from '@/lib/singleLinkImport';
+import { sortPlatformLibrarySource } from '@/lib/platformLibraryOrder';
 import {
   classifyHomeSourceModes,
   firstPopulatedHomeMode,
@@ -102,7 +103,7 @@ const CHANNEL_KEYS: ChannelKey[] = [
   'bilibili_import',
 ];
 
-const HOME_CACHE_VERSION = 'v5';
+const HOME_CACHE_VERSION = 'v6';
 const HOME_CACHE_MAX_AGE = 5 * 60 * 1000;
 
 function homeCacheKey(userId: string): string {
@@ -293,7 +294,7 @@ export default function WorkspaceActionHome() {
       });
       (['collect', 'like', 'import'] as const).forEach((mode) => {
         const key = `bilibili_${mode}` as ChannelKey;
-        nextPreviews[key] = toPlatformPreviews(fallbackBuckets[mode]);
+        nextPreviews[key] = toPlatformPreviews(sortPlatformLibrarySource(fallbackBuckets[mode], mode));
         nextTotals[key] = fallbackBuckets[mode].length;
       });
       publishChannels();
@@ -540,7 +541,7 @@ export default function WorkspaceActionHome() {
                       <small>{platform.description} · {platformTotal.toLocaleString('zh-CN')} 条</small>
                     </span>
                   </div>
-                  <Link href={`/library?platform=${platform.key}`}>
+                  <Link href={`/library?platform=${platform.key}&mode=${activeModes[platform.key]}`}>
                     全部
                     <ArrowRight size={13} weight="bold" aria-hidden="true" />
                   </Link>

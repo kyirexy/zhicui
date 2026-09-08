@@ -90,3 +90,12 @@ test('uses source rank for the synchronized scope instead of the current display
     'liked-second',
   ]);
 });
+
+test('最新同步范围不会被旧快照的更小rank打乱', () => {
+  const scoped = selectSyncedSourceScope([
+    item('old-first', { source_rank: 0, source_synced_at: '2026-09-07T00:00:00Z' }),
+    item('new-second', { source_rank: 1, source_synced_at: '2026-09-08T00:00:00Z' }),
+    item('new-first', { source_rank: 0, source_synced_at: '2026-09-08T00:00:00Z' }),
+  ], 2);
+  assert.deepEqual(scoped.map((entry) => entry.aweme_id), ['new-first', 'new-second']);
+});

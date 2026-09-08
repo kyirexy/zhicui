@@ -16,6 +16,8 @@ import tempfile
 import json
 import random
 import time
+import threading
+from collections import deque
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -1305,6 +1307,17 @@ def extract_transcript(
     return text
 
 
+def _drain_process_stderr(stream: Any, tail: deque[bytes]) -> None:
+    """持续排空 FFmpeg 错误管道，仅在内存保留有界尾部诊断。"""
+    try:
+        while chunk := stream.read(4096):
+            tail.append(chunk)
+    except (OSError, ValueError):
+        pass
+    finally:
+        stream.close()
+
+
 def extract_media_url_transcript(
     media_url: str,
     api_key: str,
@@ -1371,6 +1384,16 @@ def extract_media_url_transcript(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
         )
+        # 必须边写 stdin 边排空 stderr。等到 wait() 后才读 stderr 会形成
+        # 双向管道死锁，导致大量文案任务永久占住工作线程，连 wait 超时都到不了。
+        stderr_tail: deque[bytes] = deque(maxlen=4)
+        stderr_reader = threading.Thread(
+            target=_drain_process_stderr,
+            args=(process.stderr, stderr_tail),
+            name="zhicui-ffmpeg-stderr",
+            daemon=True,
+        )
+        stderr_reader.start()
         try:
             with _requests.Session() as session:
                 session.trust_env = False
@@ -1410,10 +1433,10 @@ def extract_media_url_transcript(
                 process.kill()
                 process.wait()
                 raise RuntimeError("FFmpeg 提取音频超时") from exc
+            stderr_reader.join(timeout=2)
             stderr = (
-                process.stderr.read().decode("utf-8", errors="replace")
-                if process.stderr is not None
-                else ""
+                "" if stderr_reader.is_alive()
+                else b"".join(stderr_tail).decode("utf-8", errors="replace")
             )
             if return_code != 0 or not audio_path.exists():
                 raise RuntimeError(f"FFmpeg 提取音频失败：{stderr[-300:]}")
@@ -1422,6 +1445,13 @@ def extract_media_url_transcript(
                 process.kill()
                 process.wait()
             raise
+        finally:
+            if process.stdin is not None:
+                try:
+                    process.stdin.close()
+                except OSError:
+                    pass
+            stderr_reader.join(timeout=2)
 
         if api_key:
             try:

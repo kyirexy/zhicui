@@ -861,6 +861,14 @@ export interface PlatformLibraryItem {
   card_type?: CardType | null;
   source_mode?: DouyinSourceMode | 'unknown' | 'import';
   source_modes?: DouyinSourceMode[];
+  source_rank?: number | null;
+  source_ranks?: Partial<Record<DouyinSourceMode | 'import', number>>;
+  source_synced_at?: string | null;
+  source_synced_ats?: Partial<Record<DouyinSourceMode | 'import', string>>;
+  source_order_reliable?: boolean;
+  source_order_reliabilities?: Partial<Record<DouyinSourceMode | 'import', boolean>>;
+  source_coverage?: 'complete' | 'limited' | 'partial' | 'unknown';
+  source_coverages?: Partial<Record<DouyinSourceMode | 'import', 'complete' | 'limited' | 'partial' | 'unknown'>>;
   /** 列表请求省略完整文稿；详情和导入响应才携带 Note。 */
   note?: NoteDetail;
 }

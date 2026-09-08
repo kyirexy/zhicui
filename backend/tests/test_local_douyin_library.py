@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -97,6 +98,46 @@ class LocalDouyinLibraryTests(unittest.TestCase):
         self.assertEqual(a_items[0]["title"], "更新后的标题")
         self.assertEqual(b_items[0]["title"], "另一个用户的标题")
         self.assertEqual(a_items[0]["provider"], "desktop-local")
+
+    def test_new_snapshot_prefix_does_not_mix_with_old_rank_zero(self) -> None:
+        old = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        new = datetime(2026, 8, 2, tzinfo=timezone.utc)
+        a, b, c = '7672579366093622537', '7672579366093622538', '7672579366093622539'
+        local_douyin_library_service.ingest_items(self.db, user_id=self.user_a.id,
+            source_mode='collect', source_synced_at=old,
+            items=[self.item(a, source_rank=0), self.item(b, source_rank=1)])
+        local_douyin_library_service.ingest_items(self.db, user_id=self.user_a.id,
+            source_mode='collect', source_synced_at=new,
+            items=[self.item(c, source_rank=0), self.item(b, source_rank=1)])
+        rows = local_douyin_library_service.list_items(self.db, user_id=self.user_a.id, source_mode='collect')
+        self.assertEqual([item['aweme_id'] for item in rows], [c, b, a])
+
+    def test_delayed_snapshot_and_transcript_observation_cannot_reset_rank(self) -> None:
+        from app.services import video_source_ledger_service as ledger
+        old = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        new = datetime(2026, 8, 2, tzinfo=timezone.utc)
+        video = '7672579366093622537'
+        for stamp, rank in [(new, 3), (old, 0)]:
+            local_douyin_library_service.ingest_items(self.db, user_id=self.user_a.id,
+                source_mode='like', source_synced_at=stamp, items=[self.item(video, source_rank=rank)])
+        ledger.upsert_source(self.db, user_id=self.user_a.id, video_id=video, source_mode='like')
+        self.db.expire_all()
+        row = self.db.query(VideoSourceLedger).filter_by(user_id=self.user_a.id, video_id=video).one()
+        self.assertEqual(row.source_rank, 3)
+        self.assertEqual(row.source_synced_at.replace(tzinfo=timezone.utc), new)
+
+    def test_complete_snapshot_reconciles_only_that_source_membership(self) -> None:
+        old = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        new = datetime(2026, 8, 2, tzinfo=timezone.utc)
+        a, b = '7672579366093622537', '7672579366093622538'
+        for mode in ['collect', 'like']:
+            local_douyin_library_service.ingest_items(self.db, user_id=self.user_a.id, source_mode=mode,
+                source_synced_at=old, items=[self.item(a), self.item(b, source_rank=1)])
+        local_douyin_library_service.ingest_items(self.db, user_id=self.user_a.id, source_mode='collect',
+            source_synced_at=new, source_coverage='complete', source_order_reliable=True, items=[self.item(b)])
+        self.assertEqual(self.db.query(VideoSourceLedger).filter_by(source_mode='collect').count(), 1)
+        self.assertEqual(self.db.query(VideoSourceLedger).filter_by(source_mode='like').count(), 2)
+        self.assertEqual(self.db.query(DouyinLocalLibraryItem).count(), 2)
 
     def test_sensitive_and_noncanonical_fields_are_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "不得包含"):

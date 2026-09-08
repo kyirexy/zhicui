@@ -339,7 +339,7 @@ async function executeLibraryAutoSync(
           continue;
         }
         listResponse.data.items
-          .filter((item) => item.can_extract && !item.extracted)
+          .filter((item) => item.can_extract && !(item.extracted_note_id && item.transcript_chars > 0))
           .forEach((item) => targetIds.add(item.aweme_id));
       } catch (error) {
         syncFailures.push(

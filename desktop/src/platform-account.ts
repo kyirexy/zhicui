@@ -4,6 +4,7 @@ import {
   chromium,
   type BrowserContext,
   type Page,
+  type Request,
   type Response,
 } from 'playwright-core';
 import type {
@@ -27,7 +28,7 @@ import {
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 const XHS_PROFILE_TIMEOUT_MS = 2 * 60 * 1000;
 const POLL_INTERVAL_MS = 1200;
-const MAX_BILIBILI_FOLDERS = 20;
+const MAX_BILIBILI_FOLDERS = 100;
 const MAX_XHS_SCROLLS = 8;
 const MAX_DOUYIN_SCROLLS = 36;
 const BILIBILI_LOGIN_URL = 'https://passport.bilibili.com/login';
@@ -49,9 +50,12 @@ interface PlatformCookie {
   domain: string;
 }
 
-interface RankedUrl {
-  url: string;
-  rank: number;
+export interface PlatformSourceCollection {
+  urls: string[];
+  items?: PlatformAccountItem[];
+  coverage: 'complete' | 'limited' | 'partial';
+  orderReliable: boolean;
+  warning?: string;
 }
 
 function wait(milliseconds: number): Promise<void> {
@@ -81,7 +85,8 @@ function firstText(...values: unknown[]): string {
   return '';
 }
 
-function firstUrl(value: unknown): string {
+function firstUrl(value: unknown, depth = 0): string {
+  if (depth > 6) return '';
   if (typeof value === 'string') {
     const raw = value.trim();
     if (/^https:\/\//i.test(raw)) return raw;
@@ -89,12 +94,13 @@ function firstUrl(value: unknown): string {
     if (/^\/\//.test(raw)) return `https:${raw}`;
     return '';
   }
+  if (!value || typeof value !== 'object') return '';
   const payload = record(value);
   for (const candidate of list(payload.url_list)) {
-    const url = firstUrl(candidate);
+    const url = firstUrl(candidate, depth + 1);
     if (url) return url;
   }
-  return firstUrl(payload.url || payload.uri);
+  return firstUrl(payload.url || payload.uri, depth + 1);
 }
 
 function firstUrlOf(...values: unknown[]): string {
@@ -179,9 +185,308 @@ export function isDouyinSourceResponseUrl(
 
 export function readDouyinSourceRecords(value: unknown): unknown[] {
   const payload = record(value);
-  const direct = list(payload.aweme_list);
-  if (direct.length > 0) return direct;
+  if (Array.isArray(payload.aweme_list)) return payload.aweme_list;
   return list(record(payload.data).aweme_list);
+}
+
+function optionalBoolean(value: unknown): boolean | undefined {
+  if (value === true || value === 1 || value === '1') return true;
+  if (value === false || value === 0 || value === '0') return false;
+  return undefined;
+}
+
+interface DouyinSourcePage {
+  requestCursor: string;
+  nextCursor: string | null;
+  hasMore: boolean | undefined;
+  items: PlatformAccountItem[];
+  malformedItems: boolean;
+}
+
+/** 按官方游标链接组织页，不能把网络完成顺序或作品发布时间当作收藏顺序。 */
+export class DouyinSourcePages {
+  private readonly pages = new Map<string, { sequence: number; page: DouyinSourcePage | null }>();
+  private generationStart = -1;
+
+  begin(url: string, sequence: number): void {
+    const params = new URL(url).searchParams;
+    const cursor = params.get('max_cursor') ?? params.get('cursor') ?? params.get('min_cursor') ?? '0';
+    if (cursor === '0' && sequence > this.generationStart) {
+      // 重新加载首屏后，旧一轮的后续页不再是可用于成员清理的完整快照。
+      this.pages.clear();
+      this.generationStart = sequence;
+    }
+    const previous = this.pages.get(cursor);
+    if (!previous || previous.sequence <= sequence) this.pages.set(cursor, { sequence, page: null });
+  }
+
+  add(url: string, value: unknown, sequence: number): boolean {
+    if (sequence < this.generationStart) return false;
+    const payload = record(value);
+    const data = Array.isArray(payload.aweme_list) ? payload : record(payload.data);
+    if (!Array.isArray(data.aweme_list)) return false;
+    if (payload.status_code !== undefined && payload.status_code !== 0 && payload.status_code !== '0') return false;
+    const params = new URL(url).searchParams;
+    const cursorKey = ['max_cursor', 'cursor', 'min_cursor'].find((key) => params.has(key));
+    const requestCursor = cursorKey ? params.get(cursorKey)! : '0';
+    const cursorValue = (cursorKey ? data[cursorKey] : undefined) ?? data.max_cursor ?? data.cursor ?? data.min_cursor;
+    const normalized = data.aweme_list.map((entry, index) => {
+      try { return normalizeDouyinRecord(entry, index); } catch { return null; }
+    });
+    const page: DouyinSourcePage = {
+      requestCursor,
+      nextCursor: cursorValue === undefined || cursorValue === null ? null : String(cursorValue),
+      hasMore: optionalBoolean(data.has_more ?? data.hasMore),
+      // 只读取 aweme_list 的直接成员，禁止递归加入相关作品和推荐条目。
+      items: normalized.filter((item): item is PlatformAccountItem => item !== null),
+      malformedItems: normalized.some((item) => item === null),
+    };
+    const previous = this.pages.get(requestCursor);
+    if (!previous || previous.sequence <= sequence) this.pages.set(requestCursor, { sequence, page });
+    return true;
+  }
+
+  snapshot(limit: number): PlatformSourceCollection {
+    const items = new Map<string, PlatformAccountItem>();
+    const visited = new Set<string>();
+    let cursor = '0';
+    let ended = false;
+    let malformedItems = false;
+    while (!visited.has(cursor)) {
+      visited.add(cursor);
+      const page = this.pages.get(cursor)?.page;
+      if (!page) break;
+      malformedItems ||= page.malformedItems;
+      for (const item of page.items) mergeDouyinItem(items, item, limit + 1);
+      if (page.hasMore === false) {
+        ended = true;
+        break;
+      }
+      if (items.size >= limit || !page.nextCursor) break;
+      cursor = page.nextCursor;
+    }
+    const values = [...items.values()].slice(0, limit)
+      .map((item, sourceRank) => ({ ...item, sourceRank }));
+    const coverage = malformedItems ? 'partial' : ended && items.size <= limit ? 'complete'
+      : items.size >= limit ? 'limited' : 'partial';
+    return {
+      urls: values.map((item) => item.sourceUrl),
+      items: values,
+      coverage,
+      orderReliable: Boolean(this.pages.get('0')?.page),
+      warning: coverage === 'partial'
+        ? '官方列表尚未完整读取，本次仅保留已确认顺序的作品；请稍后重试'
+        : coverage === 'limited' ? `本次读取前 ${limit} 条，未扫描全部作品` : undefined,
+    };
+  }
+}
+
+export function readBilibiliLikeRecords(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  const data = record(value);
+  if (Array.isArray(data.list)) return data.list;
+  return list(record(data.list).vlist);
+}
+
+type BilibiliRequest = (url: string) => Promise<unknown>;
+
+export async function requestBilibiliJson(
+  context: Pick<BrowserContext, 'request'>,
+  url: string,
+  cancelled: () => boolean = () => false,
+  delay: (milliseconds: number) => Promise<void> = wait,
+): Promise<unknown> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (cancelled()) throw new Error('同步已取消');
+    let response;
+    try {
+      response = await context.request.get(url, {
+        timeout: 15_000,
+        headers: { Referer: 'https://space.bilibili.com/' },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (attempt < 2 && /Timeout|ETIMEDOUT|ECONNRESET|socket hang up/i.test(message)) {
+        await delay(600 * (2 ** attempt));
+        continue;
+      }
+      throw error;
+    }
+    if (!response.ok()) {
+      const status = response.status();
+      await response.dispose();
+      // 仅重试短暂网络/网关错误，不重试登录失败、429 或平台验证限制。
+      if (attempt < 2 && [500, 502, 503, 504].includes(status)) {
+        await delay(600 * (2 ** attempt));
+        continue;
+      }
+      throw new Error(`B站账号接口暂不可用（${status}）`);
+    }
+    let payload: Record<string, unknown>;
+    try {
+      payload = record(await response.json());
+    } finally {
+      // Playwright 的 APIResponse 默认缓存整个 body；逐页释放以限制同步内存。
+      await response.dispose();
+    }
+    if (payload.code === undefined) throw new Error('B站账号接口返回格式异常，请稍后重试');
+    if (payload.code !== 0 && payload.code !== '0') {
+      const message = String(payload.message || payload.msg || '账号接口拒绝请求');
+      throw new Error(`B站${message.slice(0, 80)}`);
+    }
+    return payload.data;
+  }
+  throw new Error('B站账号接口暂不可用，请稍后重试');
+}
+
+/** 点赞保留接口原序；多收藏夹按收藏时间归并，绝不使用视频发布时间补排序。 */
+export async function collectBilibiliSource(
+  request: BilibiliRequest,
+  mode: PlatformAccountSourceMode,
+  limit: number,
+  cancelled: () => boolean = () => false,
+): Promise<PlatformSourceCollection> {
+  const nav = record(await request('https://api.bilibili.com/x/web-interface/nav'));
+  const mid = numeric(nav.mid);
+  if (!mid || nav.isLogin === false) throw new Error('B站登录状态无效，请重新登录');
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  let malformedItems = false;
+  const append = (value: unknown): boolean => {
+    const bvid = firstText(record(value).bvid);
+    const url = bvid ? normalizeBilibiliUrl(`https://www.bilibili.com/video/${bvid}`) : null;
+    if (!url) { malformedItems = true; return false; }
+    if (seen.has(url)) return false;
+    seen.add(url);
+    urls.push(url);
+    return true;
+  };
+  if (mode === 'like') {
+    const fingerprints = new Set<string>();
+    let ended = false;
+    let warning = '';
+    for (let page = 1; page <= Math.ceil(limit / 50) + 3 && urls.length < limit && !cancelled(); page += 1) {
+      let data: unknown;
+      try {
+        data = await request(`https://api.bilibili.com/x/space/like/video?vmid=${mid}&pn=${page}&ps=50`);
+      } catch (error) {
+        if (!urls.length) throw error;
+        warning = '后续点赞分页暂不可用，本次只读取了部分作品';
+        break;
+      }
+      if (!Array.isArray(data) && !Array.isArray(record(data).list)
+        && !Array.isArray(record(record(data).list).vlist)) {
+        if (!urls.length) throw new Error('B站点赞分页格式异常，请稍后重试');
+        warning = '后续点赞分页格式异常，本次只读取了部分作品';
+        break;
+      }
+      const videos = readBilibiliLikeRecords(data);
+      const fingerprint = JSON.stringify(videos.map((entry) => firstText(record(entry).bvid)));
+      if (videos.length && fingerprints.has(fingerprint)) {
+        warning = '平台返回了重复分页，本次只读取了部分作品';
+        break;
+      }
+      fingerprints.add(fingerprint);
+      for (const value of videos) append(value);
+      const hasMore = optionalBoolean(record(data).has_more ?? record(data).hasMore);
+      if (hasMore === false) {
+        ended = true;
+        break;
+      }
+      // 未声明 has_more 的短页不能证明完整：平台实际页大小可能低于请求值。
+      if (videos.length === 0) break;
+    }
+    const coverage = warning || malformedItems ? 'partial'
+      : ended && urls.length <= limit ? 'complete' : urls.length >= limit ? 'limited' : 'partial';
+    return {
+      urls: urls.slice(0, limit), coverage, orderReliable: true,
+      warning: warning || (coverage === 'limited' ? `本次读取前 ${limit} 条，未扫描全部作品`
+        : coverage === 'partial' ? '点赞分页尚未完整读取，请稍后重试' : undefined),
+    };
+  }
+
+  const foldersData = record(await request(`https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=${mid}`));
+  if (!Array.isArray(foldersData.list)) throw new Error('B站收藏夹列表格式异常，请稍后重试');
+  const allFolders = list(foldersData.list);
+  const folders = allFolders.slice(0, MAX_BILIBILI_FOLDERS).map((value, index) => ({
+    id: numeric(record(value).media_id ?? record(value).id ?? record(value).fid),
+    index, page: 0, offset: 0, items: [] as unknown[], ended: false, confirmedEnd: false,
+    fingerprints: new Set<string>(),
+  }));
+  let warning = allFolders.length > MAX_BILIBILI_FOLDERS ? '收藏夹数量超过本次读取上限，尚未覆盖全部收藏夹' : '';
+  let orderReliable = !warning;
+  let missingFavoriteTime = false;
+  const fetchPage = async (folder: typeof folders[number]): Promise<void> => {
+    if (cancelled() || folder.ended) return;
+    if (folder.id <= 0) throw new Error('B站收藏夹缺少有效的资源 ID，请重试');
+    if (folder.page >= Math.ceil(limit / 20) + 3) {
+      warning = '收藏分页达到本次安全上限，尚未读取完整';
+      folder.ended = true;
+      return;
+    }
+    const data = record(await request(`https://api.bilibili.com/x/v3/fav/resource/list?media_id=${folder.id}&pn=${folder.page + 1}&ps=20&keyword=&order=mtime&type=0&tid=0&platform=web`));
+    if (!Array.isArray(data.medias) && data.medias !== null) throw new Error('B站收藏分页格式异常，请稍后重试');
+    const medias = list(data.medias);
+    const fingerprint = JSON.stringify(medias.map((entry) => firstText(record(entry).bvid)));
+    if (medias.length && folder.fingerprints.has(fingerprint)) {
+      warning = '平台返回了重复收藏分页，本次只读取了部分作品';
+      folder.ended = true;
+      return;
+    }
+    folder.fingerprints.add(fingerprint);
+    folder.page += 1;
+    folder.items = medias;
+    folder.offset = 0;
+    const hasMore = optionalBoolean(data.has_more ?? data.hasMore);
+    folder.confirmedEnd = hasMore === false;
+    folder.ended = folder.confirmedEnd || medias.length === 0;
+    if (medias.some((media) => !firstText(record(media).bvid))) malformedItems = true;
+    if (folders.length > 1 && medias.some((media) => numeric(record(media).fav_time) <= 0)) {
+      orderReliable = false;
+      missingFavoriteTime = true;
+    }
+  };
+  // 两个只读请求并行预取各收藏夹首屏。后续仅推进归并用到的夹，避免完整扫描每个夹。
+  let nextFolder = 0;
+  let firstScreenError: unknown;
+  await Promise.all([0, 1].map(async () => {
+    while (nextFolder < folders.length && !cancelled() && !firstScreenError) {
+      try {
+        await fetchPage(folders[nextFolder++]);
+      } catch (error) {
+        firstScreenError = error;
+      }
+    }
+  }));
+  if (firstScreenError) throw firstScreenError;
+  while (urls.length < limit && !cancelled()) {
+    const candidates = folders.filter((folder) => folder.offset < folder.items.length);
+    if (!candidates.length) break;
+    candidates.sort((left, right) => (
+      numeric(record(right.items[right.offset]).fav_time) - numeric(record(left.items[left.offset]).fav_time)
+      || left.index - right.index
+    ));
+    const folder = candidates[0];
+    append(folder.items[folder.offset++]);
+    if (folder.offset >= folder.items.length && !folder.ended && urls.length < limit) {
+      try {
+        await fetchPage(folder);
+      } catch (error) {
+        // 缺失任意夹的下一页后，其他夹的条目不再保证是全局下一条，因此在此停止。
+        if (!urls.length) throw error;
+        warning = '后续收藏分页暂不可用，本次只读取了部分作品';
+        break;
+      }
+    }
+  }
+  const ended = folders.every((folder) => folder.confirmedEnd && folder.offset >= folder.items.length);
+  const coverage = warning || malformedItems ? 'partial' : ended ? 'complete' : urls.length >= limit ? 'limited' : 'partial';
+  return {
+    urls: urls.slice(0, limit), coverage, orderReliable,
+    warning: [warning, missingFavoriteTime ? '部分作品缺少收藏时间，跨收藏夹顺序暂无法完整校准' : '',
+      coverage === 'limited' ? `本次读取前 ${limit} 条，未扫描全部作品`
+        : coverage === 'partial' && !warning ? '收藏分页尚未完整读取，请稍后重试' : ''].filter(Boolean).join('；') || undefined,
+  };
 }
 
 export async function readDouyinMetadataPayload(
@@ -448,14 +753,17 @@ export class PlatformAccountConnector {
             : '正在读取最近喜欢…',
         launched.browser,
       );
-      const douyinItems = request.platform === 'douyin'
+      const collection = request.platform === 'douyin'
         ? await this.collectDouyin(launched.context, request.mode, request.limit)
-        : [];
-      const urls = request.platform === 'bilibili'
+        : request.platform === 'bilibili'
         ? await this.collectBilibili(launched.context, request.mode, request.limit)
-        : request.platform === 'xiaohongshu'
-          ? await this.collectXiaohongshu(launched.context, request.mode, request.limit)
-          : douyinItems.map((item) => item.sourceUrl);
+        : {
+          urls: await this.collectXiaohongshu(launched.context, request.mode, request.limit),
+          coverage: 'partial' as const,
+          orderReliable: false,
+          warning: '本次仅读取官方页面可见作品，未确认全部分页',
+        };
+      const { urls } = collection;
       if (this.cancelled) {
         return { success: false, cancelled: true, platform: request.platform };
       }
@@ -469,15 +777,14 @@ export class PlatformAccountConnector {
       this.notifyStatus(
         request.platform,
         'success',
-        `已读取 ${urls.length} 条${request.mode === 'collect' ? '收藏' : request.mode === 'post' ? '自己的' : '喜欢'}作品`,
+        collection.warning || `已读取 ${urls.length} 条${request.mode === 'collect' ? '收藏' : request.mode === 'post' ? '自己的' : '喜欢'}作品`,
         launched.browser,
       );
       return {
         success: true,
         connected: true,
         platform: request.platform,
-        urls,
-        items: douyinItems.length > 0 ? douyinItems : undefined,
+        ...collection,
         count: urls.length,
       };
     });
@@ -600,87 +907,18 @@ export class PlatformAccountConnector {
   private async requestBilibili(
     context: BrowserContext,
     url: string,
-  ): Promise<Record<string, unknown>> {
-    const response = await context.request.get(url, {
-      timeout: 20_000,
-      headers: { Referer: 'https://space.bilibili.com/' },
-    });
-    if (!response.ok()) throw new Error(`B站账号接口暂不可用（${response.status()}）`);
-    const payload = record(await response.json());
-    if (numeric(payload.code) !== 0) {
-      const message = String(payload.message || payload.msg || '账号接口拒绝请求');
-      throw new Error(`B站${message.slice(0, 80)}`);
-    }
-    return record(payload.data);
+  ): Promise<unknown> {
+    return requestBilibiliJson(context, url, () => this.cancelled);
   }
 
   private async collectBilibili(
     context: BrowserContext,
     mode: PlatformAccountSourceMode,
     limit: number,
-  ): Promise<string[]> {
-    const nav = await this.requestBilibili(
-      context,
-      'https://api.bilibili.com/x/web-interface/nav',
+  ): Promise<PlatformSourceCollection> {
+    return collectBilibiliSource(
+      (url) => this.requestBilibili(context, url), mode, limit, () => this.cancelled,
     );
-    const mid = numeric(nav.mid);
-    if (!mid) throw new Error('B站登录状态无效，请重新登录');
-    const ranked: RankedUrl[] = [];
-    // like 接口单页最多 50，收藏接口单页最多 20；超过单页上限时分页拉取。
-    const pageSize = mode === 'like' ? 50 : 20;
-    const pageCap = Math.ceil(limit / pageSize);
-    if (mode === 'like') {
-      for (let page = 1; page <= pageCap && ranked.length < limit && !this.cancelled; page += 1) {
-        const data = await this.requestBilibili(
-          context,
-          `https://api.bilibili.com/x/space/like/video?vmid=${mid}&pn=${page}&ps=${pageSize}`,
-        );
-        const videos = list(record(data.list).vlist);
-        for (const value of videos) {
-          const video = record(value);
-          const bvid = String(video.bvid || '').trim();
-          if (!bvid) continue;
-          ranked.push({
-            url: `https://www.bilibili.com/video/${bvid}`,
-            rank: numeric(video.created || video.pubdate),
-          });
-        }
-        if (videos.length < pageSize) break;
-      }
-    } else {
-      const foldersData = await this.requestBilibili(
-        context,
-        `https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=${mid}`,
-      );
-      const folders = list(foldersData.list).slice(0, MAX_BILIBILI_FOLDERS);
-      for (const value of folders) {
-        if (this.cancelled || ranked.length >= limit) break;
-        const folder = record(value);
-        // B站默认收藏夹的 fid 为 0，id/fid 可能缺省或为 0；media_id 才是取资源列表所需的字段。
-        // 不能因为 fid === 0 就跳过，否则仅使用默认收藏夹的账号会一个作品都读不到。
-        const mediaId = numeric(folder.media_id ?? folder.id ?? folder.fid);
-        if (!Number.isFinite(mediaId)) continue;
-        for (let page = 1; page <= pageCap && ranked.length < limit; page += 1) {
-          const folderData = await this.requestBilibili(
-            context,
-            `https://api.bilibili.com/x/v3/fav/resource/list?media_id=${mediaId}&pn=${page}&ps=${pageSize}&keyword=&order=mtime&type=0&tid=0&platform=web`,
-          );
-          const medias = list(folderData.medias);
-          for (const mediaValue of medias) {
-            const media = record(mediaValue);
-            const bvid = String(media.bvid || '').trim();
-            if (!bvid) continue;
-            ranked.push({
-              url: `https://www.bilibili.com/video/${bvid}`,
-              rank: numeric(media.fav_time || media.ctime || media.pubtime),
-            });
-          }
-          if (medias.length < pageSize) break;
-        }
-      }
-    }
-    ranked.sort((left, right) => right.rank - left.rank);
-    return boundedPlatformUrls('bilibili', ranked.map((item) => item.url), limit);
   }
 
   private async collectXiaohongshu(
@@ -735,78 +973,6 @@ export class PlatformAccountConnector {
     return collected;
   }
 
-  private collectDouyinRecords(
-    value: unknown,
-    target: Map<string, PlatformAccountItem>,
-    limit: number,
-    depth = 0,
-  ): void {
-    // Even after the visible card list reaches the requested limit, keep
-    // walking bounded response payloads so richer author/cover/media records
-    // can upgrade those same IDs. mergeDouyinItem still refuses new IDs once
-    // the limit is full.
-    if (depth > 7) return;
-    if (Array.isArray(value)) {
-      for (const entry of value.slice(0, 500)) {
-        this.collectDouyinRecords(entry, target, limit, depth + 1);
-      }
-      return;
-    }
-    const payload = record(value);
-    if (Object.keys(payload).length === 0) return;
-    const item = normalizeDouyinRecord(payload, target.size);
-    if (item) mergeDouyinItem(target, item, limit);
-    for (const entry of Object.values(payload)) {
-      if (typeof entry !== 'object' || entry === null) continue;
-      this.collectDouyinRecords(entry, target, limit, depth + 1);
-    }
-  }
-
-  private async collectVisibleDouyinCards(
-    page: Page,
-    target: Map<string, PlatformAccountItem>,
-    limit: number,
-  ): Promise<void> {
-    const values = await page.locator('a[href*="/video/"]:visible').evaluateAll(
-      (anchors) => anchors.slice(0, 300).map((node) => {
-        const anchor = node as HTMLAnchorElement;
-        const image = anchor.querySelector('img') as HTMLImageElement | null;
-        const ownText = (anchor.textContent || '').trim();
-        return {
-          href: anchor.href,
-          text: ownText.length <= 500 ? ownText : '',
-          image: image?.currentSrc || image?.src || '',
-          imageAlt: image?.alt || '',
-          ariaLabel: anchor.getAttribute('aria-label') || anchor.title || '',
-        };
-      }),
-    ).catch(() => [] as Array<{
-      href: string;
-      text: string;
-      image: string;
-      imageAlt: string;
-      ariaLabel: string;
-    }>);
-    for (const value of values) {
-      if (target.size >= limit) break;
-      const sourceUrl = normalizeDouyinUrl(value.href);
-      const match = sourceUrl?.match(/\/video\/(\d{5,32})$/);
-      if (!sourceUrl || !match) continue;
-      const caption = firstText(value.imageAlt, value.ariaLabel, value.text).slice(0, 500);
-      mergeDouyinItem(target, {
-        videoId: match[1],
-        sourceUrl,
-        title: firstText(value.imageAlt, value.ariaLabel, value.text, '抖音作品').slice(0, 500),
-        caption,
-        authorName: '',
-        coverUrl: /^https:\/\//i.test(value.image) ? value.image.slice(0, 2048) : '',
-        publishedAt: '',
-        durationSeconds: 0,
-        sourceRank: target.size,
-      }, limit);
-    }
-  }
-
   private async selectDouyinTab(
     page: Page,
     platform: PlatformAccountProvider,
@@ -821,7 +987,6 @@ export class PlatformAccountConnector {
         const candidate = matches.nth(index);
         if (!await candidate.isVisible().catch(() => false)) continue;
         if (await candidate.click({ timeout: 2500 }).then(() => true).catch(() => false)) {
-          await page.waitForTimeout(900);
           return true;
         }
       }
@@ -854,59 +1019,93 @@ export class PlatformAccountConnector {
     context: BrowserContext,
     mode: PlatformAccountSourceMode,
     limit: number,
-  ): Promise<PlatformAccountItem[]> {
+  ): Promise<PlatformSourceCollection> {
     const page = context.pages()[0] || await context.newPage();
-    const items = new Map<string, PlatformAccountItem>();
+    const pages = new DouyinSourcePages();
     const pending = new Set<Promise<void>>();
-    let targetPayloadSeen = false;
+    const requestSequences = new WeakMap<Request, number>();
+    const activeRequests = new Set<Request>();
+    let nextRequestSequence = 0;
+    let lastRequestAt = Date.now();
+    let lastResponseAt = Date.now();
+    const onRequest = (request: Request): void => {
+      if (!isDouyinSourceResponseUrl(request.url(), mode)) return;
+      const sequence = nextRequestSequence++;
+      requestSequences.set(request, sequence);
+      pages.begin(request.url(), sequence);
+      activeRequests.add(request);
+      lastRequestAt = Date.now();
+    };
+    const onRequestSettled = (request: Request): void => { activeRequests.delete(request); };
     const onResponse = (response: Response): void => {
+      if (!isDouyinSourceResponseUrl(response.url(), mode)) return;
+      const sequence = requestSequences.get(response.request()) ?? nextRequestSequence++;
       const work = readDouyinMetadataPayload(response, mode)
         .then((payload) => {
           if (payload === null) return;
-          targetPayloadSeen = true;
-          this.collectDouyinRecords(readDouyinSourceRecords(payload), items, limit);
+          if (pages.add(response.url(), payload, sequence)) lastResponseAt = Date.now();
         })
-        .then(() => undefined);
+        .catch(() => undefined);
       pending.add(work);
       void work.finally(() => pending.delete(work));
     };
     try {
+      // 在导航前注册以捕获首屏；只接受目标分类的官方列表接口。
+      page.on('request', onRequest);
+      page.on('requestfinished', onRequestSettled);
+      page.on('requestfailed', onRequestSettled);
+      page.on('response', onResponse);
       await page.goto(DOUYIN_PROFILE_URL, { waitUntil: 'commit', timeout: 25_000 })
         .catch(() => undefined);
       const browser = context.browser()?.browserType().name() === 'chromium'
         ? 'chrome'
         : 'msedge';
-      // 导航预热阶段会返回默认“作品”和推荐流；只在进入本人主页后监听
-      // 当前 mode 的精确接口，避免把别的 tab 整批写成收藏或喜欢。
-      page.on('response', onResponse);
       await this.selectDouyinTab(page, 'douyin', mode, browser);
       let unchangedRounds = 0;
-      for (let index = 0; index < MAX_DOUYIN_SCROLLS && items.size < limit; index += 1) {
+      for (let index = 0; index < MAX_DOUYIN_SCROLLS; index += 1) {
         if (this.cancelled) break;
-        const before = items.size;
-        await Promise.allSettled([...pending]);
-        // 官方接口不可见时才使用已切换 tab 的可见卡片；接口明确返回空
-        // 代表真实 0 条，不能再从页面推荐区猜测来源。
-        if (!targetPayloadSeen) {
-          await this.collectVisibleDouyinCards(page, items, limit);
-        }
-        unchangedRounds = items.size === before ? unchangedRounds + 1 : 0;
-        if (items.size >= limit || unchangedRounds >= 5) break;
+        // 不无限等待一个流式/挂起的响应；只观察官方页面，不主动伪造签名或翻页请求。
+        await Promise.race([Promise.allSettled([...pending]), wait(1500)]);
+        const before = pages.snapshot(limit);
+        if (before.coverage !== 'partial') break;
         await page.evaluate(() => {
-          window.scrollBy({
-            top: Math.max(window.innerHeight * 0.88, 720),
-            behavior: 'instant',
+          // 部分版本的个人主页使用内层滚动容器，滚动 window 不会触发下一页。
+          const anchor = document.querySelector('a[href*="/video/"]');
+          let scrollTarget: Element | null = anchor?.parentElement || null;
+          while (scrollTarget) {
+            const style = getComputedStyle(scrollTarget);
+            if (/(auto|scroll)/.test(style.overflowY)
+              && scrollTarget.scrollHeight > scrollTarget.clientHeight + 100) break;
+            scrollTarget = scrollTarget.parentElement;
+          }
+          const target = scrollTarget || document.scrollingElement;
+          target?.scrollBy({
+            top: Math.max((target.clientHeight || window.innerHeight) * 0.88, 720), behavior: 'instant',
           });
         }).catch(() => undefined);
-        await page.waitForTimeout(850);
+        const responseDeadline = Date.now() + 2200;
+        const responseAt = lastResponseAt;
+        while (!this.cancelled && Date.now() < responseDeadline) {
+          await wait(200);
+          if (lastResponseAt !== responseAt) break;
+        }
+        const after = pages.snapshot(limit);
+        unchangedRounds = after.urls.length === before.urls.length ? unchangedRounds + 1 : 0;
+        if (after.coverage !== 'partial'
+          || (unchangedRounds >= 5 && (activeRequests.size === 0 || Date.now() - lastRequestAt > 20_000))) break;
       }
-      await Promise.allSettled([...pending]);
+      await Promise.race([Promise.allSettled([...pending]), wait(1500)]);
     } finally {
       page.off('response', onResponse);
+      page.off('request', onRequest);
+      page.off('requestfinished', onRequestSettled);
+      page.off('requestfailed', onRequestSettled);
     }
-    return [...items.values()]
-      .slice(0, limit)
-      .map((item, sourceRank) => ({ ...item, sourceRank }));
+    const result = pages.snapshot(limit);
+    if (!result.orderReliable && !this.cancelled) {
+      throw new Error('没有读取到抖音官方分类首屏；请确认本人主页和对应标签，完成官方验证后重试');
+    }
+    return result;
   }
 
   private latestPage(context: BrowserContext, fallback: Page): Page {

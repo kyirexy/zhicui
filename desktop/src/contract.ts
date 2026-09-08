@@ -128,6 +128,10 @@ export interface PlatformAccountResult {
   urls?: string[];
   items?: PlatformAccountItem[];
   count?: number;
+  /** complete 仅用于官方分页明确结束；limited 为达到本次读取上限。 */
+  coverage?: 'complete' | 'limited' | 'partial';
+  orderReliable?: boolean;
+  warning?: string;
 }
 
 export interface DesktopUpdateResult {

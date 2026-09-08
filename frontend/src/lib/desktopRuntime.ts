@@ -123,6 +123,9 @@ export interface PlatformAccountResult {
   urls?: string[];
   items?: PlatformAccountItem[];
   count?: number;
+  coverage?: 'complete' | 'limited' | 'partial';
+  orderReliable?: boolean;
+  warning?: string;
 }
 
 export interface DesktopUpdateResult {

@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 from urllib.parse import urlsplit, urlunsplit
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.models.douyin_local_library_item import DouyinLocalLibraryItem
+from app.models.user import User
 from app.models.video_source_ledger import VideoSourceLedger
 from app.services import note_service, video_source_ledger_service
 
@@ -207,6 +208,9 @@ def ingest_items(
     user_id: str,
     source_mode: str,
     items: Iterable[dict[str, Any]],
+    source_synced_at: datetime | None = None,
+    source_order_reliable: bool = False,
+    source_coverage: str = "partial",
 ) -> dict[str, Any]:
     mode = video_source_ledger_service.normalize_source_mode(source_mode)
     if mode not in _SOURCE_MODES:
@@ -227,6 +231,10 @@ def ingest_items(
         raise ValueError("抖音本地同步没有可登记的作品")
     _discard_repeated_page_metadata(normalized)
 
+    # 同一用户的短快照写入串行，防止旧请求在新快照检查后插回旧成员。
+    # SQLite 忽略 FOR UPDATE；生产 PostgreSQL 在事务结束时释放行锁。
+    db.execute(select(User.id).where(User.id == user_id).with_for_update()).scalar_one()
+
     existing_rows = db.execute(
         select(DouyinLocalLibraryItem).where(
             DouyinLocalLibraryItem.user_id == user_id,
@@ -240,6 +248,22 @@ def ingest_items(
         user_id=user_id,
     )
     now = _utcnow()
+    synced_at = source_synced_at or now
+    if synced_at.tzinfo is None:
+        synced_at = synced_at.replace(tzinfo=timezone.utc)
+    synced_at = synced_at.astimezone(timezone.utc)
+    if synced_at > now + timedelta(minutes=5):
+        raise ValueError("同步时间超出允许范围，请校准设备时间")
+    latest = db.execute(select(func.max(VideoSourceLedger.source_synced_at)).where(
+        VideoSourceLedger.user_id == user_id, VideoSourceLedger.source_mode == mode,
+    )).scalar_one_or_none()
+    if latest and video_source_ledger_service.source_timestamp(latest) > synced_at.timestamp():
+        return {
+            "accepted": 0, "created": 0, "reused": 0, "ready": 0, "quarantined": 0,
+            "source_mode": mode, "source_synced_at": latest.isoformat(),
+            "source_order_reliable": source_order_reliable, "source_coverage": source_coverage,
+            "video_ids": [], "stale_snapshot": True,
+        }
     created = 0
     ready = 0
     try:
@@ -299,9 +323,18 @@ def ingest_items(
                 source_rank=item["source_rank"],
                 note_id=note.id if note else None,
                 observed_at=now,
-                source_synced_at=now,
+                source_synced_at=synced_at,
                 commit=False,
             )
+        # 只有已确认完整的官方列表才能解除不再存在的来源成员关系。
+        # 限量/中断同步不删旧尾部；视频文稿、知识和计划始终保留。
+        if source_coverage == "complete" and source_order_reliable:
+            db.execute(delete(VideoSourceLedger).where(
+                VideoSourceLedger.user_id == user_id,
+                VideoSourceLedger.source_mode == mode,
+                VideoSourceLedger.video_id.not_in(seen),
+                VideoSourceLedger.source_synced_at <= synced_at,
+            ))
         db.commit()
     except Exception:
         db.rollback()
@@ -313,7 +346,9 @@ def ingest_items(
         "ready": ready,
         "quarantined": len(normalized) - ready,
         "source_mode": mode,
-        "source_synced_at": now.isoformat().replace("+00:00", "Z"),
+        "source_synced_at": synced_at.isoformat().replace("+00:00", "Z"),
+        "source_order_reliable": source_order_reliable,
+        "source_coverage": source_coverage,
         "video_ids": [item["video_id"] for item in normalized],
     }
 
@@ -337,6 +372,7 @@ def list_items(
     ).scalars().all()
     rows.sort(
         key=lambda row: (
+            -video_source_ledger_service.source_timestamp(row.source_synced_at),
             row.source_rank is None,
             row.source_rank if row.source_rank is not None else MAX_LOCAL_SYNC_ITEMS + 1,
             -row.last_seen_at.timestamp(),

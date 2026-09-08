@@ -1,5 +1,9 @@
 'use client';
 
+import { platformSyncWarning } from '@/lib/platformSyncFeedback';
+import { capturePlatformSyncSnapshot } from '@/lib/platformSyncSnapshot';
+import { selectTranscriptPreparationTargets } from '@/lib/libraryTranscriptPreparation';
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
@@ -342,15 +346,17 @@ export default function AgentSourceSyncSheet({
     };
   }, [closeOrBackground, open]);
 
-  const prepareNewTranscripts = async (mode: DouyinSourceMode, count: number) => {
+  const prepareNewTranscripts = async (mode: DouyinSourceMode, count: number, syncedVideoIds?: string[]) => {
     setMessage('视频列表已更新，正在检查新视频…');
-    const listResponse = await listDouyinLibraryItems(count, mode, 'collection');
+    const listResponse = await listDouyinLibraryItems(syncedVideoIds ? 0 : count, mode, 'collection');
     if (!listResponse.success || !listResponse.data) {
       throw new Error(listResponse.error || '视频已同步，但暂时无法读取最新列表');
     }
-    const targets = listResponse.data.items
-      .filter((item) => item.can_extract && !item.extracted)
-      .slice(0, count);
+    const syncedIds = syncedVideoIds ? new Set(syncedVideoIds) : null;
+    const scopedItems = syncedIds
+      ? listResponse.data.items.filter((item) => syncedIds.has(item.aweme_id))
+      : listResponse.data.items;
+    const targets = selectTranscriptPreparationTargets([scopedItems], count);
     if (targets.length === 0) {
       await onSynced();
       return { prepared: 0, total: 0 };
@@ -400,12 +406,14 @@ export default function AgentSourceSyncSheet({
           throw new Error('请先在本机连接抖音账号');
         }
         setDouyinStage('collecting');
+        const sourceSyncedAt = new Date().toISOString();
         const collected = await bridge.collectPlatformAccount({
           platform: 'douyin',
           profileKey,
           mode: douyinMode,
           limit: Math.max(1, Math.min(100, Math.trunc(syncCount) || 50)),
         });
+        const snapshot = capturePlatformSyncSnapshot(collected, sourceSyncedAt);
         if (!collected.success || !collected.items?.length) {
           if (collected.error?.includes('重新登录')) setDouyinConnection(false);
           throw new Error(collected.cancelled
@@ -417,18 +425,20 @@ export default function AgentSourceSyncSheet({
           douyinMode,
           toLocalDouyinSyncItems(collected.items),
           douyinDesktopVersion,
+          snapshot,
         );
         if (!ingested.success || !ingested.data) {
           throw new Error(ingested.error || '本机已读取作品，但服务器登记失败');
         }
-        const prepared = await prepareNewTranscripts(douyinMode, syncCount);
+        const prepared = await prepareNewTranscripts(douyinMode, ingested.data.accepted, ingested.data.video_ids);
         const completedMessage = prepared.total > 0
           ? `同步完成 · 本机读取 ${ingested.data.accepted} 条，新增文稿 ${prepared.prepared} 条`
           : `同步完成 · 最近 ${ingested.data.accepted} 条已是最新`;
         setDouyinStage('success');
-        setMessage(completedMessage);
+        const resultMessage = [completedMessage, platformSyncWarning(collected)].filter(Boolean).join('；');
+        setMessage(resultMessage);
         await onSynced();
-        onCompleted(completedMessage, true);
+        onCompleted(resultMessage, collected.coverage !== 'partial');
         return;
       }
       const connection = await getDouyinLibraryStatus();
@@ -700,12 +710,14 @@ export default function AgentSourceSyncSheet({
     setBiliPending(true);
     setBiliStage('collecting');
     setBiliMessage(biliAccountMode === 'collect' ? '正在读取最近收藏…' : '正在读取最近喜欢…');
+    const sourceSyncedAt = new Date().toISOString();
     const collected = await bridge.collectPlatformAccount({
       platform: 'bilibili',
       profileKey,
       mode: biliAccountMode,
       limit: biliSyncCount,
     });
+    const snapshot = capturePlatformSyncSnapshot(collected, sourceSyncedAt);
     if (!collected.success || !collected.urls?.length) {
       setBiliPending(false);
       setBiliConnected((current) => (collected.error?.includes('重新登录') ? false : current));
@@ -716,7 +728,9 @@ export default function AgentSourceSyncSheet({
       return;
     }
     setBiliMessage(`已读取 ${collected.urls.length} 条，正在导入视频资料…`);
-    const imported = await importPlatformLibraryItems(collected.urls, biliAccountMode);
+    const imported = await importPlatformLibraryItems(collected.urls, biliAccountMode, snapshot, (completed, total) => {
+      setBiliMessage(`正在导入视频资料 ${completed}/${total} 条…`);
+    });
     setBiliPending(false);
     if (!imported.success || !imported.data) {
       setBiliStage('error');
@@ -727,9 +741,10 @@ export default function AgentSourceSyncSheet({
     const completedMessage = imported.data.failed > 0
       ? `已导入 ${imported.data.success} 条，${imported.data.failed} 条需要重试`
       : `已同步 ${imported.data.success} 条${biliAccountMode === 'collect' ? '收藏' : '喜欢'}作品`;
-    setBiliMessage(completedMessage);
+    const resultMessage = [completedMessage, platformSyncWarning(collected)].filter(Boolean).join('；');
+    setBiliMessage(resultMessage);
     if (imported.data.success > 0) await onSynced();
-    onCompleted(completedMessage, imported.data.failed === 0);
+    onCompleted(resultMessage, imported.data.failed === 0 && collected.coverage !== 'partial');
   };
 
   const cancelBilibili = async () => {

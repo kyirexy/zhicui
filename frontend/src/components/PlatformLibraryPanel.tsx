@@ -41,9 +41,13 @@ import {
 } from '@/lib/libraryListCache';
 import type {
   PlatformAccountProvider,
+  PlatformAccountResult,
   PlatformAccountSourceMode,
   PlatformAccountStage,
 } from '@/lib/desktopRuntime';
+import { readLibraryQuickSyncPreferences } from '@/lib/libraryQuickSync';
+import { platformSyncWarning } from '@/lib/platformSyncFeedback';
+import { capturePlatformSyncSnapshot, type PlatformSyncSnapshot } from '@/lib/platformSyncSnapshot';
 import styles from './PlatformLibraryPanel.module.css';
 
 interface PlatformLibraryPanelProps {
@@ -173,6 +177,7 @@ export default function PlatformLibraryPanel({
   const disconnectDialogRef = useRef<HTMLDialogElement | null>(null);
   const onItemsChangeRef = useRef(onItemsChange);
   const onStateChangeRef = useRef(onStateChange);
+  const loadRequestRef = useRef(0);
   const [accountConnections, setAccountConnections] = useState<AccountConnectionMap>(
     INITIAL_ACCOUNT_CONNECTIONS,
   );
@@ -274,11 +279,13 @@ export default function PlatformLibraryPanel({
   }, [isDesktop, updateAccountConnection]);
 
   const load = useCallback(async (silent = false) => {
+    const requestId = ++loadRequestRef.current;
     if (!silent) {
       setLoading(true);
       onStateChangeRef.current?.({ loading: true, error: '' });
     }
     const response = await listPlatformLibraryItems('all');
+    if (requestId !== loadRequestRef.current) return;
     if (response.success && response.data) {
       const loadedItems = response.data.items;
       setItems(loadedItems);
@@ -306,6 +313,7 @@ export default function PlatformLibraryPanel({
       onStateChangeRef.current?.({ loading: false, error: '' });
     }
     void load(Boolean(cached));
+    return () => { loadRequestRef.current += 1; };
   }, [load, user?.id]);
 
   const filteredItems = useMemo(() => {
@@ -389,7 +397,13 @@ export default function PlatformLibraryPanel({
       || accountAction
       || modes.length === 0
     ) return;
-    const collectedUrls: Array<{ mode: PlatformAccountSourceMode; urls: string[] }> = [];
+    const collectedUrls: Array<{
+      mode: PlatformAccountSourceMode;
+      urls: string[];
+      snapshot: PlatformSyncSnapshot;
+      result: PlatformAccountResult;
+    }> = [];
+    const requestedCount = readLibraryQuickSyncPreferences().count;
     setFeedbackView(platform);
     const syncAction = `${platform}:sync`;
     setAccountAction(syncAction);
@@ -400,12 +414,14 @@ export default function PlatformLibraryPanel({
         stage: 'collecting',
         message: mode === 'collect' ? '正在读取最近收藏…' : '正在读取最近喜欢…',
       });
+      const sourceSyncedAt = new Date().toISOString();
       const collected = await bridge.collectPlatformAccount({
         platform,
         profileKey: user.agent_profile_key || '',
         mode,
-        limit: 10,
+        limit: requestedCount,
       });
+      const snapshot = capturePlatformSyncSnapshot(collected, sourceSyncedAt);
       if (!collected.success || !collected.urls?.length) {
         const isRelogin = collected.error?.includes('重新登录');
         if (mode === 'like' && !isRelogin && modes.includes('collect')) {
@@ -432,7 +448,7 @@ export default function PlatformLibraryPanel({
         setAccountAction('');
         return;
       }
-      collectedUrls.push({ mode, urls: collected.urls });
+      collectedUrls.push({ mode, urls: collected.urls, snapshot, result: collected });
     }
 
     const urls = collectedUrls.flatMap((entry) => entry.urls);
@@ -449,12 +465,17 @@ export default function PlatformLibraryPanel({
     updateAccountConnection(platform, {
       connected: true,
       stage: 'collecting',
-      message: `已读取 ${urls.length} 条，正在准备文案…`,
+      message: `已读取 ${urls.length} 条，正在导入视频资料…`,
     });
     const importedItems: PlatformLibraryImportEntry[] = [];
     let importError = '';
     for (const entry of collectedUrls) {
-      const imported = await importPlatformLibraryItems(entry.urls, entry.mode);
+      const imported = await importPlatformLibraryItems(entry.urls, entry.mode, entry.snapshot, (completed, total) => {
+        updateAccountConnection(platform, {
+          stage: 'collecting',
+          message: `正在导入${entry.mode === 'collect' ? '收藏' : '喜欢'} ${completed}/${total} 条…`,
+        });
+      });
       if (!imported.success || !imported.data) {
         importError = imported.error || '作品已读取，但导入资料失败';
         break;
@@ -477,14 +498,16 @@ export default function PlatformLibraryPanel({
         ? '收藏'
         : '喜欢';
     setResults(importedItems);
+    const warnings = [...new Set(collectedUrls.map((entry) => platformSyncWarning(entry.result)).filter(Boolean))];
+    const completedMessage = importError
+      ? `已同步 ${importedSuccess} 条；${importError}`
+      : importedFailed > 0
+        ? `已导入 ${importedSuccess} 条，${importedFailed} 条需要重试`
+        : `已同步 ${importedSuccess} 条${modeSummary}作品`;
     updateAccountConnection(platform, {
       connected: true,
       stage: importError ? 'error' : 'success',
-      message: importError
-        ? `已同步 ${importedSuccess} 条；${importError}`
-        : importedFailed > 0
-          ? `已导入 ${importedSuccess} 条，${importedFailed} 条需要重试`
-          : `已同步 ${importedSuccess} 条${modeSummary}作品`,
+      message: [completedMessage, ...warnings].join('；'),
     });
     if (importedSuccess > 0) await load(true);
   };
@@ -724,7 +747,7 @@ export default function PlatformLibraryPanel({
                           >
                             <LoaderCircle size={17} className="animate-spin" />
                             {accountAction === `${syncAction}:import`
-                              ? '正在准备文案'
+                              ? '正在导入资料'
                               : selectedModes.length > 1
                                 ? '正在同步喜欢 + 收藏'
                                 : selectedModes[0] === 'like'

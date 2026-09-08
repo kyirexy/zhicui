@@ -89,6 +89,8 @@ import type {
   VideoInfo,
 } from './types';
 import { getEphemeralDouyinMediaSources } from './douyinDesktopSync';
+import { importPlatformBatches, platformImportBatchBody } from './platformImportBatch';
+import type { PlatformSyncSnapshot } from './platformSyncSnapshot';
 export type { ApiResponse };
 
 // In Capacitor/static-export mode, NEXT_PUBLIC_API_URL is set explicitly
@@ -682,14 +684,14 @@ export async function getDouyinLibraryStatus(): Promise<ApiResponse<DouyinLibrar
 export async function importPlatformLibraryItems(
   urls: string[],
   sourceMode?: 'collect' | 'like' | 'post',
+  snapshot?: PlatformSyncSnapshot,
+  onProgress?: (completed: number, total: number) => void,
 ): Promise<ApiResponse<PlatformLibraryImportResult>> {
-  const response = await request<PlatformLibraryImportResult>('/api/library/imports', {
-    method: 'POST',
-    body: JSON.stringify({
-      urls: urls.slice(0, 10),
-      ...(sourceMode ? { source_mode: sourceMode } : {}),
-    }),
-  });
+  const sourceSyncedAt = snapshot?.sourceSyncedAt || new Date().toISOString();
+  const response = await importPlatformBatches(urls, (batch) => request<PlatformLibraryImportResult>('/api/library/imports', {
+      method: 'POST',
+      body: JSON.stringify(platformImportBatchBody(batch, sourceSyncedAt, sourceMode, snapshot)),
+    }), onProgress);
   if (!response.data) return response;
   return {
     ...response,
@@ -938,6 +940,7 @@ export async function ingestLocalDouyinLibrary(
   sourceMode: DouyinSourceMode,
   items: DouyinLocalSyncItem[],
   clientVersion = '',
+  snapshot?: PlatformSyncSnapshot,
 ): Promise<ApiResponse<DouyinLocalSyncResult>> {
   return request<DouyinLocalSyncResult>('/api/library/douyin/local-sync', {
     method: 'POST',
@@ -945,6 +948,9 @@ export async function ingestLocalDouyinLibrary(
       source_mode: sourceMode,
       items: items.slice(0, 100),
       client_version: clientVersion,
+      ...(snapshot?.sourceSyncedAt ? { source_synced_at: snapshot.sourceSyncedAt } : {}),
+      ...(snapshot?.coverage ? { source_coverage: snapshot.coverage } : {}),
+      ...(typeof snapshot?.orderReliable === 'boolean' ? { source_order_reliable: snapshot.orderReliable } : {}),
     }),
   });
 }

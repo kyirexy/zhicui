@@ -4,7 +4,8 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from concurrent.futures import ThreadPoolExecutor
+import weakref
+from concurrent.futures import CancelledError, ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Callable, Literal
 from urllib.parse import urlsplit
@@ -37,7 +38,7 @@ _EXECUTOR = ThreadPoolExecutor(
     thread_name_prefix="zhicui-extract",
 )
 _ITEM_LOCKS_GUARD = threading.Lock()
-_ITEM_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+_ITEM_LOCKS: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
 logger = logging.getLogger(__name__)
 _EPHEMERAL_MEDIA_HOST_SUFFIXES = (
     ".douyinvod.com",
@@ -150,10 +151,11 @@ def _persist_generated_note(
         ai_result,
         user_id,
     )
-    video_source_ledger_service.upsert_item(
+    # 文案任务只能关联已有来源，不得恢复同步时已解除的收藏/喜欢。
+    video_source_ledger_service.link_note(
         db,
         user_id=user_id,
-        item=item,
+        video_id=item["aweme_id"],
         note_id=note.id,
     )
     plan_id = _persist_generated_plan(db, note, ai_result, user_id)
@@ -328,30 +330,34 @@ def extract_library_item(
 
             binding = douyin_binding_service.get_or_create(db, user_id)
             if item is None:
-                try:
-                    item = douyin_library.get_item(
-                        binding.session_scope,
-                        binding.id,
-                        clean_id,
-                    )
-                except douyin_library.DouyinLibraryError:
-                    item = None
-            if item is None:
+                # 已同步的元数据直接使用本地快照，不为每条文案再请求连接器。
                 item = local_douyin_library_service.get_item(
                     db,
                     user_id=user_id,
                     video_id=clean_id,
                 )
-            if item is None:
-                raise ValueError("收藏视频不存在或尚未同步")
-            if not item.get("can_extract"):
-                raise ValueError("该作品没有可提取的视频文件")
             asr_config = (
                 settings_service.get_asr_config(db)
                 if not existing_transcript
                 else None
             )
             session_scope = binding.session_scope
+            binding_id = binding.id
+
+        # 外部连接器可能超时，等待时不能占用数据库连接池。
+        if item is None:
+            try:
+                item = douyin_library.get_item(
+                    session_scope,
+                    binding_id,
+                    clean_id,
+                )
+            except douyin_library.DouyinLibraryError:
+                item = None
+        if item is None:
+            raise ValueError("收藏视频不存在或尚未同步")
+        if not item.get("can_extract"):
+            raise ValueError("该作品没有可提取的视频文件")
 
         transcript = existing_transcript
         if not transcript:
@@ -415,7 +421,8 @@ def extract_library_item(
         if not transcript.strip():
             raise RuntimeError("语音识别没有返回文案")
 
-        if operation == "transcript":
+        # 文案是独立检查点：摘要调用失败或进程重启时，不应重复下载和计费 ASR。
+        if operation == "transcript" or not existing_transcript:
             with SessionLocal() as db:
                 current = note_service.get_note_by_video_id(
                     db,
@@ -425,22 +432,24 @@ def extract_library_item(
                 if current is not None and (current.transcript_raw or "").strip():
                     result = current.to_dict()
                     result["already_existed"] = True
-                    return result
-                note = note_service.create_transcript_note(
-                    db,
-                    video_info=_video_info(item),
-                    transcript=transcript,
-                    source_meta=_source_meta(item),
-                    user_id=user_id,
-                )
-                video_source_ledger_service.upsert_item(
-                    db,
-                    user_id=user_id,
-                    item=item,
-                    note_id=note.id,
-                )
-                result = note.to_dict()
-                result["already_existed"] = False
+                    transcript = current.transcript_raw
+                else:
+                    note = note_service.create_transcript_note(
+                        db,
+                        video_info=_video_info(item),
+                        transcript=transcript,
+                        source_meta=_source_meta(item),
+                        user_id=user_id,
+                    )
+                    video_source_ledger_service.link_note(
+                        db,
+                        user_id=user_id,
+                        video_id=clean_id,
+                        note_id=note.id,
+                    )
+                    result = note.to_dict()
+                    result["already_existed"] = False
+            if operation == "transcript":
                 return result
 
         ai_result = _generate_ai_result(
@@ -464,10 +473,10 @@ def extract_library_item(
                     return result
                 existing.transcript_raw = transcript
                 note = note_service.update_note_ai(db, existing, ai_result)
-                video_source_ledger_service.upsert_item(
+                video_source_ledger_service.link_note(
                     db,
                     user_id=user_id,
-                    item=item,
+                    video_id=clean_id,
                     note_id=note.id,
                 )
                 plan_id = _persist_generated_plan(
@@ -613,6 +622,15 @@ def _run_job_item(
     ephemeral_media_url: str = "",
 ) -> None:
     def progress(state: str) -> None:
+        # 工作线程可能已排队/等锁很久。真正开始 ASR 或 AI 前再次检查取消，
+        # 避免取消任务仍发起下一阶段的付费请求。
+        with SessionLocal() as db:
+            current = db.query(LibraryExtractionBatch).filter(
+                LibraryExtractionBatch.id == job_id,
+                LibraryExtractionBatch.user_id == user_id,
+            ).first()
+            if current is None or current.cancellation_requested:
+                raise CancelledError()
         _update_item(job_id, aweme_id, state=state, error="")
 
     try:
@@ -644,6 +662,8 @@ def _run_job_item(
             ai_initialized=bool(result.get("ai_initialized")),
             already_existed=bool(result.get("already_existed")),
         )
+    except CancelledError:
+        pass
     except Exception as exc:
         logger.warning(
             "Douyin extraction failed job=%s item=%s error_type=%s error=%s",
@@ -662,30 +682,34 @@ def _run_job_item(
         _finish_job_if_ready(job_id)
 
 
-def _prefetch_items(user_id: str) -> dict[str, dict[str, Any]]:
+def _prefetch_items(
+    user_id: str, aweme_ids: set[str] | None = None,
+) -> dict[str, dict[str, Any]]:
     """Load one metadata snapshot; failure safely falls back to per-item lookup."""
+    result: dict[str, dict[str, Any]] = {}
     try:
         with SessionLocal() as db:
-            binding = douyin_binding_service.get_or_create(db, user_id)
-            try:
-                sidecar_items = douyin_library.list_items(
-                    binding.session_scope, binding.id, limit=0,
-                )
-            except douyin_library.DouyinLibraryError:
-                sidecar_items = []
             local_items = local_douyin_library_service.list_items(db, user_id=user_id)
             result = {
                 str(item.get("aweme_id") or "").strip(): item
-                for item in sidecar_items
+                for item in local_items
                 if str(item.get("aweme_id") or "").strip()
+                and (aweme_ids is None or item["aweme_id"] in aweme_ids)
             }
-            for local_item in local_items:
-                aweme_id = str(local_item.get("aweme_id") or "").strip()
-                if aweme_id and aweme_id not in result:
-                    result[aweme_id] = local_item
-            return result
+            if aweme_ids is not None and aweme_ids.issubset(result):
+                return result
+            binding = douyin_binding_service.get_or_create(db, user_id)
+            session_scope, binding_id = binding.session_scope, binding.id
+        # 本地已有全部所选项时不访问 sidecar；缺项才补查，且已释放 DB 连接。
+        sidecar_items = douyin_library.list_items(session_scope, binding_id, limit=0)
+        for item in sidecar_items:
+            aweme_id = str(item.get("aweme_id") or "").strip()
+            if aweme_id and (aweme_ids is None or aweme_id in aweme_ids):
+                result.setdefault(aweme_id, item)
     except Exception:
-        return {}
+        # 连接器故障不丢弃成功读取的本地快照。
+        logger.info("Library metadata prefetch incomplete; using available local snapshots")
+    return result
 
 
 def _submit_batch(
@@ -694,11 +718,25 @@ def _submit_batch(
     *,
     media_sources: dict[str, str] | None = None,
 ) -> None:
-    item_by_id = _prefetch_items(job.user_id)
+    item_by_id = _prefetch_items(job.user_id, {row.aweme_id for row in items})
     asr_gate = threading.Semaphore(job.asr_concurrency)
     llm_gate = threading.Semaphore(job.llm_concurrency)
-    for row in items:
-        _EXECUTOR.submit(
+    # 每批仅投递实际可运行的窗口。一次投递 100 项会让工作线程阻塞在同一
+    # semaphore 上，并把后续用户的全部任务挤到队尾。完成一项才补投一项。
+    concurrency = (
+        job.asr_concurrency if job.operation == "transcript"
+        else job.llm_concurrency if job.operation == "ai"
+        else max(job.asr_concurrency, job.llm_concurrency)
+    )
+    pending = iter(items)
+    pending_guard = threading.Lock()
+
+    def submit_next(_finished=None) -> None:
+        with pending_guard:
+            row = next(pending, None)
+        if row is None:
+            return
+        future = _EXECUTOR.submit(
             _run_job_item,
             job.id,
             job.user_id,
@@ -709,6 +747,10 @@ def _submit_batch(
             item_by_id.get(row.aweme_id),
             (media_sources or {}).get(row.aweme_id, ""),
         )
+        future.add_done_callback(submit_next)
+
+    for _ in range(min(concurrency, _MAX_EXECUTION_WORKERS, len(items))):
+        submit_next()
 
 
 def create_batch_job(
@@ -828,7 +870,7 @@ def cancel_batch_job(job_id: str, user_id: str) -> dict[str, Any] | None:
             job.updated_at = now
             db.query(LibraryExtractionBatchItem).filter(
                 LibraryExtractionBatchItem.batch_id == job.id,
-                LibraryExtractionBatchItem.state == "queued",
+                LibraryExtractionBatchItem.state.in_(["queued", "transcribing", "analyzing"]),
             ).update({
                 LibraryExtractionBatchItem.state: "canceled",
                 LibraryExtractionBatchItem.updated_at: now,

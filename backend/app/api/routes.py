@@ -530,6 +530,11 @@ class ExtractRequest(BaseModel):
 class PlatformLibraryImportRequest(BaseModel):
     urls: list[str] = Field(..., min_length=1, max_length=10)
     source_mode: Literal["collect", "like", "post"] | None = None
+    source_rank_offset: int = Field(default=0, ge=0, le=10000)
+    source_snapshot_size: int | None = Field(default=None, ge=1, le=10000)
+    source_synced_at: datetime | None = None
+    source_order_reliable: bool = True
+    source_coverage: Literal["complete", "limited", "partial", "unknown"] = "partial"
 
     @field_validator("urls")
     @classmethod
@@ -562,6 +567,9 @@ class LocalDouyinLibrarySyncRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_mode: Literal["collect", "like", "post"]
+    source_synced_at: datetime | None = None
+    source_order_reliable: bool = False
+    source_coverage: Literal["complete", "limited", "partial", "unknown"] = "partial"
     items: list[LocalDouyinLibraryItemRequest] = Field(
         ...,
         min_length=1,
@@ -1894,6 +1902,11 @@ def import_platform_library_items(
             user_id=current_user.id,
             values=body.urls,
             source_mode=body.source_mode,
+            source_rank_offset=body.source_rank_offset,
+            source_snapshot_size=body.source_snapshot_size,
+            source_synced_at=body.source_synced_at.isoformat() if body.source_synced_at else None,
+            source_order_reliable=body.source_order_reliable,
+            source_coverage=body.source_coverage,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -2382,6 +2395,9 @@ def ingest_local_douyin_library(
             user_id=current_user.id,
             source_mode=body.source_mode,
             items=[item.model_dump() for item in body.items],
+            source_synced_at=body.source_synced_at,
+            source_order_reliable=body.source_order_reliable,
+            source_coverage=body.source_coverage,
         )
     except ValueError as exc:
         activity_service.log_activity_safely(
@@ -2777,6 +2793,7 @@ def list_douyin_library_items(
         )
     else:
         items.sort(key=lambda item: (
+            -video_source_ledger_service.source_timestamp(item.get("source_synced_at")),
             item.get("source_rank") is None,
             int(item.get("source_rank") or 0),
         ))

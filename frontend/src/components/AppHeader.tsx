@@ -1,4 +1,5 @@
 'use client';
+import UserAvatar from '@/components/UserAvatar';
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
@@ -79,7 +80,7 @@ export default function AppHeader() {
             {!authLoading && user ? (
               <div className={styles.accountGroup}>
                 <span className={styles.accountIdentity} title={user.email}>
-                  <UserCircle size={17} weight="fill" aria-hidden="true" />
+                  <UserAvatar user={user} size={28} />
                   <span>{user.username || user.email}</span>
                   {user.is_admin && <small>管理员</small>}
                 </span>
@@ -188,7 +189,7 @@ export default function AppHeader() {
             )}
             <span className="flex items-center gap-1.5 rounded-full border border-card-border bg-card-bg py-1 pl-1 pr-3 text-xs font-medium text-foreground-secondary">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent-brand/[0.12] text-accent-brand">
-                <UserCircle size={15} weight="fill" />
+                <UserAvatar user={user} size={24} />
               </span>
               {user.username || user.email}
             </span>

@@ -21,6 +21,7 @@ class User(Base):
     id = Column(String, primary_key=True, default=lambda: f"u-{uuid.uuid4().hex[:12]}")
     email = Column(String, unique=True, nullable=False, index=True)
     username = Column(String, unique=True, nullable=True, index=True)
+    avatar_id = Column(String(32), nullable=True)
     hashed_password = Column(String, nullable=False)
     is_active = Column(Boolean, default=True)
     is_admin = Column(Boolean, default=False)
@@ -36,6 +37,7 @@ class User(Base):
             "id": self.id,
             "email": self.email,
             "username": self.username,
+            "avatar_id": self.avatar_id,
             "is_active": self.is_active,
             "is_admin": self.is_admin,
             "email_verified": bool(self.email_verified),

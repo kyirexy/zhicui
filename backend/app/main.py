@@ -385,6 +385,8 @@ def create_app() -> FastAPI:
             reset_request_context(context_tokens)
 
     # Register routes
+    from app.api.avatar_routes import router as avatar_router
+    app.include_router(avatar_router)
     app.include_router(router)
     app.include_router(desktop_login_router)
     app.include_router(phone_login_router)
@@ -829,6 +831,8 @@ def _migrate_db() -> None:
             ))
         if insp.has_table("users"):
             user_cols = {c["name"] for c in insp.get_columns("users")}
+            if "avatar_id" not in user_cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN avatar_id VARCHAR(32) NULL"))
             if "username" not in user_cols:
                 conn.execute(text("ALTER TABLE users ADD COLUMN username VARCHAR NULL"))
             if "is_admin" not in user_cols:

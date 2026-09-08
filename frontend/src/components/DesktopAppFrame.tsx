@@ -1,4 +1,5 @@
 'use client';
+import UserAvatar from '@/components/UserAvatar';
 
 import {
   createContext,
@@ -141,7 +142,7 @@ function DesktopNavigation() {
             <div className="desktop-sidebar__account-menu" aria-label="账户菜单">
               <div className="desktop-sidebar__account-menu-profile">
                 <span className="desktop-sidebar__account-menu-avatar" aria-hidden="true">
-                  {userLabel.slice(0, 1).toUpperCase()}
+                  <UserAvatar user={user} size={40} />
                 </span>
                 <span>
                   <strong>{userLabel}</strong>
@@ -188,7 +189,7 @@ function DesktopNavigation() {
             onClick={() => setAccountMenuOpen((open) => !open)}
           >
             <span className="desktop-sidebar__account-avatar" aria-hidden="true">
-              <CircleUserRound size={20} strokeWidth={1.8} />
+              <UserAvatar user={user} size={40} />
             </span>
             <span className="desktop-sidebar__account-copy">
               <strong>{userLabel}</strong>

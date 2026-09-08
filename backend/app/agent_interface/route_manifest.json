@@ -26,6 +26,7 @@
     {"pattern": "^/api/(?:health|readiness|legal/documents/current|app/releases/latest)$", "classification": "public", "reason": "Public health, legal or release metadata"},
     {"pattern": "^/api/auth/(?:register|login)$", "classification": "public", "reason": "Interactive product authentication, not an Agent Action"},
     {"pattern": "^/api/auth/me$", "classification": "action", "domain": "account"},
+    {"pattern": "^/api/auth/avatar$", "classification": "transport_internal", "reason": "用户本人在客户端选择预设头像，不向 Agent 开放账号外观写入"},
 
     {"pattern": "^/api/account(?:/|$)", "classification": "action", "domain": "account"},
     {"pattern": "^/api/feedback(?:/|$)", "classification": "action", "domain": "feedback"},

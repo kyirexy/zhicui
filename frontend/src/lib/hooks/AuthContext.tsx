@@ -17,6 +17,7 @@ export interface AuthUser {
   id: string;
   email: string;
   username: string | null;
+  avatar_id?: string | null;
   is_active: boolean;
   is_admin: boolean;
   email_verified: boolean;
@@ -218,6 +219,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     applySession(session);
     return session.user;
   }, [applySession]);
+
+  // 回到应用时重新读取账号资料，使其他设备更换的头像同步到当前端。
+  useEffect(() => {
+    if (!token) return;
+    const controller = new AbortController();
+    let pending = false;
+    const refresh = async () => {
+      if (document.visibilityState === 'hidden' || pending) return;
+      pending = true;
+      try {
+        const response = await authRequest<AuthUser>('/api/auth/me', {
+          headers: { Authorization: `Bearer ${token}` }, signal: controller.signal,
+        });
+        if (!controller.signal.aborted && response.success && response.data) setUser(response.data);
+      } finally { pending = false; }
+    };
+    void refresh();
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      controller.abort();
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [token]);
 
   const enterDevelopmentSession = useCallback(async () => {
     if (!IS_DEV) {

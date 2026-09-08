@@ -1,0 +1,14 @@
+.root { border: 1px solid var(--border-color, #e5e7eb); border-radius: 18px; padding: 16px; margin-bottom: 20px; background: var(--background-secondary, #fff); }
+.trigger { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; background: transparent; border: 0; color: inherit; cursor: pointer; }
+.trigger span { min-width: 0; }
+.trigger strong, .trigger small { display: block; }
+.trigger strong { font-size: 16px; }
+.trigger small { font-size: 13px; margin-top: 5px; color: var(--foreground-muted, #666); }
+.trigger b { margin-left: auto; font-size: 13px; white-space: nowrap; color: #5877b6; }
+.grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+.grid button { display: flex; align-items: center; justify-content: center; min-height: 76px; border: 2px solid transparent; border-radius: 16px; background: transparent; cursor: pointer; padding: 4px; }
+.grid button[aria-pressed=true] { border-color: #6586c5; background: #eaf1ff; }
+.grid button:disabled { cursor: wait; opacity: .65; }
+.trigger:focus-visible, .grid button:focus-visible { outline: 3px solid #6586c5; outline-offset: 3px; }
+.status { font-size: 13px; margin: 8px 0 0; min-height: 18px; }
+@media (max-width: 520px) { .grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; } .root { padding: 12px; } .grid button { min-height: 68px; } .grid button > span { max-width: 100%; height: auto !important; aspect-ratio: 1; } }

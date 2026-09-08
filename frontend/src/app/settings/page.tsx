@@ -1,4 +1,6 @@
 'use client';
+import AvatarPicker from '@/components/AvatarPicker';
+import UserAvatar from '@/components/UserAvatar';
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
@@ -303,12 +305,13 @@ function SettingsWorkspace() {
                   </div>
                 </section>
 
+                <AvatarPicker />
                 <ClientCapabilitySettingsCard />
                 {isDesktop && user ? <DesktopPhoneLoginCard /> : null}
 
                 <section className={styles.mobileActions} aria-label="账号与帮助">
                   <div className={styles.mobileAccount}>
-                    <span aria-hidden="true"><UserCircle size={22} /></span>
+                    <UserAvatar user={user} size={40} />
                     <div>
                       <strong>{user?.username || '我的账号'}</strong>
                       <small>{user?.email || '内容已安全同步'}</small>

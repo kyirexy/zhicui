@@ -59,6 +59,7 @@ export default function LibraryVideoCard({
         ? 'is-extract-ready'
         : '';
   const displayDate = item.date || item.recorded_at?.slice(0, 10) || '';
+  const dateDescription = `${item.date ? '发布于' : '记录于'} ${displayDate}`;
   const hasTranscript = isExtracted && item.transcript_chars > 0;
   const organizationLabel = extractState === 'error'
     ? '失败'
@@ -143,11 +144,13 @@ export default function LibraryVideoCard({
             <PlatformBrandIcon platform="douyin" size={12} />
             抖音
           </span>
-          <span>{item.author_name || '未知作者'}</span>
+          <span className="min-w-0 truncate" title={item.author_name || '未知作者'}>{item.author_name || '未知作者'}</span>
           {displayDate && (
             <>
               <span aria-hidden="true">·</span>
-              <time dateTime={displayDate}>{displayDate}</time>
+              <time className="shrink-0" dateTime={displayDate} title={dateDescription} aria-label={dateDescription}>
+                <span className="hidden sm:inline">{item.date ? '发布于' : '记录于'} </span>{displayDate}
+              </time>
             </>
           )}
         </div>

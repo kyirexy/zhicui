@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import { createSyncNoticeReporter, formatTranscriptPreparationProgress } from './douyinSyncFeedback.ts';
 import { hasReadyTranscript } from './libraryTranscriptPreparation.ts';
+import { MIN_LOCAL_DOUYIN_DESKTOP_VERSION, requiresLocalDouyinDesktopUpdate } from './douyinDesktopSync.ts';
 
 // 执行页面实际任务函数，覆盖弹窗回调接线和迟到响应，而非重写一份模拟实现。
 const page = readFileSync(new URL('../app/library/page.tsx', import.meta.url), 'utf8');
@@ -14,6 +15,38 @@ const code = ts.transpileModule(`${taskSource}\n exports.extractItems = extractI
 }).outputText;
 const pending = Array.from({ length: 10 }, (_, index) => ({ aweme_id: String(index), can_extract: true, transcript_chars: 0 }));
 const running = { job_id: 'job', operation: 'transcript', status: 'running', total: 10, success: 9, failed: 0, active: 1, queued: 0, items: [] };
+
+test('1.1.2 加载新网页后，资料库和Agent同步入口均先提示升级而不开始采集', async () => {
+  const desktopVersion = '1.1.2';
+  const messages: string[] = [];
+  const syncSource = page.slice(page.indexOf('  const syncCollection = async'), page.indexOf('  const syncCollectionRef = useRef'));
+  const syncCode = ts.transpileModule(`${syncSource}\nexports.run = syncCollection;`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+  }).outputText;
+  const library = {
+    exports: {} as { run: () => Promise<{ started: boolean }> }, desktopVersion,
+    desktopDouyinUpdateRequired: requiresLocalDouyinDesktopUpdate(desktopVersion), MIN_LOCAL_DOUYIN_DESKTOP_VERSION,
+    publishSourceManagerNotice: (message: string) => messages.push(message),
+  };
+  vm.runInNewContext(syncCode, library);
+  assert.equal((await library.exports.run()).started, false);
+  assert.match(messages[0], /1\.1\.2[\s\S]*安装 1\.1\.3/);
+
+  const sheet = readFileSync(new URL('../components/agent/AgentSourceSyncSheet.tsx', import.meta.url), 'utf8');
+  const sheetSource = sheet.slice(sheet.indexOf('  const syncDouyin = async'), sheet.indexOf('  const importLinks = async'));
+  const sheetCode = ts.transpileModule(`${sheetSource}\nexports.run = syncDouyin;`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+  }).outputText;
+  const agent = {
+    exports: {} as { run: () => Promise<void> }, user: { id: 'a' }, currentUserIdRef: { current: 'a' }, accountEpochRef: { current: 1 }, runningRef: { current: false },
+    douyinDesktopVersion: desktopVersion, douyinDesktopUpdateRequired: requiresLocalDouyinDesktopUpdate(desktopVersion), MIN_LOCAL_DOUYIN_DESKTOP_VERSION,
+    douyinMode: 'collect', syncCount: 50, setPending: () => {}, setFailed: () => {}, setMessage: (message: string) => messages.push(message), onCompleted: () => {},
+  };
+  vm.runInNewContext(sheetCode, agent);
+  await agent.exports.run();
+  assert.match(messages.at(-1)!, /1\.1\.2[\s\S]*安装 1\.1\.3/);
+  assert.equal(agent.runningRef.current, false);
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

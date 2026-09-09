@@ -40,6 +40,9 @@ const DOUYIN_SOURCE_RESPONSE_PATHS: Record<PlatformAccountSourceMode, RegExp> = 
   collect: /^\/aweme\/v1\/web\/aweme\/listcollection\/?$/i,
   post: /^\/aweme\/v1\/web\/aweme\/post\/?$/i,
 };
+const DOUYIN_SOURCE_TAB_IDS: Record<PlatformAccountSourceMode, string> = {
+  like: 'semiTablike', collect: 'semiTabfavorite_collection', post: 'semiTabpost',
+};
 
 type SupportedBrowser = 'chrome' | 'msedge';
 type StatusListener = (status: PlatformAccountStatus) => void;
@@ -176,7 +179,8 @@ export function isDouyinSourceResponseUrl(
   try {
     const url = new URL(value);
     const hostname = url.hostname.toLowerCase().replace(/\.$/, '');
-    if (hostname !== 'douyin.com' && !hostname.endsWith('.douyin.com')) return false;
+    // www-hj 等护航域不代表本人官方列表，不能拿它的响应确认来源顺序。
+    if (url.protocol !== 'https:' || !['www.douyin.com', 'douyin.com'].includes(hostname)) return false;
     return DOUYIN_SOURCE_RESPONSE_PATHS[mode].test(url.pathname);
   } catch {
     return false;
@@ -202,6 +206,7 @@ interface DouyinSourcePage {
   items: PlatformAccountItem[];
   malformedItems: boolean;
 }
+type DouyinPageMap = Map<string, { sequence: number; page: DouyinSourcePage | null }>;
 
 function douyinCursorKeys(url: URL): string[] {
   // 收藏用 cursor；喜欢/作品用 max_cursor。辅助游标可能同时存在且固定为 0。
@@ -210,35 +215,70 @@ function douyinCursorKeys(url: URL): string[] {
     : ['max_cursor', 'cursor', 'min_cursor'];
 }
 
-function douyinRequestCursor(url: URL): string {
-  const key = douyinCursorKeys(url).find((candidate) => url.searchParams.has(candidate));
-  return key ? url.searchParams.get(key)! : '0';
+export interface DouyinSourceRequest {
+  url: string;
+  method?: string;
+  postData?: string | null;
+}
+
+function douyinRequestCursor(request: DouyinSourceRequest): string | null {
+  const url = new URL(request.url);
+  let body: Record<string, unknown> = {};
+  if (request.method?.toUpperCase() === 'POST' && request.postData) {
+    try { body = record(JSON.parse(request.postData)); } catch {
+      body = Object.fromEntries(new URLSearchParams(request.postData));
+    }
+  }
+  const normalize = (value: unknown): string | null => {
+    if (typeof value === 'number' && (!Number.isSafeInteger(value) || value < 0)) return null;
+    const text = typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+    return /^\d{1,32}$/.test(text) ? text.replace(/^0+(?=\d)/, '') : null;
+  };
+  for (const key of douyinCursorKeys(url)) {
+    const inBody = Object.hasOwn(body, key);
+    const inQuery = url.searchParams.has(key);
+    if (!inBody && !inQuery) continue;
+    const cursor = normalize(inBody ? body[key] : url.searchParams.get(key));
+    if (inBody && inQuery && cursor !== normalize(url.searchParams.get(key))) return null;
+    return cursor;
+  }
+  // 未采集到游标意味着页次未知，绝不能把滚动后的 POST 后页默认为首屏。
+  return null;
 }
 
 /** 按官方游标链接组织页，不能把网络完成顺序或作品发布时间当作收藏顺序。 */
 export class DouyinSourcePages {
-  private readonly pages = new Map<string, { sequence: number; page: DouyinSourcePage | null }>();
+  private pages: DouyinPageMap = new Map();
   private generationStart = -1;
+  private previousGeneration: { start: number; pages: DouyinPageMap } | undefined;
 
-  begin(url: string, sequence: number): void {
-    const cursor = douyinRequestCursor(new URL(url));
+  begin(input: string | DouyinSourceRequest, sequence: number): void {
+    const cursor = douyinRequestCursor(typeof input === 'string' ? { url: input } : input);
+    if (cursor === null) return;
     if (cursor === '0' && sequence > this.generationStart) {
-      // 重新加载首屏后，旧一轮的后续页不能与新首屏拼成同一批次。
-      this.pages.clear();
+      // 官网滚动时也会自动重发首屏；两轮分别保存，绝不把页混入另一轮。
+      this.previousGeneration = { start: this.generationStart, pages: this.pages };
+      this.pages = new Map();
       this.generationStart = sequence;
     }
     const previous = this.pages.get(cursor);
     if (!previous || previous.sequence <= sequence) this.pages.set(cursor, { sequence, page: null });
   }
 
-  add(url: string, value: unknown, sequence: number): boolean {
-    if (sequence < this.generationStart) return false;
+  add(input: string | DouyinSourceRequest, value: unknown, sequence: number): boolean {
+    const previousGeneration = sequence < this.generationStart;
+    const pages = previousGeneration
+      ? this.previousGeneration && sequence >= this.previousGeneration.start ? this.previousGeneration.pages : undefined
+      : this.pages;
+    if (!pages) return false;
+    const request = typeof input === 'string' ? { url: input } : input;
+    const requestCursor = douyinRequestCursor(request);
+    if (requestCursor === null) return false;
     const payload = record(value);
     const data = Array.isArray(payload.aweme_list) ? payload : record(payload.data);
     if (!Array.isArray(data.aweme_list)) return false;
     if (payload.status_code !== undefined && payload.status_code !== 0 && payload.status_code !== '0') return false;
-    const parsedUrl = new URL(url);
-    const requestCursor = douyinRequestCursor(parsedUrl);
+    const parsedUrl = new URL(request.url);
     const cursorValue = douyinCursorKeys(parsedUrl).map((key) => data[key])
       .find((value) => value !== undefined && value !== null);
     const normalized = data.aweme_list.map((entry, index) => {
@@ -254,12 +294,35 @@ export class DouyinSourcePages {
         .filter((item): item is PlatformAccountItem => item !== null),
       malformedItems: firstUnknown >= 0,
     };
-    const previous = this.pages.get(requestCursor);
-    if (!previous || previous.sequence <= sequence) this.pages.set(requestCursor, { sequence, page });
-    return true;
+    const previous = pages.get(requestCursor);
+    if (!previous || previous.sequence <= sequence) pages.set(requestCursor, { sequence, page });
+    return !previousGeneration;
   }
 
   snapshot(limit: number): PlatformSourceCollection {
+    const current = this.snapshotPages(this.pages, limit);
+    if (current.coverage !== 'partial' || !this.previousGeneration) return current;
+    const first = this.pages.get('0')?.page;
+    const previousFirst = this.previousGeneration.pages.get('0')?.page;
+    const signature = (page: DouyinSourcePage): string => JSON.stringify([
+      page.items.map((item) => item.videoId), page.nextCursor, page.hasMore, page.malformedItems,
+    ]);
+    const confirmed = (page: DouyinSourcePage): boolean => !page.malformedItems && page.hasMore !== undefined
+      && (page.hasMore === false || Boolean(page.nextCursor && /^\d+$/.test(page.nextCursor)));
+    // 最新首屏必须已确认，而且双方所有已返回的重叠页都相同。
+    // 仅选用上一轮自身完整满足 N 的独立页链，不用旧页补新轮缺口。
+    if (!first || !confirmed(first) || !previousFirst || signature(first) !== signature(previousFirst)) return current;
+    for (const [cursor, entry] of this.pages) {
+      if (!entry.page) continue;
+      const previousPage = this.previousGeneration.pages.get(cursor)?.page;
+      if (!confirmed(entry.page) || !previousPage || signature(entry.page) !== signature(previousPage)) return current;
+    }
+    if ([...this.previousGeneration.pages.values()].some((entry) => entry.page && !confirmed(entry.page))) return current;
+    const previous = this.snapshotPages(this.previousGeneration.pages, limit);
+    return previous.coverage !== 'partial' && (previous.items?.length || 0) >= limit ? previous : current;
+  }
+
+  private snapshotPages(pages: DouyinPageMap, limit: number): PlatformSourceCollection {
     const items = new Map<string, PlatformAccountItem>();
     const visited = new Set<string>();
     let cursor = '0';
@@ -267,7 +330,7 @@ export class DouyinSourcePages {
     let malformedItems = false;
     while (!visited.has(cursor)) {
       visited.add(cursor);
-      const page = this.pages.get(cursor)?.page;
+      const page = pages.get(cursor)?.page;
       if (!page) break;
       for (const item of page.items) mergeDouyinItem(items, item, limit + 1);
       // 所需前 N 条已确认时，范围外的失效占位不影响本次前缀；也不能宣称全量完成。
@@ -290,7 +353,7 @@ export class DouyinSourcePages {
       urls: values.map((item) => item.sourceUrl),
       items: values,
       coverage,
-      orderReliable: Boolean(this.pages.get('0')?.page),
+      orderReliable: Boolean(pages.get('0')?.page),
       warning: coverage === 'partial'
         ? values.length
           ? `已按官方顺序读取前 ${values.length} 条，其余作品本次未读取；历史资料保留`
@@ -298,6 +361,45 @@ export class DouyinSourcePages {
         : coverage === 'limited' ? `本次读取前 ${limit} 条，未扫描全部作品` : undefined,
     };
   }
+}
+
+/** 在浏览器内执行：只沿目标标签的可见内容区寻找滚动容器，不使用页脚推荐链接。 */
+export function scrollDouyinSourcePanel(input: { tabId: string; reset: boolean }): boolean {
+  const tab = document.getElementById(input.tabId);
+  if (!tab || tab.getAttribute('role') !== 'tab' || tab.getAttribute('aria-selected') !== 'true') return false;
+  const visible = (element: Element): boolean => {
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.display !== 'none' && style.visibility !== 'hidden'
+      && element.getAttribute('aria-hidden') !== 'true' && rect.width > 0 && rect.height > 0;
+  };
+  if (!visible(tab)) return false;
+  const activePanel = (element: Element): boolean => {
+    const style = getComputedStyle(element);
+    // 官方 pane 实际只有零尺寸动画占位，卡片位于兄弟内容区。
+    // 用精确 tab 的 aria 关联和活动状态定位共同滚动祖先，不能要求 pane 内必须存在视频链接。
+    return element.getAttribute('role') === 'tabpanel' && element.getAttribute('aria-hidden') !== 'true'
+      && style.display !== 'none' && style.visibility !== 'hidden';
+  };
+  const controlledId = tab.getAttribute('aria-controls');
+  const controlled = controlledId ? document.getElementById(controlledId) : null;
+  const panel = controlled && activePanel(controlled)
+    ? controlled
+    : Array.from(document.querySelectorAll('[role="tabpanel"]'))
+      .find((element) => element.getAttribute('aria-labelledby') === input.tabId && activePanel(element));
+  if (!panel) return false;
+  let target: Element | null = panel;
+  while (target) {
+    const style = getComputedStyle(target);
+    if (/(auto|scroll)/.test(style.overflowY) && target.scrollHeight > target.clientHeight + 8) break;
+    if (target === document.scrollingElement && target.scrollHeight > target.clientHeight + 8) break;
+    target = target.parentElement;
+  }
+  if (!target) return false;
+  const previousTop = target.scrollTop;
+  if (input.reset) target.scrollTo({ top: 0, behavior: 'instant' });
+  else target.scrollBy({ top: Math.max(target.clientHeight * 0.88, 720), behavior: 'instant' });
+  return input.reset || target.scrollTop !== previousTop;
 }
 
 export function readBilibiliLikeRecords(value: unknown): unknown[] {
@@ -999,35 +1101,64 @@ export class PlatformAccountConnector {
     browser: SupportedBrowser,
   ): Promise<void> {
     const label = mode === 'collect' ? '收藏' : mode === 'post' ? '作品' : '喜欢';
-    const clickVisibleTab = async (): Promise<boolean> => {
-      const matches = page.getByText(label, { exact: true });
-      const count = Math.min(await matches.count().catch(() => 0), 16);
-      for (let index = 0; index < count; index += 1) {
-        const candidate = matches.nth(index);
-        if (!await candidate.isVisible().catch(() => false)) continue;
-        if (await candidate.click({ timeout: 2500 }).then(() => true).catch(() => false)) {
-          return true;
-        }
+    const tab = page.locator(`#${DOUYIN_SOURCE_TAB_IDS[mode]}[role="tab"]`);
+    let stableProfile = '';
+    let readySince = 0;
+    let selectedSince = 0;
+    let clickAttempts = 0;
+    let lastClickAt = 0;
+    // 页面加载与标签选择分开计时，慢加载不能耗尽尚未开始的点击预算。
+    const profileDeadline = Date.now() + 30_000;
+    let selectionDeadline = 0;
+    const confirmTab = async (allowClick: boolean): Promise<boolean> => {
+      let profile = '';
+      try {
+        const url = new URL(page.url());
+        // 本人主页可以一直保留 /user/self，不能把是否跳转 secuid 当成已登录依据。
+        if (url.protocol === 'https:' && url.hostname === 'www.douyin.com' && /^\/user\/[^/]+\/?$/.test(url.pathname)) profile = url.pathname;
+      } catch { /* 等待官方本人主页加载。 */ }
+      if (!profile || !await tab.isVisible().catch(() => false)) {
+        readySince = selectedSince = 0;
+        return false;
+      }
+      if (profile !== stableProfile) {
+        stableProfile = profile;
+        readySince = selectedSince = 0;
+      }
+      readySince ||= Date.now();
+      if (Date.now() - readySince < 600) return false;
+      selectionDeadline ||= Date.now() + 15_000;
+      const selected = await tab.getAttribute('aria-selected').catch(() => null) === 'true';
+      if (selected) {
+        selectedSince ||= Date.now();
+        return Date.now() - selectedSince >= 600;
+      }
+      selectedSince = 0;
+      // 官网水合期间点击可能无效；仅在仍未选中时有限重试，不能重复触发已选中的首屏。
+      if (allowClick && clickAttempts < 3 && (clickAttempts === 0 || Date.now() - lastClickAt >= 2_000)) {
+        clickAttempts += 1;
+        await tab.click({ timeout: 2500 }).catch(() => undefined);
+        lastClickAt = Date.now();
+        selectionDeadline = Math.max(selectionDeadline, lastClickAt + 1_500);
       }
       return false;
     };
 
-    const backgroundDeadline = Date.now() + 15_000;
-    while (!this.cancelled && Date.now() < backgroundDeadline) {
-      if (await clickVisibleTab()) return;
-      await page.waitForTimeout(POLL_INTERVAL_MS);
+    while (!this.cancelled && Date.now() < (selectionDeadline || profileDeadline)) {
+      if (await confirmTab(true)) return;
+      await page.waitForTimeout(200);
     }
     this.notifyStatus(
       platform,
       'needs-action',
-      `抖音需要你确认官方页面；完成验证并进入“${label}”后会继续`,
+      `抖音官方页面尚未就绪；请确认已进入本人主页，如有验证请完成，随后会继续读取“${label}”`,
       browser,
     );
     await page.bringToFront().catch(() => undefined);
     const actionDeadline = Date.now() + XHS_PROFILE_TIMEOUT_MS;
     while (!this.cancelled && Date.now() < actionDeadline) {
-      if (await clickVisibleTab()) return;
-      await page.waitForTimeout(POLL_INTERVAL_MS);
+      if (await confirmTab(true)) return;
+      await page.waitForTimeout(200);
     }
     if (!this.cancelled) {
       throw new Error(`没有找到抖音“${label}”列表，请确认当前是本人主页并完成官方验证`);
@@ -1042,7 +1173,7 @@ export class PlatformAccountConnector {
     const page = context.pages()[0] || await context.newPage();
     const pages = new DouyinSourcePages();
     const pending = new Set<Promise<void>>();
-    const requestSequences = new WeakMap<Request, number>();
+    const requestSequences = new WeakMap<Request, { sequence: number; source: DouyinSourceRequest }>();
     const activeRequests = new Set<Request>();
     let nextRequestSequence = 0;
     let lastRequestAt = Date.now();
@@ -1050,19 +1181,22 @@ export class PlatformAccountConnector {
     const onRequest = (request: Request): void => {
       if (!isDouyinSourceResponseUrl(request.url(), mode)) return;
       const sequence = nextRequestSequence++;
-      requestSequences.set(request, sequence);
-      pages.begin(request.url(), sequence);
+      const source = { url: request.url(), method: request.method(), postData: request.postData() };
+      requestSequences.set(request, { sequence, source });
+      pages.begin(source, sequence);
       activeRequests.add(request);
       lastRequestAt = Date.now();
     };
     const onRequestSettled = (request: Request): void => { activeRequests.delete(request); };
     const onResponse = (response: Response): void => {
       if (!isDouyinSourceResponseUrl(response.url(), mode)) return;
-      const sequence = requestSequences.get(response.request()) ?? nextRequestSequence++;
+      const captured = requestSequences.get(response.request());
+      // 导航前已在途、未观察到请求起点的响应不能假装属于本轮首页。
+      if (!captured || !response.ok()) return;
       const work = readDouyinMetadataPayload(response, mode)
         .then((payload) => {
           if (payload === null) return;
-          if (pages.add(response.url(), payload, sequence)) lastResponseAt = Date.now();
+          if (pages.add(captured.source, payload, captured.sequence)) lastResponseAt = Date.now();
         })
         .catch(() => undefined);
       pending.add(work);
@@ -1080,28 +1214,20 @@ export class PlatformAccountConnector {
         ? 'chrome'
         : 'msedge';
       await this.selectDouyinTab(page, 'douyin', mode, browser);
+      let sourceScrollReset = false;
       let unchangedRounds = 0;
       for (let index = 0; index < MAX_DOUYIN_SCROLLS; index += 1) {
         if (this.cancelled) break;
         // 不无限等待一个流式/挂起的响应；只观察官方页面，不主动伪造签名或翻页请求。
         await Promise.race([Promise.allSettled([...pending]), wait(1500)]);
+        if (!sourceScrollReset) {
+          sourceScrollReset = await page.evaluate(scrollDouyinSourcePanel, { tabId: DOUYIN_SOURCE_TAB_IDS[mode], reset: true })
+            .catch(() => false);
+        }
         const before = pages.snapshot(limit);
         if (before.coverage !== 'partial') break;
-        await page.evaluate(() => {
-          // 部分版本的个人主页使用内层滚动容器，滚动 window 不会触发下一页。
-          const anchor = document.querySelector('a[href*="/video/"]');
-          let scrollTarget: Element | null = anchor?.parentElement || null;
-          while (scrollTarget) {
-            const style = getComputedStyle(scrollTarget);
-            if (/(auto|scroll)/.test(style.overflowY)
-              && scrollTarget.scrollHeight > scrollTarget.clientHeight + 100) break;
-            scrollTarget = scrollTarget.parentElement;
-          }
-          const target = scrollTarget || document.scrollingElement;
-          target?.scrollBy({
-            top: Math.max((target.clientHeight || window.innerHeight) * 0.88, 720), behavior: 'instant',
-          });
-        }).catch(() => undefined);
+        const scrollAdvanced = await page.evaluate(scrollDouyinSourcePanel, { tabId: DOUYIN_SOURCE_TAB_IDS[mode], reset: false })
+          .catch(() => false);
         const responseDeadline = Date.now() + 2200;
         const responseAt = lastResponseAt;
         while (!this.cancelled && Date.now() < responseDeadline) {
@@ -1109,7 +1235,8 @@ export class PlatformAccountConnector {
           if (lastResponseAt !== responseAt) break;
         }
         const after = pages.snapshot(limit);
-        unchangedRounds = after.urls.length === before.urls.length ? unchangedRounds + 1 : 0;
+        // 长列表尚未滚到底时数量会暂时不变，不能把正常滚动误判为分页停滞。
+        unchangedRounds = after.urls.length === before.urls.length && !scrollAdvanced ? unchangedRounds + 1 : 0;
         if (after.coverage !== 'partial'
           || (unchangedRounds >= 5 && (activeRequests.size === 0 || Date.now() - lastRequestAt > 20_000))) break;
       }

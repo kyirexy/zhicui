@@ -30,6 +30,7 @@ interface NormalizedPreview {
   caption: string;
   author: string;
   date: string;
+  dateLabel: '发布于' | '记录于' | '导入于';
   coverUrl: string;
   platform: PlatformBrand;
   sourceUrl: string;
@@ -73,6 +74,7 @@ function normalizeSelection(selection: LibraryPreviewSelection): NormalizedPrevi
       caption: item.caption && item.caption !== item.title ? item.caption : '',
       author: item.author_name,
       date: item.date || item.recorded_at,
+      dateLabel: item.date ? '发布于' : '记录于',
       coverUrl: item.cover_proxy_url || item.cover_url,
       platform: normalizePlatform(item.platform || 'douyin'),
       sourceUrl: item.source_url,
@@ -107,6 +109,7 @@ function normalizeSelection(selection: LibraryPreviewSelection): NormalizedPrevi
     caption: item.caption && item.caption !== item.title ? item.caption : '',
     author: item.author_name,
     date: item.published_at || item.imported_at,
+    dateLabel: item.published_at ? '发布于' : '导入于',
     coverUrl: item.cover_url,
     platform: item.platform,
     sourceUrl: item.source_url,
@@ -155,7 +158,7 @@ export default function LibraryPreviewPane({ selection, onRefreshCover }: Librar
         {(preview.author || displayDate) && (
           <div className={styles.previewPaneMeta}>
             {preview.author && <span>{preview.author}</span>}
-            {displayDate && <time dateTime={preview.date}>{displayDate}</time>}
+            {displayDate && <time dateTime={preview.date}>{preview.dateLabel} {displayDate}</time>}
           </div>
         )}
       </div>

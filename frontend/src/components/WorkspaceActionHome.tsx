@@ -103,7 +103,8 @@ const CHANNEL_KEYS: ChannelKey[] = [
   'bilibili_import',
 ];
 
-const HOME_CACHE_VERSION = 'v7';
+// 收藏台账校准后，旧首页预览也不能在网络响应前闪回错误排名。
+const HOME_CACHE_VERSION = 'v8';
 const HOME_CACHE_MAX_AGE = 5 * 60 * 1000;
 
 function homeCacheKey(userId: string): string {

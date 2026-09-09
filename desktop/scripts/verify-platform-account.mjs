@@ -3,6 +3,7 @@ import {
   boundedPlatformUrls,
   collectBilibiliSource,
   DouyinSourcePages,
+  PlatformAccountConnector,
   hasPlatformAuthCookie,
   isDouyinSourceResponseUrl,
   mergeDouyinItem,
@@ -10,6 +11,7 @@ import {
   readDouyinMetadataPayload,
   readDouyinSourceRecords,
   requestBilibiliJson,
+  scrollDouyinSourcePanel,
 } from '../dist/platform-account.js';
 import {
   validatePlatformAccountCollectRequest,
@@ -328,6 +330,51 @@ assert.equal(refreshedPages.snapshot(10).orderReliable, false, '刷新失败不�
 refreshedPages.add(douyinPageUrl(0), { aweme_list: [aweme(10003)], max_cursor: 9, has_more: true }, 2);
 assert.equal(refreshedPages.snapshot(10).coverage, 'partial', '新首屏不能拼接旧一轮后页后报告完整');
 assert.equal(refreshedPages.add(douyinPageUrl(9), { aweme_list: [aweme(10002)], has_more: false }, 1), false);
+// 现场喜欢列表在第三页在途时自动重发首屏；保留独立旧轮，不能混页或丢掉已读前 50 条。
+const automaticRefresh = (lastFirst = Array.from({ length: 20 }, (_, i) => aweme(20000 + i))) => {
+  const pages = new DouyinSourcePages();
+  const response = (offset, next) => ({ aweme_list: Array.from({ length: 20 }, (_, i) => aweme(20000 + offset + i)), max_cursor: next, has_more: true });
+  pages.begin(douyinPageUrl(0), 0);
+  pages.add(douyinPageUrl(0), response(0, 90), 0);
+  pages.begin(douyinPageUrl(90), 1);
+  pages.add(douyinPageUrl(90), response(20, 80), 1);
+  pages.begin(douyinPageUrl(80), 2);
+  pages.begin(douyinPageUrl(0), 3);
+  assert.equal(pages.snapshot(50).orderReliable, false, '重发首屏尚未返回时不能用旧轮代替');
+  assert.equal(pages.add(douyinPageUrl(80), response(40, 70), 2), false, '晚到页仍归上一轮');
+  pages.add(douyinPageUrl(0), { aweme_list: lastFirst, max_cursor: 90, has_more: true }, 3);
+  return pages;
+};
+const identicalRefresh = automaticRefresh();
+assert.deepEqual(identicalRefresh.snapshot(50).items.map(item => item.videoId), Array.from({ length: 50 }, (_, i) => String(20000 + i)));
+assert.equal(identicalRefresh.snapshot(50).coverage, 'limited');
+assert.equal(identicalRefresh.snapshot(70).items.length, 20, '上一轮不足 N 时不能跨轮补缺口');
+const changedRefresh = automaticRefresh([aweme(99999), ...Array.from({ length: 19 }, (_, i) => aweme(20001 + i))]);
+assert.equal(changedRefresh.snapshot(50).items.length, 20, '最新首屏变化后不能返回旧轮');
+assert.equal(changedRefresh.snapshot(50).items[0].videoId, '99999');
+changedRefresh.begin(douyinPageUrl(90), 4);
+changedRefresh.add(douyinPageUrl(90), { aweme_list: Array.from({ length: 40 }, (_, i) => aweme(30000 + i)), max_cursor: 70, has_more: true }, 4);
+assert.equal(changedRefresh.snapshot(50).coverage, 'limited');
+assert.equal(changedRefresh.snapshot(50).items[20].videoId, '30000', '新轮自身满足 N 时始终使用新轮');
+for (const headFields of [{ max_cursor: 90 }, { has_more: true }, { max_cursor: 90, has_more: undefined }]) {
+  const pages = new DouyinSourcePages();
+  const head = { aweme_list: [aweme(40000), aweme(40001)], ...headFields };
+  pages.begin(douyinPageUrl(0), 0);
+  pages.add(douyinPageUrl(0), head, 0);
+  pages.begin(douyinPageUrl(90), 1);
+  pages.add(douyinPageUrl(90), { aweme_list: [aweme(40002), aweme(40003)], max_cursor: 80, has_more: true }, 1);
+  pages.begin(douyinPageUrl(0), 2);
+  pages.add(douyinPageUrl(0), head, 2);
+  assert.equal(pages.snapshot(3).items.length, 2, '未知 has_more/游标不能确认两轮等价');
+}
+const malformedRefresh = automaticRefresh([aweme(20000), { removed: true }]);
+assert.equal(malformedRefresh.snapshot(50).items.length, 1, '最新首屏身份缺口不能回退旧轮');
+identicalRefresh.begin(douyinPageUrl(90), 4);
+identicalRefresh.add(douyinPageUrl(90), { aweme_list: [aweme(99998)], max_cursor: 80, has_more: true }, 4);
+assert.equal(identicalRefresh.snapshot(50).items.length, 21, '首屏相同但后页变化也不能回退旧轮');
+identicalRefresh.begin(douyinPageUrl(0), 5);
+identicalRefresh.add(douyinPageUrl(0), { aweme_list: Array.from({ length: 20 }, (_, i) => aweme(20000 + i)), max_cursor: 90, has_more: true }, 5);
+assert.equal(identicalRefresh.snapshot(50).items.length, 20, '只保留相邻两轮，不能搜索更老的完整列表');
 const malformedDouyinPage = new DouyinSourcePages();
 malformedDouyinPage.add(douyinPageUrl(0), { aweme_list: [aweme(10001), { removed: true }], has_more: false }, 0);
 assert.equal(malformedDouyinPage.snapshot(10).coverage, 'partial', '丢失成员身份时禁止完整快照清理');
@@ -355,7 +402,219 @@ unknownEnd.add(douyinPageUrl(0), { aweme_list: [aweme(10001)] }, 0);
 assert.equal(unknownEnd.snapshot(10).coverage, 'partial', '可信短前缀不能冒充列表已结束');
 assert.match(unknownEnd.snapshot(10).warning, /已按官方顺序读取前 1 条/);
 
+// 2026-09-09 官方收藏请求结构：保留 POST 游标与页链模式，作品 ID 全部使用合成值。
+const capturedCollectionPages = [
+  { cursor: '0', next: 1786455691150973 },
+  { cursor: '1786455691150973', next: 1785257438561061 },
+  { cursor: '1785257438561061', next: 1783946015168741 },
+  { cursor: '1783946015168741', next: 1781868714026829 },
+].map((page, index) => ({ ...page, ids: Array.from({ length: 10 }, (_, offset) => String(7000000000000000000n + BigInt(index * 10 + offset))) }));
+const capturedCollectionUrl = 'https://www.douyin.com/aweme/v1/web/aweme/listcollection/?device_platform=webapp';
+for (const encoding of ['form', 'json']) {
+  const pages = new DouyinSourcePages();
+  const requests = capturedCollectionPages.map((entry) => ({
+    url: capturedCollectionUrl, method: 'POST',
+    postData: encoding === 'form'
+      ? new URLSearchParams({ cursor: entry.cursor, count: '10' }).toString()
+      : JSON.stringify({ cursor: entry.cursor, count: '10' }),
+  }));
+  requests.forEach((request, index) => pages.begin(request, index));
+  for (const index of [3, 1, 0, 2]) {
+    const captured = capturedCollectionPages[index];
+    assert.equal(pages.add(requests[index], {
+      status_code: 0, aweme_list: captured.ids.map((id) => aweme(id)), cursor: captured.next, has_more: 1,
+    }, index), true);
+  }
+  const result = pages.snapshot(50);
+  assert.deepEqual(result.items.map((item) => item.videoId), capturedCollectionPages.flatMap((entry) => entry.ids));
+  assert.equal(result.items[30].sourceRank, 30, '第四页不能再冒充首屏 rank 0');
+  assert.equal(result.coverage, 'partial', '四十条未达到五十且 has_more=1，不能冒充全部');
+  assert.equal(result.orderReliable, true);
+  assert.deepEqual(pages.snapshot(3).items.map((item) => item.videoId), capturedCollectionPages[0].ids.slice(0, 3));
+  assert.equal(pages.snapshot(3).coverage, 'limited');
+}
+for (const request of [
+  { url: capturedCollectionUrl, method: 'POST', postData: 'count=10' },
+  { url: capturedCollectionUrl, method: 'POST', postData: 'cursor=undefined' },
+  { url: capturedCollectionUrl, method: 'GET' },
+  { url: `${capturedCollectionUrl}&cursor=0`, method: 'POST', postData: 'cursor=20' },
+]) {
+  const pages = new DouyinSourcePages();
+  pages.begin(request, 0);
+  assert.equal(pages.add(request, { aweme_list: [aweme('7000000000000000030')], cursor: 20, has_more: 1 }, 0), false);
+  assert.equal(pages.snapshot(50).orderReliable, false, '未确认/矛盾游标不能默认为首屏');
+}
+assert.equal(isDouyinSourceResponseUrl('https://www-hj.douyin.com/aweme/v1/web/aweme/favorite/?max_cursor=0', 'like'), false);
+assert.equal(isDouyinSourceResponseUrl('http://www.douyin.com/aweme/v1/web/aweme/favorite/?max_cursor=0', 'like'), false);
+
+// 还原现场先出现普通“收藏”文字、后挂载真实 tab、选中状态短暂回落的时序。
+for (const profilePath of ['self', 'test-profile']) {
+  const originalNow = Date.now;
+  let time = 1_000;
+  let clickedAt = 0;
+  let clicks = 0;
+  Date.now = () => time;
+  try {
+    const connector = new PlatformAccountConnector(() => 'unused-test-profile', () => {});
+    const page = {
+      url: () => `https://www.douyin.com/user/${profilePath}`,
+      locator: (selector) => {
+        assert.equal(selector, '#semiTabfavorite_collection[role="tab"]');
+        return {
+          isVisible: async () => time >= 1_800,
+          click: async () => { clicks += 1; clickedAt = time; },
+          getAttribute: async () => clickedAt && time !== clickedAt + 400 ? 'true' : 'false',
+        };
+      },
+      waitForTimeout: async (duration) => { time += duration; },
+    };
+    await connector.selectDouyinTab(page, 'douyin', 'collect', 'chrome');
+    assert.equal(clicks, 1);
+    assert.ok(clickedAt >= 2_400, '真实 tab 与本人主页稳定之后才点击');
+    assert.ok(time >= clickedAt + 1_200, '短暂 selected=true 不能算完成');
+  } finally { Date.now = originalNow; }
+}
+// 官网水合会吞掉首次真实 tab 点击，未选中时等待后重试，成功后不再点击。
+for (const visibleAt of [1_000, 20_000]) {
+  const originalNow = Date.now;
+  let time = 1_000;
+  const clickTimes = [];
+  Date.now = () => time;
+  try {
+    const connector = new PlatformAccountConnector(() => 'unused-test-profile', () => assert.fail('慢加载尚在预算内，无须人工验证'));
+    const page = {
+      url: () => 'https://www.douyin.com/user/self',
+      locator: () => ({
+        isVisible: async () => time >= visibleAt,
+        click: async () => { clickTimes.push(time); },
+        getAttribute: async () => clickTimes.length >= 2 ? 'true' : 'false',
+      }),
+      waitForTimeout: async (duration) => { time += duration; },
+    };
+    await connector.selectDouyinTab(page, 'douyin', 'collect', 'chrome');
+    assert.equal(clickTimes.length, 2);
+    assert.ok(clickTimes[0] >= visibleAt + 600);
+    assert.ok(clickTimes[1] - clickTimes[0] >= 2_000);
+  } finally { Date.now = originalNow; }
+}
+{
+  const originalNow = Date.now;
+  let time = 1_000;
+  let clicks = 0;
+  Date.now = () => time;
+  try {
+    const connector = new PlatformAccountConnector(() => 'unused-test-profile', () => {});
+    const page = {
+      url: () => 'https://www.douyin.com/user/self',
+      locator: () => ({ isVisible: async () => true, click: async () => { clicks += 1; }, getAttribute: async () => 'false' }),
+      waitForTimeout: async (duration) => { time += duration; },
+      bringToFront: async () => {},
+    };
+    await assert.rejects(connector.selectDouyinTab(page, 'douyin', 'collect', 'chrome'), /没有找到/);
+    assert.equal(clicks, 3, '人工等待阶段也不能无限重试点击');
+  } finally { Date.now = originalNow; }
+}
+{
+  const originalDocument = globalThis.document;
+  const originalStyle = globalThis.getComputedStyle;
+  const attrs = { role: 'tab', 'aria-selected': 'true', 'aria-controls': 'collect-panel' };
+  const calls = [];
+  const route = {
+    style: { overflowY: 'auto' }, clientHeight: 943, scrollHeight: 6789, scrollTop: 0, parentElement: null,
+    scrollTo: (value) => { route.scrollTop = value.top; calls.push(['reset', value.top]); },
+    scrollBy: (value) => { route.scrollTop = Math.min(route.scrollTop + value.top, route.scrollHeight - route.clientHeight); calls.push(['scroll', value.top]); },
+  };
+  const panel = {
+    style: { display: 'block', visibility: 'visible' }, parentElement: route, clientHeight: 2000, scrollHeight: 2000,
+    getAttribute: (name) => name === 'role' ? 'tabpanel' : null,
+    getBoundingClientRect: () => ({ width: 1000, height: 2000 }),
+    querySelectorAll: () => [],
+  };
+  const tab = {
+    getAttribute: (name) => attrs[name] || null,
+    style: { display: 'block', visibility: 'visible' },
+    getBoundingClientRect: () => ({ width: 56, height: 52 }),
+  };
+  globalThis.document = {
+    getElementById: (id) => id === 'semiTabfavorite_collection' ? tab : id === 'collect-panel' ? panel : null,
+    querySelectorAll: (selector) => { assert.equal(selector, '[role="tabpanel"]'); return []; },
+    scrollingElement: { scrollBy: () => assert.fail('不能滚动页脚/全页视频链接所在容器') },
+  };
+  globalThis.getComputedStyle = (element) => element.style;
+  try {
+    assert.equal(scrollDouyinSourcePanel({ tabId: 'semiTabfavorite_collection', reset: true }), true);
+    assert.equal(scrollDouyinSourcePanel({ tabId: 'semiTabfavorite_collection', reset: false }), true);
+    assert.deepEqual(calls, [['reset', 0], ['scroll', 943 * 0.88]]);
+    panel.getBoundingClientRect = () => ({ width: 0, height: 0 });
+    panel.querySelectorAll = () => [];
+    assert.equal(scrollDouyinSourcePanel({ tabId: 'semiTabfavorite_collection', reset: false }), true,
+      '现场 active pane 只有零尺寸占位，仍沿精确 aria 关联定位共同滚动祖先');
+    attrs['aria-selected'] = 'false';
+    assert.equal(scrollDouyinSourcePanel({ tabId: 'semiTabfavorite_collection', reset: false }), false);
+    attrs['aria-selected'] = 'true';
+    panel.style.display = 'none';
+    assert.equal(scrollDouyinSourcePanel({ tabId: 'semiTabfavorite_collection', reset: false }), false);
+    assert.equal(calls.length, 3, '标签未选中/内容区隐藏时不能继续滚动');
+    panel.style.display = 'block';
+    route.scrollTop = 0;
+    for (let index = 0; index < 6; index += 1) {
+      assert.equal(scrollDouyinSourcePanel({ tabId: 'semiTabfavorite_collection', reset: false }), true,
+        '长列表前六轮仍在前进，不能因为作品数量未增加就提前停止');
+    }
+    route.scrollTop = route.scrollHeight - route.clientHeight;
+    assert.equal(scrollDouyinSourcePanel({ tabId: 'semiTabfavorite_collection', reset: false }), false,
+      '到底且未新增内容时报告停滞，保留有限停止机制');
+  } finally {
+    if (originalDocument === undefined) delete globalThis.document; else globalThis.document = originalDocument;
+    if (originalStyle === undefined) delete globalThis.getComputedStyle; else globalThis.getComputedStyle = originalStyle;
+  }
+}
+
 const bilibiliUrl = (id) => `https://www.bilibili.com/video/BV${id}`;
+// 跑真实采集主循环，只替换官方页面和时钟：长列表第六次滚动才触发下一页。
+for (const longList of [true, false]) {
+  const originalNow = Date.now;
+  const originalTimeout = globalThis.setTimeout;
+  let time = 1_000;
+  let scrolls = 0;
+  let resets = 0;
+  Date.now = () => time;
+  globalThis.setTimeout = (callback, milliseconds, ...args) => originalTimeout(() => { time += Number(milliseconds) || 0; callback(...args); }, 0);
+  try {
+    const listeners = new Map();
+    const emit = (name, value) => { for (const callback of listeners.get(name) || []) callback(value); };
+    const respond = (cursor, payload) => {
+      const request = { url: () => douyinPageUrl(cursor), method: () => 'GET', postData: () => null };
+      emit('request', request);
+      emit('response', {
+        url: request.url, request: () => request, ok: () => true,
+        allHeaders: async () => ({ 'content-type': 'application/json' }), json: async () => payload,
+      });
+      emit('requestfinished', request);
+    };
+    const page = {
+      on: (name, callback) => { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(callback); },
+      off: (name, callback) => listeners.get(name)?.delete(callback),
+      goto: async () => { respond(0, { aweme_list: [aweme(50000), aweme(50001)], max_cursor: 90, has_more: true }); },
+      evaluate: async (_fn, input) => {
+        if (input.reset) { resets += 1; return true; }
+        scrolls += 1;
+        if (longList && scrolls === 6) respond(90, { aweme_list: [aweme(50002), aweme(50003)], max_cursor: 80, has_more: true });
+        return longList;
+      },
+    };
+    const connector = new PlatformAccountConnector(() => 'unused-test-profile', () => {});
+    connector.selectDouyinTab = async () => {};
+    const result = await connector.collectDouyin({ pages: () => [page], browser: () => null }, 'like', 3);
+    assert.equal(resets, 1, '初始化成功后不能反复复位滚动');
+    assert.equal(scrolls, longList ? 6 : 5);
+    assert.equal(result.coverage, longList ? 'limited' : 'partial');
+    assert.equal(result.items.length, longList ? 3 : 2);
+  } finally {
+    Date.now = originalNow;
+    globalThis.setTimeout = originalTimeout;
+  }
+}
 const liked = await collectBilibiliSource(async (url) => {
   if (url.endsWith('/nav')) return { mid: 123 };
   return { list: { vlist: [

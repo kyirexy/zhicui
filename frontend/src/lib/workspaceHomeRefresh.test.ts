@@ -141,6 +141,29 @@ test('真实首页忽略同步前旧响应，刷新失败保留其他分类，�
     original.find((request) => request.key === 'douyin_like')!.resolve(result('old-user'));
     await settle();
     assert.ok(!page.links().some((href) => /saved|new-bili|old-user/.test(href)));
-    assert.equal(page.storage['zhicui:workspace-home:v7:user-a'], undefined);
+    assert.equal(page.storage['zhicui:workspace-home:v8:user-a'], undefined);
+  } finally { page.close(); }
+});
+
+test('台账校准发布后首页不显示旧 v7 预览，网络返回后写入 v8 快照', async () => {
+  const page = harness();
+  try {
+    const keys = ['douyin_collect', 'douyin_like', 'douyin_post', 'bilibili_collect', 'bilibili_like', 'bilibili_import'];
+    const channelPreviews = Object.fromEntries(keys.map((key) => [key, key === 'douyin_collect'
+      ? [{ key: 'old', href: '/library/detail?id=wrong-old-rank', title: '旧排名', cover: '', author: '' }]
+      : []]));
+    page.storage['zhicui:workspace-home:v7:user-a'] = JSON.stringify({
+      savedAt: Date.now(), threads: [], readyCount: 1, channelPreviews,
+      channelTotals: Object.fromEntries(keys.map((key) => [key, 0])),
+      activeModes: { douyin: 'collect', bilibili: 'collect' },
+    });
+    page.render();
+    assert.ok(!page.links().includes('/library/detail?id=wrong-old-rank'));
+    page.requests.splice(0).forEach((request) => request.resolve(request.key === 'douyin_collect'
+      ? result('corrected-rank') : { success: false }));
+    await settle();
+    assert.ok(page.links().includes('/library/detail?id=corrected-rank'));
+    assert.ok(!page.links().includes('/library/detail?id=wrong-old-rank'));
+    assert.match(String(page.storage['zhicui:workspace-home:v8:user-a']), /corrected-rank/);
   } finally { page.close(); }
 });

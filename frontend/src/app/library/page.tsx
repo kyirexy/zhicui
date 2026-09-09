@@ -996,6 +996,9 @@ export default function VideoLibraryPage() {
     if (batchExtractingRef.current || nextMode === sourceModeRef.current) return;
     sourceModeRef.current = nextMode;
     setSourceMode(nextMode);
+    const currentUrl = new URL(window.location.href);
+    currentUrl.searchParams.set('mode', nextMode);
+    window.history.replaceState(window.history.state, '', `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
     setSelected(new Set());
     setPreviewTarget(null);
     setSortMenuOpen(false);

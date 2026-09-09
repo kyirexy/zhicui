@@ -1,7 +1,8 @@
 import type { PlatformAccountItem } from '@/lib/desktopRuntime';
 import type { DouyinLocalSyncItem } from '@/lib/types';
 
-export const MIN_LOCAL_DOUYIN_DESKTOP_VERSION = '1.0.9';
+// 1.1.3 才会正确识别收藏 POST 分页游标，旧版不能继续写入可信来源排名。
+export const MIN_LOCAL_DOUYIN_DESKTOP_VERSION = '1.1.3';
 
 const EPHEMERAL_MEDIA_TTL_MS = 15 * 60 * 1000;
 const TRUSTED_DOUYIN_MEDIA_DOMAINS = [
@@ -35,11 +36,16 @@ export function isTrustedEphemeralDouyinMediaUrl(value: string): boolean {
 }
 
 export function supportsLocalDouyinRuntime(version: string): boolean {
-  const [major = 0, minor = 0, patch = 0] = String(version || '')
+  const parts = String(version || '')
     .split('.')
     .slice(0, 3)
     .map((value) => Number.parseInt(value, 10) || 0);
-  return major > 1 || (major === 1 && (minor > 0 || patch >= 9));
+  const minimum = MIN_LOCAL_DOUYIN_DESKTOP_VERSION.split('.').map(Number);
+  for (let index = 0; index < minimum.length; index += 1) {
+    const current = parts[index] || 0;
+    if (current !== minimum[index]) return current > minimum[index];
+  }
+  return true;
 }
 
 export function requiresLocalDouyinDesktopUpdate(version: string): boolean {

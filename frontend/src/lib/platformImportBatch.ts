@@ -48,7 +48,7 @@ export async function importPlatformBatches(
     if (!response.success || !response.data) {
       const message = response.error || '导入失败，请稍后重试';
       entries.push(...uniqueUrls.slice(offset).map((input) => ({
-        input, success: false, status: 'failed' as const, error: message,
+        input, success: false, status: 'pending' as const, error: `结果待确认，可重试：${message}`,
       })));
       break;
     }
@@ -57,14 +57,16 @@ export async function importPlatformBatches(
     if (response.data.items.length < batch.length) {
       const reported = new Set(response.data.items.map((item) => item.input));
       entries.push(...batch.filter((input) => !reported.has(input)).map((input) => ({
-        input, success: false, status: 'failed' as const, error: '服务端未返回该视频结果，请重试',
+        input, success: false, status: 'pending' as const, error: '服务端未返回该视频结果，待确认，可重试',
       })));
     }
     onProgress?.(Math.min(offset + batch.length, uniqueUrls.length), uniqueUrls.length);
   }
   const success = entries.filter((entry) => entry.success).length;
+  const skipped = entries.filter((entry) => entry.status === 'skipped').length;
+  const pending = entries.filter((entry) => entry.status === 'pending').length;
   return {
     success: true,
-    data: { items: entries, total: entries.length, success, failed: entries.length - success },
+    data: { items: entries, total: entries.length, success, skipped, pending, failed: entries.filter((entry) => entry.status === 'failed').length },
   };
 }

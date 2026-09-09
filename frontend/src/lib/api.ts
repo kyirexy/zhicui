@@ -1,4 +1,5 @@
 import { notifyLibraryUpdated } from './libraryUpdates';
+import type { LibrarySyncRun } from './types';
 import type {
   AgentAutomation,
   AgentAutomationCreate,
@@ -92,7 +93,7 @@ import type {
 import { getEphemeralDouyinMediaSources } from './douyinDesktopSync';
 import { importPlatformBatches, platformImportBatchBody } from './platformImportBatch';
 import type { PlatformSyncSnapshot } from './platformSyncSnapshot';
-import { sessionFetch } from './authSession';
+import { readStoredToken, sessionFetch } from './authSession';
 export type { ApiResponse };
 
 // In Capacitor/static-export mode, NEXT_PUBLIC_API_URL is set explicitly
@@ -683,18 +684,28 @@ export async function getDouyinLibraryStatus(): Promise<ApiResponse<DouyinLibrar
   return request<DouyinLibraryStatus>('/api/library/douyin/status');
 }
 
+export async function listLibrarySyncRuns(limit = 20): Promise<ApiResponse<{ items: LibrarySyncRun[]; total: number }>> {
+  return request(`/api/library/sync-runs?limit=${Math.max(1, Math.min(20, limit))}`);
+}
+
 export async function importPlatformLibraryItems(
   urls: string[],
   sourceMode?: 'collect' | 'like' | 'post',
   snapshot?: PlatformSyncSnapshot,
   onProgress?: (completed: number, total: number) => void,
 ): Promise<ApiResponse<PlatformLibraryImportResult>> {
+  const requestedToken = readStoredToken();
   const sourceSyncedAt = snapshot?.sourceSyncedAt || new Date().toISOString();
-  const response = await importPlatformBatches(urls, (batch) => request<PlatformLibraryImportResult>('/api/library/imports', {
+  const response = await importPlatformBatches(urls, async (batch) => {
+    if (requestedToken !== readStoredToken()) return { success: false, error: '账号已切换，剩余同步已停止' };
+    const result = await request<PlatformLibraryImportResult>('/api/library/imports', {
       method: 'POST',
       body: JSON.stringify(platformImportBatchBody(batch, sourceSyncedAt, sourceMode, snapshot)),
-    }), onProgress);
-  if (response.success && (response.data?.success || 0) > 0) notifyLibraryUpdated();
+    });
+    // 每批已落库就失效旧读取；后续批次断线也不能漏掉部分成功。
+    notifyLibraryUpdated();
+    return result;
+  }, onProgress);
   if (!response.data) return response;
   return {
     ...response,
@@ -957,7 +968,8 @@ export async function ingestLocalDouyinLibrary(
       ...(typeof snapshot?.orderReliable === 'boolean' ? { source_order_reliable: snapshot.orderReliable } : {}),
     }),
   });
-  if (response.success && (response.data?.accepted || 0) > 0) notifyLibraryUpdated();
+  // 网络中断也可能已有部分落库，通过重新读取确认，不能继续展示旧快照。
+  notifyLibraryUpdated();
   return response;
 }
 
@@ -1054,7 +1066,10 @@ export async function getDouyinCollectionJob(
     `/api/library/douyin/jobs/${encodeURIComponent(jobId)}`,
     { signal },
   );
-  if (response.success && response.data?.status === 'success') notifyLibraryUpdated();
+  if (response.success && response.data
+    && (response.data.status === 'success' || response.data.status === 'failed')) {
+    notifyLibraryUpdated(`douyin-sync:${jobId}:${response.data.status}:${response.data.success}`);
+  }
   return response;
 }
 
@@ -1097,10 +1112,14 @@ export async function getDouyinBatchExtraction(
   jobId: string,
   signal?: AbortSignal,
 ): Promise<ApiResponse<DouyinBatchExtractionJob>> {
-  return request<DouyinBatchExtractionJob>(
+  const response = await request<DouyinBatchExtractionJob>(
     `/api/library/douyin/extractions/batch/${encodeURIComponent(jobId)}`,
     { signal },
   );
+  if (response.success && response.data && response.data.success > 0) {
+    notifyLibraryUpdated(`douyin-transcript:${jobId}:${response.data.success}`);
+  }
+  return response;
 }
 
 export async function deleteDouyinLibraryExtraction(

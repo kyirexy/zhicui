@@ -40,6 +40,7 @@ import {
   UserRound,
   X,
 } from 'lucide-react';
+import LibrarySyncHistory from '@/components/LibrarySyncHistory';
 import CrossPlatformLibraryRow from '@/components/CrossPlatformLibraryRow';
 import LibraryExtractionLiveProgress from '@/components/LibraryExtractionLiveProgress';
 import MarqueeSelectionOverlay from '@/components/MarqueeSelectionOverlay';
@@ -113,6 +114,8 @@ import {
   readLibraryListCache,
   writeLibraryListCache,
 } from '@/lib/libraryListCache';
+import { getLibraryRevision, isLibraryRevisionCurrent, subscribeLibraryUpdates } from '@/lib/libraryUpdates';
+import { mergeSyncedItems } from '@/lib/libraryIncrementalSync';
 import { findNewLibraryItems } from '@/lib/librarySyncDiff';
 import { selectPlatformLibrarySource, type PlatformLibrarySourceFilter } from '@/lib/platformLibraryOrder';
 import { platformSyncWarning, withPlatformSyncWarning } from '@/lib/platformSyncFeedback';
@@ -163,6 +166,10 @@ interface SyncCollectionModeResult {
   queueMayStillBeRunning?: boolean;
   warning?: string;
   syncedVideoIds?: string[];
+  createdVideoIds?: string[];
+  createdCount?: number;
+  reusedCount?: number;
+  revision?: number;
 }
 
 interface CollectionProgressSnapshot {
@@ -485,6 +492,8 @@ export default function VideoLibraryPage() {
   const [sourceSyncWarning, setSourceSyncWarning] = useState('');
   const [autoSyncing, setAutoSyncing] = useState(false);
   const activeRef = useRef(true);
+  const currentUserIdRef = useRef(user?.id);
+  currentUserIdRef.current = user?.id;
   const batchExtractingRef = useRef(false);
   const extractionRevisionRef = useRef('');
   const sourceModeRef = useRef<DouyinSourceMode>(sourceMode);
@@ -528,6 +537,9 @@ export default function VideoLibraryPage() {
     refreshOrder = false,
   ): Promise<DouyinLibraryListResult | null> => {
     const requestedMode = sourceMode;
+    const requestedUserId = user?.id;
+    const requestedRevision = getLibraryRevision();
+    if (!requestedUserId || !activeRef.current) return null;
     const requestId = libraryRequestRef.current + 1;
     libraryRequestRef.current = requestId;
     if (!silent) setLoading(true);
@@ -538,7 +550,9 @@ export default function VideoLibraryPage() {
       refreshOrder,
     );
     const isCurrentRequest = (
-      requestId === libraryRequestRef.current
+      activeRef.current && requestedUserId === currentUserIdRef.current
+      && isLibraryRevisionCurrent(requestedRevision)
+      && requestId === libraryRequestRef.current
       && requestedMode === sourceModeRef.current
     );
     if (response.success && response.data) {
@@ -575,6 +589,9 @@ export default function VideoLibraryPage() {
 
   const loadLibrary = useCallback(async (keepVisible = false) => {
     const requestedMode = sourceMode;
+    const requestedUserId = user?.id;
+    const requestedRevision = getLibraryRevision();
+    if (!requestedUserId || !activeRef.current) return null;
     const requestId = libraryRequestRef.current + 1;
     libraryRequestRef.current = requestId;
     if (!keepVisible) setLoading(true);
@@ -587,7 +604,9 @@ export default function VideoLibraryPage() {
 
     void statusPromise.then((statusResponse) => {
       if (
-        requestId !== libraryRequestRef.current
+        !activeRef.current || requestedUserId !== currentUserIdRef.current
+        || !isLibraryRevisionCurrent(requestedRevision)
+        || requestId !== libraryRequestRef.current
         || requestedMode !== sourceModeRef.current
       ) return;
       if (statusResponse.success && statusResponse.data) {
@@ -600,7 +619,9 @@ export default function VideoLibraryPage() {
 
     const itemsResponse = await itemsPromise;
     if (
-      requestId !== libraryRequestRef.current
+      !activeRef.current || requestedUserId !== currentUserIdRef.current
+      || !isLibraryRevisionCurrent(requestedRevision)
+      || requestId !== libraryRequestRef.current
       || requestedMode !== sourceModeRef.current
     ) {
       return;
@@ -619,6 +640,9 @@ export default function VideoLibraryPage() {
     setLoading(false);
   }, [activeSort, applyLibraryListResult, sourceMode, user?.id]);
 
+  const refreshLibraryRef = useRef(loadLibrary);
+  refreshLibraryRef.current = loadLibrary;
+
   useEffect(() => {
     if (!isDouyinSourceMode(storedSourceMode)) {
       setSourceMode('collect');
@@ -632,6 +656,7 @@ export default function VideoLibraryPage() {
   }, [setLayoutMode, storedLayoutMode]);
 
   useEffect(() => {
+    activeRef.current = true;
     setSelected(new Set());
     setPreviewTarget(null);
     const cached = readLibraryListCache(user?.id, sourceMode, activeSort);
@@ -649,8 +674,14 @@ export default function VideoLibraryPage() {
     activeRef.current = true;
     return () => {
       activeRef.current = false;
+      libraryRequestRef.current += 1;
     };
   }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    return subscribeLibraryUpdates(() => { void loadLibrary(true); });
+  }, [loadLibrary, user?.id]);
 
   useEffect(() => {
     if (!sortMenuOpen) return;
@@ -1097,8 +1128,9 @@ export default function VideoLibraryPage() {
     let current = initial;
     let consecutiveFailures = 0;
     const refreshPersistedState = async () => {
+      if (!activeRef.current || user?.id !== currentUserIdRef.current) return;
       clearLibraryListCache(user?.id);
-      if (!activeRef.current) return;
+      const requestedRevision = getLibraryRevision();
       const requestedMode = sourceModeRef.current;
       const requestedSort: DouyinLibrarySort = requestedMode === 'post'
         ? 'published'
@@ -1111,6 +1143,9 @@ export default function VideoLibraryPage() {
         requestedMode,
         requestedSort,
       );
+      if (!activeRef.current || user?.id !== currentUserIdRef.current
+        || !isLibraryRevisionCurrent(requestedRevision)
+        || requestId !== libraryRequestRef.current || requestedMode !== sourceModeRef.current) return;
       if (!response.success || !response.data) {
         if (requestId === libraryRequestRef.current) setLoading(false);
         return;
@@ -2093,6 +2128,11 @@ export default function VideoLibraryPage() {
     requestedMode: DouyinSourceMode,
     requestedCount: number,
   ): Promise<SyncCollectionModeResult> => {
+    const syncUserId = user?.id;
+    const ensureSyncUser = () => {
+      if (!activeRef.current || !syncUserId || syncUserId !== currentUserIdRef.current) throw new Error('账号已切换，同步结果不再写入当前页面');
+    };
+    ensureSyncUser();
     const requestedSourceLabel = SOURCE_MODES.find(
       (mode) => mode.value === requestedMode,
     )?.label || '视频';
@@ -2101,23 +2141,22 @@ export default function VideoLibraryPage() {
       : sourceSorts[requestedMode] === 'published'
         ? 'published'
         : 'collection';
-    const baselineKnown = requestedMode === sourceModeRef.current;
-    let baselineItems = baselineKnown ? items : [];
+    let baselineItems: DouyinLibraryItem[] = [];
     const progressPrefix = batchExtractingRef.current
       ? `正在同步${requestedSourceLabel}；已有文案任务继续在后台处理`
       : `正在同步${requestedSourceLabel}；视频会先进入视频资料`;
     publishSourceManagerNotice(progressPrefix);
     setCollectionJob(null);
 
-    if (!baselineKnown) {
+    {
       const baselineResponse = await listDouyinLibraryItems(
         ALL_LIBRARY_ITEMS,
         requestedMode,
         requestedSort,
       );
-      if (baselineResponse.success && baselineResponse.data) {
-        baselineItems = baselineResponse.data.items;
-      }
+      ensureSyncUser();
+      if (!baselineResponse.success || !baselineResponse.data) throw new Error('无法确认已有资料，请稍后重试同步');
+      baselineItems = baselineResponse.data.items;
     }
     const previousIds = new Set(baselineItems.map((item) => item.aweme_id));
 
@@ -2141,6 +2180,7 @@ export default function VideoLibraryPage() {
         mode: requestedMode,
         limit: requestedCount,
       });
+      ensureSyncUser();
       const snapshot = capturePlatformSyncSnapshot(collected, sourceSyncedAt);
       if (!collected.success || !collected.items?.length) {
         if (collected.error?.includes('重新登录')) {
@@ -2166,6 +2206,7 @@ export default function VideoLibraryPage() {
         desktopVersion,
         snapshot,
       );
+      ensureSyncUser();
       if (!ingested.success || !ingested.data) {
         return {
           requestedMode,
@@ -2176,6 +2217,7 @@ export default function VideoLibraryPage() {
           error: ingested.error || '本机已读取作品，但服务器登记失败',
         };
       }
+      const revision = getLibraryRevision();
       const refreshedResponse = await listDouyinLibraryItems(
         ALL_LIBRARY_ITEMS,
         requestedMode,
@@ -2191,7 +2233,8 @@ export default function VideoLibraryPage() {
           error: `${requestedSourceLabel}已读取，但视频列表刷新失败`,
         };
       }
-      const refreshed = refreshedResponse.data.items || [];
+      ensureSyncUser();
+      const refreshed = mergeSyncedItems(baselineItems, refreshedResponse.data.items || [], (item) => item.aweme_id);
       const localJob: DouyinCollectionJob = {
         job_id: `desktop-${Date.now()}`,
         url: 'desktop-local',
@@ -2216,8 +2259,12 @@ export default function VideoLibraryPage() {
         requestedMode,
         refreshed,
         newlyVisible: findNewLibraryItems(refreshed, previousIds),
-        overview: refreshedResponse.data,
+        overview: { ...refreshedResponse.data, items: refreshed },
         finalJob: localJob,
+        createdVideoIds: ingested.data.created_video_ids || (ingested.data.created === 0 ? [] : undefined),
+        createdCount: ingested.data.created,
+        reusedCount: ingested.data.reused,
+        revision,
         error: '',
         warning: platformSyncWarning(collected),
         syncedVideoIds: ingested.data.video_ids,
@@ -2320,6 +2367,8 @@ export default function VideoLibraryPage() {
       sourceLabel: requestedSourceLabel,
       requestedCount,
     }));
+    ensureSyncUser();
+    const revision = getLibraryRevision();
     const refreshedResponse = await listDouyinLibraryItems(
       ALL_LIBRARY_ITEMS,
       requestedMode,
@@ -2336,14 +2385,16 @@ export default function VideoLibraryPage() {
       };
     }
     const refreshedResult = refreshedResponse.data;
-    const refreshed = refreshedResult.items || [];
+    ensureSyncUser();
+    const refreshed = mergeSyncedItems(baselineItems, refreshedResult.items || [], (item) => item.aweme_id);
     const newlyVisible = findNewLibraryItems(refreshed, previousIds);
     return {
       requestedMode,
       refreshed,
       newlyVisible,
-      overview: refreshedResult,
+      overview: { ...refreshedResult, items: refreshed },
       finalJob,
+      revision,
       error: '',
     };
   };
@@ -2352,6 +2403,7 @@ export default function VideoLibraryPage() {
     requestedModes: DouyinSourceMode[],
     persistedModes: DouyinSourceMode[],
     countOverride?: number,
+    prepareExisting = false,
   ): Promise<{ started: boolean }> => {
     if (desktopDouyinUpdateRequired) {
       publishSourceManagerNotice(
@@ -2413,10 +2465,12 @@ export default function VideoLibraryPage() {
         .join('、')}`,
     );
 
+    const syncUserId = user?.id;
+    const isSyncUserCurrent = () => activeRef.current && syncUserId === currentUserIdRef.current;
     const results: SyncCollectionModeResult[] = [];
     let failed = false;
     for (const [modeIndex, requestedMode] of modes.entries()) {
-      if (!activeRef.current) return { started: true };
+      if (!isSyncUserCurrent()) return { started: true };
       setSourceSyncQueue({
         current: modeIndex + 1,
         total: modes.length,
@@ -2437,6 +2491,7 @@ export default function VideoLibraryPage() {
             : '同步连接异常，请稍后重试',
         };
       }
+      if (!isSyncUserCurrent()) return { started: true };
       results.push(result);
       if (result.error) {
         failed = true;
@@ -2446,18 +2501,28 @@ export default function VideoLibraryPage() {
         if (result.queueMayStillBeRunning) break;
         continue;
       }
+      if (result.revision !== undefined && !isLibraryRevisionCurrent(result.revision)) {
+        void refreshLibraryRef.current(true);
+        continue;
+      }
       const refreshed = result.refreshed || [];
       const overview = result.overview;
-      sourceModeRef.current = requestedMode;
-      libraryRequestRef.current += 1;
-      setSourceMode(requestedMode);
-      setItems(refreshed);
+      const isVisibleSource = sourceModeRef.current === requestedMode;
+      if (isVisibleSource) {
+        libraryRequestRef.current += 1;
+        setItems(refreshed);
+        setSelected(new Set());
+        setError('');
+        setLoading(false);
+      }
       if (overview) {
-        setLibraryOverview({
-          sourceTotal: overview.source_total,
-          temporaryHidden: overview.hidden.temporary,
-          permanentHidden: overview.permanent_hidden_total,
-        });
+        if (isVisibleSource) {
+          setLibraryOverview({
+            sourceTotal: overview.source_total,
+            temporaryHidden: overview.hidden.temporary,
+            permanentHidden: overview.permanent_hidden_total,
+          });
+        }
         const requestedSort: DouyinLibrarySort = requestedMode === 'post'
           ? 'published'
           : sourceSorts[requestedMode] === 'published'
@@ -2470,9 +2535,6 @@ export default function VideoLibraryPage() {
           overview,
         );
       }
-      setSelected(new Set());
-      setError('');
-      setLoading(false);
       publishSourceManagerNotice(`${SOURCE_MODES.find((mode) => mode.value === requestedMode)?.label || '该来源'}已更新，视频资料现有 ${refreshed.length} 条`);
     }
 
@@ -2509,11 +2571,7 @@ export default function VideoLibraryPage() {
           : 0;
         publishSourceManagerNotice(quarantined > 0
           ? `已读取 ${nonNegativeInteger(result.finalJob?.total)} 条${sourceLabel}，完整 ${nonNegativeInteger(result.finalJob?.success)} 条；另有 ${quarantined} 条公开资料不完整，已安全隔离，请更新桌面端后重新同步`
-          : formatCollectionSyncMessage({
-              ...result.finalJob!,
-              sourceLabel,
-              requestedCount,
-            }));
+          : `新增 ${result.createdCount ?? result.newlyVisible.length} 条，复用 ${result.reusedCount ?? Math.max(0, nonNegativeInteger(result.finalJob?.total) - result.newlyVisible.length)} 条；历史资料已保留`);
       }
     } else {
       const summary = formatMultiSourceSyncSummary(results.map((result) => ({
@@ -2522,6 +2580,8 @@ export default function VideoLibraryPage() {
           )?.label || '该来源',
           checked: result.finalJob?.success || result.finalJob?.total || 0,
           newlyVisible: result.newlyVisible.length,
+          created: result.createdCount ?? result.newlyVisible.length,
+          reused: result.reusedCount ?? Math.max(0, (result.finalJob?.total || 0) - result.newlyVisible.length),
           error: result.error || undefined,
         })));
       const quarantined = successful.reduce(
@@ -2546,11 +2606,14 @@ export default function VideoLibraryPage() {
     // 独立保存读取范围警告，后台文案进度不能覆盖 partial/limited 的事实。
     setSourceSyncWarning(syncWarnings.join('；'));
 
-    // 手动同步后要补齐当前来源中所有仍缺文案的视频，而不仅是第一次出现的
-    // 条目。否则重新绑定或升级旧版本后，已有视频会永久停在“待整理”。
+    // 普通同步只为新增条目准备文稿；历史欠账由用户明确点击“准备文稿”后重试。
     const transcriptTargets = selectTranscriptPreparationTargets(
       allRefreshed.map((result) => selectSyncedSourceScope(
-        result.syncedVideoIds
+        !prepareExisting
+          ? result.createdVideoIds
+            ? result.refreshed?.filter((item) => result.createdVideoIds!.includes(item.aweme_id))
+            : result.newlyVisible
+          : result.syncedVideoIds
           ? result.refreshed?.filter((item) => result.syncedVideoIds!.includes(item.aweme_id))
           : result.refreshed,
         result.finalJob?.url === 'desktop-local'
@@ -2559,7 +2622,7 @@ export default function VideoLibraryPage() {
       )),
       MAX_TRANSCRIPT_PREPARATION,
     );
-    if (transcriptTargets.length === 0) return { started: true };
+    if (!isSyncUserCurrent() || transcriptTargets.length === 0) return { started: true };
     if (batchExtractingRef.current) {
       publishSourceManagerNotice(
         `还有 ${transcriptTargets.length} 条视频待准备文案；当前任务完成后可继续`,
@@ -2570,13 +2633,13 @@ export default function VideoLibraryPage() {
     void (async () => {
       // 立即创建服务端任务；不能先延迟，否则用户在同步完成后马上离开页面时，
       // 任务可能根本没有提交，重新进入后又全部显示为“待整理”。
-      if (batchExtractingRef.current) return;
+      if (!isSyncUserCurrent() || batchExtractingRef.current) return;
       const result = await extractItems(
         transcriptTargets,
         'transcript',
         { background: true },
       );
-      if (!activeRef.current) return;
+      if (!isSyncUserCurrent()) return;
       if (result.status === 'success' || result.status === 'partial') {
         publishSourceManagerNotice(
           `视频已同步，${result.success}/${transcriptTargets.length} 条文案已就绪`,
@@ -2600,6 +2663,7 @@ export default function VideoLibraryPage() {
         [sourceMode],
         savedPreferences.modes,
         Math.min(pendingTranscriptTotal, MAX_SYNC_COUNT),
+        true,
       );
       return;
     }
@@ -3692,6 +3756,7 @@ export default function VideoLibraryPage() {
             onItemsChange={setPlatformItems}
             onStateChange={setPlatformLibraryState}
           />
+          <LibrarySyncHistory />
           </div>
         </div>
         {(sourceManagerNotice || sourceSyncWarning) && sourceManagerView === 'douyin' && (

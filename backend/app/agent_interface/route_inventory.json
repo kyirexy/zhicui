@@ -114,6 +114,7 @@
     "GET /api/library/imports/{note_id}",
     "GET /api/library/imports/{note_id}/cover",
     "GET /api/library/imports/{note_id}/media",
+    "GET /api/library/sync-runs",
     "GET /api/notes",
     "GET /api/notes/{note_id}",
     "GET /api/plans",

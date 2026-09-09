@@ -125,3 +125,14 @@ test('混合同步只把真实成功来源计入成功数量', () => {
   assert.match(message, /收藏：收藏读取条件未完成/);
   assert.doesNotMatch(message, /已同步 2 个来源/);
 });
+
+test('新版同步反馈使用服务端新增与复用计数，不把重新出现的历史项算新增', () => {
+  const message = formatMultiSourceSyncSummary([
+    { sourceLabel: '收藏', checked: 10, newlyVisible: 5, created: 1, reused: 9 },
+    { sourceLabel: '喜欢', checked: 5, newlyVisible: 3, created: 0, reused: 5 },
+  ]);
+  assert.match(message, /新增 1 条/);
+  assert.match(message, /复用 14 条/);
+  assert.match(message, /历史资料已保留/);
+  assert.doesNotMatch(message, /新显示/);
+});

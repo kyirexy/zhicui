@@ -9,6 +9,7 @@ import hmac
 import ipaddress
 import socket
 import time
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -24,7 +25,7 @@ from app.core.media_reference import (
 from app.models.note import Note
 from app.models.plan import Plan
 from app.models.user import User
-from app.services import ai_juicer, note_service, plan_service, settings_service, video_extractor
+from app.services import ai_juicer, library_sync_service, note_service, plan_service, settings_service, video_extractor
 from app.services.xhs_downloader_client import (
     XhsDownloaderUnavailable,
     fetch_xhs_detail,
@@ -33,6 +34,8 @@ from app.services.xhs_downloader_client import (
 SOURCE_KIND = "platform-import"
 SUPPORTED_PLATFORMS = {"bilibili", "xiaohongshu"}
 MAX_IMPORT_URLS = 10
+
+
 _COVER_URL_TTL_SECONDS = 6 * 60 * 60
 _MEDIA_URL_TTL_SECONDS = 5 * 60
 
@@ -148,6 +151,17 @@ def _order_maps(meta: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return maps
 
 
+def _confirmed_source_rank(maps: dict[str, dict[str, Any]], mode: str) -> int | None:
+    """只采用有效且未被明确标记不可靠的来源排名。"""
+    rank = maps["source_ranks"].get(mode)
+    if (
+        maps["source_order_reliabilities"].get(mode) is False
+        or isinstance(rank, bool) or not isinstance(rank, int) or rank < 0
+    ):
+        return None
+    return rank
+
+
 def _with_source_order(
     meta: dict[str, Any], *, source_mode: str | None, rank: int,
     synced_at: str, reliable: bool, coverage: str,
@@ -197,6 +211,12 @@ def _merge_source_metadata(
             continue
         old_rank = previous_maps["source_ranks"].get(mode)
         new_rank = incoming_maps["source_ranks"].get(mode)
+        if (
+            incoming_maps["source_order_reliabilities"].get(mode) is False
+            and _confirmed_source_rank(previous_maps, mode) is not None
+        ):
+            # 非可靠重同步可以补充资料和成员，但不能改写已确认排名所属的快照。
+            continue
         for field in _ORDER_MAP_FIELDS:
             if mode in incoming_maps[field]:
                 previous_maps[field][mode] = incoming_maps[field][mode]
@@ -237,7 +257,9 @@ def _canonical_bilibili_id(url: str) -> str:
 
 def _bilibili_source_watermark(db: Session, *, user_id: str, mode: str) -> float:
     """只读取小型来源 JSON 的频道水位，覆盖尚无旧 Note 的迟到采集。"""
-    latest = 0.0
+    latest = library_sync_service.latest_source_timestamp(
+        db, user_id=user_id, platform="bilibili", source_mode=mode,
+    )
     for (raw_payload,) in db.query(Note.ai_summary).filter(Note.user_id == user_id).yield_per(200):
         try:
             payload = json.loads(raw_payload or "{}")
@@ -703,26 +725,13 @@ def _save_or_refresh(
     )
     if stable_source_url:
         source_meta["source_url"] = stable_source_url
-    # 外部字幕/ASR 已完成才持有短事务用户锁，与完整快照对账串行。
+    # 外部字幕/ASR 已完成才持有短事务用户锁，与其他同步写入串行。
     db.query(User.id).filter(User.id == user_id).with_for_update().one()
     existing = _find_existing(
         db, user_id=user_id, platform=platform, video_id=video_id, for_update=True,
     )
-    mode = str(source_meta.get("source_mode") or "import")
-    if platform == "bilibili" and mode in _ACCOUNT_SOURCE_MODES:
-        incoming_time = _snapshot_time(_order_maps(source_meta)["source_synced_ats"].get(mode))
-        if incoming_time < _bilibili_source_watermark(db, user_id=user_id, mode=mode):
-            previous = _source_meta(existing) if existing is not None else {}
-            if mode in _source_modes(previous.get("source_modes"), previous.get("source_mode")):
-                # 保留已经确认的现有来源信息，不让迟到 ASR 改写其位置。
-                source_meta = previous
-            else:
-                # 仍保存已提取的文案，但仅归普通导入，不把旧捕获加入新来源。
-                source_meta = _with_source_order(
-                    source_meta, source_mode=None, rank=0,
-                    synced_at=str(source_meta.get("source_synced_at") or _utcnow()),
-                    reliable=False, coverage="unknown",
-                )
+    # 已完成的有效提取保留为原批次历史，供等待同一视频的更新请求直接复用。
+    # 此处不能因全频道水位推进丢弃已付费ASR；既有Note的更新顺序由下方逐视频合并保护。
     if existing is None:
         note = note_service.create_transcript_note(
             db,
@@ -747,9 +756,13 @@ def _save_or_refresh(
     )
     payload["source_meta"] = merged_source_meta
     if accepted:
-        existing.video_title = str(info.get("title") or existing.video_title)
+        if platform != "bilibili" or not previous_complete:
+            existing.video_title = str(info.get("title") or existing.video_title)
         existing.video_url = stable_source_url
-        if transcript and (not previous_complete or len(transcript) >= len(existing.transcript_raw or "")):
+        if transcript and (
+            not existing.transcript_raw or not previous_complete
+            or (platform != "bilibili" and len(transcript) >= len(existing.transcript_raw))
+        ):
             existing.transcript_raw = transcript
     existing.ai_summary = json.dumps(payload, ensure_ascii=False)
     existing.updated_at = datetime.now(timezone.utc)
@@ -759,6 +772,8 @@ def _save_or_refresh(
 
 
 def _safe_error(platform: str, exc: Exception) -> str:
+    if isinstance(exc, library_sync_service.LibraryImportBusyError):
+        return "该视频正在处理，请稍后重试"
     if isinstance(exc, ValueError):
         return str(exc)[:160]
     if platform == "bilibili":
@@ -772,6 +787,32 @@ def _safe_error(platform: str, exc: Exception) -> str:
 
 
 def import_one(
+    db: Session,
+    *,
+    user_id: str,
+    value: str,
+    source_mode: str | None = None,
+    source_rank_offset: int = 0,
+    source_synced_at: str | None = None,
+    source_order_reliable: bool = True,
+    source_coverage: str = "partial",
+) -> dict[str, Any]:
+    snapshot = _normalize_snapshot(source_synced_at)
+    url = normalize_shared_url(value)
+    canonical_id = _canonical_bilibili_id(url)
+    # 独立会话咨询锁覆盖查重到写入，不能让两个入口同时触发同一视频的ASR。
+    lease = library_sync_service.import_lease(
+        db, user_id=user_id, platform="bilibili", video_id=canonical_id,
+    ) if canonical_id else nullcontext()
+    with lease:
+        return _import_one_under_lease(
+            db, user_id=user_id, value=value, source_mode=source_mode,
+            source_rank_offset=source_rank_offset, source_synced_at=snapshot,
+            source_order_reliable=source_order_reliable, source_coverage=source_coverage,
+        )
+
+
+def _import_one_under_lease(
     db: Session,
     *,
     user_id: str,
@@ -798,10 +839,19 @@ def import_one(
         existing = _find_existing(
             db, user_id=user_id, platform=platform, video_id=canonical_id,
         ) if canonical_id else None
+        if source_mode in _ACCOUNT_SOURCE_MODES and _snapshot_time(snapshot) < _bilibili_source_watermark(
+            db, user_id=user_id, mode=source_mode,
+        ):
+            return {
+                "status": "skipped", "stale_snapshot": True,
+                "item": serialize_item(existing) if existing is not None else None,
+            }
         if existing is not None and _is_complete_bilibili_note(existing):
             info = {"video_id": existing.video_id, "title": existing.video_title}
             transcript, source_meta = existing.transcript_raw, _source_meta(existing)
         else:
+            # 规范标识查重后的读事务不跨越外部字幕/音轨/ASR请求。
+            db.commit()
             info, transcript, source_meta = _extract_bilibili(url, db)
         ensure_bilibili_result_ready(info, transcript, source_meta)
     else:
@@ -871,100 +921,29 @@ def import_many(
                 "status": "failed",
                 "platform": platform,
                 "error": _safe_error(platform, exc),
+                "error_code": "import_busy" if isinstance(exc, library_sync_service.LibraryImportBusyError) else "",
             })
-    succeeded = sum(1 for result in results if result["success"])
-    removed = None
-    if (
-        source_mode in _ACCOUNT_SOURCE_MODES
-        and source_coverage == "complete"
-        and source_order_reliable
-        and source_snapshot_size is not None
-        and source_rank_offset + len(values) >= source_snapshot_size
-        and succeeded == len(results)
-        and all(result["item"]["platform"] == "bilibili" for result in results)
-    ):
-        removed = _reconcile_bilibili_snapshot(
-            db, user_id=user_id, source_mode=source_mode,
-            snapshot=snapshot, expected_size=source_snapshot_size,
-        )
+    imported = sum(result["success"] and result["status"] == "imported" for result in results)
+    reused = sum(result["success"] and result["status"] == "reused" for result in results)
+    skipped = sum(result["success"] and result["status"] == "skipped" for result in results)
+    failed = sum(not result["success"] for result in results)
     return {
         "items": results,
         "total": len(results),
-        "success": succeeded,
-        "failed": len(results) - succeeded,
-        "source_reconciled": removed is not None,
-        "source_memberships_removed": removed or 0,
+        "success": imported + reused,
+        "failed": failed,
+        "imported": imported,
+        "reused": reused,
+        "skipped": skipped,
+        "video_ids": list(dict.fromkeys(
+            str(result["item"].get("video_id") or "")
+            for result in results
+            if result.get("item") and result["item"].get("video_id")
+        )),
+        # 兼容旧客户端字段；同步不再自动解除任何历史分类关系。
+        "source_reconciled": False,
+        "source_memberships_removed": 0,
     }
-
-
-def _reconcile_bilibili_snapshot(
-    db: Session, *, user_id: str, source_mode: str, snapshot: str, expected_size: int,
-) -> int | None:
-    """完整且可靠的最后一批才对账成员关系；文稿与其他频道永不删除。"""
-    db.query(User.id).filter(User.id == user_id).with_for_update().one()
-    candidates = (
-        db.query(Note).filter(Note.user_id == user_id)
-        .order_by(Note.id.asc()).populate_existing().with_for_update().all()
-    )
-    timestamp = _snapshot_time(snapshot)
-    current_ids: set[str] = set()
-    current_ranks: set[int] = set()
-    previous_members: list[tuple[Note, dict[str, Any]]] = []
-    for note in candidates:
-        meta = _source_meta(note)
-        if meta.get("source_kind") != SOURCE_KIND or meta.get("platform") != "bilibili":
-            continue
-        modes = _source_modes(meta.get("source_modes"), meta.get("source_mode"))
-        if source_mode not in modes:
-            continue
-        maps = _order_maps(meta)
-        note_time = _snapshot_time(maps["source_synced_ats"].get(source_mode))
-        if note_time > timestamp:
-            # 更新一轮已经开始，旧批次迟到不能用旧视图回滚当前成员关系。
-            db.commit()
-            return None
-        if note_time == timestamp:
-            rank = maps["source_ranks"].get(source_mode)
-            if (
-                maps["source_order_reliabilities"].get(source_mode) is True
-                and _is_complete_bilibili_note(note)
-                and isinstance(rank, int) and not isinstance(rank, bool) and rank >= 0
-            ):
-                current_ids.add(note.video_id)
-                current_ranks.add(rank)
-        else:
-            previous_members.append((note, meta))
-    # 前批失败/缺页/重复链接导致总量或排名不全时，保留所有旧成员待重试。
-    if len(current_ids) < expected_size or not all(rank in current_ranks for rank in range(expected_size)):
-        db.commit()
-        return None
-    for note, meta in previous_members:
-        modes = [mode for mode in _source_modes(meta.get("source_modes"), meta.get("source_mode"))
-                 if mode != source_mode]
-        maps = _order_maps(meta)
-        for field in _ORDER_MAP_FIELDS:
-            maps[field].pop(source_mode, None)
-        remaining_modes = [mode for mode in maps["source_synced_ats"]
-                           if mode in modes or mode == "import"]
-        primary = str(meta.get("source_mode") or "import")
-        if primary == source_mode:
-            primary = max(remaining_modes, key=lambda mode: _snapshot_time(
-                maps["source_synced_ats"].get(mode),
-            )) if remaining_modes else (modes[0] if modes else "import")
-        removed_ats = dict(meta.get("source_removed_ats") or {})
-        removed_ats[source_mode] = snapshot
-        updated = {**meta, **maps, "source_mode": primary, "source_modes": modes,
-                   "source_removed_ats": removed_ats}
-        for map_key, scalar_key in zip(_ORDER_MAP_FIELDS, _ORDER_SCALAR_FIELDS):
-            if primary in maps[map_key]:
-                updated[scalar_key] = maps[map_key][primary]
-            else:
-                updated.pop(scalar_key, None)
-        payload = _load_payload(note)
-        payload["source_meta"] = updated
-        note.ai_summary = json.dumps(payload, ensure_ascii=False)
-    db.commit()
-    return len(previous_members)
 
 
 def list_notes(
@@ -997,17 +976,16 @@ def list_notes(
         meta = _source_meta(note)
         mode = source_mode or str(meta.get("source_mode") or "import")
         maps = _order_maps(meta)
-        rank = maps["source_ranks"].get(mode)
-        valid_rank = isinstance(rank, int) and not isinstance(rank, bool) and rank >= 0
-        if not maps["source_order_reliabilities"].get(mode, True):
-            valid_rank = False
+        rank = _confirmed_source_rank(maps, mode)
+        valid_rank = rank is not None
         return (
-            -_snapshot_time(maps["source_synced_ats"].get(mode)),
-            not valid_rank, rank if valid_rank else 0,
-            -_snapshot_time(meta.get("first_seen_at") or note.created_at), note.id,
+            not valid_rank,
+            -_snapshot_time(maps["source_synced_ats"].get(mode)) if valid_rank else 0,
+            rank if valid_rank else 0,
+            _snapshot_time(meta.get("first_seen_at") or note.created_at), note.id,
         )
 
-    # 先按来源快照分组，再按平台原始位置；文案/摘要的完成时间不参与排序。
+    # 可靠排名优先按来源快照排列；无排名资料固定在尾部，不随重复同步时间跳动。
     return sorted(result, key=source_order)[:500]
 
 
@@ -1071,9 +1049,9 @@ def serialize_item(
             meta.get("source_mode"),
         ),
         **order_maps,
-        "source_rank": order_maps["source_ranks"].get(mode),
+        "source_rank": _confirmed_source_rank(order_maps, mode),
         "source_synced_at": order_maps["source_synced_ats"].get(mode, ""),
-        "source_order_reliable": bool(order_maps["source_order_reliabilities"].get(mode, False)),
+        "source_order_reliable": _confirmed_source_rank(order_maps, mode) is not None,
         "source_coverage": order_maps["source_coverages"].get(mode, "unknown"),
     }
     if include_note:

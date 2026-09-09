@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { notifyLibraryUpdated } from '@/lib/libraryUpdates';
 import { listCreatorSyncRuns } from '@/lib/api';
 import type { CreatorSyncRun } from '@/lib/types';
 import { useAuth } from './AuthContext';
@@ -34,6 +35,10 @@ export function CreatorSyncProvider({ children }: { children: React.ReactNode })
   const [lastUpdatedAt, setLastUpdatedAt] = useState(0);
   const trackedRef = useRef<CreatorSyncRun[]>([]);
   const initializedRef = useRef(false);
+  const currentUserIdRef = useRef(user?.id);
+  currentUserIdRef.current = user?.id;
+  const activeRequestRef = useRef(0);
+  const recentRequestRef = useRef(0);
 
   useEffect(() => {
     trackedRef.current = activeRuns;
@@ -41,20 +46,24 @@ export function CreatorSyncProvider({ children }: { children: React.ReactNode })
 
   const refreshRecent = useCallback(async () => {
     if (!user) return [];
+    const requestId = ++recentRequestRef.current;
     const response = await listCreatorSyncRuns('recent');
+    if (requestId !== recentRequestRef.current || user.id !== currentUserIdRef.current) return [];
     const next = response.data?.items || [];
     if (response.success) {
       setRecentRuns(next);
       setLastUpdatedAt(Date.now());
     }
     return next;
-  }, [user]);
+  }, [user?.id]);
 
   const refreshActive = useCallback(async () => {
     if (!user) return;
     const initial = !initializedRef.current;
     if (initial) setLoading(true);
+    const requestId = ++activeRequestRef.current;
     const response = await listCreatorSyncRuns('active');
+    if (requestId !== activeRequestRef.current || user.id !== currentUserIdRef.current) return;
     if (response.success && response.data) {
       const next = response.data.items || [];
       const nextIds = new Set(next.map((run) => run.id));
@@ -65,8 +74,12 @@ export function CreatorSyncProvider({ children }: { children: React.ReactNode })
       setLastUpdatedAt(Date.now());
       if (!initial && completedIds.length) {
         const recent = await refreshRecent();
+        if (requestId !== activeRequestRef.current || user.id !== currentUserIdRef.current) return;
         const completed = recent.filter((run) => completedIds.includes(run.id));
         if (completed.length) {
+          for (const run of completed) {
+            if (run.new_count > 0 || run.reused_count > 0) notifyLibraryUpdated(`creator-sync:${run.id}:${run.status}`);
+          }
           window.dispatchEvent(new CustomEvent('vc:creator-sync-updated', {
             detail: { runs: completed },
           }));
@@ -85,7 +98,7 @@ export function CreatorSyncProvider({ children }: { children: React.ReactNode })
     }
     initializedRef.current = true;
     if (initial) setLoading(false);
-  }, [refreshRecent, user]);
+  }, [refreshRecent, user?.id]);
 
   const refreshAll = useCallback(async () => {
     await Promise.all([refreshActive(), refreshRecent()]);
@@ -107,7 +120,8 @@ export function CreatorSyncProvider({ children }: { children: React.ReactNode })
     if (!user) return;
     void refreshActive();
     void refreshRecent();
-  }, [authLoading, refreshActive, refreshRecent, user]);
+    return () => { activeRequestRef.current += 1; recentRequestRef.current += 1; };
+  }, [authLoading, refreshActive, refreshRecent, user?.id]);
 
   useEffect(() => {
     if (!user) return;

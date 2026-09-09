@@ -45,6 +45,8 @@ import type {
   PlatformAccountSourceMode,
   PlatformAccountStage,
 } from '@/lib/desktopRuntime';
+import { getLibraryRevision, isLibraryRevisionCurrent, subscribeLibraryUpdates } from '@/lib/libraryUpdates';
+import { mergeSyncedItems, platformImportSummary } from '@/lib/libraryIncrementalSync';
 import { readLibraryQuickSyncPreferences } from '@/lib/libraryQuickSync';
 import { platformSyncWarning } from '@/lib/platformSyncFeedback';
 import { capturePlatformSyncSnapshot, type PlatformSyncSnapshot } from '@/lib/platformSyncSnapshot';
@@ -127,6 +129,7 @@ function sourceLabel(item: PlatformLibraryItem): string {
 }
 
 function importResultLabel(entry: PlatformLibraryImportEntry): string {
+  if (entry.status === 'skipped') return '已跳过过期同步结果，保留较新的资料';
   const platform = entry.item?.platform || entry.platform;
   const platformName = platform === 'bilibili'
     ? 'B站'
@@ -134,7 +137,7 @@ function importResultLabel(entry: PlatformLibraryImportEntry): string {
       ? '小红书'
       : '未知平台';
   if (entry.success && entry.item) {
-    const resultState = entry.status === 'reused' ? '已在资料库' : '已导入';
+    const resultState = entry.status === 'reused' ? '已复用，仅更新来源顺序' : '新增';
     return `${platformName} · ${entry.item.title || '视频'} · ${sourceLabel(entry.item)} · ${resultState}`;
   }
   const compactInput = entry.input.length > 42 ? `${entry.input.slice(0, 42)}…` : entry.input;
@@ -178,6 +181,11 @@ export default function PlatformLibraryPanel({
   const onItemsChangeRef = useRef(onItemsChange);
   const onStateChangeRef = useRef(onStateChange);
   const loadRequestRef = useRef(0);
+  const currentUserIdRef = useRef(user?.id);
+  currentUserIdRef.current = user?.id;
+  const mountedRef = useRef(true);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   const [accountConnections, setAccountConnections] = useState<AccountConnectionMap>(
     INITIAL_ACCOUNT_CONNECTIONS,
   );
@@ -279,15 +287,21 @@ export default function PlatformLibraryPanel({
   }, [isDesktop, updateAccountConnection]);
 
   const load = useCallback(async (silent = false) => {
+    const requestedUserId = user?.id;
+    if (!requestedUserId || !mountedRef.current) return;
+    const requestedRevision = getLibraryRevision();
     const requestId = ++loadRequestRef.current;
     if (!silent) {
       setLoading(true);
       onStateChangeRef.current?.({ loading: true, error: '' });
     }
     const response = await listPlatformLibraryItems('all');
-    if (requestId !== loadRequestRef.current) return;
+    if (!mountedRef.current || requestedUserId !== currentUserIdRef.current
+      || !isLibraryRevisionCurrent(requestedRevision) || requestId !== loadRequestRef.current) return;
     if (response.success && response.data) {
-      const loadedItems = response.data.items;
+      const loadedItems = response.data.total > response.data.items.length
+        ? mergeSyncedItems(itemsRef.current, response.data.items, (item) => item.id)
+        : response.data.items;
       setItems(loadedItems);
       onItemsChangeRef.current?.(loadedItems);
       writePlatformLibraryCache(user?.id, loadedItems);
@@ -300,11 +314,18 @@ export default function PlatformLibraryPanel({
       setError(message);
       onStateChangeRef.current?.({ loading: false, error: message });
     }
-    if (!silent) setLoading(false);
+    setLoading(false);
   }, [user?.id]);
 
   useEffect(() => {
+    mountedRef.current = true;
+    setImporting(false);
+    setResults([]);
+    setAccountAction('');
     const cached = readPlatformLibraryCache(user?.id);
+    itemsRef.current = cached || [];
+    setItems(cached || []);
+    onItemsChangeRef.current?.(cached || []);
     if (cached) {
       setItems(cached);
       onItemsChangeRef.current?.(cached);
@@ -313,7 +334,12 @@ export default function PlatformLibraryPanel({
       onStateChangeRef.current?.({ loading: false, error: '' });
     }
     void load(Boolean(cached));
-    return () => { loadRequestRef.current += 1; };
+    return () => { mountedRef.current = false; loadRequestRef.current += 1; };
+  }, [load, user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    return subscribeLibraryUpdates(() => { void load(true); });
   }, [load, user?.id]);
 
   const filteredItems = useMemo(() => {
@@ -330,6 +356,7 @@ export default function PlatformLibraryPanel({
   }, [filter, items, search]);
 
   const submit = async () => {
+    const requestedUserId = user?.id;
     setFeedbackView('import');
     const urls = input
       .split(/\r?\n/)
@@ -344,6 +371,7 @@ export default function PlatformLibraryPanel({
     setError('');
     setResults([]);
     const response = await importPlatformLibraryItems(urls);
+    if (!mountedRef.current || requestedUserId !== currentUserIdRef.current) return;
     setImporting(false);
     if (!response.success || !response.data) {
       setError(response.error || '导入没有完成，请稍后重试');
@@ -351,9 +379,8 @@ export default function PlatformLibraryPanel({
     }
     setResults(response.data.items);
     if (response.data.success > 0) {
-      setInput(response.data.failed > 0
-        ? response.data.items.filter((entry) => !entry.success).map((entry) => entry.input).join('\n')
-        : '');
+      setInput(response.data.items.filter((entry) => entry.status === 'failed' || entry.status === 'pending')
+        .map((entry) => entry.input).join('\n'));
       await load(true);
     }
   };
@@ -397,6 +424,8 @@ export default function PlatformLibraryPanel({
       || accountAction
       || modes.length === 0
     ) return;
+    const requestedUserId = user.id;
+    const stillCurrent = () => mountedRef.current && requestedUserId === currentUserIdRef.current;
     const collectedUrls: Array<{
       mode: PlatformAccountSourceMode;
       urls: string[];
@@ -421,6 +450,7 @@ export default function PlatformLibraryPanel({
         mode,
         limit: requestedCount,
       });
+      if (!stillCurrent()) return;
       const snapshot = capturePlatformSyncSnapshot(collected, sourceSyncedAt);
       if (!collected.success || !collected.urls?.length) {
         const isRelogin = collected.error?.includes('重新登录');
@@ -470,12 +500,15 @@ export default function PlatformLibraryPanel({
     const importedItems: PlatformLibraryImportEntry[] = [];
     let importError = '';
     for (const entry of collectedUrls) {
+      if (!stillCurrent()) return;
       const imported = await importPlatformLibraryItems(entry.urls, entry.mode, entry.snapshot, (completed, total) => {
+        if (!stillCurrent()) return;
         updateAccountConnection(platform, {
           stage: 'collecting',
           message: `正在导入${entry.mode === 'collect' ? '收藏' : '喜欢'} ${completed}/${total} 条…`,
         });
       });
+      if (!stillCurrent()) return;
       if (!imported.success || !imported.data) {
         importError = imported.error || '作品已读取，但导入资料失败';
         break;
@@ -484,7 +517,6 @@ export default function PlatformLibraryPanel({
     }
     setAccountAction('');
     const importedSuccess = importedItems.filter((entry) => entry.success).length;
-    const importedFailed = importedItems.length - importedSuccess;
     if (importedItems.length === 0 && importError) {
       updateAccountConnection(platform, {
         stage: 'error',
@@ -492,21 +524,12 @@ export default function PlatformLibraryPanel({
       });
       return;
     }
-    const modeSummary = collectedUrls.length > 1
-      ? '喜欢 + 收藏'
-      : collectedUrls[0]?.mode === 'collect'
-        ? '收藏'
-        : '喜欢';
     setResults(importedItems);
     const warnings = [...new Set(collectedUrls.map((entry) => platformSyncWarning(entry.result)).filter(Boolean))];
-    const completedMessage = importError
-      ? `已同步 ${importedSuccess} 条；${importError}`
-      : importedFailed > 0
-        ? `已导入 ${importedSuccess} 条，${importedFailed} 条需要重试`
-        : `已同步 ${importedSuccess} 条${modeSummary}作品`;
+    const completedMessage = `${platformImportSummary(importedItems)}${importError ? `；${importError}` : ''}`;
     updateAccountConnection(platform, {
       connected: true,
-      stage: importError ? 'error' : 'success',
+      stage: importError || importedItems.some((entry) => entry.status === 'failed' || entry.status === 'pending') ? 'error' : 'success',
       message: [completedMessage, ...warnings].join('；'),
     });
     if (importedSuccess > 0) await load(true);

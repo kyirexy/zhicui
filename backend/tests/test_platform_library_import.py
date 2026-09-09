@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from threading import Event
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
@@ -12,6 +14,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
 from app.models.note import Note
+from app.models.library_sync import LibrarySyncRun
 from app.models.plan import Plan
 from app.models.user import User
 from app.services import platform_library_service
@@ -31,7 +34,7 @@ class PlatformLibraryImportTests(unittest.TestCase):
         )
         Base.metadata.create_all(
             self.engine,
-            tables=[User.__table__, Note.__table__, Plan.__table__],
+            tables=[User.__table__, Note.__table__, Plan.__table__, LibrarySyncRun.__table__],
         )
         self.Session = sessionmaker(bind=self.engine)
         self.db = self.Session()
@@ -426,6 +429,212 @@ class PlatformLibraryImportTests(unittest.TestCase):
         self.assertTrue(result["item"]["metadata_complete"])
         self.assertEqual(result["item"]["note"]["transcript_raw"], transcript)
 
+    def test_repeated_canonical_urls_reuse_note_without_network_or_asr(self) -> None:
+        canonical = "https://www.bilibili.com/video/BV1TEST"
+        with patch.object(platform_library_service, "_extract_bilibili", return_value=self.bili_result()) as extract:
+            first = platform_library_service.import_many(
+                self.db, user_id=self.user_a.id, values=[canonical, canonical + "/?from=sync"],
+                source_mode="collect", source_synced_at="2026-09-07T00:00:00Z",
+            )
+            again = platform_library_service.import_many(
+                self.db, user_id=self.user_a.id, values=[canonical + "?from=share"],
+                source_mode="like", source_rank_offset=6, source_synced_at="2026-09-08T00:00:00Z",
+            )
+        extract.assert_called_once()
+        self.assertEqual((first["imported"], first["reused"], first["skipped"], first["failed"]), (1, 1, 0, 0))
+        self.assertEqual((again["imported"], again["reused"]), (0, 1))
+        self.assertEqual(first["items"][0]["item"]["id"], again["items"][0]["item"]["id"])
+        self.assertEqual(again["items"][0]["item"]["source_ranks"], {"collect": 0, "like": 6})
+        self.assertEqual(self.db.query(Note).count(), 1)
+        self.assertEqual(again["video_ids"], ["BV1TEST"])
+
+    def test_parallel_canonical_imports_share_one_extraction(self) -> None:
+        entered, release = Event(), Event()
+        user_id = self.user_a.id
+
+        def extract(_url, _db):
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError("测试释放提取锁超时")
+            return self.bili_result()
+
+        def import_from_separate_request():
+            with self.Session() as db:
+                return platform_library_service.import_one(
+                    db, user_id=user_id, value="https://www.bilibili.com/video/BV1TEST",
+                    source_mode="collect", source_synced_at="2026-09-08T00:00:00Z",
+                )
+
+        with patch.object(platform_library_service, "_extract_bilibili", side_effect=extract) as extractor:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                first = pool.submit(import_from_separate_request)
+                self.assertTrue(entered.wait(3))
+                second = pool.submit(import_from_separate_request)
+                self.assertFalse(second.done())
+                release.set()
+                results = [first.result(timeout=8), second.result(timeout=8)]
+        self.assertEqual([result["status"] for result in results], ["imported", "reused"])
+        self.assertEqual(results[0]["item"]["id"], results[1]["item"]["id"])
+        extractor.assert_called_once()
+
+    def test_busy_import_lock_returns_retryable_error_without_extraction(self) -> None:
+        from app.services import library_sync_service
+        lease = library_sync_service.import_lease
+        with lease(self.db, user_id=self.user_a.id, platform="bilibili", video_id="BV1TEST"):
+            with (
+                patch.object(library_sync_service, "import_lease", side_effect=lambda db, **kwargs: lease(db, **kwargs, timeout_seconds=0)),
+                patch.object(platform_library_service, "_extract_bilibili") as extract,
+            ):
+                result = platform_library_service.import_many(
+                    self.db, user_id=self.user_a.id, values=["https://www.bilibili.com/video/BV1TEST"],
+                    source_mode="collect",
+                )
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["items"][0]["error_code"], "import_busy")
+        extract.assert_not_called()
+
+    def test_newer_started_batch_waits_for_and_reuses_inflight_paid_extraction(self) -> None:
+        from app.services import library_sync_service
+        entered, release, newer_started = Event(), Event(), Event()
+        user_id = self.user_a.id
+
+        def extract(_url, _db):
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError("测试等待释放提取超时")
+            return self.bili_result()
+
+        def run_request(stamp, rank, announce=False):
+            with self.Session() as db:
+                library_sync_service.start_run(
+                    db, user_id=user_id, platform="bilibili", source_mode="collect",
+                    source_synced_at=stamp, requested_count=1, source_rank_offset=rank,
+                    coverage="partial", order_reliable=True,
+                )
+                if announce:
+                    newer_started.set()
+                return platform_library_service.import_one(
+                    db, user_id=user_id, value="https://www.bilibili.com/video/BV1TEST",
+                    source_mode="collect", source_synced_at=stamp, source_rank_offset=rank,
+                )
+
+        with patch.object(platform_library_service, "_extract_bilibili", side_effect=extract) as extractor:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                first = pool.submit(run_request, "2026-09-07T00:00:00Z", 0)
+                self.assertTrue(entered.wait(3))
+                second = pool.submit(run_request, "2026-09-08T00:00:00Z", 7, True)
+                self.assertTrue(newer_started.wait(3))
+                self.assertFalse(second.done())
+                release.set()
+                old_result, new_result = first.result(timeout=8), second.result(timeout=8)
+        extractor.assert_called_once()
+        self.assertEqual((old_result["status"], new_result["status"]), ("imported", "reused"))
+        self.assertEqual(old_result["item"]["id"], new_result["item"]["id"])
+        self.assertEqual(old_result["item"]["source_synced_at"], "2026-09-07T00:00:00+00:00")
+        self.assertEqual(new_result["item"]["source_synced_at"], "2026-09-08T00:00:00+00:00")
+        self.assertEqual(new_result["item"]["source_rank"], 7)
+        self.assertEqual(self.db.query(Note).count(), 1)
+
+    def test_started_sync_watermark_skips_old_capture_before_any_note_exists(self) -> None:
+        from app.services import library_sync_service
+        library_sync_service.start_run(
+            self.db, user_id=self.user_a.id, platform="bilibili", source_mode="collect",
+            source_synced_at="2026-09-08T00:00:00Z", requested_count=0,
+            coverage="complete", order_reliable=True,
+        )
+        with patch.object(platform_library_service, "_extract_bilibili") as extract:
+            result = platform_library_service.import_many(
+                self.db, user_id=self.user_a.id, values=["https://www.bilibili.com/video/BV1TEST"],
+                source_mode="collect", source_synced_at="2026-09-07T00:00:00Z",
+            )
+        self.assertEqual((result["success"], result["failed"], result["skipped"]), (0, 0, 1))
+        self.assertEqual(result["video_ids"], [])
+        self.assertEqual(self.db.query(Note).count(), 0)
+        extract.assert_not_called()
+
+    def test_existing_complete_transcript_survives_another_extraction_finishing(self) -> None:
+        info, transcript, meta = self.bili_result()
+        with patch.object(platform_library_service, "_extract_bilibili", return_value=(info, transcript, meta)):
+            imported = platform_library_service.import_one(
+                self.db, user_id=self.user_a.id, value="https://www.bilibili.com/video/BV1TEST",
+                source_mode="collect", source_synced_at="2026-09-07T00:00:00Z",
+            )
+        saved = self.db.get(Note, imported["item"]["id"])
+        saved.video_title = "用户整理后的标题"
+        saved.transcript_raw = "用户已经整理过的完整文稿"
+        payload = json.loads(saved.ai_summary)
+        payload["hero_quote"] = "保留已有知识卡"
+        saved.ai_summary = json.dumps(payload)
+        self.db.commit()
+        newer_meta = platform_library_service._with_source_order(
+            meta, source_mode="collect", rank=2, synced_at="2026-09-08T00:00:00Z",
+            reliable=True, coverage="complete",
+        )
+        refreshed, reused = platform_library_service._save_or_refresh(
+            self.db, user_id=self.user_a.id, platform="bilibili", info=info,
+            transcript="另一个请求稍后完成的更长文稿" * 20, source_meta=newer_meta,
+        )
+        self.assertTrue(reused)
+        self.assertEqual(refreshed.video_title, "用户整理后的标题")
+        self.assertEqual(refreshed.transcript_raw, "用户已经整理过的完整文稿")
+        self.assertEqual(json.loads(refreshed.ai_summary)["hero_quote"], "保留已有知识卡")
+        self.assertEqual(platform_library_service.serialize_item(refreshed)["source_rank"], 2)
+        old_meta = platform_library_service._with_source_order(
+            meta, source_mode="collect", rank=0, synced_at="2026-09-07T00:00:00Z",
+            reliable=True, coverage="complete",
+        )
+        old_completion, _ = platform_library_service._save_or_refresh(
+            self.db, user_id=self.user_a.id, platform="bilibili", info=info,
+            transcript="迟到旧请求的完整结果" * 30, source_meta=old_meta,
+        )
+        self.assertEqual(old_completion.transcript_raw, "用户已经整理过的完整文稿")
+        self.assertEqual(platform_library_service.serialize_item(old_completion)["source_rank"], 2)
+        self.assertEqual(platform_library_service.serialize_item(old_completion)["source_synced_at"], "2026-09-08T00:00:00Z")
+
+    def test_newer_sync_during_extraction_keeps_paid_result_as_old_history(self) -> None:
+        old_url = "https://www.bilibili.com/video/BV1SLOW"
+        new_url = "https://www.bilibili.com/video/BV1FAST"
+
+        def extract(url, db):
+            if url == old_url:
+                with self.Session() as other:
+                    platform_library_service.import_one(
+                        other, user_id=self.user_a.id, value=new_url, source_mode="collect",
+                        source_synced_at="2026-09-08T00:00:00Z",
+                    )
+            return self._bili_for_url(url, db)
+
+        with patch.object(platform_library_service, "_extract_bilibili", side_effect=extract):
+            result = platform_library_service.import_many(
+                self.db, user_id=self.user_a.id, values=[old_url], source_mode="collect",
+                source_synced_at="2026-09-07T00:00:00Z",
+            )
+        self.assertEqual((result["success"], result["failed"], result["skipped"]), (1, 0, 0))
+        self.assertEqual(result["items"][0]["item"]["source_synced_at"], "2026-09-07T00:00:00+00:00")
+        self.assertEqual(result["items"][0]["item"]["source_rank"], 0)
+        self.assertTrue(result["items"][0]["item"]["note"]["transcript_raw"])
+        ordered = platform_library_service.list_notes(
+            self.db, user_id=self.user_a.id, platform="bilibili", source_mode="collect",
+        )
+        self.assertEqual([note.video_url for note in ordered], [new_url, old_url])
+
+    def test_user_can_still_explicitly_delete_an_import(self) -> None:
+        from app.services import creator_sync_service
+        with patch.object(platform_library_service, "_extract_bilibili", return_value=self.bili_result()):
+            imported = platform_library_service.import_one(
+                self.db, user_id=self.user_a.id, value="https://www.bilibili.com/video/BV1TEST",
+                source_mode="collect",
+            )
+        with patch.object(creator_sync_service, "mark_note_permanently_removed") as mark_removed:
+            self.assertFalse(platform_library_service.delete_import(
+                self.db, user_id=self.user_b.id, note_id=imported["item"]["id"],
+            ))
+            self.assertTrue(platform_library_service.delete_import(
+                self.db, user_id=self.user_a.id, note_id=imported["item"]["id"],
+            ))
+        mark_removed.assert_called_once()
+        self.assertEqual(self.db.query(Note).count(), 0)
+
     def test_unverified_source_order_does_not_expose_invented_rank(self) -> None:
         with patch.object(platform_library_service, "_extract_bilibili", return_value=self.bili_result()):
             result = platform_library_service.import_one(
@@ -442,7 +651,93 @@ class PlatformLibraryImportTests(unittest.TestCase):
         return ({**info, "video_id": url.rsplit("/", 1)[-1]}, transcript,
                 {**meta, "source_url": url})
 
-    def test_complete_snapshot_reconciles_only_after_both_batches_and_preserves_other_mode(self) -> None:
+    def test_unreliable_resync_keeps_confirmed_positions_and_other_modes(self) -> None:
+        urls = [f"https://www.bilibili.com/video/BV1ORDER{index}" for index in range(4)]
+        with patch.object(platform_library_service, "_extract_bilibili", side_effect=self._bili_for_url) as extract:
+            platform_library_service.import_many(
+                self.db, user_id=self.user_a.id, values=urls[:2], source_mode="collect",
+                source_synced_at="2026-09-06T00:00:00Z", source_coverage="complete",
+            )
+            platform_library_service.import_one(
+                self.db, user_id=self.user_a.id, value=urls[0], source_mode="like",
+                source_synced_at="2026-09-06T01:00:00Z", source_rank_offset=7,
+            )
+            platform_library_service.import_many(
+                self.db, user_id=self.user_a.id, values=[urls[1], urls[0], *urls[2:]],
+                source_mode="collect", source_synced_at="2026-09-07T00:00:00Z",
+                source_order_reliable=False, source_coverage="unknown",
+            )
+            # 更新较早录入的无排名条目，也不能把它挪到已确认排名之前或倒转历史尾部。
+            platform_library_service.import_many(
+                self.db, user_id=self.user_a.id, values=[urls[3], urls[2]],
+                source_mode="collect", source_synced_at="2026-09-07T01:00:00Z",
+                source_order_reliable=False,
+            )
+            collected = platform_library_service.list_notes(
+                self.db, user_id=self.user_a.id, platform="bilibili", source_mode="collect",
+            )
+            self.assertEqual([note.video_url for note in collected], urls)
+            first = platform_library_service.serialize_item(collected[0])
+            self.assertEqual(first["source_ranks"], {"collect": 0, "like": 7})
+            self.assertEqual(first["source_synced_ats"]["collect"], "2026-09-06T00:00:00+00:00")
+            self.assertEqual(first["source_synced_ats"]["like"], "2026-09-06T01:00:00+00:00")
+            self.assertTrue(first["source_order_reliabilities"]["collect"])
+            self.assertEqual(first["source_coverages"]["collect"], "complete")
+            self.assertEqual(set(first["source_modes"]), {"collect", "like"})
+            unknown = platform_library_service.serialize_item(collected[2])
+            self.assertNotIn("collect", unknown["source_ranks"])
+            self.assertFalse(unknown["source_order_reliable"])
+            self.assertEqual(extract.call_count, 4)
+
+            # 后续可靠采集仍能校准这批条目的顺序，不会永久冻结在旧位置。
+            platform_library_service.import_many(
+                self.db, user_id=self.user_a.id, values=list(reversed(urls)),
+                source_mode="collect", source_synced_at="2026-09-08T00:00:00Z",
+                source_order_reliable=True,
+            )
+        calibrated = platform_library_service.list_notes(
+            self.db, user_id=self.user_a.id, platform="bilibili", source_mode="collect",
+        )
+        self.assertEqual([note.video_url for note in calibrated], list(reversed(urls)))
+        self.assertEqual(platform_library_service.serialize_item(calibrated[0])["source_rank"], 0)
+        self.assertEqual(extract.call_count, 4)
+
+    def test_legacy_valid_rank_is_protected_and_invalid_rank_cannot_lead_preview(self) -> None:
+        _, transcript, base_meta = self.bili_result()
+        for index, rank in enumerate([None, 0.5, True, -1, 0]):
+            meta = {
+                **base_meta, "source_mode": "collect", "source_modes": ["collect"],
+                "source_ranks": {"collect": rank},
+                "source_synced_ats": {"collect": "2026-09-06T00:00:00Z"},
+                "first_seen_at": f"2026-09-05T00:00:0{index}Z",
+            }
+            self.db.add(Note(
+                user_id=self.user_a.id, video_id=f"BV1LEGACY{index}",
+                video_title=f"旧版资料{index}", video_url=f"https://www.bilibili.com/video/BV1LEGACY{index}",
+                transcript_raw=transcript, ai_summary=json.dumps({"source_meta": meta}),
+                seo_title=f"旧版资料{index}", seo_slug=f"legacy-{index}", seo_meta="测试",
+            ))
+        self.db.commit()
+        with patch.object(platform_library_service, "_extract_bilibili") as extract:
+            resynced = platform_library_service.import_one(
+                self.db, user_id=self.user_a.id, value="https://www.bilibili.com/video/BV1LEGACY4",
+                source_mode="collect", source_synced_at="2026-09-08T00:00:00Z",
+                source_order_reliable=False,
+            )
+        extract.assert_not_called()
+        self.assertEqual(resynced["item"]["source_rank"], 0)
+        self.assertTrue(resynced["item"]["source_order_reliable"])
+        self.assertEqual(resynced["item"]["source_synced_ats"]["collect"], "2026-09-06T00:00:00Z")
+        rows = platform_library_service.list_notes(
+            self.db, user_id=self.user_a.id, platform="bilibili", source_mode="collect",
+        )
+        self.assertEqual([note.video_id for note in rows], [
+            "BV1LEGACY4", "BV1LEGACY0", "BV1LEGACY1", "BV1LEGACY2", "BV1LEGACY3",
+        ])
+        for note in rows[1:]:
+            self.assertIsNone(platform_library_service.serialize_item(note)["source_rank"])
+
+    def test_complete_snapshot_keeps_old_items_and_all_modes_after_last_batch(self) -> None:
         removed_url = "https://www.bilibili.com/video/BV1REMOVED"
         urls = [f"https://www.bilibili.com/video/BV1KEPT{index:04d}" for index in range(11)]
         with patch.object(platform_library_service, "_extract_bilibili", side_effect=self._bili_for_url):
@@ -468,16 +763,19 @@ class PlatformLibraryImportTests(unittest.TestCase):
                 source_synced_at="2026-09-08T00:00:00Z", source_rank_offset=10,
                 source_coverage="complete", source_snapshot_size=11,
             )
-        self.assertTrue(last["source_reconciled"])
-        self.assertEqual(last["source_memberships_removed"], 1)
+        self.assertFalse(last["source_reconciled"])
+        self.assertEqual(last["source_memberships_removed"], 0)
         saved = platform_library_service.get_import(self.db, user_id=self.user_a.id, note_id=old["item"]["id"])
         item = platform_library_service.serialize_item(saved)
-        self.assertEqual(item["source_modes"], ["like"])
-        self.assertEqual(item["source_ranks"], {"like": 7})
+        self.assertEqual(set(item["source_modes"]), {"collect", "like"})
+        self.assertEqual(item["source_ranks"], {"collect": 3, "like": 7})
         self.assertEqual(item["source_mode"], "like")
         self.assertEqual(item["source_synced_at"], "2026-09-08T01:00:00+00:00")
         self.assertTrue(saved.transcript_raw)
         self.assertEqual(self.db.query(Note).count(), 12)
+        collected = platform_library_service.list_notes(self.db, user_id=self.user_a.id,
+            platform="bilibili", source_mode="collect")
+        self.assertEqual([note.video_url for note in collected], [*urls, removed_url])
 
     def test_complete_snapshot_with_failed_earlier_batch_preserves_old_members(self) -> None:
         old_url = "https://www.bilibili.com/video/BV1KEEPOLD"
@@ -559,7 +857,27 @@ class PlatformLibraryImportTests(unittest.TestCase):
                 )
         extract.assert_not_called()
 
-    def test_removed_membership_cannot_be_resurrected_by_old_or_same_snapshot(self) -> None:
+    def _detach_legacy_source(self, note_id: str, source_mode: str, stamp: str) -> None:
+        """模拟升级前已持久化的来源移除记录，保留其防旧请求保护。"""
+        note = self.db.get(Note, note_id)
+        payload = json.loads(note.ai_summary)
+        meta = payload["source_meta"]
+        modes = [mode for mode in meta.get("source_modes", []) if mode != source_mode]
+        maps = platform_library_service._order_maps(meta)
+        for values in maps.values():
+            values.pop(source_mode, None)
+        primary = modes[0] if modes else "import"
+        meta.update({**maps, "source_mode": primary, "source_modes": modes,
+                     "source_removed_ats": {source_mode: stamp}})
+        for mapping, field in zip(platform_library_service._ORDER_MAP_FIELDS, platform_library_service._ORDER_SCALAR_FIELDS):
+            if primary in maps[mapping]:
+                meta[field] = maps[mapping][primary]
+            else:
+                meta.pop(field, None)
+        note.ai_summary = json.dumps(payload)
+        self.db.commit()
+
+    def test_legacy_removed_membership_cannot_be_resurrected_by_old_or_same_snapshot(self) -> None:
         old_url = "https://www.bilibili.com/video/BV1REMOVED"
         current_url = "https://www.bilibili.com/video/BV1CURRENT"
         removal_stamp = "2026-09-08T00:00:00Z"
@@ -576,7 +894,8 @@ class PlatformLibraryImportTests(unittest.TestCase):
                 self.db, user_id=self.user_a.id, values=[current_url], source_mode="collect",
                 source_synced_at=removal_stamp, source_coverage="complete", source_snapshot_size=1,
             )
-            self.assertTrue(cleanup["source_reconciled"])
+            self.assertFalse(cleanup["source_reconciled"])
+            self._detach_legacy_source(old["item"]["id"], "collect", "2026-09-08T00:00:00+00:00")
             for stamp in ("2026-09-07T00:00:00Z", removal_stamp):
                 late = platform_library_service.import_one(
                     self.db, user_id=self.user_a.id, value=old_url, source_mode="collect",
@@ -597,22 +916,24 @@ class PlatformLibraryImportTests(unittest.TestCase):
         self.assertEqual(platform_library_service._source_meta(saved)["source_removed_ats"]["collect"],
                          "2026-09-08T00:00:00+00:00")
 
-    def test_first_created_late_capture_keeps_transcript_without_rejoining_source(self) -> None:
+    def test_old_unseen_capture_is_skipped_before_network_and_not_inserted(self) -> None:
         old_url = "https://www.bilibili.com/video/BV1FIRSTLATE"
         current_url = "https://www.bilibili.com/video/BV1CURRENT"
-        with patch.object(platform_library_service, "_extract_bilibili", side_effect=self._bili_for_url):
+        with patch.object(platform_library_service, "_extract_bilibili", side_effect=self._bili_for_url) as extract:
             cleanup = platform_library_service.import_many(
                 self.db, user_id=self.user_a.id, values=[current_url], source_mode="collect",
                 source_synced_at="2026-09-08T00:00:00Z", source_coverage="complete", source_snapshot_size=1,
             )
-            self.assertTrue(cleanup["source_reconciled"])
+            self.assertFalse(cleanup["source_reconciled"])
             late = platform_library_service.import_one(
                 self.db, user_id=self.user_a.id, value=old_url, source_mode="collect",
                 source_synced_at="2026-09-07T00:00:00Z",
             )
-            self.assertEqual(late["item"]["source_mode"], "import")
-            self.assertEqual(late["item"]["source_modes"], [])
-            self.assertTrue(late["item"]["note"]["transcript_raw"])
+            self.assertEqual(late["status"], "skipped")
+            self.assertTrue(late["stale_snapshot"])
+            self.assertIsNone(late["item"])
+            extract.assert_called_once()
+            self.assertEqual(self.db.query(Note).count(), 1)
             visible = platform_library_service.list_notes(
                 self.db, user_id=self.user_a.id, platform="bilibili", source_mode="collect",
             )
@@ -623,9 +944,9 @@ class PlatformLibraryImportTests(unittest.TestCase):
                 source_synced_at="2026-09-08T00:00:01Z", source_rank_offset=1,
             )
         self.assertIn("collect", fresh["item"]["source_modes"])
-        self.assertEqual(fresh["item"]["id"], late["item"]["id"])
+        self.assertEqual(self.db.query(Note).count(), 2)
 
-    def test_ai_completion_preserves_membership_removed_during_llm_request(self) -> None:
+    def test_ai_completion_preserves_existing_membership_during_incremental_sync(self) -> None:
         old_url = "https://www.bilibili.com/video/BV1AISTALE"
         with patch.object(platform_library_service, "_extract_bilibili", side_effect=self._bili_for_url):
             old = platform_library_service.import_one(
@@ -654,11 +975,10 @@ class PlatformLibraryImportTests(unittest.TestCase):
         self.assertFalse(reused)
         self.assertTrue(note.ai_initialized)
         item = platform_library_service.serialize_item(note)
-        self.assertEqual(item["source_mode"], "import")
-        self.assertEqual(item["source_modes"], [])
-        self.assertNotIn("collect", item["source_ranks"])
-        self.assertEqual(platform_library_service._source_meta(note)["source_removed_ats"]["collect"],
-                         "2026-09-08T00:00:00+00:00")
+        self.assertEqual(item["source_mode"], "collect")
+        self.assertEqual(item["source_modes"], ["collect"])
+        self.assertEqual(item["source_ranks"]["collect"], 0)
+        self.assertNotIn("source_removed_ats", platform_library_service._source_meta(note))
 
     def test_list_api_filters_source_mode_before_500_item_limit(self) -> None:
         from app.api import routes

@@ -37,7 +37,9 @@ test('中途断线保留已成功项，其余明确标记可重试，不假报�
   });
   assert.equal(requests, 2);
   assert.equal(result.data?.success, 10);
-  assert.equal(result.data?.failed, 15);
+  assert.equal(result.data?.failed, 0);
+  assert.equal(result.data?.pending, 15);
+  assert.equal(result.data?.items.filter((item) => item.status === 'pending').length, 15);
   assert.deepEqual(result.data?.items.map((item) => item.input), urls(25));
 });
 

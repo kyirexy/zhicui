@@ -56,6 +56,7 @@ from app.models.privacy_account import (  # noqa: F401
 from app.models.client_download_daily import ClientDownloadDaily  # noqa: F401
 from app.models.feedback import Feedback  # noqa: F401
 from app.models.library_hidden_item import LibraryHiddenItem  # noqa: F401
+from app.models.library_sync import LibrarySyncRun  # noqa: F401
 from app.models.douyin_account_binding import DouyinAccountBinding  # noqa: F401
 from app.models.douyin_local_library_item import DouyinLocalLibraryItem  # noqa: F401
 from app.models.desktop_handoff import DesktopHandoff  # noqa: F401

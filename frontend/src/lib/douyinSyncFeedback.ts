@@ -18,6 +18,8 @@ export interface MultiSourceSyncResult {
   sourceLabel: string;
   checked: number;
   newlyVisible: number;
+  created?: number;
+  reused?: number;
   error?: string;
 }
 
@@ -56,7 +58,10 @@ export function formatMultiSourceSyncSummary(
   const failedSuffix = failed.length > 0
     ? `；${failed.map((result) => `${result.sourceLabel}：${result.error}`).join('；')}`
     : '';
-  return `已同步 ${successful.length} 个来源，共检查 ${checked} 条，新显示 ${newlyVisible} 条${failedSuffix}`;
+  const counts = successful.every((result) => result.created !== undefined && result.reused !== undefined)
+    ? `新增 ${successful.reduce((sum, item) => sum + boundedCount(item.created), 0)} 条，复用 ${successful.reduce((sum, item) => sum + boundedCount(item.reused), 0)} 条；历史资料已保留`
+    : `新显示 ${newlyVisible} 条`;
+  return `已同步 ${successful.length} 个来源，共检查 ${checked} 条，${counts}${failedSuffix}`;
 }
 
 export function formatDouyinSyncError(

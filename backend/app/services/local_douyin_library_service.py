@@ -8,13 +8,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 from urllib.parse import urlsplit, urlunsplit
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.douyin_local_library_item import DouyinLocalLibraryItem
 from app.models.user import User
 from app.models.video_source_ledger import VideoSourceLedger
-from app.services import note_service, video_source_ledger_service
+from app.services import library_sync_service, note_service, video_source_ledger_service
 
 MAX_LOCAL_SYNC_ITEMS = 100
 _VIDEO_ID_PATTERN = re.compile(r"^[0-9]{5,32}$")
@@ -257,14 +257,21 @@ def ingest_items(
     latest = db.execute(select(func.max(VideoSourceLedger.source_synced_at)).where(
         VideoSourceLedger.user_id == user_id, VideoSourceLedger.source_mode == mode,
     )).scalar_one_or_none()
-    if latest and video_source_ledger_service.source_timestamp(latest) > synced_at.timestamp():
+    latest_timestamp = max(
+        video_source_ledger_service.source_timestamp(latest),
+        library_sync_service.latest_source_timestamp(
+            db, user_id=user_id, platform="douyin", source_mode=mode,
+        ),
+    )
+    if latest_timestamp > synced_at.timestamp():
         return {
             "accepted": 0, "created": 0, "reused": 0, "ready": 0, "quarantined": 0,
-            "source_mode": mode, "source_synced_at": latest.isoformat(),
+            "source_mode": mode, "source_synced_at": datetime.fromtimestamp(latest_timestamp, tz=timezone.utc).isoformat(),
             "source_order_reliable": source_order_reliable, "source_coverage": source_coverage,
-            "video_ids": [], "stale_snapshot": True,
+            "video_ids": [], "created_video_ids": [], "stale_snapshot": True,
         }
     created = 0
+    created_video_ids: list[str] = []
     ready = 0
     try:
         for item in normalized:
@@ -286,6 +293,7 @@ def ingest_items(
                 )
                 db.add(row)
                 created += 1
+                created_video_ids.append(item["video_id"])
             else:
                 existing_quality = _snapshot_quality(row)
                 incoming_quality = _snapshot_quality(item)
@@ -320,21 +328,14 @@ def ingest_items(
                 user_id=user_id,
                 video_id=item["video_id"],
                 source_mode=mode,
-                source_rank=item["source_rank"],
+                # 不可靠采集只刷新观察时间；UPSERT保留已有可信排名和排名快照。
+                source_rank=item["source_rank"] if source_order_reliable else None,
                 note_id=note.id if note else None,
                 observed_at=now,
                 source_synced_at=synced_at,
                 commit=False,
             )
-        # 只有已确认完整的官方列表才能解除不再存在的来源成员关系。
-        # 限量/中断同步不删旧尾部；视频文稿、知识和计划始终保留。
-        if source_coverage == "complete" and source_order_reliable:
-            db.execute(delete(VideoSourceLedger).where(
-                VideoSourceLedger.user_id == user_id,
-                VideoSourceLedger.source_mode == mode,
-                VideoSourceLedger.video_id.not_in(seen),
-                VideoSourceLedger.source_synced_at <= synced_at,
-            ))
+        # 同步只增量登记和校准位置；完整列表也不能代替用户删除历史资料或来源。
         db.commit()
     except Exception:
         db.rollback()
@@ -350,6 +351,7 @@ def ingest_items(
         "source_order_reliable": source_order_reliable,
         "source_coverage": source_coverage,
         "video_ids": [item["video_id"] for item in normalized],
+        "created_video_ids": created_video_ids,
     }
 
 
@@ -370,14 +372,7 @@ def list_items(
             *([VideoSourceLedger.source_mode == mode] if mode else []),
         )
     ).scalars().all()
-    rows.sort(
-        key=lambda row: (
-            -video_source_ledger_service.source_timestamp(row.source_synced_at),
-            row.source_rank is None,
-            row.source_rank if row.source_rank is not None else MAX_LOCAL_SYNC_ITEMS + 1,
-            -row.last_seen_at.timestamp(),
-        )
-    )
+    rows.sort(key=lambda row: video_source_ledger_service.source_order_key(row.to_dict()))
     snapshots = db.execute(
         select(DouyinLocalLibraryItem).where(
             DouyinLocalLibraryItem.user_id == user_id,

@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
 from app.models.douyin_local_library_item import DouyinLocalLibraryItem
+from app.models.library_sync import LibrarySyncRun
 from app.models.note import Note
 from app.models.plan import Plan
 from app.models.user import User
@@ -37,6 +38,7 @@ class LocalDouyinLibraryTests(unittest.TestCase):
                 Plan.__table__,
                 DouyinLocalLibraryItem.__table__,
                 VideoSourceLedger.__table__,
+                LibrarySyncRun.__table__,
             ],
         )
         self.Session = sessionmaker(bind=self.engine, expire_on_commit=False)
@@ -104,10 +106,10 @@ class LocalDouyinLibraryTests(unittest.TestCase):
         new = datetime(2026, 8, 2, tzinfo=timezone.utc)
         a, b, c = '7672579366093622537', '7672579366093622538', '7672579366093622539'
         local_douyin_library_service.ingest_items(self.db, user_id=self.user_a.id,
-            source_mode='collect', source_synced_at=old,
+            source_mode='collect', source_synced_at=old, source_order_reliable=True,
             items=[self.item(a, source_rank=0), self.item(b, source_rank=1)])
         local_douyin_library_service.ingest_items(self.db, user_id=self.user_a.id,
-            source_mode='collect', source_synced_at=new,
+            source_mode='collect', source_synced_at=new, source_order_reliable=True,
             items=[self.item(c, source_rank=0), self.item(b, source_rank=1)])
         rows = local_douyin_library_service.list_items(self.db, user_id=self.user_a.id, source_mode='collect')
         self.assertEqual([item['aweme_id'] for item in rows], [c, b, a])
@@ -119,14 +121,15 @@ class LocalDouyinLibraryTests(unittest.TestCase):
         video = '7672579366093622537'
         for stamp, rank in [(new, 3), (old, 0)]:
             local_douyin_library_service.ingest_items(self.db, user_id=self.user_a.id,
-                source_mode='like', source_synced_at=stamp, items=[self.item(video, source_rank=rank)])
+                source_mode='like', source_synced_at=stamp, source_order_reliable=True,
+                items=[self.item(video, source_rank=rank)])
         ledger.upsert_source(self.db, user_id=self.user_a.id, video_id=video, source_mode='like')
         self.db.expire_all()
         row = self.db.query(VideoSourceLedger).filter_by(user_id=self.user_a.id, video_id=video).one()
         self.assertEqual(row.source_rank, 3)
         self.assertEqual(row.source_synced_at.replace(tzinfo=timezone.utc), new)
 
-    def test_complete_snapshot_reconciles_only_that_source_membership(self) -> None:
+    def test_complete_snapshot_preserves_all_previous_source_memberships(self) -> None:
         old = datetime(2026, 8, 1, tzinfo=timezone.utc)
         new = datetime(2026, 8, 2, tzinfo=timezone.utc)
         a, b = '7672579366093622537', '7672579366093622538'
@@ -135,9 +138,70 @@ class LocalDouyinLibraryTests(unittest.TestCase):
                 source_synced_at=old, items=[self.item(a), self.item(b, source_rank=1)])
         local_douyin_library_service.ingest_items(self.db, user_id=self.user_a.id, source_mode='collect',
             source_synced_at=new, source_coverage='complete', source_order_reliable=True, items=[self.item(b)])
-        self.assertEqual(self.db.query(VideoSourceLedger).filter_by(source_mode='collect').count(), 1)
+        self.assertEqual(self.db.query(VideoSourceLedger).filter_by(source_mode='collect').count(), 2)
         self.assertEqual(self.db.query(VideoSourceLedger).filter_by(source_mode='like').count(), 2)
         self.assertEqual(self.db.query(DouyinLocalLibraryItem).count(), 2)
+        rows = local_douyin_library_service.list_items(self.db, user_id=self.user_a.id, source_mode='collect')
+        self.assertEqual([item['aweme_id'] for item in rows], [b, a])
+
+    def test_older_snapshot_cannot_insert_previously_unseen_video(self) -> None:
+        current, stale = '7672579366093622537', '7672579366093622538'
+        local_douyin_library_service.ingest_items(
+            self.db, user_id=self.user_a.id, source_mode='collect',
+            source_synced_at=datetime(2026, 9, 8, tzinfo=timezone.utc), items=[self.item(current)],
+        )
+        result = local_douyin_library_service.ingest_items(
+            self.db, user_id=self.user_a.id, source_mode='collect',
+            source_synced_at=datetime(2026, 9, 7, tzinfo=timezone.utc), items=[self.item(stale)],
+            source_coverage='complete', source_order_reliable=True,
+        )
+        self.assertTrue(result['stale_snapshot'])
+        self.assertEqual(result['accepted'], 0)
+        self.assertEqual(self.db.query(DouyinLocalLibraryItem).count(), 1)
+        self.assertEqual(self.db.query(VideoSourceLedger).count(), 1)
+
+    def test_started_empty_snapshot_blocks_old_data_before_any_ledger_exists(self) -> None:
+        from app.services import library_sync_service
+        library_sync_service.start_run(
+            self.db, user_id=self.user_a.id, platform="douyin", source_mode="collect",
+            source_synced_at="2026-09-08T00:00:00Z", requested_count=0,
+            coverage="complete", order_reliable=True,
+        )
+        result = local_douyin_library_service.ingest_items(
+            self.db, user_id=self.user_a.id, source_mode="collect", items=[self.item()],
+            source_synced_at=datetime(2026, 9, 7, tzinfo=timezone.utc), source_order_reliable=True,
+        )
+        self.assertTrue(result["stale_snapshot"])
+        self.assertEqual(result["created_video_ids"], [])
+        self.assertEqual(self.db.query(DouyinLocalLibraryItem).count(), 0)
+
+    def test_unreliable_snapshot_keeps_confirmed_order_and_new_items_unranked(self) -> None:
+        first, second, unknown = "7672579366093622501", "7672579366093622502", "7672579366093622503"
+        initial = local_douyin_library_service.ingest_items(
+            self.db, user_id=self.user_a.id, source_mode="collect", source_order_reliable=True,
+            source_synced_at=datetime(2026, 9, 6, tzinfo=timezone.utc),
+            items=[self.item(first, source_rank=0), self.item(second, source_rank=1)],
+        )
+        result = local_douyin_library_service.ingest_items(
+            self.db, user_id=self.user_a.id, source_mode="collect", source_order_reliable=False,
+            source_synced_at=datetime(2026, 9, 7, tzinfo=timezone.utc),
+            items=[self.item(video, source_rank=index, title=video, caption=video)
+                   for index, video in enumerate([unknown, second, first])],
+        )
+        self.assertEqual(initial["created_video_ids"], [first, second])
+        self.assertEqual(result["created_video_ids"], [unknown])
+        for stamp in (7, 8):
+            local_douyin_library_service.ingest_items(
+                self.db, user_id=self.user_a.id, source_mode="collect", source_order_reliable=False,
+                source_synced_at=datetime(2026, 9, stamp, tzinfo=timezone.utc),
+                items=[self.item(unknown, source_rank=0)],
+            )
+        self.db.expire_all()
+        rows = local_douyin_library_service.list_items(self.db, user_id=self.user_a.id, source_mode="collect")
+        self.assertEqual([row["aweme_id"] for row in rows], [first, second, unknown])
+        self.assertEqual([row["source_rank"] for row in rows], [0, 1, None])
+        self.assertEqual(rows[0]["source_synced_at"], "2026-09-06T00:00:00Z")
+        self.assertEqual(rows[1]["source_synced_at"], "2026-09-06T00:00:00Z")
 
     def test_sensitive_and_noncanonical_fields_are_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "不得包含"):
@@ -177,6 +241,7 @@ class LocalDouyinLibraryTests(unittest.TestCase):
         local_douyin_library_service.ingest_items(
             self.db, user_id=self.user_a.id, source_mode="like",
             source_synced_at=datetime(2026, 9, 2, tzinfo=timezone.utc),
+            source_order_reliable=True,
             items=[self.item(first, source_rank=0), self.item(second, source_rank=1)],
         )
         stale_items = [
@@ -212,6 +277,7 @@ class LocalDouyinLibraryTests(unittest.TestCase):
         local_douyin_library_service.ingest_items(
             self.db, user_id=self.user_a.id, source_mode="like",
             source_synced_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+            source_order_reliable=True,
             items=[self.item(second, source_rank=0), self.item(first, source_rank=1)],
         )
         result = self._legacy_route_items([

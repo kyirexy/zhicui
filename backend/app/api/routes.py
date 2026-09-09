@@ -5,6 +5,7 @@ API route definitions for VideoCapsule.
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import importlib.util
 import time
@@ -51,6 +52,7 @@ from app.services import (
     image_memory_cache,
     library_extraction_service,
     library_hidden_service,
+    library_sync_service,
     local_douyin_library_service,
     llm_usage_service,
     knowledge_service,
@@ -1896,7 +1898,22 @@ def import_platform_library_items(
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
     """Import up to ten Bilibili/Xiaohongshu links without implicit LLM work."""
+    snapshot = body.source_synced_at or datetime.now(timezone.utc)
+    platforms = {_detect_platform(url) for url in body.urls}
+    platform = next(iter(platforms)) if len(platforms) == 1 else "mixed"
+    if platform not in {"bilibili", "xiaohongshu"}:
+        platform = "mixed"
+    run = None
     try:
+        run = library_sync_service.start_run(
+            db, user_id=current_user.id, platform=platform,
+            source_mode=body.source_mode or "import", source_synced_at=snapshot,
+            source_rank_offset=body.source_rank_offset, requested_count=len(body.urls),
+            coverage=body.source_coverage, order_reliable=body.source_order_reliable,
+            request_fingerprint=hashlib.sha256(json.dumps(body.urls, ensure_ascii=False).encode()).hexdigest(),
+        )
+        if getattr(run, "_sync_duplicate_running", False):
+            raise HTTPException(status_code=409, detail="这批同步仍在处理中，请稍后查看同步记录")
         result = platform_library_service.import_many(
             db,
             user_id=current_user.id,
@@ -1904,13 +1921,38 @@ def import_platform_library_items(
             source_mode=body.source_mode,
             source_rank_offset=body.source_rank_offset,
             source_snapshot_size=body.source_snapshot_size,
-            source_synced_at=body.source_synced_at.isoformat() if body.source_synced_at else None,
+            source_synced_at=snapshot.isoformat(),
             source_order_reliable=body.source_order_reliable,
             source_coverage=body.source_coverage,
         )
+    except HTTPException:
+        raise
     except ValueError as exc:
+        db.rollback()
+        if run is not None:
+            library_sync_service.finish_run(db, run, {}, status="invalid", error_code="invalid_request")
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception:
+        db.rollback()
+        if run is not None:
+            library_sync_service.finish_run(db, run, {}, status="failed", error_code="sync_failed")
+        raise
+    library_sync_service.finish_run(db, run, result)
+    result["sync_run_id"] = run.id
     return _ok(result)
+
+
+@router.get("/api/library/sync-runs")
+def list_library_sync_runs(
+    response: Response,
+    limit: int = Query(default=20, ge=1, le=50),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """只返回当前用户的有界同步提交记录，不包含视频正文或平台凭据。"""
+    response.headers["Cache-Control"] = "no-store"
+    items = library_sync_service.list_runs(db, user_id=current_user.id, limit=limit)
+    return _ok({"items": items, "total": len(items)})
 
 
 @router.get("/api/library/imports")
@@ -2390,17 +2432,33 @@ def ingest_local_douyin_library(
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
     """Accept bounded public metadata discovered by the Windows client."""
+    snapshot = body.source_synced_at or datetime.now(timezone.utc)
+    values = [item.model_dump() for item in body.items]
+    run = None
     try:
+        run = library_sync_service.start_run(
+            db, user_id=current_user.id, platform="douyin", source_mode=body.source_mode,
+            source_synced_at=snapshot, requested_count=len(values),
+            coverage=body.source_coverage, order_reliable=body.source_order_reliable,
+            request_fingerprint=hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest(),
+        )
+        if getattr(run, "_sync_duplicate_running", False):
+            raise HTTPException(status_code=409, detail="这批同步仍在处理中，请稍后查看同步记录")
         result = local_douyin_library_service.ingest_items(
             db,
             user_id=current_user.id,
             source_mode=body.source_mode,
-            items=[item.model_dump() for item in body.items],
-            source_synced_at=body.source_synced_at,
+            items=values,
+            source_synced_at=snapshot,
             source_order_reliable=body.source_order_reliable,
             source_coverage=body.source_coverage,
         )
+    except HTTPException:
+        raise
     except ValueError as exc:
+        db.rollback()
+        if run is not None:
+            library_sync_service.finish_run(db, run, {}, status="invalid", error_code="invalid_request")
         activity_service.log_activity_safely(
             user_id=current_user.id,
             action="douyin_local_sync_failed",
@@ -2416,6 +2474,13 @@ def ingest_local_douyin_library(
             },
         )
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception:
+        db.rollback()
+        if run is not None:
+            library_sync_service.finish_run(db, run, {}, status="failed", error_code="sync_failed")
+        raise
+    library_sync_service.finish_run(db, run, result)
+    result["sync_run_id"] = run.id
     activity_service.log_activity_safely(
         user_id=current_user.id,
         action="douyin_local_sync",
@@ -2803,6 +2868,7 @@ def list_douyin_library_items(
             continue
         item_ledgers[item["aweme_id"]] = ledger
         ledger_data = ledger.to_dict()
+        item["first_seen_at"] = ledger_data["first_seen_at"]
         ledger_time = video_source_ledger_service.source_timestamp(ledger_data["source_synced_at"])
         item_time = video_source_ledger_service.source_timestamp(item.get("source_synced_at"))
         # 新的连接器快照尚未落库时，旧台账不能覆盖它。
@@ -2816,11 +2882,7 @@ def list_douyin_library_items(
             reverse=True,
         )
     else:
-        items.sort(key=lambda item: (
-            -video_source_ledger_service.source_timestamp(item.get("source_synced_at")),
-            item.get("source_rank") is None,
-            int(item.get("source_rank") or 0),
-        ))
+        items.sort(key=video_source_ledger_service.source_order_key)
 
     source_total = len(items)
     hidden_modes = library_hidden_service.list_hidden_modes(

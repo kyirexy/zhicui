@@ -768,6 +768,7 @@ export interface DouyinLocalSyncItem {
 export interface DouyinLocalSyncResult {
   accepted: number;
   created: number;
+  created_video_ids?: string[];
   reused: number;
   ready: number;
   quarantined: number;
@@ -881,8 +882,8 @@ export interface PlatformLibraryListResult {
 export interface PlatformLibraryImportEntry {
   input: string;
   success: boolean;
-  status: 'imported' | 'reused' | 'failed';
-  item?: PlatformLibraryItem;
+  status: 'imported' | 'reused' | 'failed' | 'skipped' | 'pending';
+  item?: PlatformLibraryItem | null;
   platform?: PlatformLibraryPlatform | 'unknown';
   error?: string;
 }
@@ -892,6 +893,26 @@ export interface PlatformLibraryImportResult {
   total: number;
   success: number;
   failed: number;
+  skipped?: number;
+  pending?: number;
+}
+
+export interface LibrarySyncRun {
+  id: string;
+  platform: string;
+  source_mode: string;
+  status: 'running' | 'succeeded' | 'partial' | 'failed' | 'rejected' | 'invalid';
+  requested_count: number;
+  accepted: number;
+  created: number;
+  reused: number;
+  ready: number;
+  failed_count: number;
+  quarantined: number;
+  skipped?: number;
+  pending_count?: number;
+  started_at: string;
+  finished_at?: string | null;
 }
 
 export type CreatorSourcePlatform = 'douyin' | 'bilibili' | 'xiaohongshu';

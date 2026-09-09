@@ -50,6 +50,43 @@ test('新快照前缀先展示，旧快照rank0不能插进新快照rank1前面'
   ]);
 });
 
+test('不可靠或缺排名的新快照不能越过可靠历史，也不打乱无排名资料的服务端次序', () => {
+  const records = [
+    item('unknown-old', { source_synced_at: '2026-09-01T00:00:00Z' }),
+    item('unreliable-new', {
+      source_ranks: { collect: 0 }, source_order_reliabilities: { collect: false },
+      source_synced_ats: { collect: '2026-09-10T00:00:00Z' },
+    }),
+    item('ranked-old', { source_rank: 0, source_synced_at: '2026-09-02T00:00:00Z' }),
+    item('missing-new', { source_synced_at: '2026-09-11T00:00:00Z' }),
+    item('ranked-new', { source_rank: 1, source_synced_at: '2026-09-03T00:00:00Z' }),
+    item('invalid-new', { source_rank: NaN, source_synced_at: '2026-09-12T00:00:00Z' }),
+    item('fraction-new', { source_rank: 0.5, source_synced_at: '2026-09-13T00:00:00Z' }),
+  ];
+  assert.deepEqual(sortPlatformLibrarySource(records, 'collect').map((entry) => entry.id), [
+    'ranked-new', 'ranked-old', 'unknown-old', 'unreliable-new', 'missing-new', 'invalid-new', 'fraction-new',
+  ]);
+  assert.equal(records[0].id, 'unknown-old');
+});
+
+test('收藏可靠性只由收藏字段决定，喜欢的可靠rank不能让收藏无排名项提前', () => {
+  const records = [
+    item('reliable-like', {
+      source_mode: 'like', source_modes: ['collect', 'like'],
+      source_rank: 0, source_order_reliable: true, source_synced_at: '2026-09-11T00:00:00Z',
+      source_ranks: { like: 0 }, source_order_reliabilities: { collect: false, like: true },
+    }),
+    item('reliable-collect', {
+      source_mode: 'like', source_modes: ['collect', 'like'],
+      source_rank: 0, source_order_reliable: false, source_synced_at: '2026-09-12T00:00:00Z',
+      source_ranks: { collect: 2 }, source_order_reliabilities: { collect: true, like: false },
+      source_synced_ats: { collect: '2026-09-01T00:00:00Z' },
+    }),
+  ];
+  assert.deepEqual(selectPlatformLibrarySource(records, 'collect').map((entry) => entry.id), ['reliable-collect', 'reliable-like']);
+  assert.deepEqual(selectPlatformLibrarySource(records, 'like').map((entry) => entry.id), ['reliable-like', 'reliable-collect']);
+});
+
 test('收藏排序只使用收藏快照，喜欢更新更晚也不能顶替收藏快照', () => {
   const records = [
     item('recent-like', {

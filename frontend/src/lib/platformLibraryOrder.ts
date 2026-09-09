@@ -19,19 +19,25 @@ export function sortPlatformLibrarySource(
     item.source_synced_ats?.[mode]
       ?? (item.source_mode === mode ? item.source_synced_at : undefined),
   );
-  const rank = (item: PlatformLibraryItem): number => {
+  const rank = (item: PlatformLibraryItem): number | null => {
     const reliable = item.source_order_reliabilities?.[mode]
       ?? (item.source_mode === mode ? item.source_order_reliable : undefined);
-    if (reliable === false) return Number.MAX_SAFE_INTEGER;
+    if (reliable === false) return null;
     const value = item.source_ranks?.[mode]
       ?? (item.source_mode === mode ? item.source_rank : undefined);
-    return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    return typeof value === 'number' && Number.isInteger(value) && value >= 0
       ? value
-      : Number.MAX_SAFE_INTEGER;
+      : null;
   };
-  // 新快照前缀始终在旧快照尾部之前；排名只在同一来源、同一快照内比较。
-  // 缺少快照/排名时保持服务端顺序，不拿发布时间或文案完成时间冒充收藏顺序。
-  return [...items].sort((left, right) => syncedAt(right) - syncedAt(left) || rank(left) - rank(right));
+  // 先展示有可靠排名的资料，再在同一来源内按快照与排名排序。
+  // 无可靠排名的资料保持服务端次序，不能仅凭更新的采集时间顶到前面。
+  return [...items].sort((left, right) => {
+    const leftRank = rank(left);
+    const rightRank = rank(right);
+    if (leftRank === null) return rightRank === null ? 0 : 1;
+    if (rightRank === null) return -1;
+    return syncedAt(right) - syncedAt(left) || leftRank - rightRank;
+  });
 }
 
 export function selectPlatformLibrarySource(

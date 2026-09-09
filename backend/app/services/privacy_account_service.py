@@ -387,10 +387,11 @@ _EXPORT_GROUPS: dict[str, tuple[str, ...]] = {
         "creator_sources",
         "creator_source_items",
         "douyin_local_library_items",
-        "video_source_ledger",
+        "video_source_ledgers",
         "library_hidden_items",
         "library_extraction_batches",
         "library_extraction_batch_items",
+        "library_sync_runs",
     ),
     "ai_conversations": (
         "agent_threads",

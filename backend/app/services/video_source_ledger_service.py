@@ -72,6 +72,19 @@ def source_timestamp(value: object) -> float:
     return parsed.timestamp() if parsed else 0
 
 
+def source_order_key(item: dict[str, Any]) -> tuple:
+    """可信来源先按快照及排名排列；无排名资料稳定放尾部，不冒充平台顺序。"""
+    rank = item.get("source_rank")
+    ranked = isinstance(rank, int) and not isinstance(rank, bool) and rank >= 0
+    return (
+        not ranked,
+        -source_timestamp(item.get("source_synced_at")) if ranked else 0,
+        rank if ranked else 0,
+        source_timestamp(item.get("first_seen_at") or item.get("recorded_at")),
+        str(item.get("aweme_id") or item.get("video_id") or item.get("id") or ""),
+    )
+
+
 def _validate_note_owner(
     db: Session,
     *,

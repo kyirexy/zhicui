@@ -111,6 +111,7 @@ import {
   type UserAIProviderConfig,
   type UserChatModelCatalog,
 } from '@/lib/api';
+import { getLibraryRevision, isLibraryRevisionCurrent, subscribeLibraryUpdates } from '@/lib/libraryUpdates';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import { useSettings } from '@/lib/hooks/SettingsContext';
 import { useMarqueeSelection } from '@/lib/hooks/useMarqueeSelection';
@@ -739,6 +740,10 @@ export default function VideoAgentWorkspace({
   const feedbackTurnIdRef = useRef<string | null>(null);
   const lastStreamEventSeqRef = useRef(0);
   const sourceRequestRef = useRef<AbortController | null>(null);
+  const sourceUserIdRef = useRef(user?.id);
+  sourceUserIdRef.current = user?.id;
+  const loadedSourceUserIdRef = useRef(user?.id);
+  const refreshLibrarySourcesRef = useRef<() => void>(() => {});
   const planContextRequestRef = useRef<string | null>(null);
   const initialSourceIdsRef = useRef(initialSourceIds);
   const initialSourceIdsProvidedRef = useRef(initialSourceIds !== undefined);
@@ -1010,6 +1015,9 @@ export default function VideoAgentWorkspace({
     scope: BrowseSourceScope,
     includeIds: string[] = [],
   ) => {
+    const requestedUserId = user?.id;
+    if (!requestedUserId) return;
+    const requestedRevision = getLibraryRevision();
     const normalizedIncludeIds = normalizeSourceIds(includeIds);
     const requestedIds = requestedSourceIdsRef.current;
     const isHandoffRequest = requestedIds.length > 0
@@ -1029,14 +1037,13 @@ export default function VideoAgentWorkspace({
       normalizedIncludeIds,
       settings.agentSourceDisplayLimit,
     );
-    if (controller.signal.aborted) return;
+    if (controller.signal.aborted || requestedUserId !== sourceUserIdRef.current
+      || !isLibraryRevisionCurrent(requestedRevision)) return;
     setSourceLoading(false);
     if (isHandoffRequest) setRequestedSourceCheckComplete(true);
     sourceRequestRef.current = null;
     if (!response.success || !response.data) {
-      setSources([]);
-      setSourceCount(0);
-      setScopeReadyCount(0);
+      // 网络失败不等于已存资料被清空。
       setSourceError(response.error || '暂时无法读取可用视频资料');
       return;
     }
@@ -1051,7 +1058,7 @@ export default function VideoAgentWorkspace({
       ...(response.data.included_items || []),
       ...(response.data.items || []),
     ]);
-  }, [rememberSources, settings.agentSourceDisplayLimit]);
+  }, [rememberSources, settings.agentSourceDisplayLimit, user?.id]);
 
   const loadCreatorSources = useCallback(async () => {
     setCreatorSourcesLoading(true);
@@ -1336,7 +1343,22 @@ export default function VideoAgentWorkspace({
 
   useEffect(() => {
     void loadSources(browseScope, requestedSourceIdsRef.current);
+    return () => { sourceRequestRef.current?.abort(); };
   }, [browseScope, loadSources]);
+
+  useEffect(() => {
+    // 初次登录保留从资料库带入的选择，只在离开已有账号时清空。
+    if (loadedSourceUserIdRef.current !== undefined && loadedSourceUserIdRef.current !== user?.id) {
+      setSources([]);
+      setSourceRegistry({});
+      setSelectedSourceIds(new Set());
+      setSourceCount(0);
+      setScopeReadyCount(0);
+    }
+    loadedSourceUserIdRef.current = user?.id;
+    if (!user?.id) return;
+    return subscribeLibraryUpdates(() => refreshLibrarySourcesRef.current());
+  }, [user?.id]);
 
   useEffect(() => {
     const requestedSourceIds = requestedSourceIdsRef.current;
@@ -2069,9 +2091,12 @@ export default function VideoAgentWorkspace({
     }
   };
 
-  const runSmartSourceSearch = async (event?: FormEvent) => {
+  const runSmartSourceSearch = async (event?: FormEvent, queryOverride?: string) => {
     event?.preventDefault();
-    const query = sourceQuery.trim();
+    const requestedUserId = user?.id;
+    if (!requestedUserId) return;
+    const requestedRevision = getLibraryRevision();
+    const query = (queryOverride ?? sourceQuery).trim();
     if (query.length < 2) {
       setSourceError('请至少输入两个字，描述你想找的视频');
       return;
@@ -2087,13 +2112,12 @@ export default function VideoAgentWorkspace({
       scope: browseScope,
       limit: 50,
     }, controller.signal);
-    if (controller.signal.aborted) return;
+    if (controller.signal.aborted || requestedUserId !== sourceUserIdRef.current
+      || !isLibraryRevisionCurrent(requestedRevision)) return;
     sourceRequestRef.current = null;
     setSourceLoading(false);
 
     if (!response.success || !response.data) {
-      setSources([]);
-      setSourceCount(0);
       setSourceError(response.error || '智能搜索暂时不可用，请稍后重试');
       return;
     }
@@ -2107,6 +2131,11 @@ export default function VideoAgentWorkspace({
     setSourceExpandedQueries(response.data.expanded_queries || []);
     setSourceScannedCount(response.data.scanned_count || 0);
     rememberSources(items);
+  };
+
+  refreshLibrarySourcesRef.current = () => {
+    if (sourceAppliedQuery) void runSmartSourceSearch(undefined, sourceAppliedQuery);
+    else void loadSources(browseScope, requestedSourceIdsRef.current);
   };
 
   const clearSourceSearch = () => {

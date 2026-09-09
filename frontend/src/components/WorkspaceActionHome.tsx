@@ -27,7 +27,7 @@ import LibraryCoverImage from '@/components/LibraryCoverImage';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import { buildHomeLinkDestination } from '@/lib/singleLinkImport';
 import { sortPlatformLibrarySource } from '@/lib/platformLibraryOrder';
-import { LIBRARY_UPDATED_EVENT } from '@/lib/libraryUpdates';
+import { getLibraryRevision, isLibraryRevisionCurrent, subscribeLibraryUpdates } from '@/lib/libraryUpdates';
 import {
   firstPopulatedHomeMode,
   type HomeChannelMode,
@@ -207,23 +207,7 @@ export default function WorkspaceActionHome() {
 
   useEffect(() => {
     if (!user?.id) return;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const refresh = () => {
-      if (document.visibilityState === 'hidden') return;
-      clearTimeout(timer);
-      timer = setTimeout(() => setRefreshRevision((value) => value + 1), 100);
-    };
-    window.addEventListener('focus', refresh);
-    window.addEventListener('pageshow', refresh);
-    window.addEventListener(LIBRARY_UPDATED_EVENT, refresh);
-    document.addEventListener('visibilitychange', refresh);
-    return () => {
-      clearTimeout(timer);
-      window.removeEventListener('focus', refresh);
-      window.removeEventListener('pageshow', refresh);
-      window.removeEventListener(LIBRARY_UPDATED_EVENT, refresh);
-      document.removeEventListener('visibilitychange', refresh);
-    };
+    return subscribeLibraryUpdates(() => setRefreshRevision((value) => value + 1));
   }, [user?.id]);
 
   useEffect(() => {
@@ -233,6 +217,8 @@ export default function WorkspaceActionHome() {
       return;
     }
     let active = true;
+    const requestedRevision = getLibraryRevision();
+    const isCurrent = () => active && isLibraryRevisionCurrent(requestedRevision);
     const initialLoad = loadedUserId.current !== user.id;
     if (initialLoad) {
       loadedUserId.current = user.id;
@@ -279,7 +265,7 @@ export default function WorkspaceActionHome() {
     remember();
 
     const publishChannels = () => {
-      if (!active) return;
+      if (!isCurrent()) return;
       remember();
       setChannelPreviews({ ...nextPreviews });
       setChannelTotals({ ...nextTotals });
@@ -301,7 +287,7 @@ export default function WorkspaceActionHome() {
     };
 
     const threadRequest = listAgentThreads().then((response) => {
-      if (!active) return response;
+      if (!isCurrent()) return response;
       if (response.success) {
         nextThreads = (response.data?.items || []).slice(0, 3);
         remember();
@@ -310,12 +296,12 @@ export default function WorkspaceActionHome() {
       setLoading(false);
       return response;
     }).catch(() => {
-      if (active) setLoading(false);
+      if (isCurrent()) setLoading(false);
       return null;
     });
 
     const sourceRequest = listAgentSources('all_ready', '', undefined, [], 500).then((response) => {
-      if (!active || !response.success) return response;
+      if (!isCurrent() || !response.success) return response;
       const sources = response.data;
       nextReadyCount = sources?.ready_count ?? sources?.total ?? 0;
       remember();
@@ -325,7 +311,7 @@ export default function WorkspaceActionHome() {
 
     const douyinRequests = (['collect', 'like', 'post'] as const).map((mode) => (
       listDouyinLibraryItems(6, mode, 'collection', false, true).then((response) => {
-        if (!active || !response.success) return response;
+        if (!isCurrent() || !response.success) return response;
         const key = `douyin_${mode}` as ChannelKey;
         const total = response.data?.source_total ?? 0;
         // 成功响应（包括真实的 0 条）就是该来源的权威结果。
@@ -339,7 +325,7 @@ export default function WorkspaceActionHome() {
     // 服务端先按分类筛选和排序，防止其他分类挤占有界列表的前 500 条。
     const biliRequests = (['collect', 'like', 'import'] as const).map((mode) => (
       listPlatformLibraryItems('bilibili', mode).then((response) => {
-        if (!active || !response.success) return response;
+        if (!isCurrent() || !response.success) return response;
         const key = `bilibili_${mode}` as ChannelKey;
         nextPreviews[key] = toPlatformPreviews(sortPlatformLibrarySource(response.data?.items || [], mode));
         nextTotals[key] = response.data?.total ?? 0;
@@ -354,7 +340,7 @@ export default function WorkspaceActionHome() {
       ...douyinRequests,
       ...biliRequests,
     ]).then(() => {
-      if (!active) return;
+      if (!isCurrent()) return;
       const nextActiveModes: Record<ChannelPlatform, ChannelMode> = {
         douyin: firstPopulatedHomeMode('douyin', {
           collect: nextTotals.douyin_collect,

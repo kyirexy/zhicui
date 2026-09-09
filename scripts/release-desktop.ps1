@@ -26,6 +26,9 @@ param(
 
     [string]$ArtifactCacheRoot = '',
 
+    # 可选的完整官方运行时 ZIP；版本与 SHA256 必须匹配提交锁定的 Electron 包。
+    [string]$ElectronZipPath = '',
+
     # Stable 发布前必须由真实 Windows 机器完成全新安装、升级和回滚恢复验收。
     # 证据只记录脱敏设备指纹，并在发行清单中绑定其 SHA-256。
     [string]$StableSmokeEvidencePath = '',
@@ -195,6 +198,36 @@ function Invoke-StrictPublicDownload {
     }
 }
 
+function Resolve-ElectronReleaseZip {
+    param([string]$ZipPath, [string]$DesktopDirectory)
+    if ([string]::IsNullOrWhiteSpace($ZipPath)) { return $null }
+    $archive = Get-Item -LiteralPath $ZipPath -ErrorAction Stop
+    if ($archive.PSIsContainer) { throw 'ElectronZipPath 必须是官方 ZIP 文件，不能是已打包应用目录。' }
+    $lock = Get-Content -Raw -LiteralPath (Join-Path $DesktopDirectory 'package-lock.json') | ConvertFrom-Json -AsHashtable
+    $lockedVersion = [string]$lock.packages['node_modules/electron'].version
+    if ($lockedVersion -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+        throw 'package-lock.json 缺少有效的锁定 Electron 版本。'
+    }
+    $electronDirectory = Join-Path $DesktopDirectory 'node_modules/electron'
+    $installed = Get-Content -Raw -LiteralPath (Join-Path $electronDirectory 'package.json') | ConvertFrom-Json
+    if ([string]$installed.version -cne $lockedVersion) {
+        throw '已安装 Electron 版本与 package-lock.json 不一致，拒绝复用 ZIP。'
+    }
+    $archiveName = "electron-v$lockedVersion-win32-x64.zip"
+    if ($archive.Name -cne $archiveName) { throw "Electron ZIP 文件名必须为 $archiveName。" }
+    $checksums = Get-Content -Raw -LiteralPath (Join-Path $electronDirectory 'checksums.json') | ConvertFrom-Json
+    $expectedSha256 = ([string]$checksums.PSObject.Properties[$archiveName].Value).ToLowerInvariant()
+    if ($expectedSha256 -notmatch '^[0-9a-f]{64}$') { throw '锁定 Electron 包未提供该 ZIP 的有效官方 SHA256。' }
+    $sha256 = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($sha256 -cne $expectedSha256) { throw 'Electron ZIP SHA256 与锁定包的官方校验值不一致。' }
+    return [pscustomobject]@{ path = $archive.FullName; version = $lockedVersion; name = $archiveName; sha256 = $sha256 }
+}
+
+# 在进入隔离 worktree 前固定输入路径，避免相对路径在子调用中指向别处。
+if (-not [string]::IsNullOrWhiteSpace($ElectronZipPath)) {
+    $ElectronZipPath = (Resolve-Path -LiteralPath $ElectronZipPath -ErrorAction Stop).Path
+}
+
 # 外层只解析调用方显式给出的完整提交并创建临时 detached worktree。
 # 随后改由该提交中的脚本执行，主 checkout 的已修改/未追踪文件不参与编译。
 if (-not $InternalWorktree) {
@@ -232,6 +265,7 @@ if (-not $InternalWorktree) {
             Server = $Server
             RemoteDownloadRoot = $RemoteDownloadRoot
             ArtifactCacheRoot = $ArtifactCacheRoot
+            ElectronZipPath = $ElectronZipPath
             StableSmokeEvidencePath = $StableSmokeEvidencePath
             InternalWorktree = $true
             CallerWorkspace = $workspace
@@ -364,9 +398,11 @@ if ($publishedVersions.Count -gt 0) {
     }
 }
 
+$electronRuntime = $null
 Push-Location $desktopDir
 try {
     Invoke-Checked 'npm.cmd' @('ci', '--silent')
+    $electronRuntime = Resolve-ElectronReleaseZip -ZipPath $ElectronZipPath -DesktopDirectory $desktopDir
     Invoke-Checked 'npm.cmd' @('run', 'prepare:cli')
     Invoke-Checked 'npm.cmd' @('run', 'verify:agent-integration')
     Invoke-Checked 'npm.cmd' @('run', 'verify:release-contract')
@@ -410,6 +446,10 @@ if ($SkipBuild) {
     $releaseDir = Join-Path $desktopDir "release-$Version"
     $builderConfigPath = Join-Path $desktopDir ".electron-builder-release-$PID.json"
     $buildConfig = $package.build | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+    if ($electronRuntime) {
+        $buildConfig | Add-Member -NotePropertyName electronDist -NotePropertyValue $electronRuntime.path -Force
+        Write-Host "使用已核验的官方 Electron $($electronRuntime.version) ZIP（SHA256 $($electronRuntime.sha256)）。"
+    }
     $publishers = @($buildConfig.publish)
     if ($publishers.Count -ne 1 -or $publishers[0].provider -ne 'generic') {
         throw 'Windows 发布配置必须且只能包含一个 generic provider。'
@@ -608,6 +648,14 @@ if (-not $SkipBuild) {
         }
     }
     $temporaryProvenance = "$provenancePath.tmp-$PID"
+    if ($electronRuntime) {
+        $provenance.electron_runtime = [ordered]@{
+            version = $electronRuntime.version
+            archive_name = $electronRuntime.name
+            sha256 = $electronRuntime.sha256
+            source = 'verified_official_zip'
+        }
+    }
     [System.IO.File]::WriteAllText(
         $temporaryProvenance,
         (($provenance | ConvertTo-Json -Depth 6) + "`n"),

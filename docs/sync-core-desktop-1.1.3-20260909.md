@@ -75,3 +75,9 @@ npx tsc --noEmit --pretty false
 - 首次隔离打包在 GitHub 校验文件下载处超时，未生成或发布新安装包。即使命中 Electron ZIP 缓存，下载器仍会重新读取远端校验文件。
 - 发布脚本增加可选 `ElectronZipPath`，在锁定 npm 依赖安装后核对 Electron 锁定版本、实际包版本、官方归档名及随包 SHA-256，才将完整官方 ZIP 提供给 electron-builder。复用的是官方运行时，不是旧业务 ASAR；来源记录保留运行时版本与哈希，不保留本机绝对路径。
 - `verify-electron-release-input.ps1` 的隔离参数传播、正确输入与错误版本/文件名/校验值拒绝均通过。实际官方 43.2.0 ZIP 大小 144,326,439 字节，SHA-256 为 `eba5f5088af40ecb364fe258809c79a5234c6ece5a75c64722772eba01b02786`。原生同步模块未改动，仍为两类真实 50 条验证使用的同一哈希。
+
+## Windows 发行进展
+
+- Windows 1.1.3 已从固定提交 `3728ebeac34ce54fa60b2b18e29fbefe60603c26` 的干净隔离 worktree 成功构建，Agent 接入及发行契约均通过，仍使用现有 Beta 通道。
+- 安装包 93,668,116 字节，SHA-256 `6208fffe3adebb593fcee47cb510b0ad909c3fb303d0f5f72ec9fcdc2299f5cc`。版本化安装包、blockmap、beta feed 与清单于 `2026-09-09T10:56:09Z` 发布；公网完整回读及本机安装另行核验。
+- 前端公开发行/鉴权契约 12 项通过；仅同步新发行清单后推送正式网页构建。

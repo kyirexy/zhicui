@@ -5,28 +5,28 @@
   "platform": "windows",
   "architecture": "x64",
   "artifact_kind": "unsigned",
-  "version": "1.1.2",
-  "source_commit": "c8f102c93651ceabe54a991bc5afaf93b4a805ed",
-  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.2-x64.exe",
-  "size_bytes": 93582586,
-  "sha256": "ba27a3a557ea05738c70fc267861fb1fea23238abfdb7cffb6ad5bd92f356336",
+  "version": "1.1.3",
+  "source_commit": "3728ebeac34ce54fa60b2b18e29fbefe60603c26",
+  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.3-x64.exe",
+  "size_bytes": 93668116,
+  "sha256": "6208fffe3adebb593fcee47cb510b0ad909c3fb303d0f5f72ec9fcdc2299f5cc",
   "blockmap": {
-    "name": "Zhicui-Setup-1.1.2-x64.exe.blockmap",
-    "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.2-x64.exe.blockmap",
-    "size_bytes": 99116,
-    "sha256": "1d99244476c527e07c624120c3c423b5cf27f4d844cb3db4cb746ab47ef71987"
+    "name": "Zhicui-Setup-1.1.3-x64.exe.blockmap",
+    "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.3-x64.exe.blockmap",
+    "size_bytes": 99056,
+    "sha256": "d92d4367e55070d7e622a9fc71c4a5c13902ac4fbabdc2d88ad9bd0235fd21f8"
   },
   "update_feed": {
     "name": "beta.yml",
     "download_url": "https://luxai.cn/download/windows/beta.yml",
     "size_bytes": 348,
-    "sha256": "6d8a62e6e68416e8d6fc501b81a55ed9c3dbc958f373905001c9b35cbf620e43"
+    "sha256": "9257141adecd39e22a63e2b2266c4aa09024045ba8ec00e3c6c2ce47d1e027c6"
   },
-  "published_at": "2026-09-09T08:36:32.6119820Z",
+  "published_at": "2026-09-09T10:56:09.8101332Z",
   "release_notes": [
-    "修复抖音收藏分页游标识别，按官方列表顺序保留连续可靠的前几条作品。",
-    "同步增量保存历史资料，重复视频复用，文稿准备进度实时更新。",
-    "按所选数量读取完成后不再误报为列表读取失败。"
+    "修复抖音收藏 POST 分页游标读取错误，严格保留官方列表顺序。",
+    "确认官方分类标签和内容区域后再读取，避免混入其他分类或丢失后续页。",
+    "继续增量保存和重复复用，保留历史资料及已有文稿。"
   ],
   "code_signed": false,
   "release_status": "beta_download",

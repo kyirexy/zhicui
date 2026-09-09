@@ -5,17 +5,17 @@
   "platform": "windows",
   "architecture": "x64",
   "artifact_kind": "unsigned",
-  "version": "1.1.2",
-  "source_commit": "c8f102c93651ceabe54a991bc5afaf93b4a805ed",
-  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.2-x64.exe",
-  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.2-x64.exe",
-  "size_bytes": 93582586,
-  "sha256": "ba27a3a557ea05738c70fc267861fb1fea23238abfdb7cffb6ad5bd92f356336",
-  "published_at": "2026-09-09T08:36:32.6119820Z",
+  "version": "1.1.3",
+  "source_commit": "3728ebeac34ce54fa60b2b18e29fbefe60603c26",
+  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.3-x64.exe",
+  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.3-x64.exe",
+  "size_bytes": 93668116,
+  "sha256": "6208fffe3adebb593fcee47cb510b0ad909c3fb303d0f5f72ec9fcdc2299f5cc",
+  "published_at": "2026-09-09T10:56:09.8101332Z",
   "notes": [
-    "修复抖音收藏分页游标识别，按官方列表顺序保留连续可靠的前几条作品。",
-    "同步增量保存历史资料，重复视频复用，文稿准备进度实时更新。",
-    "按所选数量读取完成后不再误报为列表读取失败。"
+    "修复抖音收藏 POST 分页游标读取错误，严格保留官方列表顺序。",
+    "确认官方分类标签和内容区域后再读取，避免混入其他分类或丢失后续页。",
+    "继续增量保存和重复复用，保留历史资料及已有文稿。"
   ],
   "code_signed": false,
   "release_status": "beta_download"

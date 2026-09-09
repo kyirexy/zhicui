@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import {
   chromium,
   type BrowserContext,
+  type Frame,
   type Page,
   type Request,
   type Response,
@@ -1099,6 +1100,7 @@ export class PlatformAccountConnector {
     platform: PlatformAccountProvider,
     mode: PlatformAccountSourceMode,
     browser: SupportedBrowser,
+    assertContext?: () => void,
   ): Promise<void> {
     const label = mode === 'collect' ? '收藏' : mode === 'post' ? '作品' : '喜欢';
     const tab = page.locator(`#${DOUYIN_SOURCE_TAB_IDS[mode]}[role="tab"]`);
@@ -1111,6 +1113,7 @@ export class PlatformAccountConnector {
     const profileDeadline = Date.now() + 30_000;
     let selectionDeadline = 0;
     const confirmTab = async (allowClick: boolean): Promise<boolean> => {
+      assertContext?.();
       let profile = '';
       try {
         const url = new URL(page.url());
@@ -1178,7 +1181,45 @@ export class PlatformAccountConnector {
     let nextRequestSequence = 0;
     let lastRequestAt = Date.now();
     let lastResponseAt = Date.now();
+    let ownProfileSeen = false;
+    let ownAccount: string | null = null;
+    let profileChanged = false;
+    const readProfile = (value: string): string | null => {
+      try {
+        const url = new URL(value);
+        return url.protocol === 'https:' && url.hostname === 'www.douyin.com'
+          && /^\/user\/[^/]+\/?$/.test(url.pathname) ? url.pathname.replace(/\/$/, '') : null;
+      } catch { return null; }
+    };
+    const checkProfile = (value = page.url()): boolean => {
+      const profile = readProfile(value);
+      // 从首次实际进入本人主页起保护，不留“等标签选完才绑定”的导航窗口。
+      if (!ownProfileSeen) {
+        if (profile === '/user/self') ownProfileSeen = true;
+        return !profileChanged;
+      }
+      // /user/self 可以规范化为真实本人 ID，但必须有官方请求给出的账号证据。
+      if (!profile || (profile !== '/user/self'
+        && (!ownAccount || profile !== `/user/${ownAccount}`))) profileChanged = true;
+      return !profileChanged;
+    };
+    const assertProfile = (): void => {
+      if (!checkProfile()) throw new Error('同步期间离开了本人抖音主页或切换了账号，本次结果未保存；请重新同步');
+    };
+    const onFrameNavigated = (frame: Frame): void => {
+      if (frame === page.mainFrame()) checkProfile(frame.url());
+    };
     const onRequest = (request: Request): void => {
+      if (!checkProfile() || !ownProfileSeen) return;
+      // 收藏 POST 没有账号字段。只从本人主页实际发出的作品/喜欢请求绑定身份，不能从作品作者推断。
+      if (isDouyinSourceResponseUrl(request.url(), 'post') || isDouyinSourceResponseUrl(request.url(), 'like')) {
+        const account = new URL(request.url()).searchParams.get('sec_user_id');
+        if (account) {
+          if (ownAccount && ownAccount !== account) profileChanged = true;
+          else ownAccount = account;
+        }
+      }
+      if (profileChanged) return;
       if (!isDouyinSourceResponseUrl(request.url(), mode)) return;
       const sequence = nextRequestSequence++;
       const source = { url: request.url(), method: request.method(), postData: request.postData() };
@@ -1189,13 +1230,14 @@ export class PlatformAccountConnector {
     };
     const onRequestSettled = (request: Request): void => { activeRequests.delete(request); };
     const onResponse = (response: Response): void => {
+      if (!checkProfile()) return;
       if (!isDouyinSourceResponseUrl(response.url(), mode)) return;
       const captured = requestSequences.get(response.request());
       // 导航前已在途、未观察到请求起点的响应不能假装属于本轮首页。
       if (!captured || !response.ok()) return;
       const work = readDouyinMetadataPayload(response, mode)
         .then((payload) => {
-          if (payload === null) return;
+          if (payload === null || !checkProfile()) return;
           if (pages.add(captured.source, payload, captured.sequence)) lastResponseAt = Date.now();
         })
         .catch(() => undefined);
@@ -1208,16 +1250,22 @@ export class PlatformAccountConnector {
       page.on('requestfinished', onRequestSettled);
       page.on('requestfailed', onRequestSettled);
       page.on('response', onResponse);
+      page.on('framenavigated', onFrameNavigated);
       await page.goto(DOUYIN_PROFILE_URL, { waitUntil: 'commit', timeout: 25_000 })
         .catch(() => undefined);
+      assertProfile();
       const browser = context.browser()?.browserType().name() === 'chromium'
         ? 'chrome'
         : 'msedge';
-      await this.selectDouyinTab(page, 'douyin', mode, browser);
+      await this.selectDouyinTab(page, 'douyin', mode, browser, assertProfile);
+      // 未实际见到 /user/self，或缺少本人官方请求证据时，不能用任意 /user/id 自证身份。
+      if (!ownProfileSeen || !readProfile(page.url())) profileChanged = true;
+      assertProfile();
       let sourceScrollReset = false;
       let unchangedRounds = 0;
       for (let index = 0; index < MAX_DOUYIN_SCROLLS; index += 1) {
         if (this.cancelled) break;
+        assertProfile();
         // 不无限等待一个流式/挂起的响应；只观察官方页面，不主动伪造签名或翻页请求。
         await Promise.race([Promise.allSettled([...pending]), wait(1500)]);
         if (!sourceScrollReset) {
@@ -1246,7 +1294,9 @@ export class PlatformAccountConnector {
       page.off('request', onRequest);
       page.off('requestfinished', onRequestSettled);
       page.off('requestfailed', onRequestSettled);
+      page.off('framenavigated', onFrameNavigated);
     }
+    assertProfile();
     const result = pages.snapshot(limit);
     if (!result.orderReliable && !this.cancelled) {
       throw new Error('没有读取到抖音官方分类首屏；请确认本人主页和对应标签，完成官方验证后重试');

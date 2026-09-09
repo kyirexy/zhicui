@@ -117,7 +117,6 @@ import {
   writeLibraryListCache,
 } from '@/lib/libraryListCache';
 import { getLibraryRevision, isLibraryRevisionCurrent, subscribeLibraryUpdates } from '@/lib/libraryUpdates';
-import { mergeSyncedItems } from '@/lib/libraryIncrementalSync';
 import { findNewLibraryItems } from '@/lib/librarySyncDiff';
 import { selectPlatformLibrarySource, type PlatformLibrarySourceFilter } from '@/lib/platformLibraryOrder';
 import { formatPlatformSyncSourceResults, withPlatformSyncWarning, type PlatformSyncSourceResult } from '@/lib/platformSyncFeedback';
@@ -2297,7 +2296,8 @@ export default function VideoLibraryPage() {
         };
       }
       ensureSyncUser();
-      const refreshed = mergeSyncedItems(baselineItems, refreshedResponse.data.items || [], (item) => item.aweme_id);
+      // 完整列表已包含增量保留的历史资料；不能合并旧基线，避免复活采集期间隐藏的条目。
+      const refreshed = refreshedResponse.data.items || [];
       const localJob: DouyinCollectionJob = {
         job_id: `desktop-${Date.now()}`,
         url: 'desktop-local',
@@ -2454,7 +2454,8 @@ export default function VideoLibraryPage() {
     }
     const refreshedResult = refreshedResponse.data;
     ensureSyncUser();
-    const refreshed = mergeSyncedItems(baselineItems, refreshedResult.items || [], (item) => item.aweme_id);
+    // 历史资料由服务端保留，完整刷新结果同时决定当前可见范围与顺序。
+    const refreshed = refreshedResult.items || [];
     const newlyVisible = findNewLibraryItems(refreshed, previousIds);
     return {
       requestedMode,

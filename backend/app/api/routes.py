@@ -2436,6 +2436,10 @@ def ingest_local_douyin_library(
     values = [item.model_dump() for item in body.items]
     run = None
     try:
+        # 必须先于同步记录和水位写入，避免旧客户端使后续有效请求变成过期快照。
+        local_douyin_library_service.require_order_capable_client(
+            client_version=body.client_version, order_reliable=body.source_order_reliable,
+        )
         run = library_sync_service.start_run(
             db, user_id=current_user.id, platform="douyin", source_mode=body.source_mode,
             source_synced_at=snapshot, requested_count=len(values),

@@ -16,8 +16,8 @@ const code = ts.transpileModule(`${taskSource}\n exports.extractItems = extractI
 const pending = Array.from({ length: 10 }, (_, index) => ({ aweme_id: String(index), can_extract: true, transcript_chars: 0 }));
 const running = { job_id: 'job', operation: 'transcript', status: 'running', total: 10, success: 9, failed: 0, active: 1, queued: 0, items: [] };
 
-test('1.1.2 加载新网页后，资料库和Agent同步入口均先提示升级而不开始采集', async () => {
-  const desktopVersion = '1.1.2';
+for (const desktopVersion of ['1.1.2', '1.1.3']) {
+test(`${desktopVersion} 加载新网页后，资料库和Agent同步入口均先提示升级而不开始采集`, async () => {
   const messages: string[] = [];
   const syncSource = page.slice(page.indexOf('  const syncCollection = async'), page.indexOf('  const syncCollectionRef = useRef'));
   const syncCode = ts.transpileModule(`${syncSource}\nexports.run = syncCollection;`, {
@@ -30,7 +30,8 @@ test('1.1.2 加载新网页后，资料库和Agent同步入口均先提示升级
   };
   vm.runInNewContext(syncCode, library);
   assert.equal((await library.exports.run()).started, false);
-  assert.match(messages[0], /1\.1\.2[\s\S]*安装 1\.1\.3/);
+  assert.ok(messages[0].includes(desktopVersion));
+  assert.match(messages[0], /安装 1\.1\.4/);
 
   const sheet = readFileSync(new URL('../components/agent/AgentSourceSyncSheet.tsx', import.meta.url), 'utf8');
   const sheetSource = sheet.slice(sheet.indexOf('  const syncDouyin = async'), sheet.indexOf('  const importLinks = async'));
@@ -44,9 +45,11 @@ test('1.1.2 加载新网页后，资料库和Agent同步入口均先提示升级
   };
   vm.runInNewContext(sheetCode, agent);
   await agent.exports.run();
-  assert.match(messages.at(-1)!, /1\.1\.2[\s\S]*安装 1\.1\.3/);
+  assert.ok(messages.at(-1)!.includes(desktopVersion));
+  assert.match(messages.at(-1)!, /安装 1\.1\.4/);
   assert.equal(agent.runningRef.current, false);
 });
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

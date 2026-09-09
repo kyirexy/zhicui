@@ -1,8 +1,8 @@
 import type { PlatformAccountItem } from '@/lib/desktopRuntime';
 import type { DouyinLocalSyncItem } from '@/lib/types';
 
-// 1.1.3 才会正确识别收藏 POST 分页游标，旧版不能继续写入可信来源排名。
-export const MIN_LOCAL_DOUYIN_DESKTOP_VERSION = '1.1.3';
+// 1.1.4 同时校验采集身份上下文和收藏 POST 游标，旧版不能继续写入可信来源排名。
+export const MIN_LOCAL_DOUYIN_DESKTOP_VERSION = '1.1.4';
 
 const EPHEMERAL_MEDIA_TTL_MS = 15 * 60 * 1000;
 const TRUSTED_DOUYIN_MEDIA_DOMAINS = [

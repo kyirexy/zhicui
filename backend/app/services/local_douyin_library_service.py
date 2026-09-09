@@ -17,6 +17,8 @@ from app.models.video_source_ledger import VideoSourceLedger
 from app.services import library_sync_service, note_service, video_source_ledger_service
 
 MAX_LOCAL_SYNC_ITEMS = 100
+MIN_LOCAL_DOUYIN_DESKTOP_VERSION = "1.1.4"
+_RELEASE_VERSION_PATTERN = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 _VIDEO_ID_PATTERN = re.compile(r"^[0-9]{5,32}$")
 _CANONICAL_PATH_PATTERN = re.compile(r"^/video/([0-9]{5,32})/?$")
 _SOURCE_MODES = {"like", "collect", "post"}
@@ -42,6 +44,19 @@ _COVER_HOST_SUFFIXES = (
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def require_order_capable_client(*, client_version: str, order_reliable: bool) -> None:
+    """旧窗口可能仍缓存旧网页，因此可信排名写入也必须在服务端检查版本。"""
+    if not order_reliable:
+        return
+    version = _RELEASE_VERSION_PATTERN.fullmatch(client_version)
+    minimum = tuple(int(part) for part in MIN_LOCAL_DOUYIN_DESKTOP_VERSION.split("."))
+    if version is None or tuple(int(part) for part in version.groups()) < minimum:
+        raise ValueError(
+            "当前客户端版本无法安全保存抖音顺序，请升级至 "
+            f"{MIN_LOCAL_DOUYIN_DESKTOP_VERSION} 或更新版本后重新同步"
+        )
 
 
 def _bounded_text(value: object, limit: int) -> str:

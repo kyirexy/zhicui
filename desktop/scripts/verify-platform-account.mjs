@@ -447,6 +447,56 @@ for (const request of [
 assert.equal(isDouyinSourceResponseUrl('https://www-hj.douyin.com/aweme/v1/web/aweme/favorite/?max_cursor=0', 'like'), false);
 assert.equal(isDouyinSourceResponseUrl('http://www.douyin.com/aweme/v1/web/aweme/favorite/?max_cursor=0', 'like'), false);
 
+// 穷举响应完成顺序；请求先后是浏览器观察值，任何完成排列都不能重排或串轮。
+const responsePermutations = (values) => values.length === 0 ? [[]]
+  : values.flatMap((value, index) => responsePermutations(values.filter((_, offset) => offset !== index))
+    .map((rest) => [value, ...rest]));
+for (const order of responsePermutations([0, 1, 2, 3])) {
+  for (const changedHead of [false, true]) {
+    const pages = new DouyinSourcePages();
+    const cursors = [0, 90, 80, 0];
+    const payloads = [
+      { aweme_list: [aweme(61000)], max_cursor: 90, has_more: true },
+      { aweme_list: [aweme(61001)], max_cursor: 80, has_more: true },
+      { aweme_list: [aweme(61002)], has_more: false },
+      { aweme_list: [aweme(changedHead ? 61999 : 61000)], max_cursor: 90, has_more: true },
+    ];
+    cursors.forEach((cursor, sequence) => pages.begin(douyinPageUrl(cursor), sequence));
+    for (const sequence of order) pages.add(douyinPageUrl(cursors[sequence]), payloads[sequence], sequence);
+    const result = pages.snapshot(3);
+    assert.deepEqual(result.items.map((item) => item.videoId), changedHead ? ['61999'] : ['61000', '61001', '61002'],
+      `重发首屏响应排列 ${order}，changedHead=${changedHead}`);
+    assert.equal(result.coverage, changedHead ? 'partial' : 'complete');
+  }
+}
+for (const order of responsePermutations([0, 1, 2])) {
+  const pages = new DouyinSourcePages();
+  const cursors = [0, 90, 80];
+  cursors.forEach((cursor, sequence) => pages.begin(douyinPageUrl(cursor), sequence));
+  for (const sequence of order) pages.add(douyinPageUrl(cursors[sequence]), {
+    aweme_list: [aweme(62000 + sequence)], max_cursor: cursors[sequence + 1] || 0, has_more: sequence < 2,
+  }, sequence);
+  assert.deepEqual(pages.snapshot(10).items.map((item) => item.videoId), ['62000', '62001', '62002']);
+  assert.equal(pages.snapshot(10).coverage, 'complete');
+}
+const failedRepeat = new DouyinSourcePages();
+failedRepeat.begin(douyinPageUrl(0), 0);
+failedRepeat.add(douyinPageUrl(0), { aweme_list: [aweme(63000)], max_cursor: 90, has_more: true }, 0);
+failedRepeat.begin(douyinPageUrl(90), 1);
+failedRepeat.begin(douyinPageUrl(90), 2);
+assert.equal(failedRepeat.add(douyinPageUrl(90), { status_code: 9, aweme_list: [aweme(63999)], has_more: false }, 2), false);
+failedRepeat.add(douyinPageUrl(90), { aweme_list: [aweme(63001)], has_more: false }, 1);
+assert.deepEqual(failedRepeat.snapshot(10).items.map((item) => item.videoId), ['63000'],
+  '同游标最新请求失败时，晚到旧响应不能填回未确认页');
+assert.equal(failedRepeat.snapshot(10).coverage, 'partial');
+const multiPageCycle = new DouyinSourcePages();
+for (const [sequence, cursor, next] of [[0, 0, 90], [1, 90, 80], [2, 80, 90]]) {
+  multiPageCycle.begin(douyinPageUrl(cursor), sequence);
+  multiPageCycle.add(douyinPageUrl(cursor), { aweme_list: [aweme(64000 + sequence)], max_cursor: next, has_more: true }, sequence);
+}
+assert.equal(multiPageCycle.snapshot(10).coverage, 'partial', '多页游标环必须有限结束且不能冒充全量');
+assert.deepEqual(multiPageCycle.snapshot(10).items.map((item) => item.videoId), ['64000', '64001', '64002']);
+
 // 还原现场先出现普通“收藏”文字、后挂载真实 tab、选中状态短暂回落的时序。
 for (const profilePath of ['self', 'test-profile']) {
   const originalNow = Date.now;
@@ -596,6 +646,7 @@ for (const longList of [true, false]) {
       on: (name, callback) => { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(callback); },
       off: (name, callback) => listeners.get(name)?.delete(callback),
       goto: async () => { respond(0, { aweme_list: [aweme(50000), aweme(50001)], max_cursor: 90, has_more: true }); },
+      url: () => 'https://www.douyin.com/user/self',
       evaluate: async (_fn, input) => {
         if (input.reset) { resets += 1; return true; }
         scrolls += 1;
@@ -611,6 +662,192 @@ for (const longList of [true, false]) {
     assert.equal(result.coverage, longList ? 'limited' : 'partial');
     assert.equal(result.items.length, longList ? 3 : 2);
   } finally {
+    Date.now = originalNow;
+    globalThis.setTimeout = originalTimeout;
+  }
+}
+// 走 collect 外层直到返回值和 finally：失败/取消不可交付成功快照，也必须释放监听和浏览器。
+for (const scenario of ['http-error', 'html-challenge', 'bad-json', 'unobserved-request', 'hanging-body', 'hanging-request', 'failed-tail', 'cancel']) {
+  const originalNow = Date.now;
+  const originalTimeout = globalThis.setTimeout;
+  const timers = new Set();
+  let time = 1_000;
+  let scrolls = 0;
+  let closed = 0;
+  let released = 0;
+  Date.now = () => time;
+  globalThis.setTimeout = (callback, milliseconds, ...args) => {
+    const timer = originalTimeout(() => {
+      timers.delete(timer);
+      time += Number(milliseconds) || 0;
+      callback(...args);
+    }, 0);
+    timers.add(timer);
+    return timer;
+  };
+  try {
+    const listeners = new Map();
+    const emit = (name, value) => { for (const callback of listeners.get(name) || []) callback(value); };
+    const request = { url: () => douyinPageUrl(0), method: () => 'GET', postData: () => null };
+    const connector = new PlatformAccountConnector(() => 'unused-test-profile', () => {});
+    const page = {
+      on: (name, callback) => { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(callback); },
+      off: (name, callback) => listeners.get(name)?.delete(callback),
+      url: () => 'https://www.douyin.com/user/self',
+      goto: async () => {
+        if (scenario !== 'unobserved-request') emit('request', request);
+        if (scenario === 'hanging-request') return;
+        emit('response', {
+          url: request.url, request: () => request, ok: () => scenario !== 'http-error',
+          allHeaders: async () => ({ 'content-type': scenario === 'html-challenge' ? 'text/html' : 'application/json' }),
+          json: async () => {
+            if (scenario === 'bad-json') throw new SyntaxError('test invalid JSON');
+            if (scenario === 'hanging-body') return new Promise(() => {});
+            return { aweme_list: [aweme(65000)], max_cursor: 90, has_more: true };
+          },
+        });
+        emit('requestfinished', request);
+      },
+      evaluate: async (_fn, input) => {
+        if (input.reset) return true;
+        scrolls += 1;
+        if (scenario === 'cancel') connector.cancelled = true;
+        if (scenario === 'failed-tail' && scrolls === 1) {
+          const tail = { url: () => douyinPageUrl(90), method: () => 'GET', postData: () => null };
+          emit('request', tail);
+          emit('requestfailed', tail);
+        }
+        return false;
+      },
+    };
+    const context = {
+      pages: () => [page], browser: () => null,
+      cookies: async () => [{ name: 'sessionid', value: 'test-only', domain: '.douyin.com' }],
+      close: async () => { closed += 1; },
+    };
+    connector.profilePath = async () => 'unused-test-profile';
+    connector.launchBrowser = async () => ({ context, browser: 'chrome' });
+    connector.selectDouyinTab = async () => {};
+    connector.actionLocks = { acquire: async () => ({ release: async () => { released += 1; } }) };
+    const result = await connector.collect({ platform: 'douyin', profileKey: 'test-only', mode: 'like', limit: 3 });
+    assert.equal(result.success, scenario === 'failed-tail', `${scenario} 不可误交付成功列表`);
+    if (scenario === 'failed-tail') {
+      assert.equal(result.coverage, 'partial');
+      assert.equal(result.orderReliable, true);
+      assert.deepEqual(result.items.map((item) => item.videoId), ['65000'], '后页失败只交付已确认的首屏前缀');
+    }
+    if (scenario === 'cancel') assert.equal(result.cancelled, true);
+    assert.ok(scrolls <= 36, `${scenario} 必须在滚动上限内结束`);
+    assert.ok(time < 180_000, `${scenario} 不可无限等待请求/响应`);
+    assert.equal(closed, 1, `${scenario} 释放浏览器`);
+    assert.equal(released, 1, `${scenario} 释放跨进程锁`);
+    assert.equal(connector.running, false);
+    assert.equal(connector.activeContext, null);
+    assert.equal([...listeners.values()].reduce((count, callbacks) => count + callbacks.size, 0), 0,
+      `${scenario} 清理全部来源请求/响应监听`);
+  } finally {
+    for (const timer of timers) clearTimeout(timer);
+    Date.now = originalNow;
+    globalThis.setTimeout = originalTimeout;
+  }
+}
+// 导航和账号身份守卫：只接受当前本人上下文，离开后返回也不能恢复已作废的一轮。
+for (const scenario of ['other-profile', 'leave-origin', 'leave-return', 'foreign-api-account', 'unproven-canonical',
+  'canonical-like', 'canonical-collect', 'canonical-before-selection', 'canonical-to-self', 'query-only', 'iframe-only',
+  'during-selection-other', 'during-selection-return', 'initial-other-profile', 'normal-initial-blank']) {
+  const originalNow = Date.now;
+  const originalTimeout = globalThis.setTimeout;
+  const timers = new Set();
+  let time = 1_000;
+  const actualSelection = ['during-selection-other', 'during-selection-return', 'initial-other-profile', 'normal-initial-blank'].includes(scenario);
+  let currentUrl = actualSelection ? 'about:blank' : 'https://www.douyin.com/user/self';
+  let closed = 0;
+  const mode = scenario === 'canonical-collect' ? 'collect' : 'like';
+  const expectedSuccess = ['canonical-like', 'canonical-collect', 'canonical-before-selection', 'canonical-to-self', 'query-only', 'iframe-only', 'normal-initial-blank'].includes(scenario);
+  Date.now = () => time;
+  globalThis.setTimeout = (callback, milliseconds, ...args) => {
+    const timer = originalTimeout(() => { timers.delete(timer); time += Number(milliseconds) || 0; callback(...args); }, 0);
+    timers.add(timer);
+    return timer;
+  };
+  try {
+    const listeners = new Map();
+    const emit = (event, value) => { for (const callback of listeners.get(event) || []) callback(value); };
+    const mainFrame = { url: () => currentUrl };
+    const navigate = (url) => { currentUrl = url; emit('framenavigated', mainFrame); };
+    const respond = (cursor, ids, account = 'SELF_TEST') => {
+      const url = mode === 'collect' ? capturedCollectionUrl
+        : `${douyinPageUrl(cursor)}${scenario === 'unproven-canonical' ? '' : `&sec_user_id=${account}`}`;
+      const request = { url: () => url, method: () => mode === 'collect' ? 'POST' : 'GET',
+        postData: () => mode === 'collect' ? `cursor=${cursor}&count=10` : null };
+      emit('request', request);
+      emit('response', {
+        url: request.url, request: () => request, ok: () => true,
+        allHeaders: async () => ({ 'content-type': 'application/json' }),
+        json: async () => ({ aweme_list: ids.map((id) => aweme(id)), [mode === 'collect' ? 'cursor' : 'max_cursor']: 90, has_more: cursor === 0 }),
+      });
+      emit('requestfinished', request);
+    };
+    const page = {
+      url: () => currentUrl, mainFrame: () => mainFrame,
+      locator: () => ({ isVisible: async () => true, getAttribute: async () => 'true', click: async () => {} }),
+      bringToFront: async () => {},
+      waitForTimeout: async (milliseconds) => {
+        time += milliseconds;
+        if (scenario === 'during-selection-other') navigate('https://www.douyin.com/user/OTHER_TEST');
+        if (scenario === 'during-selection-return') {
+          navigate('https://www.douyin.com/user/OTHER_TEST');
+          navigate('https://www.douyin.com/user/self');
+        }
+      },
+      on: (event, callback) => { if (!listeners.has(event)) listeners.set(event, new Set()); listeners.get(event).add(callback); },
+      off: (event, callback) => listeners.get(event)?.delete(callback),
+      goto: async () => {
+        if (actualSelection) {
+          emit('framenavigated', mainFrame); // 初始 about:blank 不是离开已确认的本人主页。
+          navigate(scenario === 'initial-other-profile' ? 'https://www.douyin.com/user/OTHER_TEST' : 'https://www.douyin.com/user/self');
+        }
+        if (mode === 'collect') {
+          // 实采中收藏请求没有 sec_user_id；从同一本人主页加载时的作品请求确认账号。
+          const request = { url: () => 'https://www.douyin.com/aweme/v1/web/aweme/post/?sec_user_id=SELF_TEST&max_cursor=0' };
+          emit('request', request);
+        }
+        respond(0, [66000]);
+        if (['canonical-before-selection', 'canonical-to-self'].includes(scenario)) navigate('https://www.douyin.com/user/SELF_TEST');
+      },
+      evaluate: async (_fn, input) => {
+        if (input.reset) return true;
+        if (scenario === 'other-profile') navigate('https://www.douyin.com/user/OTHER_TEST');
+        if (scenario === 'leave-origin') navigate('https://example.com/user/self');
+        if (scenario === 'leave-return') { navigate('https://www.douyin.com/user/OTHER_TEST'); navigate('https://www.douyin.com/user/self'); }
+        if (['canonical-like', 'canonical-collect', 'unproven-canonical'].includes(scenario)) navigate('https://www.douyin.com/user/SELF_TEST/');
+        if (scenario === 'canonical-to-self') navigate('https://www.douyin.com/user/self');
+        if (scenario === 'query-only') navigate('https://www.douyin.com/user/self?showTab=like');
+        if (scenario === 'iframe-only') emit('framenavigated', { url: () => 'https://example.com/challenge' });
+        respond(90, [66001, 66002], scenario === 'foreign-api-account' ? 'OTHER_TEST' : 'SELF_TEST');
+        return true;
+      },
+    };
+    const connector = new PlatformAccountConnector(() => 'unused-test-profile', () => {});
+    const context = { pages: () => [page], browser: () => null,
+      cookies: async () => [{ name: 'sessionid', value: 'test-only', domain: '.douyin.com' }], close: async () => { closed += 1; } };
+    connector.profilePath = async () => 'unused-test-profile';
+    connector.launchBrowser = async () => ({ context, browser: 'chrome' });
+    if (!actualSelection) connector.selectDouyinTab = async () => {};
+    connector.actionLocks = { acquire: async () => ({ release: async () => {} }) };
+    const result = await connector.collect({ platform: 'douyin', profileKey: 'test-only', mode, limit: 3 });
+    assert.equal(result.success, expectedSuccess, scenario);
+    if (expectedSuccess) {
+      assert.deepEqual(result.items.map((item) => item.videoId), ['66000', '66001', '66002'], scenario);
+      assert.equal(result.orderReliable, true);
+    } else {
+      assert.match(result.error, /离开了本人抖音主页或切换了账号/, scenario);
+      assert.equal(result.items, undefined, `${scenario} 整轮丢弃，不能返回之前的可信前缀`);
+    }
+    assert.equal(closed, 1);
+    assert.equal([...listeners.values()].reduce((count, callbacks) => count + callbacks.size, 0), 0);
+  } finally {
+    for (const timer of timers) clearTimeout(timer);
     Date.now = originalNow;
     globalThis.setTimeout = originalTimeout;
   }

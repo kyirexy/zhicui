@@ -983,10 +983,15 @@ export async function removeDouyinLibraryItems(
   mode: 'temporary' | 'permanent';
   aweme_ids: string[];
 }>> {
-  return request('/api/library/douyin/items/remove', {
-    method: 'POST',
-    body: JSON.stringify({ aweme_ids: awemeIds, mode }),
-  });
+  try {
+    return await request('/api/library/douyin/items/remove', {
+      method: 'POST',
+      body: JSON.stringify({ aweme_ids: awemeIds, mode }),
+    });
+  } finally {
+    // 中断也可能已落库；所有来源与首页重新确认可见范围，不能复用隐藏前快照。
+    notifyLibraryUpdated();
+  }
 }
 
 export async function listPermanentlyHiddenDouyinItems(
@@ -1004,10 +1009,15 @@ export async function restorePermanentlyHiddenDouyinItems(
   restored: number;
   aweme_ids: string[];
 }>> {
-  return request('/api/library/douyin/hidden-items/restore', {
-    method: 'POST',
-    body: JSON.stringify({ aweme_ids: awemeIds }),
-  });
+  try {
+    return await request('/api/library/douyin/hidden-items/restore', {
+      method: 'POST',
+      body: JSON.stringify({ aweme_ids: awemeIds }),
+    });
+  } finally {
+    // 与隐藏共用失效入口，失败或断线时也通过只读刷新确认最终状态。
+    notifyLibraryUpdated();
+  }
 }
 
 export async function disconnectDouyinLibrary(

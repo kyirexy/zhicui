@@ -155,6 +155,87 @@ class LocalDouyinLibraryTests(unittest.TestCase):
                 items=[self.item(source_url="https://example.com/video/7672579366093622537")],
             )
 
+    def _legacy_route_items(self, items: list[dict], *, limit: int = 0, mode: str = "like") -> list[dict]:
+        from app.api import routes
+        with (
+            patch.object(routes.douyin_binding_service, "get_or_create", return_value=SimpleNamespace(
+                id="dyb-0123456789abcdef0123", session_scope="S" * 32,
+            )),
+            patch.object(local_douyin_library_service, "list_items", return_value=[]),
+            patch.object(douyin_library, "list_items", return_value=items),
+            patch.object(routes.library_hidden_service, "list_hidden_modes", return_value={}),
+            patch.object(routes.library_hidden_service, "count_hidden", return_value=0),
+        ):
+            response = routes.list_douyin_library_items(
+                limit=limit, mode=mode, sort="collection", refresh_order=False,
+                local_only=False, db=self.db, current_user=self.user_a,
+            )
+        return response["data"]["items"]
+
+    def test_route_uses_matching_ledger_before_limiting_preview(self) -> None:
+        first, second = "7672579366093622501", "7672579366093622502"
+        local_douyin_library_service.ingest_items(
+            self.db, user_id=self.user_a.id, source_mode="like",
+            source_synced_at=datetime(2026, 9, 2, tzinfo=timezone.utc),
+            items=[self.item(first, source_rank=0), self.item(second, source_rank=1)],
+        )
+        stale_items = [
+            {**self.item(second), "aweme_id": second, "source_mode": "like", "source_rank": 0,
+             "source_synced_at": "2026-09-01T00:00:00Z"},
+            {**self.item(first), "aweme_id": first, "source_mode": "like", "source_rank": 1,
+             "source_synced_at": "2026-09-01T00:00:00Z"},
+        ]
+        result = self._legacy_route_items(stale_items, limit=1)
+        self.assertEqual([item["aweme_id"] for item in result], [first])
+        self.assertEqual(result[0]["source_rank"], 0)
+        self.assertEqual(result[0]["source_synced_at"], "2026-09-02T00:00:00Z")
+
+    def test_route_does_not_borrow_other_modes_ledger_time(self) -> None:
+        old_id, new_id = "7672579366093622501", "7672579366093622502"
+        local_douyin_library_service.ingest_items(
+            self.db, user_id=self.user_a.id, source_mode="collect",
+            source_synced_at=datetime(2026, 9, 3, tzinfo=timezone.utc),
+            items=[self.item(old_id)],
+        )
+        result = self._legacy_route_items([
+            {**self.item(old_id), "aweme_id": old_id, "source_mode": "like", "source_rank": 0,
+             "source_synced_at": "2026-09-01T00:00:00Z"},
+            {**self.item(new_id), "aweme_id": new_id, "source_mode": "like", "source_rank": 1,
+             "source_synced_at": "2026-09-02T00:00:00Z"},
+        ])
+        self.assertEqual([item["aweme_id"] for item in result], [new_id, old_id])
+        self.assertEqual(result[1]["source_synced_at"], "2026-09-01T00:00:00Z")
+        self.assertNotIn("source_ledger", result[1])
+
+    def test_route_preserves_newer_connector_snapshot_than_ledger(self) -> None:
+        first, second = "7672579366093622501", "7672579366093622502"
+        local_douyin_library_service.ingest_items(
+            self.db, user_id=self.user_a.id, source_mode="like",
+            source_synced_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+            items=[self.item(second, source_rank=0), self.item(first, source_rank=1)],
+        )
+        result = self._legacy_route_items([
+            {**self.item(second), "aweme_id": second, "source_mode": "like", "source_rank": 1,
+             "source_synced_at": "2026-09-02T00:00:00Z"},
+            {**self.item(first), "aweme_id": first, "source_mode": "like", "source_rank": 0,
+             "source_synced_at": "2026-09-02T00:00:00Z"},
+        ])
+        self.assertEqual([item["aweme_id"] for item in result], [first, second])
+        self.assertEqual(result[0]["source_rank"], 0)
+        self.assertEqual(result[0]["source_synced_at"], "2026-09-02T00:00:00Z")
+
+    def test_legacy_catalog_sorts_latest_batch_before_rank_for_all_modes(self) -> None:
+        for mode in ("like", "collect", "post", None):
+            with self.subTest(mode=mode):
+                items = [
+                    {"aweme_id": "old", "source_mode": mode, "source_rank": 0, "source_synced_at": "2026-09-01T00:00:00Z"},
+                    {"aweme_id": "second", "source_mode": mode, "source_rank": 1, "source_synced_at": "2026-09-02T00:00:00Z"},
+                    {"aweme_id": "first", "source_mode": mode, "source_rank": 0, "source_synced_at": "2026-09-02T00:00:00Z"},
+                ]
+                with patch.object(douyin_library, "_load_normalized_items", return_value=items):
+                    result = douyin_library.list_items("scope", "binding", 2, mode=mode)
+                self.assertEqual([item["aweme_id"] for item in result], ["first", "second"])
+
     def test_repeated_page_text_is_not_saved_as_multiple_video_captions(self) -> None:
         repeated = "热门：这是页面级推荐文字，不属于列表中的任何一条作品，不能重复写入资料库"
         local_douyin_library_service.ingest_items(

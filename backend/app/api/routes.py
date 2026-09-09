@@ -1916,11 +1916,12 @@ def import_platform_library_items(
 @router.get("/api/library/imports")
 def list_platform_library_items(
     platform: Literal["all", "bilibili", "xiaohongshu"] = Query("all"),
+    source_mode: Literal["collect", "like", "post", "import"] | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict:
     notes = platform_library_service.list_notes(
-        db, user_id=current_user.id, platform=platform,
+        db, user_id=current_user.id, platform=platform, source_mode=source_mode,
     )
     return _ok({
         # 列表首屏只需要封面、标题与处理状态。完整 Note（含文稿和 AI
@@ -2786,6 +2787,29 @@ def list_douyin_library_items(
             emitted.add(aweme_id)
             items.append(dict(sidecar_item))
 
+    # 截取首页条目前先读取当前分类的台账，不能先按旧 manifest 选出几条再补时间。
+    ledger_map = video_source_ledger_service.list_by_video_ids(
+        db,
+        user_id=current_user.id,
+        video_ids=[item["aweme_id"] for item in items],
+    )
+    item_ledgers = {}
+    for item in items:
+        source_mode = mode or item.get("source_mode")
+        ledger = video_source_ledger_service.preferred_for_item(
+            ledger_map.get(item["aweme_id"], []), source_mode,
+        )
+        if ledger is None or ledger.source_mode != source_mode:
+            continue
+        item_ledgers[item["aweme_id"]] = ledger
+        ledger_data = ledger.to_dict()
+        ledger_time = video_source_ledger_service.source_timestamp(ledger_data["source_synced_at"])
+        item_time = video_source_ledger_service.source_timestamp(item.get("source_synced_at"))
+        # 新的连接器快照尚未落库时，旧台账不能覆盖它。
+        if ledger_time >= item_time:
+            item["source_rank"] = ledger_data["source_rank"]
+            item["source_synced_at"] = ledger_data["source_synced_at"]
+
     if sort == "published":
         items.sort(
             key=lambda item: str(item.get("published_at") or ""),
@@ -2816,23 +2840,14 @@ def list_douyin_library_items(
         [item["aweme_id"] for item in items],
         user_id=current_user.id,
     )
-    ledger_map = video_source_ledger_service.list_by_video_ids(
-        db,
-        user_id=current_user.id,
-        video_ids=[item["aweme_id"] for item in items],
-    )
     for item in items:
         note = note_map.get(item["aweme_id"])
-        ledger = video_source_ledger_service.preferred_for_item(
-            ledger_map.get(item["aweme_id"], []),
-            item.get("source_mode"),
-        )
+        ledger = item_ledgers.get(item["aweme_id"])
         if ledger is not None:
             ledger_data = ledger.to_dict()
             item["source_ledger"] = ledger_data
             item["first_seen_at"] = ledger_data["first_seen_at"]
             item["last_seen_at"] = ledger_data["last_seen_at"]
-            item["source_synced_at"] = ledger_data["source_synced_at"]
         else:
             # Existing installs may only have source metadata embedded in the
             # card JSON. Read it as a compatibility fallback, never write it.

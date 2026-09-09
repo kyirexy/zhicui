@@ -20,6 +20,7 @@ from urllib.parse import quote, urlsplit
 import requests
 
 from app.core.config import settings
+from app.services.video_source_ledger_service import source_timestamp
 
 _MAX_BOUNDED_LIBRARY_ITEMS = 10000
 _MAX_SYNC_COUNT = 100
@@ -940,14 +941,13 @@ def list_items(
         ]
 
     normalized.sort(key=_item_sort_key, reverse=True)
-    if sort_by == "collection" and mode in {"collect", "like"}:
+    if sort_by == "collection":
         normalized.sort(
             key=lambda item: (
-                0,
-                int(item["source_rank"]),
+                -source_timestamp(item.get("source_synced_at")),
+                item.get("source_rank") is None,
+                int(item.get("source_rank") or 0),
             )
-            if item.get("source_rank") is not None
-            else (1, 0)
         )
     unique_items: list[dict[str, Any]] = []
     seen_aweme_ids: set[str] = set()

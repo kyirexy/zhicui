@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -658,6 +659,35 @@ class PlatformLibraryImportTests(unittest.TestCase):
         self.assertNotIn("collect", item["source_ranks"])
         self.assertEqual(platform_library_service._source_meta(note)["source_removed_ats"]["collect"],
                          "2026-09-08T00:00:00+00:00")
+
+    def test_list_api_filters_source_mode_before_500_item_limit(self) -> None:
+        from app.api import routes
+        _, transcript, base_meta = self.bili_result()
+        for index in range(502):
+            mode = "collect" if index == 501 else "like"
+            stamp = "2026-09-01T00:00:00Z" if mode == "collect" else "2026-09-02T00:00:00Z"
+            meta = {
+                **base_meta, "source_mode": mode, "source_modes": [mode],
+                "source_ranks": {mode: index}, "source_synced_ats": {mode: stamp},
+                "source_order_reliabilities": {mode: True},
+            }
+            self.db.add(Note(
+                user_id=self.user_a.id, video_id=f"BV1FILTER{index}",
+                video_title=f"测试作品{index}", video_url=f"https://www.bilibili.com/video/BV1FILTER{index}",
+                transcript_raw=transcript, ai_summary=json.dumps({"source_meta": meta}),
+                seo_title=f"测试作品{index}", seo_slug=f"filter-{index}", seo_meta="测试",
+            ))
+        self.db.commit()
+        unfiltered = routes.list_platform_library_items(
+            platform="bilibili", source_mode=None, db=self.db, current_user=self.user_a,
+        )["data"]
+        self.assertEqual(unfiltered["total"], 500)
+        self.assertTrue(all(item["source_mode"] == "like" for item in unfiltered["items"]))
+        collected = routes.list_platform_library_items(
+            platform="bilibili", source_mode="collect", db=self.db, current_user=self.user_a,
+        )["data"]
+        self.assertEqual(collected["total"], 1)
+        self.assertEqual(collected["items"][0]["video_id"], "BV1FILTER501")
 
     def test_xhs_video_keeps_caption_and_spoken_text(self) -> None:
         info = {

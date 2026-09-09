@@ -27,8 +27,8 @@ import LibraryCoverImage from '@/components/LibraryCoverImage';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import { buildHomeLinkDestination } from '@/lib/singleLinkImport';
 import { sortPlatformLibrarySource } from '@/lib/platformLibraryOrder';
+import { LIBRARY_UPDATED_EVENT } from '@/lib/libraryUpdates';
 import {
-  classifyHomeSourceModes,
   firstPopulatedHomeMode,
   type HomeChannelMode,
   type HomeChannelPlatform,
@@ -103,7 +103,7 @@ const CHANNEL_KEYS: ChannelKey[] = [
   'bilibili_import',
 ];
 
-const HOME_CACHE_VERSION = 'v6';
+const HOME_CACHE_VERSION = 'v7';
 const HOME_CACHE_MAX_AGE = 5 * 60 * 1000;
 
 function homeCacheKey(userId: string): string {
@@ -200,14 +200,52 @@ export default function WorkspaceActionHome() {
     bilibili: 'collect',
   });
   const touchedModes = useRef<Set<ChannelPlatform>>(new Set());
+  const loadedUserId = useRef<string | null>(null);
+  const lastSuccessful = useRef<{ userId: string; value: WorkspaceHomeCache } | null>(null);
+  const [refreshRevision, setRefreshRevision] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!user?.id) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = () => {
+      if (document.visibilityState === 'hidden') return;
+      clearTimeout(timer);
+      timer = setTimeout(() => setRefreshRevision((value) => value + 1), 100);
+    };
+    window.addEventListener('focus', refresh);
+    window.addEventListener('pageshow', refresh);
+    window.addEventListener(LIBRARY_UPDATED_EVENT, refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('pageshow', refresh);
+      window.removeEventListener(LIBRARY_UPDATED_EVENT, refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      loadedUserId.current = null;
+      lastSuccessful.current = null;
+      return;
+    }
     let active = true;
-    touchedModes.current = new Set();
+    const initialLoad = loadedUserId.current !== user.id;
+    if (initialLoad) {
+      loadedUserId.current = user.id;
+      touchedModes.current = new Set();
+      setThreads([]);
+      setReadyCount(null);
+      setChannelPreviews(emptyChannelRecord<ChannelPreview[]>([]));
+      setChannelTotals(emptyChannelRecord<number | null>(null));
+      setActiveModes({ douyin: 'collect', bilibili: 'collect' });
+      setLoading(true);
+    }
     const cached = readHomeCache(user.id);
-    if (cached) {
+    if (cached && initialLoad) {
       setThreads(cached.threads);
       setReadyCount(cached.readyCount);
       setChannelPreviews(cached.channelPreviews);
@@ -216,13 +254,33 @@ export default function WorkspaceActionHome() {
       setLoading(false);
     }
 
-    const nextPreviews = cached?.channelPreviews || emptyChannelRecord<ChannelPreview[]>([]);
-    const nextTotals = cached?.channelTotals || emptyChannelRecord<number | null>(null);
-    let nextThreads = cached?.threads || [];
-    let nextReadyCount = cached?.readyCount ?? null;
+    // 失效缓存不等于资料为空；同账号刷新失败时保留上次成功展示的分组。
+    const previous = !initialLoad && lastSuccessful.current?.userId === user.id
+      ? lastSuccessful.current.value
+      : cached;
+    const nextPreviews = { ...(previous?.channelPreviews || emptyChannelRecord<ChannelPreview[]>([])) };
+    const nextTotals = { ...(previous?.channelTotals || emptyChannelRecord<number | null>(null)) };
+    let nextThreads = previous?.threads || [];
+    let nextReadyCount = previous?.readyCount ?? null;
+    const remember = () => {
+      lastSuccessful.current = {
+        userId: user.id,
+        value: {
+          savedAt: Date.now(),
+          threads: nextThreads,
+          readyCount: nextReadyCount,
+          channelPreviews: { ...nextPreviews },
+          channelTotals: { ...nextTotals },
+          activeModes: previous?.activeModes || { douyin: 'collect', bilibili: 'collect' },
+        },
+      };
+    };
+    // 缓存画面已可见时也建立内存基线，覆盖首批请求尚未返回就再次同步的情况。
+    remember();
 
     const publishChannels = () => {
       if (!active) return;
+      remember();
       setChannelPreviews({ ...nextPreviews });
       setChannelTotals({ ...nextTotals });
       setActiveModes((current) => {
@@ -246,6 +304,7 @@ export default function WorkspaceActionHome() {
       if (!active) return response;
       if (response.success) {
         nextThreads = (response.data?.items || []).slice(0, 3);
+        remember();
         setThreads(nextThreads);
       }
       setLoading(false);
@@ -259,6 +318,7 @@ export default function WorkspaceActionHome() {
       if (!active || !response.success) return response;
       const sources = response.data;
       nextReadyCount = sources?.ready_count ?? sources?.total ?? 0;
+      remember();
       setReadyCount(nextReadyCount);
       return response;
     }).catch(() => null);
@@ -276,36 +336,23 @@ export default function WorkspaceActionHome() {
       }).catch(() => null)
     ));
 
-    const biliRequest = listPlatformLibraryItems('bilibili').then((response) => {
-      if (!active || !response.success) return response;
-      const fallbackItems = response.data?.items || [];
-      const fallbackBuckets: Record<ChannelMode, PlatformLibraryItem[]> = {
-        collect: [],
-        like: [],
-        post: [],
-        import: [],
-      };
-      fallbackItems.forEach((item) => {
-        classifyHomeSourceModes(
-          'bilibili',
-          item.source_mode,
-          item.source_modes,
-        ).forEach((mode) => fallbackBuckets[mode].push(item));
-      });
-      (['collect', 'like', 'import'] as const).forEach((mode) => {
+    // 服务端先按分类筛选和排序，防止其他分类挤占有界列表的前 500 条。
+    const biliRequests = (['collect', 'like', 'import'] as const).map((mode) => (
+      listPlatformLibraryItems('bilibili', mode).then((response) => {
+        if (!active || !response.success) return response;
         const key = `bilibili_${mode}` as ChannelKey;
-        nextPreviews[key] = toPlatformPreviews(sortPlatformLibrarySource(fallbackBuckets[mode], mode));
-        nextTotals[key] = fallbackBuckets[mode].length;
-      });
-      publishChannels();
-      return response;
-    }).catch(() => null);
+        nextPreviews[key] = toPlatformPreviews(sortPlatformLibrarySource(response.data?.items || [], mode));
+        nextTotals[key] = response.data?.total ?? 0;
+        publishChannels();
+        return response;
+      }).catch(() => null)
+    ));
 
     void Promise.allSettled([
       threadRequest,
       sourceRequest,
       ...douyinRequests,
-      biliRequest,
+      ...biliRequests,
     ]).then(() => {
       if (!active) return;
       const nextActiveModes: Record<ChannelPlatform, ChannelMode> = {
@@ -334,7 +381,7 @@ export default function WorkspaceActionHome() {
       });
     });
     return () => { active = false; };
-  }, [user?.id]);
+  }, [user?.id, refreshRevision]);
 
   const sourceStatus = useMemo(() => {
     if (readyCount === null) return '正在读取资料';

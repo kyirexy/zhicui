@@ -1,3 +1,4 @@
+import { notifyLibraryUpdated } from './libraryUpdates';
 import type {
   AgentAutomation,
   AgentAutomationCreate,
@@ -693,6 +694,7 @@ export async function importPlatformLibraryItems(
       method: 'POST',
       body: JSON.stringify(platformImportBatchBody(batch, sourceSyncedAt, sourceMode, snapshot)),
     }), onProgress);
+  if (response.success && (response.data?.success || 0) > 0) notifyLibraryUpdated();
   if (!response.data) return response;
   return {
     ...response,
@@ -708,9 +710,10 @@ export async function importPlatformLibraryItems(
 
 export async function listPlatformLibraryItems(
   platform: 'all' | PlatformLibraryPlatform = 'all',
+  sourceMode?: DouyinSourceMode | 'import',
 ): Promise<ApiResponse<PlatformLibraryListResult>> {
   const response = await request<PlatformLibraryListResult>(
-    `/api/library/imports?platform=${encodeURIComponent(platform)}`,
+    `/api/library/imports?platform=${encodeURIComponent(platform)}${sourceMode ? `&source_mode=${encodeURIComponent(sourceMode)}` : ''}`,
   );
   if (!response.data) return response;
   return {
@@ -943,7 +946,7 @@ export async function ingestLocalDouyinLibrary(
   clientVersion = '',
   snapshot?: PlatformSyncSnapshot,
 ): Promise<ApiResponse<DouyinLocalSyncResult>> {
-  return request<DouyinLocalSyncResult>('/api/library/douyin/local-sync', {
+  const response = await request<DouyinLocalSyncResult>('/api/library/douyin/local-sync', {
     method: 'POST',
     body: JSON.stringify({
       source_mode: sourceMode,
@@ -954,6 +957,8 @@ export async function ingestLocalDouyinLibrary(
       ...(typeof snapshot?.orderReliable === 'boolean' ? { source_order_reliable: snapshot.orderReliable } : {}),
     }),
   });
+  if (response.success && (response.data?.accepted || 0) > 0) notifyLibraryUpdated();
+  return response;
 }
 
 export async function removeDouyinLibraryItems(
@@ -1045,10 +1050,12 @@ export async function getDouyinCollectionJob(
   jobId: string,
   signal?: AbortSignal,
 ): Promise<ApiResponse<DouyinCollectionJob>> {
-  return request<DouyinCollectionJob>(
+  const response = await request<DouyinCollectionJob>(
     `/api/library/douyin/jobs/${encodeURIComponent(jobId)}`,
     { signal },
   );
+  if (response.success && response.data?.status === 'success') notifyLibraryUpdated();
+  return response;
 }
 
 export async function extractDouyinLibraryItem(

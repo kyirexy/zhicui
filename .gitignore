@@ -56,11 +56,15 @@ videos/
 # Agent tooling / runtime artifacts (never commit)
 .codex/
 .codex-runtime/
+.codex-artifacts/
+.codex-websign-cache/
 .tmp/
 .playwright-mcp/
 .codex-frontend-*.log
 .pytest_cache/
 .hypothesis/
+/%SystemDrive%/
+/frontend/__acceptance__/
 
 # Third-party reference projects (not part of this repo)
 参考项目/

@@ -67,7 +67,7 @@ test('同步弹窗使用多选语义且逐项等待每个来源完成', () => {
   assert.doesNotMatch(page, /role="radiogroup" aria-label="选择一个要同步的抖音来源"/);
   assert.match(
     sequentialSync,
-    /for \(const \[modeIndex, requestedMode\] of modes\.entries\(\)\) \{[\s\S]*?await collectOneSource\(requestedMode, requestedCount\)/,
+    /for \(const \[modeIndex, requestedMode\] of modes\.entries\(\)\) \{[\s\S]*?await collectOneSource\(requestedMode, requestedCount, reportNotice, isSyncUserCurrent\)/,
   );
   assert.match(sequentialSync, /try \{[\s\S]*?await collectOneSource/);
   assert.match(sequentialSync, /if \(result\.queueMayStillBeRunning\) break;/);

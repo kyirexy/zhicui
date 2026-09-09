@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   hasReadyTranscript,
+  selectAutomaticTranscriptPreparationTargets,
   selectSyncedSourceScope,
   selectTranscriptPreparationTargets,
 } from './libraryTranscriptPreparation.ts';
@@ -98,4 +99,21 @@ test('最新同步范围不会被旧快照的更小rank打乱', () => {
     item('new-first', { source_rank: 0, source_synced_at: '2026-09-08T00:00:00Z' }),
   ], 2);
   assert.deepEqual(scoped.map((entry) => entry.aweme_id), ['new-first', 'new-second']);
+});
+
+test('自动准备只接收明确新增 ID，重复和旧接口缺失 ID 不会处理历史欠账', () => {
+  const items = [item('old-pending'), item('new-pending')];
+  assert.deepEqual(selectAutomaticTranscriptPreparationTargets([{ items, createdVideoIds: [] }]), []);
+  assert.deepEqual(selectAutomaticTranscriptPreparationTargets([{ items }]), []);
+  assert.deepEqual(selectAutomaticTranscriptPreparationTargets([
+    { items, createdVideoIds: ['new-pending'] },
+  ]).map((entry) => entry.aweme_id), ['new-pending']);
+});
+
+test('跨来源重复新增 ID 只提交一次，任一来源已有文稿就不再排队', () => {
+  const selected = selectAutomaticTranscriptPreparationTargets([
+    { items: [item('new'), item('ready')], createdVideoIds: ['new', 'ready'] },
+    { items: [item('new'), item('ready', { extracted_note_id: 'note', transcript_chars: 200 })], createdVideoIds: ['new'] },
+  ]);
+  assert.deepEqual(selected.map((entry) => entry.aweme_id), ['new']);
 });

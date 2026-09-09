@@ -2,7 +2,7 @@
 
 import { platformSyncWarning } from '@/lib/platformSyncFeedback';
 import { capturePlatformSyncSnapshot } from '@/lib/platformSyncSnapshot';
-import { selectTranscriptPreparationTargets } from '@/lib/libraryTranscriptPreparation';
+import { selectAutomaticTranscriptPreparationTargets } from '@/lib/libraryTranscriptPreparation';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
@@ -120,6 +120,7 @@ export default function AgentSourceSyncSheet({
   } = useCreatorSync();
   const { user } = useAuth();
   const currentUserIdRef = useRef(user?.id);
+  const accountEpochRef = useRef(0);
   currentUserIdRef.current = user?.id;
   const [platform, setPlatform] = useState<PlatformBrand>('douyin');
   const [sourceKind, setSourceKind] = useState<'account' | 'creator'>('account');
@@ -154,13 +155,17 @@ export default function AgentSourceSyncSheet({
   const completedCreatorRef = useRef('');
   const busy = pending || biliPending;
   useEffect(() => {
+    accountEpochRef.current += 1;
     currentUserIdRef.current = user?.id;
     runningRef.current = false;
     setPending(false);
     setBiliPending(false);
     setMessage('');
     setBiliMessage('');
-    return () => { currentUserIdRef.current = undefined; };
+    return () => {
+      accountEpochRef.current += 1;
+      currentUserIdRef.current = undefined;
+    };
   }, [user?.id]);
   const douyinDesktopUpdateRequired = requiresLocalDouyinDesktopUpdate(
     douyinDesktopVersion,
@@ -358,23 +363,21 @@ export default function AgentSourceSyncSheet({
     };
   }, [closeOrBackground, open]);
 
-  const prepareNewTranscripts = async (mode: DouyinSourceMode, count: number, syncedVideoIds?: string[]) => {
-    const requestedUserId = user?.id;
+  const prepareNewTranscripts = async (mode: DouyinSourceMode, count: number, syncedVideoIds: string[], isCurrentSync: () => boolean) => {
     const ensureCurrentUser = () => {
-      if (requestedUserId !== currentUserIdRef.current) throw new Error('账号已切换，同步已停止');
+      if (!isCurrentSync()) throw new Error('账号已切换，同步已停止');
     };
-    if (count === 0 || syncedVideoIds?.length === 0) return { prepared: 0, total: 0 };
+    if (count === 0 || !syncedVideoIds?.length) return { prepared: 0, total: 0 };
+    ensureCurrentUser();
     setMessage('视频列表已更新，正在检查新视频…');
-    const listResponse = await listDouyinLibraryItems(syncedVideoIds ? 0 : count, mode, 'collection');
+    const listResponse = await listDouyinLibraryItems(0, mode, 'collection');
     ensureCurrentUser();
     if (!listResponse.success || !listResponse.data) {
       throw new Error(listResponse.error || '视频已同步，但暂时无法读取最新列表');
     }
-    const syncedIds = syncedVideoIds ? new Set(syncedVideoIds) : null;
-    const scopedItems = syncedIds
-      ? listResponse.data.items.filter((item) => syncedIds.has(item.aweme_id))
-      : listResponse.data.items;
-    const targets = selectTranscriptPreparationTargets([scopedItems], count);
+    const targets = selectAutomaticTranscriptPreparationTargets([
+      { items: listResponse.data.items, createdVideoIds: syncedVideoIds },
+    ], count);
     if (targets.length === 0) {
       await onSynced();
       return { prepared: 0, total: 0 };
@@ -399,6 +402,7 @@ export default function AgentSourceSyncSheet({
       if (job.success !== lastVisibleCount) {
         lastVisibleCount = job.success;
         await onSynced();
+        ensureCurrentUser();
       }
       if (job.status !== 'running') {
         if (job.status === 'failed') throw new Error(job.error || '新视频文稿准备失败');
@@ -410,6 +414,9 @@ export default function AgentSourceSyncSheet({
 
   const syncDouyin = async () => {
     const requestedUserId = user?.id;
+    const accountEpoch = accountEpochRef.current;
+    const isCurrentSync = () => requestedUserId === currentUserIdRef.current
+      && accountEpoch === accountEpochRef.current;
     if (runningRef.current) return;
     runningRef.current = true;
     const modeLabel = douyinMode === 'collect' ? '收藏' : '喜欢';
@@ -435,7 +442,7 @@ export default function AgentSourceSyncSheet({
           mode: douyinMode,
           limit: Math.max(1, Math.min(100, Math.trunc(syncCount) || 50)),
         });
-        if (requestedUserId !== currentUserIdRef.current) return;
+        if (!isCurrentSync()) return;
         const snapshot = capturePlatformSyncSnapshot(collected, sourceSyncedAt);
         if (!collected.success || !collected.items?.length) {
           if (collected.error?.includes('重新登录')) setDouyinConnection(false);
@@ -453,20 +460,21 @@ export default function AgentSourceSyncSheet({
         if (!ingested.success || !ingested.data) {
           throw new Error(ingested.error || '本机已读取作品，但服务器登记失败');
         }
-        if (requestedUserId !== currentUserIdRef.current) return;
-        const newIds = ingested.data.created_video_ids || (ingested.data.created === 0 ? [] : ingested.data.video_ids);
-        const prepared = await prepareNewTranscripts(douyinMode, ingested.data.created, newIds);
-        if (requestedUserId !== currentUserIdRef.current) return;
+        if (!isCurrentSync()) return;
+        const newIds = ingested.data.created_video_ids || [];
+        const prepared = await prepareNewTranscripts(douyinMode, ingested.data.created, newIds, isCurrentSync);
+        if (!isCurrentSync()) return;
         const completedMessage = `新增 ${ingested.data.created} 条，复用 ${ingested.data.reused} 条；历史资料已保留${prepared.total > 0 ? `；新增文稿 ${prepared.prepared} 条` : ''}`;
         setDouyinStage('success');
         const resultMessage = [completedMessage, platformSyncWarning(collected)].filter(Boolean).join('；');
         setMessage(resultMessage);
         await onSynced();
+        if (!isCurrentSync()) return;
         onCompleted(resultMessage, collected.coverage !== 'partial');
         return;
       }
       const connection = await getDouyinLibraryStatus();
-      if (requestedUserId !== currentUserIdRef.current) return;
+      if (!isCurrentSync()) return;
       if (!connection.success || !connection.data?.cookie_valid) {
         throw new Error('抖音账号连接已失效，请重新连接账号后再同步');
       }
@@ -485,11 +493,11 @@ export default function AgentSourceSyncSheet({
         }));
       }
       const baseline = await listDouyinLibraryItems(0, douyinMode, 'collection');
-      if (requestedUserId !== currentUserIdRef.current) return;
+      if (!isCurrentSync()) return;
       if (!baseline.success || !baseline.data) throw new Error('无法确认已有资料，请稍后重试同步');
       const previousIds = new Set(baseline.data.items.map((item) => item.aweme_id));
       const started = await collectDouyinLibrary(syncCount, douyinMode);
-      if (requestedUserId !== currentUserIdRef.current) return;
+      if (!isCurrentSync()) return;
       if (!started.success || !started.data) {
         throw new Error(formatDouyinSyncError(
           started.error || '同步未能启动，请检查抖音连接',
@@ -505,9 +513,9 @@ export default function AgentSourceSyncSheet({
       let collectionFinished = false;
       for (let attempt = 0; attempt < 300; attempt += 1) {
         await delay(2_000);
-        if (requestedUserId !== currentUserIdRef.current) return;
+        if (!isCurrentSync()) return;
         const response = await getDouyinCollectionJob(started.data.job_id);
-        if (requestedUserId !== currentUserIdRef.current) return;
+        if (!isCurrentSync()) return;
         if (!response.success || !response.data) continue;
         const job = response.data;
         setMessage(job.processed
@@ -530,24 +538,24 @@ export default function AgentSourceSyncSheet({
         }
       }
       if (!collectionFinished) throw new Error('抖音同步等待超时，请检查账号连接后重试');
-      if (requestedUserId !== currentUserIdRef.current) return;
+      if (!isCurrentSync()) return;
       const refreshed = await listDouyinLibraryItems(0, douyinMode, 'collection');
-      if (requestedUserId !== currentUserIdRef.current) return;
+      if (!isCurrentSync()) return;
       const newIds = (refreshed.data?.items || []).filter((item) => !previousIds.has(item.aweme_id)).map((item) => item.aweme_id);
-      const prepared = await prepareNewTranscripts(douyinMode, newIds.length, newIds);
-      if (requestedUserId !== currentUserIdRef.current) return;
-      const completedMessage = `新增 ${newIds.length} 条，复用 ${Math.max(0, collectionSuccess - newIds.length)} 条；历史资料已保留${prepared.total > 0 ? `；新增文稿 ${prepared.prepared} 条` : ''}`;
+      // 旧服务端只返回分类差集，无法证明全局新增，不自动启动历史视频文稿。
+      const completedMessage = `已检查 ${collectionSuccess} 条，本次列表新增显示 ${newIds.length} 条；历史资料已保留`;
       setMessage(completedMessage);
       await onSynced();
+      if (!isCurrentSync()) return;
       onCompleted(completedMessage, true);
     } catch (error) {
-      if (requestedUserId !== currentUserIdRef.current) return;
+      if (!isCurrentSync()) return;
       const failureMessage = error instanceof Error ? error.message : '同步失败，请稍后重试';
       setFailed(true);
       setMessage(failureMessage);
       onCompleted(failureMessage, false);
     } finally {
-      if (requestedUserId === currentUserIdRef.current) {
+      if (isCurrentSync()) {
         runningRef.current = false;
         setPending(false);
       }

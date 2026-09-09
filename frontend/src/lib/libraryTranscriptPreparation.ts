@@ -38,6 +38,8 @@ export function selectTranscriptPreparationTargets(
 
   const selected: DouyinLibraryItem[] = [];
   const seen = new Set<string>();
+  const readyIds = new Set(lists.flatMap((list) => (list || [])
+    .filter(hasReadyTranscript).map((item) => item.aweme_id)));
   for (const list of lists) {
     for (const item of list || []) {
       const id = String(item.aweme_id || '').trim();
@@ -45,7 +47,7 @@ export function selectTranscriptPreparationTargets(
         !id
         || seen.has(id)
         || !item.can_extract
-        || hasReadyTranscript(item)
+        || readyIds.has(id)
       ) {
         continue;
       }
@@ -55,4 +57,21 @@ export function selectTranscriptPreparationTargets(
     }
   }
   return selected;
+}
+
+/** 普通同步只处理服务端明确登记为新增的ID，缺少新增范围时不能用分类列表差集猜测。 */
+export function selectAutomaticTranscriptPreparationTargets(
+  results: Array<{ items: DouyinLibraryItem[] | null; createdVideoIds?: string[] }>,
+  maxItems = 100,
+): DouyinLibraryItem[] {
+  const readyIds = new Set(results.flatMap(({ items }) => (items || [])
+    .filter(hasReadyTranscript).map((item) => item.aweme_id)));
+  const lists = results.map(({ items, createdVideoIds }) => {
+    const created = new Set(createdVideoIds || []);
+    return selectSyncedSourceScope(
+      (items || []).filter((item) => created.has(item.aweme_id) && !readyIds.has(item.aweme_id)),
+      created.size,
+    );
+  });
+  return selectTranscriptPreparationTargets(lists, maxItems);
 }

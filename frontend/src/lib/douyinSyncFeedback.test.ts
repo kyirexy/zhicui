@@ -3,6 +3,8 @@ import test from 'node:test';
 
 import {
   formatCollectionSyncMessage,
+  createSyncNoticeReporter,
+  formatTranscriptPreparationProgress,
   formatDouyinSyncError,
   formatMultiSourceSyncSummary,
   hasDouyinSyncFailureDiagnostic,
@@ -135,4 +137,23 @@ test('新版同步反馈使用服务端新增与复用计数，不把重新出�
   assert.match(message, /复用 14 条/);
   assert.match(message, /历史资料已保留/);
   assert.doesNotMatch(message, /新显示/);
+});
+
+test('同步摘要保留新增复用数量，跟随实际后台进度并拒绝过期回调', () => {
+  let generation = 1;
+  const notices: string[] = [];
+  const summary = formatMultiSourceSyncSummary([
+    { sourceLabel: '喜欢', checked: 20, newlyVisible: 0, created: 0, reused: 20 },
+    { sourceLabel: '收藏', checked: 10, newlyVisible: 10, created: 10, reused: 0 },
+  ]);
+  const report = createSyncNoticeReporter(summary, () => generation === 1, (message) => notices.push(message));
+  report(formatTranscriptPreparationProgress({ status: 'running', total: 10, success: 9, failed: 0, active: 1, queued: 0 }));
+  assert.match(notices[0], /新增 10 条/);
+  assert.match(notices[0], /复用 20 条/);
+  assert.match(notices[0], /已完成 9\/10 条，处理中 1 条/);
+  report('文稿任务未启动：提交失败');
+  assert.match(notices[1], /新增 10 条[\s\S]*文稿任务未启动/);
+  generation = 2;
+  report(formatTranscriptPreparationProgress({ status: 'success', total: 10, success: 10, failed: 0 }));
+  assert.equal(notices.length, 2);
 });

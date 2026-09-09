@@ -23,6 +23,36 @@ export interface MultiSourceSyncResult {
   error?: string;
 }
 
+/** 文稿任务状态与同步结果合并展示；过期任务的回调不能覆盖下一轮或其他账号。 */
+export function createSyncNoticeReporter(
+  summary: string,
+  isCurrent: () => boolean,
+  publish: (message: string) => void,
+): (progress: string) => void {
+  return (progress) => {
+    if (isCurrent()) publish([summary, progress].filter(Boolean).join('；'));
+  };
+}
+
+export function formatTranscriptPreparationProgress(job: {
+  status: 'running' | 'success' | 'partial' | 'failed';
+  total: number;
+  success: number;
+  failed: number;
+  active?: number;
+  queued?: number;
+  error?: string;
+}): string {
+  const completed = boundedCount(job.success);
+  const total = boundedCount(job.total);
+  if (job.status === 'failed') return `文稿任务未完成：${job.error || '进度已中断，可稍后重试'}`;
+  if (job.status === 'partial' || (job.status === 'success' && job.failed > 0)) {
+    return `文稿已完成 ${completed}/${total} 条，${boundedCount(job.failed)} 条未完成，可稍后重试`;
+  }
+  if (job.status === 'success') return `文稿已完成 ${completed}/${total} 条`;
+  return `文稿任务已启动：已完成 ${completed}/${total} 条，处理中 ${boundedCount(job.active)} 条，等待 ${boundedCount(job.queued)} 条`;
+}
+
 function boundedCount(value: number | undefined): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.trunc(value || 0));

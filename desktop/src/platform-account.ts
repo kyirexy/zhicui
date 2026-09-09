@@ -203,16 +203,27 @@ interface DouyinSourcePage {
   malformedItems: boolean;
 }
 
+function douyinCursorKeys(url: URL): string[] {
+  // 收藏用 cursor；喜欢/作品用 max_cursor。辅助游标可能同时存在且固定为 0。
+  return DOUYIN_SOURCE_RESPONSE_PATHS.collect.test(url.pathname)
+    ? ['cursor', 'max_cursor', 'min_cursor']
+    : ['max_cursor', 'cursor', 'min_cursor'];
+}
+
+function douyinRequestCursor(url: URL): string {
+  const key = douyinCursorKeys(url).find((candidate) => url.searchParams.has(candidate));
+  return key ? url.searchParams.get(key)! : '0';
+}
+
 /** 按官方游标链接组织页，不能把网络完成顺序或作品发布时间当作收藏顺序。 */
 export class DouyinSourcePages {
   private readonly pages = new Map<string, { sequence: number; page: DouyinSourcePage | null }>();
   private generationStart = -1;
 
   begin(url: string, sequence: number): void {
-    const params = new URL(url).searchParams;
-    const cursor = params.get('max_cursor') ?? params.get('cursor') ?? params.get('min_cursor') ?? '0';
+    const cursor = douyinRequestCursor(new URL(url));
     if (cursor === '0' && sequence > this.generationStart) {
-      // 重新加载首屏后，旧一轮的后续页不再是可用于成员清理的完整快照。
+      // 重新加载首屏后，旧一轮的后续页不能与新首屏拼成同一批次。
       this.pages.clear();
       this.generationStart = sequence;
     }
@@ -226,20 +237,22 @@ export class DouyinSourcePages {
     const data = Array.isArray(payload.aweme_list) ? payload : record(payload.data);
     if (!Array.isArray(data.aweme_list)) return false;
     if (payload.status_code !== undefined && payload.status_code !== 0 && payload.status_code !== '0') return false;
-    const params = new URL(url).searchParams;
-    const cursorKey = ['max_cursor', 'cursor', 'min_cursor'].find((key) => params.has(key));
-    const requestCursor = cursorKey ? params.get(cursorKey)! : '0';
-    const cursorValue = (cursorKey ? data[cursorKey] : undefined) ?? data.max_cursor ?? data.cursor ?? data.min_cursor;
+    const parsedUrl = new URL(url);
+    const requestCursor = douyinRequestCursor(parsedUrl);
+    const cursorValue = douyinCursorKeys(parsedUrl).map((key) => data[key])
+      .find((value) => value !== undefined && value !== null);
     const normalized = data.aweme_list.map((entry, index) => {
       try { return normalizeDouyinRecord(entry, index); } catch { return null; }
     });
+    const firstUnknown = normalized.findIndex((item) => item === null);
     const page: DouyinSourcePage = {
       requestCursor,
       nextCursor: cursorValue === undefined || cursorValue === null ? null : String(cursorValue),
       hasMore: optionalBoolean(data.has_more ?? data.hasMore),
-      // 只读取 aweme_list 的直接成员，禁止递归加入相关作品和推荐条目。
-      items: normalized.filter((item): item is PlatformAccountItem => item !== null),
-      malformedItems: normalized.some((item) => item === null),
+      // 只取官方列表中连续可确认身份的前缀，不能跨过缺口后压缩排名。
+      items: (firstUnknown < 0 ? normalized : normalized.slice(0, firstUnknown))
+        .filter((item): item is PlatformAccountItem => item !== null),
+      malformedItems: firstUnknown >= 0,
     };
     const previous = this.pages.get(requestCursor);
     if (!previous || previous.sequence <= sequence) this.pages.set(requestCursor, { sequence, page });
@@ -256,8 +269,12 @@ export class DouyinSourcePages {
       visited.add(cursor);
       const page = this.pages.get(cursor)?.page;
       if (!page) break;
-      malformedItems ||= page.malformedItems;
       for (const item of page.items) mergeDouyinItem(items, item, limit + 1);
+      // 所需前 N 条已确认时，范围外的失效占位不影响本次前缀；也不能宣称全量完成。
+      if (page.malformedItems) {
+        malformedItems = items.size < limit;
+        break;
+      }
       if (page.hasMore === false) {
         ended = true;
         break;
@@ -275,7 +292,9 @@ export class DouyinSourcePages {
       coverage,
       orderReliable: Boolean(this.pages.get('0')?.page),
       warning: coverage === 'partial'
-        ? '官方列表尚未完整读取，本次仅保留已确认顺序的作品；请稍后重试'
+        ? values.length
+          ? `已按官方顺序读取前 ${values.length} 条，其余作品本次未读取；历史资料保留`
+          : '官方列表暂未返回可确认顺序的作品；历史资料保留'
         : coverage === 'limited' ? `本次读取前 ${limit} 条，未扫描全部作品` : undefined,
     };
   }

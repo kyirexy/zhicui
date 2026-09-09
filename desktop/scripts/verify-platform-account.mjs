@@ -286,6 +286,36 @@ collectionCursors.add('https://www.douyin.com/aweme/v1/web/aweme/listcollection/
 }, 2);
 assert.equal(collectionCursors.snapshot(10).coverage, 'complete', '使用本接口的 cursor 而不是其他接口的 max_cursor');
 assert.equal(collectionCursors.snapshot(10).urls.length, 2);
+const mixedCollectionUrl = (cursor) => `https://www.douyin.com/aweme/v1/web/aweme/listcollection/?max_cursor=0&cursor=${cursor}&min_cursor=0`;
+const mixedCollectionCursors = new DouyinSourcePages();
+mixedCollectionCursors.begin(mixedCollectionUrl(0), 0);
+mixedCollectionCursors.add(mixedCollectionUrl(0), {
+  aweme_list: [aweme(10001)], cursor: 8, max_cursor: 0, has_more: true,
+}, 0);
+mixedCollectionCursors.begin(mixedCollectionUrl(8), 1);
+assert.deepEqual(mixedCollectionCursors.snapshot(10).items.map((item) => item.videoId), ['10001'],
+  '收藏后页携带 max_cursor=0 不能清空已确认首屏');
+mixedCollectionCursors.add(mixedCollectionUrl(8), {
+  aweme_list: [aweme(10002)], cursor: 0, max_cursor: 0, has_more: false,
+}, 1);
+assert.equal(mixedCollectionCursors.snapshot(10).coverage, 'complete');
+assert.deepEqual(mixedCollectionCursors.snapshot(10).items.map((item) => item.videoId), ['10001', '10002']);
+mixedCollectionCursors.begin(mixedCollectionUrl(0), 2);
+assert.equal(mixedCollectionCursors.add(mixedCollectionUrl(8), {
+  aweme_list: [aweme(10002)], has_more: false,
+}, 1), false, '混合游标仍需拒绝上一轮晚到后页');
+assert.equal(mixedCollectionCursors.snapshot(10).orderReliable, false);
+
+for (const source of ['favorite', 'post']) {
+  const mixedUrl = (cursor) => `https://www.douyin.com/aweme/v1/web/aweme/${source}/?cursor=0&max_cursor=${cursor}&min_cursor=0`;
+  const mixedPages = new DouyinSourcePages();
+  mixedPages.begin(mixedUrl(0), 0);
+  mixedPages.add(mixedUrl(0), { aweme_list: [aweme(10001)], cursor: 0, max_cursor: 90, has_more: true }, 0);
+  mixedPages.begin(mixedUrl(90), 1);
+  mixedPages.add(mixedUrl(90), { aweme_list: [aweme(10002)], cursor: 0, max_cursor: 0, has_more: false }, 1);
+  assert.equal(mixedPages.snapshot(10).coverage, 'complete', `${source} 仍使用 max_cursor`);
+  assert.deepEqual(mixedPages.snapshot(10).items.map((item) => item.videoId), ['10001', '10002']);
+}
 assert.equal(normalizeDouyinRecord(aweme(10001), 0).ephemeralMediaUrl, undefined, '图文缺少视频地址不能无限递归');
 const refreshedPages = new DouyinSourcePages();
 refreshedPages.begin(douyinPageUrl(0), 0);
@@ -301,6 +331,29 @@ assert.equal(refreshedPages.add(douyinPageUrl(9), { aweme_list: [aweme(10002)], 
 const malformedDouyinPage = new DouyinSourcePages();
 malformedDouyinPage.add(douyinPageUrl(0), { aweme_list: [aweme(10001), { removed: true }], has_more: false }, 0);
 assert.equal(malformedDouyinPage.snapshot(10).coverage, 'partial', '丢失成员身份时禁止完整快照清理');
+assert.equal(malformedDouyinPage.snapshot(1).coverage, 'limited', '范围外的失效项不妨碍可信前 N 条完成');
+assert.equal(malformedDouyinPage.snapshot(1).orderReliable, true);
+assert.doesNotMatch(malformedDouyinPage.snapshot(1).warning, /重试|未完整/);
+assert.match(malformedDouyinPage.snapshot(10).warning, /已按官方顺序读取前 1 条/);
+assert.doesNotMatch(malformedDouyinPage.snapshot(10).warning, /重试|未完整/);
+const interruptedPrefix = new DouyinSourcePages();
+interruptedPrefix.add(douyinPageUrl(0), {
+  aweme_list: [aweme(10001), { removed: true }, aweme(10002)], max_cursor: 9, has_more: true,
+}, 0);
+interruptedPrefix.add(douyinPageUrl(9), { aweme_list: [aweme(10003)], has_more: false }, 1);
+assert.deepEqual(interruptedPrefix.snapshot(10).items.map((item) => item.videoId), ['10001'],
+  '不能越过无身份项，把后续作品伪装成连续的前几条');
+assert.equal(interruptedPrefix.snapshot(10).coverage, 'partial');
+assert.equal(interruptedPrefix.snapshot(10).orderReliable, true, '缺口之前的真实前缀仍可同步');
+const unknownFirst = new DouyinSourcePages();
+unknownFirst.add(douyinPageUrl(0), { aweme_list: [{ removed: true }, aweme(10001)], has_more: false }, 0);
+assert.deepEqual(unknownFirst.snapshot(10).urls, []);
+assert.equal(unknownFirst.snapshot(10).coverage, 'partial');
+assert.doesNotMatch(unknownFirst.snapshot(10).warning, /已按官方顺序读取/);
+const unknownEnd = new DouyinSourcePages();
+unknownEnd.add(douyinPageUrl(0), { aweme_list: [aweme(10001)] }, 0);
+assert.equal(unknownEnd.snapshot(10).coverage, 'partial', '可信短前缀不能冒充列表已结束');
+assert.match(unknownEnd.snapshot(10).warning, /已按官方顺序读取前 1 条/);
 
 const bilibiliUrl = (id) => `https://www.bilibili.com/video/BV${id}`;
 const liked = await collectBilibiliSource(async (url) => {

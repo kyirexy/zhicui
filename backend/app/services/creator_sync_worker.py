@@ -69,9 +69,10 @@ class CreatorSyncRunner:
                 return
             future = self._executor.submit(creator_sync_service.process_run, run_id)
             self._futures[run_id] = future
-            future.add_done_callback(
-                lambda completed, key=run_id: self._forget(key, completed)
-            )
+        # 已完成的 Future 会立即同步调用回调，必须在释放非重入锁后注册。
+        future.add_done_callback(
+            lambda completed, key=run_id: self._forget(key, completed)
+        )
 
     def _forget(self, run_id: str, future: Future[None]) -> None:
         with self._lock:

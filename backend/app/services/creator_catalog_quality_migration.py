@@ -52,9 +52,12 @@ def ensure_schema(engine: Engine) -> None:
             }
             for name, definition in QUALITY_RUN_COLUMNS.items():
                 if name not in existing_runs:
+                    column_definition = definition
+                    if name == "lease_expires_at" and engine.dialect.name == "postgresql":
+                        column_definition = "TIMESTAMP WITH TIME ZONE NULL"
                     connection.execute(text(
                         "ALTER TABLE creator_catalog_quality_runs "
-                        f"ADD COLUMN {name} {definition}"
+                        f"ADD COLUMN {name} {column_definition}"
                     ))
             connection.execute(text(
                 "CREATE INDEX IF NOT EXISTS ix_creator_quality_runs_lease "

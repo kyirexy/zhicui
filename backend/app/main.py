@@ -114,6 +114,7 @@ from app.services import (
     automation_runner,
     creator_catalog_quality_migration,
     creator_source_identity_migration,
+    creator_schedule_timezone_migration,
     creator_catalog_quality_worker,
     creator_sync_worker,
     chat_model_catalog_service,
@@ -411,6 +412,7 @@ def create_app() -> FastAPI:
         _migrate_db()
         creator_catalog_quality_migration.ensure_schema(engine)
         creator_source_identity_migration.ensure_schema(engine)
+        creator_schedule_timezone_migration.ensure_schema(engine)
         with SessionLocal() as db:
             note_service.scrub_legacy_ephemeral_media(db)
             agent_service.mark_stale_threads(db)
@@ -691,7 +693,10 @@ def _migrate_creator_sync(conn, insp) -> None:
             "processed_count": "INTEGER NOT NULL DEFAULT 0",
             "total_count": "INTEGER NULL",
             "attempt_count": "INTEGER NOT NULL DEFAULT 0",
-            "next_retry_at": "TIMESTAMP NULL",
+            "next_retry_at": (
+                "TIMESTAMP WITH TIME ZONE NULL" if conn.dialect.name == "postgresql"
+                else "TIMESTAMP NULL"
+            ),
             "needs_action": "BOOLEAN NOT NULL DEFAULT FALSE",
             "needs_action_code": "VARCHAR(80) NOT NULL DEFAULT ''",
             "needs_action_message": "VARCHAR(240) NOT NULL DEFAULT ''",

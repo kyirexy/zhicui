@@ -538,7 +538,8 @@ class CreatorSyncRunItem(Base):
     )
 
     id: Mapped[str] = mapped_column(
-        String(48), primary_key=True, default=lambda: _uuid("creator-run-item")
+        # UUID 保留完整随机位；旧前缀产生 49 字符，超过生产 PostgreSQL 的 48 字符列。
+        String(48), primary_key=True, default=lambda: _uuid("creator-ri")
     )
     run_id: Mapped[str] = mapped_column(
         String(48), ForeignKey("creator_sync_runs.id", ondelete="CASCADE"), nullable=False

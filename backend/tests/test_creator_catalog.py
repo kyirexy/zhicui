@@ -152,6 +152,9 @@ class CreatorCatalogServiceTests(unittest.TestCase):
         self.assertEqual(
             self.db.query(CreatorSyncRunItem).filter_by(run_id=selected.id).count(), 3,
         )
+        # SQLite 不执行 VARCHAR 长度约束，显式验证真实创建的任务条目可写入 PostgreSQL。
+        for row in self.db.query(CreatorSyncRunItem).filter_by(run_id=selected.id):
+            self.assertLessEqual(len(row.id), CreatorSyncRunItem.__table__.c.id.type.length)
 
     def test_douyin_complete_refresh_preserves_old_rows(self) -> None:
         self.source.platform = "douyin"

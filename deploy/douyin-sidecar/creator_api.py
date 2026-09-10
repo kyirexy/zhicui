@@ -54,8 +54,16 @@ def profile_id(value: str) -> str:
 def public_item(raw: dict, creator_id: str) -> dict:
     import re
     author = raw.get('author') if isinstance(raw.get('author'), dict) else {}
-    if str(author.get('sec_uid') or author.get('sec_user_id') or '') != creator_id:
+    primary_id = str(author.get('sec_uid') or author.get('sec_user_id') or '')
+    cooperation = raw.get('cooperation_info') if isinstance(raw.get('cooperation_info'), dict) else {}
+    partners = cooperation.get('co_creators') if isinstance(cooperation.get('co_creators'), list) else []
+    partner = next((row for row in partners if isinstance(row, dict)
+                    and row.get('sec_uid') == creator_id and row.get('invite_status') == 1), None)
+    if primary_id != creator_id and partner is None:
         fail('creator_identity_mismatch', '作品归属与所选博主不一致，已停止本次同步')
+    author_name = str(author.get('nickname') or '').strip()[:100]
+    if primary_id != creator_id:
+        author_name += '（合作：' + str(partner.get('nickname') or '').strip()[:45] + '）'
     video_id = str(raw.get('aweme_id') or '')
     if not re.fullmatch(r'[0-9]{5,32}', video_id):
         fail('invalid_upstream_response', '博主作品标识异常')
@@ -71,7 +79,10 @@ def public_item(raw: dict, creator_id: str) -> dict:
         'aweme_id': video_id, 'creator_id': creator_id,
         'source_url': f'https://www.douyin.com/video/{video_id}',
         'desc': str(raw.get('desc') or '').strip()[:5000],
-        'author_name': str(author.get('nickname') or '').strip()[:160],
+        'author_name': author_name[:160],
+        'matched_creator_name': str((author if primary_id == creator_id else partner).get('nickname') or '').strip()[:160],
+        'creator_relation': 'author' if primary_id == creator_id else 'accepted_co_creator',
+        'primary_creator_id': primary_id,
         'media_type': 'gallery' if images else 'video',
         'publish_timestamp': integer(raw.get('create_time')),
         'duration_ms': min(integer(video.get('duration') or raw.get('duration')), 604800000),
@@ -115,7 +126,7 @@ class CreatorReader:
             if not isinstance(user, dict) or not user.get('nickname'):
                 # 官方主页资料接口受限时，只从已校验归属的公开作品取得真实作者名。
                 items, _, _ = await self.page(scope, creator_id, '0', 1)
-                author_name = next((row['author_name'] for row in items if row['author_name']), '')
+                author_name = next((row['matched_creator_name'] for row in items if row['matched_creator_name']), '')
                 if not author_name:
                     self.upstream_error(client)
                 user = {'sec_uid': creator_id, 'nickname': author_name}

@@ -129,6 +129,21 @@ class CreatorProtocolTests(unittest.TestCase):
         self.assertEqual([row['aweme_id'] for row in response.json()['items']], ['10003', '10004'])
         self.assertTrue(all(call[0] == CREATOR for call in FakeClient.calls))
 
+    def test_official_accepted_co_creation_is_included_with_attribution(self):
+        collaboration = {'co_creators': [{'sec_uid': CREATOR, 'nickname': '共同创作者', 'invite_status': 1}]}
+        FakeClient.pages = [page([item(10001, OTHER, cooperation_info=collaboration)])]
+        result = self.post()
+        self.assertEqual(result.status_code, 200)
+        row = result.json()['items'][0]
+        self.assertEqual(row['creator_id'], CREATOR)
+        self.assertEqual(row['primary_creator_id'], OTHER)
+        self.assertEqual(row['creator_relation'], 'accepted_co_creator')
+        self.assertIn('合作：共同创作者', row['author_name'])
+        self.assertEqual(row['matched_creator_name'], '共同创作者')
+        collaboration['co_creators'][0]['invite_status'] = 0
+        FakeClient.pages = [page([item(10001, OTHER, cooperation_info=collaboration)])]
+        self.assertEqual(self.post(catalog_id='unaccepted').json()['detail']['code'], 'creator_identity_mismatch')
+
     def test_backend_never_falls_back_to_self_or_shared_library(self):
         with patch.object(douyin_library, '_request', side_effect=douyin_library.DouyinLibraryError('failed')) as request:
             with self.assertRaises(douyin_library.DouyinLibraryError):

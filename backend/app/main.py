@@ -113,6 +113,7 @@ from app.services import (
     auth_service,
     automation_runner,
     creator_catalog_quality_migration,
+    creator_source_identity_migration,
     creator_catalog_quality_worker,
     creator_sync_worker,
     chat_model_catalog_service,
@@ -409,6 +410,7 @@ def create_app() -> FastAPI:
         Base.metadata.create_all(bind=engine)
         _migrate_db()
         creator_catalog_quality_migration.ensure_schema(engine)
+        creator_source_identity_migration.ensure_schema(engine)
         with SessionLocal() as db:
             note_service.scrub_legacy_ephemeral_media(db)
             agent_service.mark_stale_threads(db)

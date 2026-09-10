@@ -52,6 +52,37 @@ class ReleaseReproducibilityContractTests(unittest.TestCase):
             preinstall,
         )
 
+    def test_mutable_windows_feeds_override_immutable_prefix_cache(self) -> None:
+        nginx = (ROOT / "deploy" / "nginx-windows-updates.conf").read_text(
+            encoding="utf-8"
+        )
+        # Nginx 的 ^~ 前缀会阻止同级正则参与匹配；可变 feed 必须精确命中。
+        for channel in ("latest", "beta", "stable"):
+            with self.subTest(channel=channel):
+                block = re.search(
+                    rf"location\s+=\s+/download/windows/{channel}\.yml\s*\{{([^}}]*)\}}",
+                    nginx,
+                )
+                self.assertIsNotNone(block, "可变更新清单不能落入长期缓存的目录规则")
+                directives = block.group(1)
+                self.assertIn(
+                    f"alias /var/lib/zhicui-downloads/windows/{channel}.yml;",
+                    directives,
+                )
+                self.assertIn(
+                    'Cache-Control "no-store, no-cache, must-revalidate" always;',
+                    directives,
+                )
+                self.assertNotIn("immutable", directives)
+        versioned = re.search(
+            r"location\s+\^~\s+/download/windows/\s*\{([^}]*)\}", nginx
+        )
+        self.assertIsNotNone(versioned)
+        self.assertIn(
+            'Cache-Control "public, max-age=31536000, immutable" always;',
+            versioned.group(1),
+        )
+
     def test_smoke_evidence_does_not_chmod_an_existing_shared_directory(self) -> None:
         smoke = (ROOT / "scripts" / "smoke-production.sh").read_text(encoding="utf-8")
         self.assertIn('[[ -d "$evidence_dir" ]] || install -d -m 0700', smoke)

@@ -106,6 +106,55 @@ class CreatorProtocolTests(unittest.TestCase):
         FakeClient.pages = [page([])]
         self.assertTrue(self.post().json()['complete'])
 
+    def test_invalid_upstream_flags_fail_without_mutating_pagination(self):
+        broken = page([item(10001)], 1, 5)
+        broken['risk_flags'] = ['unexpected']
+        FakeClient.pages = [broken, page([item(10001)], 1, 5)]
+        self.assertEqual(self.post().status_code, 502)
+        self.assertEqual([row['aweme_id'] for row in self.post().json()['items']], ['10001'])
+
+    def test_concurrent_same_page_is_fetched_once_and_cancel_stops_inflight_page(self):
+        async def verify():
+            entered, release = asyncio.Event(), asyncio.Event()
+            async def fetch(*_args):
+                entered.set()
+                await release.wait()
+                return page([item(10001)], 1, 5)
+            request = module.CatalogRequest(creator_id=CREATOR, catalog_id='concurrent')
+            with patch.object(FakeClient, 'get_user_post', new=AsyncMock(side_effect=fetch)) as upstream:
+                first = asyncio.create_task(self.reader.catalog('a' * 32, request))
+                await entered.wait()
+                second = asyncio.create_task(self.reader.catalog('a' * 32, request))
+                release.set()
+                results = await asyncio.gather(first, second)
+                self.assertEqual(results[0], results[1])
+                self.assertEqual(upstream.await_count, 1)
+            entered.clear()
+            release.clear()
+            request = module.CatalogRequest(creator_id=CREATOR, catalog_id='cancel-inflight')
+            with patch.object(FakeClient, 'get_user_post', new=AsyncMock(side_effect=fetch)):
+                pending = asyncio.create_task(self.reader.catalog('a' * 32, request))
+                await entered.wait()
+                state = self.reader.jobs[('a' * 32, 'cancel-inflight')]
+                state['cancelled'] = True
+                release.set()
+                with self.assertRaises(module.HTTPException) as failure:
+                    await pending
+                self.assertEqual(failure.exception.detail['code'], 'cancelled')
+                self.assertEqual(state['cursor'], '0')
+                self.assertEqual(state['seen'], set())
+        asyncio.run(verify())
+
+    def test_safety_limit_rejection_does_not_skip_items_on_retry(self):
+        request = module.CatalogRequest(creator_id=CREATOR, catalog_id='limit')
+        _, state = self.reader.job('a' * 32, request)
+        state['seen'] = {str(number) for number in range(100000, 149999)}
+        FakeClient.pages = [page([item(10001), item(10002)])] * 2
+        for _ in range(2):
+            self.assertEqual(self.post(catalog_id='limit').json()['detail']['code'], 'catalog_safety_limit')
+            self.assertEqual(len(state['seen']), 49999)
+            self.assertEqual(state['cursor'], '0')
+
     def test_wrong_author_invalid_cursor_and_cancellation_stop(self):
         FakeClient.pages = [page([item(10001, OTHER)])]
         self.assertEqual(self.post().json()['detail']['code'], 'creator_identity_mismatch')

@@ -18,10 +18,12 @@ from app.models.creator_sync import (
     CreatorSyncRunItem,
 )
 from app.models.note import Note
+from app.models.library_hidden_item import LibraryHiddenItem
 from app.models.system_setting import SystemSetting
 from app.models.user import User
 from app.services import creator_connectors, creator_sync_service, platform_library_service
 from app.services import library_extraction_service
+from app.services import library_hidden_service
 from app.services import settings_service
 
 
@@ -37,6 +39,7 @@ class CreatorCatalogServiceTests(unittest.TestCase):
             tables=[
                 User.__table__,
                 Note.__table__,
+                LibraryHiddenItem.__table__,
                 SystemSetting.__table__,
                 CreatorSource.__table__,
                 CreatorSyncRun.__table__,
@@ -176,6 +179,74 @@ class CreatorCatalogServiceTests(unittest.TestCase):
         self.assertEqual(saved.title, "历史作品")
         self.assertEqual(saved.state, "ready")
         self.assertIsNone(saved.removed_at)
+
+    def test_co_created_video_keeps_independent_creator_membership(self) -> None:
+        other_source = CreatorSource(
+            user_id=self.user.id, platform='bilibili', creator_id='67890',
+            profile_url='https://space.bilibili.com/67890/video', display_name='合作 UP',
+        )
+        self.db.add(other_source)
+        self.db.commit()
+        original_run = SimpleNamespace(user_id=self.user.id, source_id=self.source.id,
+                                       platform='bilibili', id='run-a', operation='recent_transcript')
+        partner_run = SimpleNamespace(user_id=self.user.id, source_id=other_source.id,
+                                      platform='bilibili', id='run-b', operation='recent_transcript')
+        work = {'external_id': 'BVCOAUTHOR', 'title': '合作作品',
+                'source_url': 'https://www.bilibili.com/video/BVCOAUTHOR'}
+        original, _ = creator_sync_service._upsert_source_item(self.db, original_run, work)
+        self.db.commit()
+        original_id = original.id
+        partner, _ = creator_sync_service._upsert_source_item(self.db, partner_run, work)
+        self.db.commit()
+        self.assertNotEqual(original_id, partner.id)
+        self.assertEqual(original.source_id, self.source.id)
+        self.assertEqual(original.state, 'discovered')
+        self.assertIsNone(original.removed_at)
+        self.assertEqual(partner.source_id, other_source.id)
+        self.assertIsNone(partner.removed_at)
+        again, _ = creator_sync_service._upsert_source_item(self.db, partner_run, work)
+        self.assertEqual(again.id, partner.id)
+        self.assertEqual(self.db.query(CreatorSourceItem).filter_by(external_id='BVCOAUTHOR').count(), 2)
+
+    def test_deleted_video_tombstone_is_inherited_by_new_co_creator(self) -> None:
+        removed = CreatorSourceItem(user_id=self.user.id, source_id=self.source.id,
+                                    platform='bilibili', external_id='BVREMOVED',
+                                    state='removed', removed_at=datetime.now(timezone.utc))
+        partner = CreatorSource(user_id=self.user.id, platform='bilibili', creator_id='partner',
+                                profile_url='https://space.bilibili.com/67890/video', display_name='合作 UP')
+        self.db.add_all([removed, partner])
+        self.db.commit()
+        run = SimpleNamespace(user_id=self.user.id, source_id=partner.id, platform='bilibili',
+                              id='run-partner', operation='recent_transcript')
+        item, _ = creator_sync_service._upsert_source_item(self.db, run, {'external_id': 'BVREMOVED'})
+        self.db.commit()
+        self.assertNotEqual(item.id, removed.id)
+        self.assertEqual(item.state, 'removed')
+        self.assertEqual(item.removed_at, removed.removed_at)
+        self.assertFalse(item.is_available)
+
+    def test_permanent_hidden_before_any_creator_sync_stays_hidden_until_explicit_restore(self) -> None:
+        source = CreatorSource(user_id=self.user.id, platform='douyin', creator_id='MS4wLjABAAAAexample',
+                               profile_url='https://www.douyin.com/user/MS4wLjABAAAAexample', display_name='博主')
+        self.db.add(source)
+        self.db.add(LibraryHiddenItem(user_id=self.user.id, aweme_id='12345', hide_mode='permanent'))
+        self.db.add(LibraryHiddenItem(user_id=self.other.id, aweme_id='54321', hide_mode='permanent'))
+        self.db.commit()
+        run = SimpleNamespace(user_id=self.user.id, source_id=source.id, platform='douyin',
+                              id='run-hidden', operation='recent_transcript')
+        item, _ = creator_sync_service._upsert_source_item(self.db, run, {'external_id': '12345'})
+        visible, _ = creator_sync_service._upsert_source_item(self.db, run, {'external_id': '54321'})
+        self.db.commit()
+        self.assertEqual(item.state, 'removed')
+        self.assertFalse(item.is_available)
+        self.assertEqual(visible.state, 'discovered')
+        self.assertTrue(visible.is_available)
+        library_hidden_service.restore_permanent_aweme_ids(self.db, self.user.id, ['12345'])
+        self.db.expire_all()
+        self.assertEqual(item.state, 'discovered')
+        self.assertIsNone(item.removed_at)
+        self.assertTrue(item.is_available)
+        self.assertIsNone(item.unavailable_at)
 
     def test_thousand_item_catalog_is_idempotent_paginated_and_redacted(self) -> None:
         unseen = CreatorSourceItem(

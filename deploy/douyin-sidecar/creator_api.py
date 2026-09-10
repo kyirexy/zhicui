@@ -73,7 +73,7 @@ def public_item(raw: dict, creator_id: str) -> dict:
     def integer(value):
         try:
             return max(0, int(value or 0))
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):
             return 0
     return {
         'aweme_id': video_id, 'creator_id': creator_id,
@@ -150,6 +150,8 @@ class CreatorReader:
                     or raw.get('has_more') not in (0, 1, False, True)):
                 self.upstream_error(client)
             flags = page.get('risk_flags') or {}
+            if not isinstance(flags, dict):
+                self.upstream_error(client)
             if flags.get('verify_page') or flags.get('login_tip'):
                 fail('verification_required', '抖音需要重新验证账号', 409)
             rows = raw['aweme_list']
@@ -198,13 +200,14 @@ class CreatorReader:
                 fail('cancelled', '博主同步已取消', 409)
             if has_more and next_cursor in state['cursors']:
                 fail('invalid_discovery_cursor', '抖音返回重复分页，已停止继续读取', 502)
-            fresh = []
+            fresh, next_seen = [], set(state['seen'])
             for item in items:
-                if item['aweme_id'] not in state['seen']:
-                    state['seen'].add(item['aweme_id'])
+                if item['aweme_id'] not in next_seen:
+                    next_seen.add(item['aweme_id'])
                     fresh.append(item)
-            if len(state['seen']) > 50000:
+            if len(next_seen) > 50000:
                 fail('catalog_safety_limit', '本次作品数量达到上限，已有资料保留', 409)
+            state['seen'] = next_seen
             state['cursors'].add(cursor)
             state['cursor'] = next_cursor
             state['complete'] = not has_more

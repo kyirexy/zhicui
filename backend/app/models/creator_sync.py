@@ -222,8 +222,8 @@ class CreatorSourceItem(Base):
     __tablename__ = "creator_source_items"
     __table_args__ = (
         UniqueConstraint(
-            "user_id", "platform", "external_id",
-            name="uq_creator_item_user_platform_external",
+            "user_id", "source_id", "platform", "external_id",
+            name="uq_creator_item_user_source_platform_external",
         ),
         CheckConstraint(
             "platform IN ('douyin','bilibili','xiaohongshu')",

@@ -237,6 +237,8 @@ def restore_permanent_aweme_ids(
             {
                 CreatorSourceItem.state: "discovered",
                 CreatorSourceItem.removed_at: None,
+                CreatorSourceItem.is_available: True,
+                CreatorSourceItem.unavailable_at: None,
             },
             synchronize_session=False,
         )

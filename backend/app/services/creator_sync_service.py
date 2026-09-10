@@ -31,6 +31,7 @@ from app.models.creator_sync import (
     CreatorSyncRunItem,
 )
 from app.models.note import Note
+from app.models.library_hidden_item import LibraryHiddenItem
 from app.services import (
     creator_connectors,
     creator_item_quality,
@@ -1007,11 +1008,32 @@ def _upsert_source_item(
         return None, False
     item = db.query(CreatorSourceItem).filter(
         CreatorSourceItem.user_id == run.user_id,
+        CreatorSourceItem.source_id == run.source_id,
         CreatorSourceItem.platform == run.platform,
         CreatorSourceItem.external_id == external_id,
     ).first()
     now = _utcnow()
     is_new = item is None
+    removed_at = None
+    if is_new:
+        # 删除文稿产生的墓碑按用户和作品保留；添加合作博主不能恢复已删除作品。
+        tombstone = db.query(CreatorSourceItem.removed_at).filter(
+            CreatorSourceItem.user_id == run.user_id,
+            CreatorSourceItem.platform == run.platform,
+            CreatorSourceItem.external_id == external_id,
+            or_(CreatorSourceItem.removed_at.is_not(None), CreatorSourceItem.state == "removed"),
+        ).first()
+        if tombstone is not None:
+            removed_at = tombstone[0] or now
+    if run.platform == "douyin":
+        # 即使此前尚未保存任何博主，资料库里的永久隐藏仍对新目录有效。
+        hidden = db.query(LibraryHiddenItem).filter(
+            LibraryHiddenItem.user_id == run.user_id,
+            LibraryHiddenItem.aweme_id == external_id,
+            LibraryHiddenItem.hide_mode != "temporary",
+        ).first()
+        if hidden is not None:
+            removed_at = hidden.created_at or now
     if is_new:
         item = CreatorSourceItem(
             user_id=run.user_id,
@@ -1021,6 +1043,12 @@ def _upsert_source_item(
         )
         db.add(item)
         db.flush()
+    if removed_at is not None:
+        item.state = "removed"
+        item.removed_at = removed_at
+        item.note_id = None
+        item.is_available = False
+        item.unavailable_at = removed_at
     was_quarantined = item.metadata_quality == "quarantined"
     previous_quality_issues = set(item.safe_quality_issues())
     newly_seen = item.last_seen_run_id != run.id
@@ -1028,7 +1056,7 @@ def _upsert_source_item(
         source_url = _canonical_page_url(work.get("source_url"), run.platform)
         if source_url:
             item.source_url = source_url
-    item.source_id = run.source_id
+    # 合作作品可同时属于多个博主；目录各自保留，文稿仍按用户与视频复用。
     if "title" in work:
         item.title = str(work.get("title") or "")[:512]
     if "cover_url" in work:

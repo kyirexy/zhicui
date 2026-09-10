@@ -17,6 +17,7 @@ from app.models.note import Note
 from app.models.library_sync import LibrarySyncRun
 from app.models.plan import Plan
 from app.models.user import User
+from app.models.video_source_ledger import VideoSourceLedger
 from app.services import platform_library_service
 from app.services.xhs_downloader_client import (
     XhsDownloaderUnavailable,
@@ -34,7 +35,7 @@ class PlatformLibraryImportTests(unittest.TestCase):
         )
         Base.metadata.create_all(
             self.engine,
-            tables=[User.__table__, Note.__table__, Plan.__table__, LibrarySyncRun.__table__],
+            tables=[User.__table__, Note.__table__, Plan.__table__, LibrarySyncRun.__table__, VideoSourceLedger.__table__],
         )
         self.Session = sessionmaker(bind=self.engine)
         self.db = self.Session()

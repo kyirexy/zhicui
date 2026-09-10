@@ -13,6 +13,7 @@ import {
 import LibraryCoverImage from '@/components/LibraryCoverImage';
 import {
   getRecentCompletedResults,
+  libraryExtractionHeading,
   summarizeLibraryExtraction,
 } from '@/lib/libraryExtractionProgress';
 import type {
@@ -56,20 +57,16 @@ export default function LibraryExtractionLiveProgress({
         <span className="library-live-progress-icon" aria-hidden="true">
           {job.status === 'running'
             ? <LoaderCircle size={17} className="animate-spin" />
-            : <CheckCircle2 size={17} />}
+            : summary.failed > 0 ? <TriangleAlert size={17} /> : <CheckCircle2 size={17} />}
         </span>
         <div>
           <strong>
-            {isTranscriptJob
-              ? '文案正在逐条就绪'
-              : isStructuredJob
-                ? '结构化文案正在逐条完成'
-                : 'AI 正在逐条完成'}
+            {libraryExtractionHeading(job)}
           </strong>
           <p>
-            {summary.completed > 0
-              ? `已经完成 ${summary.completed} 条，可以先查看和提问，不用等全部结束。`
-              : '第一条完成后会马上显示在这里，不用等整批结束。'}
+            {job.status === 'running'
+              ? `同时处理中 ${summary.active} 条 · 已完成 ${summary.completed}/${summary.total} · 排队 ${summary.queued} 条。已完成的文案可直接查看和提问。`
+              : `已完成 ${summary.completed}/${summary.total} 条${summary.failed > 0 ? `，${summary.failed} 条未完成，可重试` : '，可以查看和提问'}。`}
           </p>
         </div>
         <b className="library-live-progress-total">
@@ -96,7 +93,7 @@ export default function LibraryExtractionLiveProgress({
         </span>
         <span>
           <LoaderCircle size={13} />
-          处理中 <b>{summary.active}</b>
+          同时处理 <b>{summary.active}</b>
         </span>
         <span>
           <Clock3 size={13} />

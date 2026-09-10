@@ -20,6 +20,7 @@
     {"pattern": "^/api/auth/(?:desktop-handoff|desktop-login|phone-login|dev-session)", "classification": "transport_internal", "reason": "Trusted client login handoff, never exposed as a tool"},
     {"pattern": "^/api/library/douyin/(?:local-handoff|local-sync|login/qr)", "classification": "transport_internal", "reason": "Desktop-private session/cookie/media transport"},
     {"pattern": "^/api/library/sync-runs$", "classification": "transport_internal", "reason": "当前用户的只读客户端同步记录，不新增 Agent 执行动作"},
+    {"pattern": "^/api/library/daily-recap$", "classification": "transport_internal", "reason": "首页按首次同步台账查询昨日来源，仅用户本人读取，不新增 Agent 执行动作"},
     {"pattern": "^/api/client-errors$", "classification": "transport_internal", "reason": "Client diagnostics ingestion"},
 
     {"pattern": "^/api/showcase-cases/[^/]+/(?:media|poster)$", "classification": "resource_stream", "reason": "仅已发布官网案例的公开媒体，非 Agent Action"},

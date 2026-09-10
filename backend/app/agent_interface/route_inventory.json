@@ -99,6 +99,7 @@
     "GET /api/knowledge/candidates/{note_id}",
     "GET /api/knowledge/entries/{entry_id}",
     "GET /api/legal/documents/current",
+    "GET /api/library/daily-recap",
     "GET /api/library/douyin/cover/{aweme_id}",
     "GET /api/library/douyin/extractions/batch/{job_id}",
     "GET /api/library/douyin/gallery/{aweme_id}/{image_index}",

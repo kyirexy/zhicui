@@ -76,6 +76,7 @@ def create_note(
     user_id: str = "",
     *,
     ai_initialized: bool = True,
+    commit: bool = True,
 ) -> Note:
     """Persist a new note from extraction results.
 
@@ -140,8 +141,11 @@ def create_note(
     )
 
     db.add(note)
-    db.commit()
-    db.refresh(note)
+    if commit:
+        db.commit()
+        db.refresh(note)
+    else:
+        db.flush()
     return note
 
 
@@ -210,6 +214,7 @@ def create_transcript_note(
     transcript: str,
     source_meta: dict[str, Any],
     user_id: str,
+    commit: bool = True,
 ) -> Note:
     """Persist a transcript-ready library Note without inventing AI output."""
     return create_note(
@@ -222,6 +227,7 @@ def create_transcript_note(
         },
         user_id,
         ai_initialized=False,
+        commit=commit,
     )
 
 

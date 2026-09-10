@@ -18,6 +18,14 @@ export interface LibraryCompletedResult {
   updatedAt: string;
 }
 
+export function libraryExtractionHeading(job: DouyinBatchExtractionJob): string {
+  const subject = job.operation === 'transcript' ? '文案' : job.operation === 'full' ? '结构化文案' : 'AI 解析';
+  if (job.status === 'success') return `${subject}已完成`;
+  if (job.status === 'partial') return `${subject}部分完成`;
+  if (job.status === 'failed') return `${subject}处理已结束`;
+  return `${subject}正在并发处理`;
+}
+
 export function summarizeLibraryExtraction(
   job: DouyinBatchExtractionJob | null,
 ): LibraryExtractionSummary {

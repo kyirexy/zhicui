@@ -24,6 +24,7 @@ import {
   listPlatformLibraryItems,
 } from '@/lib/api';
 import LibraryCoverImage from '@/components/LibraryCoverImage';
+import DailyRecap from '@/components/DailyRecap';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import { buildHomeLinkDestination } from '@/lib/singleLinkImport';
 import { sortPlatformLibrarySource } from '@/lib/platformLibraryOrder';
@@ -546,6 +547,8 @@ export default function WorkspaceActionHome() {
           </div>
         </div>
       </section>
+
+      <DailyRecap />
 
       <section className={styles.channels} aria-label="抖音与 B站资料">
         <div className={styles.platformGrid}>

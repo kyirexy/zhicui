@@ -140,6 +140,33 @@ class LibraryExtractionPersistenceTests(unittest.TestCase):
             library_extraction_service.cancel_batch_job(created["job_id"], self.other_id)
         )
 
+    def test_restart_finishes_committed_items_without_repeating_extraction(self) -> None:
+        for states, expected in ((["done", "done"], "success"),
+                                 (["done", "error"], "partial"),
+                                 (["error", "error"], "failed")):
+            with self.subTest(states=states):
+                with patch.object(library_extraction_service, "_submit_batch"):
+                    created = library_extraction_service.create_batch_job(
+                        user_id=self.user_id, aweme_ids=["finished-a", "finished-b"],
+                        operation="transcript", asr_concurrency=3, llm_concurrency=1,
+                    )
+                with self.Session() as db:
+                    rows = db.query(LibraryExtractionBatchItem).filter(
+                        LibraryExtractionBatchItem.batch_id == created["job_id"],
+                    ).all()
+                    for row, state in zip(rows, states):
+                        row.state = state
+                    db.commit()
+                with patch.object(library_extraction_service, "_submit_batch") as submit:
+                    self.assertEqual(library_extraction_service.resume_pending_jobs(), 0)
+                    submit.assert_not_called()
+                final = library_extraction_service.get_batch_job(created["job_id"], self.user_id)
+                self.assertEqual(final["status"], expected)
+                self.assertIsNotNone(final["finished_at"])
+                library_extraction_service._finish_job_if_ready(created["job_id"])
+                repeated = library_extraction_service.get_batch_job(created["job_id"], self.user_id)
+                self.assertEqual(repeated["finished_at"], final["finished_at"])
+
     def test_completed_batch_projects_to_one_terminal_product_run_event(self) -> None:
         with patch.object(library_extraction_service, "_submit_batch"):
             created = library_extraction_service.create_batch_job(

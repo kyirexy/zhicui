@@ -1,4 +1,4 @@
-"""Concurrent, metadata-only extraction for the Douyin video library."""
+"""资料库受控并发提取；仅持久保存文稿、笔记和任务进度。"""
 from __future__ import annotations
 
 import json
@@ -39,6 +39,8 @@ _EXECUTOR = ThreadPoolExecutor(
 )
 _ITEM_LOCKS_GUARD = threading.Lock()
 _ITEM_LOCKS: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
+_JOB_LOCKS_GUARD = threading.Lock()
+_JOB_LOCKS: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
 logger = logging.getLogger(__name__)
 _EPHEMERAL_MEDIA_HOST_SUFFIXES = (
     ".douyinvod.com",
@@ -69,6 +71,16 @@ def _item_lock(user_id: str, aweme_id: str) -> threading.Lock:
         if lock is None:
             lock = threading.Lock()
             _ITEM_LOCKS[key] = lock
+        return lock
+
+
+def _job_lock(job_id: str) -> threading.Lock:
+    """只串行同一任务的短事务，不占住下载、ASR 或 AI 的并发窗口。"""
+    with _JOB_LOCKS_GUARD:
+        lock = _JOB_LOCKS.get(job_id)
+        if lock is None:
+            lock = threading.Lock()
+            _JOB_LOCKS[job_id] = lock
         return lock
 
 
@@ -558,19 +570,22 @@ def _snapshot(
     }
 
 
-def _update_item(job_id: str, aweme_id: str, **updates: Any) -> None:
-    with SessionLocal() as db:
+def _update_item(job_id: str, aweme_id: str, **updates: Any) -> bool:
+    with _job_lock(job_id), SessionLocal() as db:
         job = db.query(LibraryExtractionBatch).filter(
             LibraryExtractionBatch.id == job_id,
-        ).first()
-        if job is None or job.cancellation_requested:
-            return
+        ).with_for_update().first()
+        if (
+            job is None or job.cancellation_requested
+            or job.status not in {"queued", "running"}
+        ):
+            return False
         item = db.query(LibraryExtractionBatchItem).filter(
             LibraryExtractionBatchItem.batch_id == job_id,
             LibraryExtractionBatchItem.aweme_id == aweme_id,
         ).first()
-        if item is None:
-            return
+        if item is None or item.state in {"done", "error", "canceled"}:
+            return False
         allowed = {
             "state", "error", "note_id", "transcript_chars", "card_type",
             "ai_initialized", "already_existed",
@@ -581,14 +596,15 @@ def _update_item(job_id: str, aweme_id: str, **updates: Any) -> None:
         item.updated_at = _utcnow()
         job.updated_at = item.updated_at
         db.commit()
+        return True
 
 
 def _finish_job_if_ready(job_id: str) -> None:
-    with SessionLocal() as db:
+    with _job_lock(job_id), SessionLocal() as db:
         job = db.query(LibraryExtractionBatch).filter(
             LibraryExtractionBatch.id == job_id,
-        ).first()
-        if job is None:
+        ).with_for_update().first()
+        if job is None or job.status not in {"queued", "running"}:
             return
         items = db.query(LibraryExtractionBatchItem).filter(
             LibraryExtractionBatchItem.batch_id == job_id,
@@ -623,15 +639,9 @@ def _run_job_item(
 ) -> None:
     def progress(state: str) -> None:
         # 工作线程可能已排队/等锁很久。真正开始 ASR 或 AI 前再次检查取消，
-        # 避免取消任务仍发起下一阶段的付费请求。
-        with SessionLocal() as db:
-            current = db.query(LibraryExtractionBatch).filter(
-                LibraryExtractionBatch.id == job_id,
-                LibraryExtractionBatch.user_id == user_id,
-            ).first()
-            if current is None or current.cancellation_requested:
-                raise CancelledError()
-        _update_item(job_id, aweme_id, state=state, error="")
+        # 检查和写入 active 必须是一个事务，取消抢先提交时不能继续付费请求。
+        if not _update_item(job_id, aweme_id, state=state, error=""):
+            raise CancelledError()
 
     try:
         with SessionLocal() as db:
@@ -855,11 +865,13 @@ def get_batch_job(job_id: str, user_id: str) -> dict[str, Any] | None:
 
 def cancel_batch_job(job_id: str, user_id: str) -> dict[str, Any] | None:
     """Persist cancellation; in-flight external calls finish but cannot write progress."""
-    with SessionLocal() as db:
+    # 与工作线程的进度更新使用同一短事务锁，避免取消后迟到的提交恢复 active。
+    # PostgreSQL 行锁同时覆盖多进程；本地锁补齐 SQLite 不支持 FOR UPDATE 的行为。
+    with _job_lock(job_id), SessionLocal() as db:
         job = db.query(LibraryExtractionBatch).filter(
             LibraryExtractionBatch.id == job_id,
             LibraryExtractionBatch.user_id == user_id,
-        ).first()
+        ).with_for_update().first()
         if job is None:
             return None
         if job.status not in {"success", "partial", "failed", "canceled"}:
@@ -889,6 +901,7 @@ def resume_pending_jobs() -> int:
     The normal bound-session resolver is used for resumed items.
     """
     submissions: list[tuple[LibraryExtractionBatch, list[LibraryExtractionBatchItem]]] = []
+    ready_job_ids: list[str] = []
     with SessionLocal() as db:
         jobs = db.query(LibraryExtractionBatch).filter(
             LibraryExtractionBatch.status.in_(["queued", "running"]),
@@ -900,6 +913,9 @@ def resume_pending_jobs() -> int:
                 LibraryExtractionBatchItem.state.in_(["queued", "transcribing", "analyzing"]),
             ).all()
             if not rows:
+                # 最后一条结果已提交、任务汇总尚未提交时也可能重启。
+                # 此时只补齐终态，不能永久停在 running，更不能重复 ASR。
+                ready_job_ids.append(job.id)
                 continue
             now = _utcnow()
             for row in rows:
@@ -917,6 +933,8 @@ def resume_pending_jobs() -> int:
             for row in rows:
                 db.expunge(row)
             submissions.append((job, rows))
+    for job_id in ready_job_ids:
+        _finish_job_if_ready(job_id)
     for job, rows in submissions:
         _submit_batch(job, rows)
     return sum(len(rows) for _, rows in submissions)

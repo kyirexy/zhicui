@@ -26,6 +26,7 @@ from app.api.video_analysis_routes import router as video_analysis_router
 from app.api.ops_routes import router as ops_router
 from app.api.privacy_account_routes import router as privacy_account_router
 from app.api.catalog_quality_routes import router as catalog_quality_router
+from app.api.daily_recap_routes import router as daily_recap_router
 from app.api.showcase_case_routes import router as showcase_case_router
 from app.api.agent_interface_routes import (
     router as agent_interface_router,
@@ -396,6 +397,7 @@ def create_app() -> FastAPI:
     app.include_router(ops_router)
     app.include_router(privacy_account_router)
     app.include_router(catalog_quality_router)
+    app.include_router(daily_recap_router)
     app.include_router(showcase_case_router)
     app.include_router(agent_interface_router)
     app.include_router(agent_secure_router)

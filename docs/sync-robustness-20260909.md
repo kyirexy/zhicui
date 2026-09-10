@@ -37,3 +37,20 @@
 - 修复源码提交 `998f1390f495337f6723dffad6bf32e0ba655558` 已通过干净隔离构建、Agent 接入及原生发行契约。使用锁定的 Electron 43.2.0 官方运行时及既有 Beta 通道。
 - Windows 1.1.4 安装包已发布：93,668,792 字节，SHA-256 `f232a963e2468f180c53fbcb52596567ba3c11d4e92a93b8a86175d68ce5e0ed`。版本化 installer、blockmap、feed、清单来自同一构建来源记录。
 - 清单同步后，公开发行与鉴权契约 12 项通过。公网完整回读、包内 ASAR、本机安装和网站部署结果在完成后追加。
+
+## 发行与部署最终结果
+
+- 公网完整回读于 21:26:53 CST 通过：12/12 个 Range、93,668,792 字节，完整 SHA-256/SHA-512、blockmap、更新 feed 与 manifest 均匹配来源记录。公网包与独立解包对象逐字节相同。
+- ASAR 内为 1.1.4/Beta，Electron 43.2.0，原生模块与最终实采 SHA-256 一致；ASAR SHA-256 为 `bb824d3f61b060ee83f3aeece5cca1ce0d0a2eef2c737bbc247a7bc642a96e4b`。
+- 本机沿用既有 allusers 安装作用域完成 1.1.4 覆盖升级。HKLM、实际安装 ASAR 与模块哈希均通过；21:28:03 重新启动主进程，21:28:04 的三个子进程都来自 `D:\Apps\zhicui\zhicui-desktop`。
+- 网页提交 `10da82a1443cb6a538c980d1ac7d628d80dbc3d0` 已推送 GitHub/Gitee master。Jenkins #214 于 21:29:43 CST `SUCCESS`，实际运行目录为 `/opt/zhicui-runtime/releases/jenkins-zhicui-deploy-214`；前后端 active，HTTPS health 和 readiness 通过，既有生产旅程验收通过。
+- 公网 `/build-version.json` 返回 `10da82a1443c-20260909132813`，与新运行目录提交的前 12 位一致，确认公网实际构建已经更新。
+- 继续沿用 Agent dark 配置。可选 sidecar 更新超时和历史手工 runtime 清理权限警告未影响部署；未为了这些既有警告扩大本轮应用变更。
+- 本轮没有重放生产收藏修复，也没有用真实账户调用提取/文稿任务。只读采集及发行完整证据、实际安装验证和 Jenkins 日志在本地受控 `.codex-artifacts/sync-robustness-20260909`。
+- Jenkins #214 后最终只读验收通过：当前喜欢、收藏各 20 条官方参考的相对顺序、接口头部与首页前 3 条均匹配；已有隐藏规则保留。4 次固定本机 GET 前后，Note、公开元数据、来源台账、同步记录、隐藏、绑定、文稿批次及批次条目 8 类持久表的完整摘要全部一致。SQL 会话只读，没有提交同步、重放修复或触发提取任务。
+
+## 结论边界
+
+常见故障和本轮可复现的排序、身份、可见性问题已有保护与回归。不同设备时间偏差、同毫秒冲突，以及进程退出后旧 `running` 批次的自动恢复仍有边界，详见后端审查记录；本轮未执行真实 PostgreSQL 多进程压力测试，不宣称所有极端并发都已覆盖。
+
+完整修复从隔离工作树发布；`D:\6month` 主工作区的其他未完成修改没有整批并入或覆盖，已部署源码以本记录的 Git SHA 为准。

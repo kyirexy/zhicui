@@ -78,6 +78,7 @@ function harness() {
       if (name === '@/lib/platformLibraryOrder') return { sortPlatformLibrarySource };
       if (name === '@/lib/singleLinkImport') return { buildHomeLinkDestination: () => '/library' };
       if (name === '@/components/LibraryCoverImage') return 'img';
+      if (name === '@/components/DailyRecap') return 'daily-recap';
       if (name.endsWith('.module.css')) return {};
       throw new Error(name);
     },

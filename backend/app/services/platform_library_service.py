@@ -25,7 +25,8 @@ from app.core.media_reference import (
 from app.models.note import Note
 from app.models.plan import Plan
 from app.models.user import User
-from app.services import ai_juicer, library_sync_service, note_service, plan_service, settings_service, video_extractor
+from app.models.video_source_ledger import VideoSourceLedger
+from app.services import ai_juicer, library_sync_service, note_service, plan_service, settings_service, video_extractor, video_source_ledger_service
 from app.services.xhs_downloader_client import (
     XhsDownloaderUnavailable,
     fetch_xhs_detail,
@@ -704,6 +705,35 @@ def _extract_xiaohongshu(url: str, db: Session) -> tuple[dict[str, Any], str, di
     return info, transcript, source_meta
 
 
+def _record_bilibili_discovery(
+    db: Session, *, note: Note, source_meta: dict[str, Any],
+    previous_meta: dict[str, Any] | None = None,
+) -> None:
+    """与文案同事务记录首次来源；旧版已有分类但缺日期时不补造昨日行为。"""
+    mode = str(source_meta.get("source_mode") or "")
+    if source_meta.get("platform") != "bilibili" or mode not in _ACCOUNT_SOURCE_MODES:
+        return
+    ledger = db.query(VideoSourceLedger).filter(
+        VideoSourceLedger.user_id == note.user_id,
+        VideoSourceLedger.video_id == note.video_id,
+        VideoSourceLedger.source_mode == mode,
+    ).first()
+    if ledger is None and previous_meta is not None:
+        previous_modes = _source_modes(previous_meta.get("source_modes"), previous_meta.get("source_mode"))
+        previous_maps = _order_maps(previous_meta)
+        if mode in previous_modes or mode in previous_maps["source_synced_ats"]:
+            return
+    # 使用合并后最终生效的当前分类，避免同快照重复项或非可靠重同步改写排名。
+    effective_maps = _order_maps(_source_meta(note))
+    video_source_ledger_service.upsert_source(
+        db, user_id=note.user_id, video_id=note.video_id, note_id=note.id,
+        source_mode=mode,
+        source_rank=_confirmed_source_rank(effective_maps, mode),
+        source_synced_at=datetime.fromisoformat(_normalize_snapshot(effective_maps["source_synced_ats"].get(mode))),
+        commit=False,
+    )
+
+
 def _save_or_refresh(
     db: Session,
     *,
@@ -744,13 +774,28 @@ def _save_or_refresh(
             transcript=transcript,
             source_meta=source_meta,
             user_id=user_id,
+            commit=False,
         )
+        _record_bilibili_discovery(db, note=note, source_meta=source_meta)
+        db.commit()
+        db.refresh(note)
         return note, False
 
     payload = _load_payload(existing)
     previous_meta = sanitized_source_meta(payload.get("source_meta"))
     previous_complete = platform != "bilibili" or _is_complete_bilibili_note(existing)
     merged_source_meta, accepted = _merge_source_metadata(previous_meta, source_meta)
+    if (
+        platform == "bilibili"
+        and source_meta.get("source_mode", "import") == "import"
+        and _source_modes(previous_meta.get("source_modes"), previous_meta.get("source_mode"))
+    ):
+        # 单链接补全文案不是重新同步账号分类；保留主来源及各分类顺序水位。
+        for key in (*_ORDER_MAP_FIELDS, *_ORDER_SCALAR_FIELDS, "source_mode", "source_modes", "source_removed_ats"):
+            if key in previous_meta:
+                merged_source_meta[key] = previous_meta[key]
+            else:
+                merged_source_meta.pop(key, None)
     merged_source_meta["first_seen_at"] = (
         previous_meta.get("first_seen_at") or existing.created_at.isoformat()
     )
@@ -766,6 +811,10 @@ def _save_or_refresh(
             existing.transcript_raw = transcript
     existing.ai_summary = json.dumps(payload, ensure_ascii=False)
     existing.updated_at = datetime.now(timezone.utc)
+    if accepted:
+        _record_bilibili_discovery(
+            db, note=existing, source_meta=source_meta, previous_meta=previous_meta,
+        )
     db.commit()
     db.refresh(existing)
     return existing, True

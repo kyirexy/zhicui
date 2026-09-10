@@ -84,7 +84,9 @@ export async function prepareDailyRecap(
             onProgress: (event) => { check(); onProgress(event.message); },
           }, signal);
           check();
-          data(resumed, 'AI 回顾暂未完成，可到已有会话继续处理');
+          // 失败/取消的持久任务仍能打开原会话查看原因或手动重试。
+          // 恢复流失败不能把首页困在重试循环，也不能自动再次收费生成。
+          if (!resumed.success || !resumed.data) return href();
           state.complete = true;
           save(key, state);
           return href();

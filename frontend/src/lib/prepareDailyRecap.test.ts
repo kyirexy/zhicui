@@ -254,6 +254,29 @@ test('收到 AI turn 标识后断线，只恢复已有流，不重新提取或�
   assert.equal(h.state().complete, true);
 });
 
+test('已有 AI 任务失败、取消或恢复断流时仍打开原会话，不标记完成也不重复生成', async () => {
+  for (const response of [
+    { success: false, status: 502, error: '视频 Agent 暂时没有完成回答' },
+    { success: false, status: 409, error: '本次生成已停止' },
+    { success: false, error: '回答数据流提前结束，请重新生成' },
+  ]) {
+    const h = harness();
+    h.seed({ scope: h.runtime.recap.items.map((value) => value.id).sort(),
+      threadId: 'thread-existing', turnId: 'turn-existing', sent: true });
+    h.threads.set('thread-existing', { id: 'thread-existing', source_scope: 'selected',
+      source_ids: ['note-1', 'note-2'], message_count: 1 });
+    h.handlers.resumeAgentTurnStream = () => response;
+    const result = await h.run();
+    assert.equal(result.href, '/harness?thread=thread-existing');
+    assert.notEqual(h.state().complete, true);
+    assert.equal(h.state().turnId, 'turn-existing');
+    assert.equal(h.count('resumeAgentTurnStream'), 1);
+    assert.equal(h.count('createAgentThread'), 0);
+    assert.equal(h.count('streamAgentMessage'), 0);
+    assert.equal(h.count('startDouyinBatchExtraction'), 0);
+  }
+});
+
 test('创建空会话后取消，重试核对相同来源并复用原会话及请求标识', async () => {
   const h = harness();
   const controller = new AbortController();

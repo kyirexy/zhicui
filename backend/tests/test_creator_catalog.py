@@ -153,6 +153,27 @@ class CreatorCatalogServiceTests(unittest.TestCase):
             self.db.query(CreatorSyncRunItem).filter_by(run_id=selected.id).count(), 3,
         )
 
+    def test_douyin_complete_refresh_preserves_old_rows(self) -> None:
+        self.source.platform = "douyin"
+        self.source.creator_id = "MS4wLjABAAAAcreator_target"
+        self.source.profile_url = "https://www.douyin.com/user/" + self.source.creator_id
+        old = CreatorSourceItem(user_id=self.user.id, source_id=self.source.id, platform="douyin",
+                                external_id="10001", title="历史作品", state="ready", is_available=True)
+        self.db.add(old)
+        self.db.commit()
+        with patch.object(creator_sync_service, "_connector_credentials", return_value={"douyin_session_scope": "s" * 32}):
+            run, _ = self._create_run(operation="catalog_all")
+        with patch.object(creator_sync_service.douyin_binding_service, "get_or_create",
+                          return_value=SimpleNamespace(id="dyb-test", session_scope="s" * 32)):
+            self._process_with_catalog(run.id, lambda *_a, **_kw: {"items": [], "complete": True, "total_count": 0, "failures": []})
+        self.db.expire_all()
+        self.assertEqual(self.db.get(CreatorSyncRun, run.id).status, "succeeded")
+        saved = self.db.get(CreatorSourceItem, old.id)
+        self.assertTrue(saved.is_available)
+        self.assertEqual(saved.title, "历史作品")
+        self.assertEqual(saved.state, "ready")
+        self.assertIsNone(saved.removed_at)
+
     def test_thousand_item_catalog_is_idempotent_paginated_and_redacted(self) -> None:
         unseen = CreatorSourceItem(
             user_id=self.user.id,
@@ -633,6 +654,12 @@ class CreatorCatalogServiceTests(unittest.TestCase):
         self.assertNotIn("media_url", passed)
         self.assertNotIn("cookie", passed)
         self.assertNotIn("signed-secret", str(passed))
+
+        # 近期作品同样使用该博主的元数据，不回查混合喜欢/收藏或本人作品列表。
+        run.operation = "recent_transcript"
+        with patch.object(library_extraction_service, "extract_library_item", return_value={"id": "reused", "already_existed": True}) as extract:
+            self.assertEqual(creator_sync_service._import_work(run, work), ("reused", "reused"))
+            self.assertEqual(extract.call_args.kwargs["item"]["caption"], "公开简介")
 
     def test_multi_part_failure_keeps_completed_transcript_for_retry(self) -> None:
         work = {

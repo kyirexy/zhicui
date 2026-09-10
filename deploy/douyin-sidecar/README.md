@@ -65,8 +65,14 @@ sudo systemctl restart zhicui-douyin-sidecar
 知萃优先调用以下作用域隔离接口；返回值只能包含公开展示资料，禁止包含 Cookie、签名媒体 URL、文件路径或平台原始响应：
 
 - `POST /api/v1/creators/resolve`：`{"profile_url":"https://www.douyin.com/user/<sec_user_id>"}`，返回 `creator_id / display_name / avatar_url`。
-- `POST /api/v1/creators/works`：`{"creator_id":"<sec_user_id>","limit":50}`，返回 `items`，并把发现的作品登记到当前 `X-Zhicui-Scope` 的 metadata-only catalog，供即时 ASR 使用。
+- `POST /api/v1/creators/works`：`{"creator_id":"<sec_user_id>","limit":50}`，返回归属已验证的公开 `items`，由主服务保存到该用户的博主目录并传给即时 ASR；不改写本人列表快照。
 - `POST /api/v1/creators/catalog`：`{"creator_id":"...","cursor":null,"page_size":50,"metadata_only":true}`，逐页返回安全元数据、`catalog_id / next_cursor / has_more / total_count / complete / needs_action`；不登记或下载媒体。
 - `DELETE /api/v1/creators/catalog/{catalog_id}`：只取消当前 `X-Zhicui-Scope` 的全量任务；API 分页受限时尝试无媒体浏览器回退，遇到验证码/风控则返回 `needs_action`，不自动死循环。
 
-滚动升级期间，主服务会兼容当前固定补丁已有的 `POST /api/v1/auto-collect`：传入 `mode=post`、`url=官方博主主页` 和 `count=20|50|100`，完成后从当前作用域的 `/api/v1/items` 读取作品。两种路径都不会持久化视频。
+博主接口由 `creator_api.py` 提供，`install_creator_api.py` 在固定补丁应用后接入。`GET /api/v1/creators/health` 必须返回协议版本 1 和真实路由操作列表；不能只依据旧 health 中的 `creator_catalog` 字符串开放功能。
+
+近期与全量接口只返回指定博主的公开元数据，不登记到本人喜欢/收藏/作品快照。知萃主服务按用户与博主持久化目录，再将该条作品元数据传给已有即时转写流程。抖音主页资料接口受限时，可以从作者标识已匹配的公开作品识别真实作者名。
+
+禁止回退到旧 `auto-collect mode=post`：旧执行器在元数据模式忽略了指定 URL，实际读取本人作品。主页接口失败也不再用占位姓名伪造识别成功。
+
+已有服务可通过 `sudo python3 deploy/douyin-sidecar/upgrade_creator_api.py` 增量发布：复制当前代码到新发行，仅接入已测试接口，路由预检后原子切换并验证，不重装依赖、不删除媒体或业务元数据，失败自动回退。Cookie、喜欢/收藏快照和原发行保持原位。

@@ -59,6 +59,7 @@ sudo -u ubuntu git -C "${RELEASE_DIR}" apply --unidiff-zero --check "${DEPLOY_RO
 sudo -u ubuntu git -C "${RELEASE_DIR}" apply --unidiff-zero "${DEPLOY_ROOT}/zhicui-sidecar.patch"
 sudo -u ubuntu git -C "${RELEASE_DIR}" apply --unidiff-zero --check "${DEPLOY_ROOT}/private-list-hardening.patch"
 sudo -u ubuntu git -C "${RELEASE_DIR}" apply --unidiff-zero "${DEPLOY_ROOT}/private-list-hardening.patch"
+sudo -u ubuntu python3 "${DEPLOY_ROOT}/install_creator_api.py" "${RELEASE_DIR}"
 
 if [[ ! -x "${APP_ROOT}/.venv/bin/python" ]]; then
   sudo -u ubuntu python3 -m venv "${APP_ROOT}/.venv"

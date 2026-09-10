@@ -56,6 +56,11 @@ class DouyinLibraryError(RuntimeError):
 
 
 _CONNECTOR_ERROR_MESSAGES = {
+    "creator_identity_mismatch": "作品归属与所选博主不一致，已停止本次同步",
+    "invalid_discovery_cursor": "博主分页顺序异常，已有资料保留，请重新同步",
+    "invalid_upstream_response": "抖音未返回完整博主数据，请稍后重试",
+    "catalog_expired": "博主分页已过期，已有资料保留，请重新同步",
+    "cancelled": "博主同步已取消",
     "argus_uifid_missing": "收藏登录信息不完整，请重新连接抖音账号后再试",
     "risk_controlled": (
         "抖音暂时限制了列表读取。账号仍保持绑定，已有资料不会丢失；"
@@ -1027,108 +1032,52 @@ def trigger_collect(
 
 
 def resolve_creator(session_scope: str, profile_url: str) -> dict[str, Any]:
-    """Resolve a Douyin profile through the scoped companion session.
-
-    The companion response is deliberately reduced to display metadata.  It
-    must not return cookies, signed media URLs or an upstream response body.
-    """
-    clean_url = str(profile_url or "").strip()
-    try:
-        data = _request(
-            "POST",
-            "/api/v1/creators/resolve",
-            session_scope=session_scope,
-            json_body={"profile_url": clean_url},
-            timeout=20.0,
-        )
-    except DouyinLibraryError:
-        # The pinned companion already accepts an explicit profile URL through
-        # auto-collect. During a rolling sidecar upgrade, keep profile saving
-        # available and let the run perform the real authenticated discovery.
-        state = connection_status(session_scope)
-        if not state.get("connected") or not state.get("cookie_valid"):
-            raise DouyinLibraryError("抖音账号连接已失效，请重新连接")
-        marker = "/user/"
-        creator_id = clean_url.split(marker, 1)[1].split("?", 1)[0].split("/", 1)[0] if marker in clean_url else ""
-        if not creator_id:
-            raise DouyinLibraryError("抖音博主主页格式无效")
-        return {
-            "creator_id": creator_id[:192],
-            "display_name": "抖音博主",
-            "avatar_url": "",
-            "profile_url": f"https://www.douyin.com/user/{creator_id}",
-        }
-    creator_id = str(data.get("creator_id") or data.get("sec_user_id") or "").strip()
-    if not creator_id:
-        raise DouyinLibraryError("抖音博主解析结果缺少用户标识")
+    """只接受经过专用接口验证的博主，不把接口失败伪装成主页识别成功。"""
+    creator_id = str(profile_url).rstrip("/").rsplit("/", 1)[-1]
+    if not re.fullmatch(r"[A-Za-z0-9_-]{12,192}", creator_id):
+        raise DouyinLibraryError("抖音博主主页格式无效")
+    data = _request(
+        "POST", "/api/v1/creators/resolve", session_scope=session_scope,
+        json_body={"profile_url": profile_url}, timeout=45.0,
+    )
+    if not isinstance(data, dict) or data.get("creator_id") != creator_id or not data.get("display_name"):
+        raise DouyinLibraryError("抖音返回的主页与目标博主不一致", code="creator_identity_mismatch")
     return {
-        "creator_id": creator_id[:192],
-        "display_name": str(data.get("display_name") or data.get("nickname") or "抖音博主").strip()[:160],
-        "avatar_url": str(data.get("avatar_url") or "").strip()[:2048],
+        "creator_id": creator_id,
+        "display_name": str(data["display_name"]).strip()[:160],
+        "avatar_url": "",
         "profile_url": f"https://www.douyin.com/user/{creator_id}",
     }
 
 
 def list_creator_works(
-    session_scope: str,
-    binding_ref: str,
-    creator_id: str,
-    limit: int,
+    session_scope: str, binding_ref: str, creator_id: str, limit: int,
 ) -> list[dict[str, Any]]:
-    """Discover recent creator works and register them in the scoped manifest."""
+    """只取目标博主的专用结果；旧 auto-collect 会读本人作品，禁止回退。"""
+    del binding_ref
+    if not re.fullmatch(r"[A-Za-z0-9_-]{12,192}", creator_id):
+        raise DouyinLibraryError("抖音博主标识无效")
     safe_limit = max(1, min(int(limit), _MAX_SYNC_COUNT))
-    clean_creator_id = str(creator_id or "").strip()
-    try:
-        body = _request(
-            "POST",
-            "/api/v1/creators/works",
-            session_scope=session_scope,
-            json_body={"creator_id": clean_creator_id, "limit": safe_limit},
-            timeout=45.0,
-        )
-        raw_items = body.get("items") if isinstance(body, dict) else None
-        if not isinstance(raw_items, list):
-            raise DouyinLibraryError("抖音博主作品接口未返回作品列表")
-    except DouyinLibraryError:
-        # Backward-compatible path for the pinned production patch: its
-        # metadata-only auto-collect already supports req.url + mode=post.
-        profile_url = f"https://www.douyin.com/user/{clean_creator_id}"
-        job = _request(
-            "POST",
-            "/api/v1/auto-collect",
-            session_scope=session_scope,
-            json_body={"mode": "post", "count": safe_limit, "url": profile_url},
-            timeout=15.0,
-        )
-        job_id = str(job.get("job_id") or "").strip()
-        if not job_id:
-            raise DouyinLibraryError("抖音博主同步任务没有启动")
-        for _ in range(180):
-            state = get_job(session_scope, job_id)
-            if state.get("status") == "success":
-                break
-            if state.get("status") == "failed":
-                raise DouyinLibraryError("抖音博主作品读取失败")
-            time.sleep(1)
-        else:
-            raise DouyinLibraryError("抖音博主作品读取超时")
-        raw_items = _request(
-            "GET",
-            "/api/v1/items",
-            session_scope=session_scope,
-            timeout=15.0,
-        ).get("items", [])
-        raw_items = [
-            item for item in raw_items
-            if isinstance(item, dict)
-            and str(item.get("source_mode") or _infer_source_mode(item.get("file_paths") or [])) == "post"
-        ][:safe_limit]
-    normalized = [
-        _normalize_item(raw, binding_ref)
-        for raw in raw_items[:safe_limit]
-        if isinstance(raw, dict)
-    ]
-    return [item for item in normalized if item.get("aweme_id")]
+    body = _request(
+        "POST", "/api/v1/creators/works", session_scope=session_scope,
+        json_body={"creator_id": creator_id, "limit": safe_limit}, timeout=45.0,
+    )
+    if not isinstance(body, dict) or body.get("creator_id") != creator_id or not isinstance(body.get("items"), list):
+        raise DouyinLibraryError("抖音博主作品返回格式异常", code="invalid_upstream_response")
+    result, seen = [], set()
+    for raw in body["items"]:
+        if not isinstance(raw, dict) or raw.get("creator_id") != creator_id:
+            raise DouyinLibraryError("作品归属与目标博主不一致", code="creator_identity_mismatch")
+        video_id = str(raw.get("aweme_id") or "")
+        if not re.fullmatch(r"[0-9]{5,32}", video_id):
+            raise DouyinLibraryError("抖音博主作品标识异常", code="invalid_upstream_response")
+        if video_id in seen or raw.get("media_type") != "video":
+            continue
+        seen.add(video_id)
+        result.append({key: raw.get(key) for key in (
+            "aweme_id", "creator_id", "desc", "author_name", "media_type", "publish_timestamp", "duration_ms",
+        )})
+    return result[:safe_limit]
 
 
 def clear_session(session_scope: str) -> dict[str, Any]:

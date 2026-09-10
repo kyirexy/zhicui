@@ -471,12 +471,15 @@ class CatalogHealthContractTests(unittest.TestCase):
         with patch.object(
             creator_connectors.douyin_library,
             "_request",
-            return_value={
+            side_effect=[{
                 "status": "ok",
                 "storage_mode": "metadata_only",
                 "capabilities": ["creator_catalog"],
                 "cookie": "must-not-escape",
-            },
+            }, {
+                "status": "ok", "protocol_version": 1, "identity_checked": True,
+                "operations": ["resolve", "recent", "catalog", "cancel"],
+            }],
         ):
             result = creator_connectors.catalog_health("douyin")
         self.assertTrue(result["healthy"])

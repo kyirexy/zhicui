@@ -34,7 +34,7 @@ class CreatorConnectorError(RuntimeError):
 
 PLATFORM_HOSTS = {
     "bilibili": {"space.bilibili.com", "b23.tv"},
-    "douyin": {"www.douyin.com", "douyin.com", "v.douyin.com"},
+    "douyin": {"www.douyin.com", "douyin.com", "v.douyin.com", "www.iesdouyin.com", "iesdouyin.com"},
     "xiaohongshu": {
         "www.xiaohongshu.com",
         "xiaohongshu.com",
@@ -140,6 +140,13 @@ def normalize_profile_ref(platform: str, profile_ref: str) -> dict[str, str]:
         raise CreatorConnectorError("unsupported_platform", "暂不支持该平台")
     if not value or len(value) > 1024:
         raise CreatorConnectorError("invalid_profile", "请输入有效的博主主页")
+    # 抖音分享按钮复制的是说明文字加短链接，先取唯一链接，再沿用官方域名校验。
+    if platform == "douyin" and not value.startswith(("https://", "http://")):
+        links = re.findall(r"https?://[^\s<>\"，。；！]+", value)
+        if len(links) == 1:
+            value = links[0]
+        elif links:
+            raise CreatorConnectorError("invalid_profile", "请一次粘贴一个博主主页链接")
 
     if "://" not in value:
         pattern = {
@@ -166,6 +173,8 @@ def normalize_profile_ref(platform: str, profile_ref: str) -> dict[str, str]:
             creator_id = segments[0]
         elif platform == "douyin" and len(segments) >= 2 and segments[0] == "user":
             creator_id = segments[1]
+        elif platform == "douyin" and len(segments) == 3 and segments[:2] == ["share", "user"]:
+            creator_id = segments[2]
         elif platform == "xiaohongshu" and len(segments) >= 3 and segments[:2] == ["user", "profile"]:
             creator_id = segments[2]
         pattern = {
@@ -380,7 +389,7 @@ def resolve_creator(
         try:
             data = douyin_library.resolve_creator(douyin_session_scope, normalized["profile_url"])
         except douyin_library.DouyinLibraryError as exc:
-            raise CreatorConnectorError("douyin_login_required", "抖音登录已失效或连接器不可用") from exc
+            raise _douyin_catalog_error(exc) from exc
         return {**normalized, **data, "platform": platform}
     if not xhs_cookie:
         raise CreatorConnectorError("xhs_service_unavailable", "小红书服务账号尚未配置")
@@ -426,17 +435,13 @@ def discover_works(
                 limit,
             )
         except douyin_library.DouyinLibraryError as exc:
-            raise CreatorConnectorError("douyin_login_required", "抖音登录已失效或连接器不可用") from exc
-        return [
-            {
-                "external_id": str(item.get("aweme_id") or "")[:192],
-                "source_url": str(item.get("source_url") or "")[:1024],
-                "media_type": str(item.get("media_type") or "video"),
-                "author_name": str(item.get("author_name") or "")[:160],
-            }
-            for item in items
-            if item.get("aweme_id")
-        ]
+            raise _douyin_catalog_error(exc) from exc
+        result = []
+        for index, raw in enumerate(items):
+            item = _normalize_douyin_catalog_item(raw, index)
+            if item is not None:
+                result.append(item)
+        return result
     try:
         items = xhs_downloader_client.list_xhs_creator_works(
             source.creator_id, limit=limit, cookie=xhs_cookie
@@ -524,6 +529,9 @@ def _normalize_douyin_catalog_item(
 
 
 def _douyin_catalog_error(exc: Exception) -> CreatorConnectorError:
+    code = str(getattr(exc, "code", ""))
+    if code in {"creator_identity_mismatch", "invalid_discovery_cursor", "invalid_upstream_response", "catalog_expired", "cancelled"}:
+        return CreatorConnectorError(code, str(exc))
     message = str(exc).lower()
     if any(marker in message for marker in ("验证码", "captcha", "challenge", "风控", "risk")):
         return CreatorConnectorError("douyin_verification_required", "抖音要求完成验证码或风控验证")
@@ -787,9 +795,17 @@ def catalog_health(
                 32,
             )
             capabilities = raw.get("capabilities") if isinstance(raw, dict) else []
-            supports_catalog = bool(
+            advertised = bool(
                 (isinstance(capabilities, list) and "creator_catalog" in capabilities)
                 or (isinstance(raw, dict) and raw.get("supports_creator_catalog"))
+            )
+            # 旧服务曾声明能力却没有路由，必须握手专用协议，不能只读广告标记。
+            protocol = douyin_library._request("GET", "/api/v1/creators/health", timeout=3.0) if advertised else {}
+            supports_catalog = bool(
+                isinstance(protocol, dict) and protocol.get("status") == "ok"
+                and protocol.get("protocol_version") == 1
+                and protocol.get("identity_checked") is True
+                and {"resolve", "recent", "catalog", "cancel"}.issubset(set(protocol.get("operations") or []))
             )
             session_ready: bool | None = None
             if douyin_session_scope:

@@ -1265,6 +1265,8 @@ def _process_catalog(
             db.query(CreatorSourceItem).filter(
                 CreatorSourceItem.user_id == run.user_id,
                 CreatorSourceItem.source_id == run.source_id,
+                # 抖音目录始终增量保留历史；一次公开列表缺席不等于用户删除资料。
+                CreatorSourceItem.platform != "douyin",
                 CreatorSourceItem.removed_at.is_(None),
                 CreatorSourceItem.state != "removed",
                 CreatorSourceItem.is_available.is_(True),
@@ -1450,7 +1452,7 @@ def _import_work(
         raise _RunCancelled("任务已取消或租约已转移")
     if run.platform == "douyin":
         safe_item = None
-        if getattr(run, "operation", "recent_transcript") == "selected_transcript":
+        if getattr(run, "operation", "recent_transcript") in {"selected_transcript", "recent_transcript"}:
             published = work.get("published_at")
             if isinstance(published, datetime):
                 recorded_at = _aware(published).isoformat()

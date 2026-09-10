@@ -5217,6 +5217,11 @@ def admin_test_creator_sync_connector(
                 douyin_session_scope=binding.session_scope if binding else "",
                 xhs_cookie=str(config.get("xhs_cookie") or ""),
             )
+            if body.platform == "douyin":
+                try:
+                    douyin_library.list_creator_works(binding.session_scope, binding.id, preview["creator_id"], 1)
+                except douyin_library.DouyinLibraryError as exc:
+                    raise creator_connectors.CreatorConnectorError(exc.code, str(exc)) from exc
         except creator_connectors.CreatorConnectorError as exc:
             settings_service.record_creator_connector_test(
                 db, platform=body.platform, healthy=False, tested_at=tested_at
@@ -5234,6 +5239,12 @@ def admin_test_creator_sync_connector(
             tested_at=tested_at,
             catalog_healthy=catalog_healthy if body.platform in {"douyin", "bilibili"} else None,
         )
+        if body.platform == "douyin":
+            audit_service.log_action(
+                db, admin_user_id=current_user.id, action="creator_connector_test",
+                target_type="config", target_id="douyin",
+                detail={"healthy": True, "catalog_healthy": catalog_healthy, "profile_verified": True},
+            )
         return _ok({
             "healthy": True,
             "catalog_healthy": catalog_healthy,
@@ -5246,30 +5257,10 @@ def admin_test_creator_sync_connector(
             "catalog_health": catalog_state,
         })
     if body.platform == "douyin":
-        binding = douyin_binding_service.get_or_create(db, current_user.id)
-        state = douyin_library.connection_status(binding.session_scope)
-        catalog_state = catalog_readiness("douyin", binding.session_scope)
-        healthy = bool(state.get("connected"))
-        catalog_healthy = bool(catalog_state.get("supports_catalog_all"))
-        settings_service.record_creator_connector_test(
-            db,
-            platform=body.platform,
-            healthy=healthy,
-            tested_at=tested_at,
-            catalog_healthy=catalog_healthy,
-        )
+        # 单纯连接到本机服务不能证明博主接口可用，也不能改写已验证的平台状态。
         return _ok({
-            "healthy": healthy,
-            "platform": body.platform,
-            "catalog_healthy": catalog_healthy,
-            "message": (
-                "近期与全部作品连接器均可用"
-                if healthy and catalog_healthy
-                else "近期作品可用；全部作品连接器尚未通过健康检查"
-                if healthy
-                else "抖音连接器不可用"
-            ),
-            "catalog_health": catalog_state,
+            "healthy": False, "catalog_healthy": False, "platform": "douyin",
+            "message": "请填写一个公开的抖音博主主页，验证真实主页与作品读取",
         })
     if body.platform == "bilibili":
         recent_healthy = importlib.util.find_spec("yt_dlp") is not None

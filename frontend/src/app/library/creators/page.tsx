@@ -493,7 +493,7 @@ function CreatorLibraryWorkspace() {
     trackRun(response.data.run);
     setNotice(
       operation === 'catalog_all'
-        ? (autoTranscribe ? '正在发现全部作品，随后自动逐条转写；切换页面不会中断' : '正在后台刷新全部公开作品，切换页面不会中断')
+        ? (autoTranscribe ? '正在发现全部作品，随后同时提取多个作品的文字；切换页面不会中断' : '正在后台刷新全部公开作品，切换页面不会中断')
         : `正在后台准备 ${response.data.run.target_count || limit || itemIds?.length || 0} 条普通文稿`,
     );
     if (operation === 'selected_transcript') setSelectedIds(new Set());

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -181,13 +183,92 @@ class CreatorCatalogServiceTests(unittest.TestCase):
         with patch.object(creator_sync_service, "_import_work", side_effect=transcribe):
             self._process_with_catalog(run.id, lambda *_a, **_kw: {"items": works, "complete": True, "total_count": 3})
         self.db.expire_all(); self.assertEqual(self.db.get(CreatorSyncRun, run.id).status, "cancelled")
-        self.assertEqual(len(calls), 1)
+        self.assertGreaterEqual(len(calls), 1)
+        self.assertLessEqual(len(calls), 3)
+        self.assertEqual(self.db.get(CreatorSyncRun, run.id).new_count, len(calls))
         creator_sync_service.retry_run(self.db, user_id=self.user.id, run_id=run.id)
         with patch.object(creator_sync_service, "_import_work", return_value=("imported", None)) as importer:
             self._process_with_catalog(run.id, lambda *_a, **_kw: self.fail("resume must keep discovered queue"))
         self.db.expire_all(); self.assertEqual(self.db.get(CreatorSyncRun, run.id).status, "succeeded")
         self.assertLessEqual(importer.call_count, 3)
         self.assertEqual(self.db.get(CreatorSyncRun, run.id).processed_count, 3)
+
+    def test_full_transcription_really_overlaps_three_extractions(self):
+        works = [self._all_work(i) for i in range(9)]
+        run, _ = self._create_run(operation="catalog_all", auto_transcribe=True)
+        barrier = threading.Barrier(3, timeout=5)
+        lock = threading.Lock()
+        active = peak = 0
+        seen = []
+        def transcribe(_run, work, **kwargs):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+                seen.append(work["external_id"])
+            try:
+                barrier.wait()
+                return "imported", None
+            finally:
+                with lock:
+                    active -= 1
+        with patch.object(creator_sync_service, "_import_work", side_effect=transcribe):
+            self._process_with_catalog(run.id, lambda *_a, **_kw: {"items": works, "complete": True, "total_count": 9})
+        self.db.expire_all()
+        final = self.db.get(CreatorSyncRun, run.id)
+        self.assertEqual((peak, len(set(seen)), final.new_count, final.status), (3, 9, 9, "succeeded"))
+
+    def test_parallel_transient_failure_preserves_other_results_before_retry(self):
+        works = [self._all_work(i) for i in range(6)]
+        run, _ = self._create_run(operation="catalog_all", auto_transcribe=True)
+        barrier = threading.Barrier(3, timeout=5)
+        def transcribe(_run, work, **kwargs):
+            if work["external_id"] in {w["external_id"] for w in works[:3]}:
+                barrier.wait()
+            if work["external_id"] == works[0]["external_id"]:
+                raise creator_connectors.CreatorConnectorError("upstream_timeout", "测试上游超时")
+            return "imported", None
+        with patch.object(creator_sync_service, "_import_work", side_effect=transcribe):
+            self._process_with_catalog(run.id, lambda *_a, **_kw: {"items": works, "complete": True, "total_count": 6})
+        self.db.expire_all()
+        final = self.db.get(CreatorSyncRun, run.id)
+        self.assertEqual((final.status, final.new_count, final.failed_count), ("queued", 5, 0))
+        self.assertIsNone(final.lease_token)
+        final.next_retry_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        row = self.db.query(CreatorSyncRunItem).filter_by(run_id=run.id, state="pending").one()
+        row.next_retry_at = final.next_retry_at
+        self.db.commit()
+        with patch.object(creator_sync_service, "_import_work", return_value=("imported", None)) as importer:
+            self._process_with_catalog(run.id, lambda *_a, **_kw: self.fail("重试不重新抓目录"))
+        self.assertEqual(importer.call_count, 1)
+        self.db.expire_all()
+        self.assertEqual(self.db.get(CreatorSyncRun, run.id).new_count, 6)
+        self.assertEqual(self.db.get(CreatorSyncRun, run.id).status, "succeeded")
+
+    def test_parallel_risk_stops_dispatch_and_keeps_inflight_success(self):
+        works = [self._all_work(i) for i in range(12)]
+        run, _ = self._create_run(operation="catalog_all", auto_transcribe=True)
+        barrier = threading.Barrier(3, timeout=5)
+        calls = []
+        def transcribe(_run, work, **kwargs):
+            calls.append(work["external_id"])
+            barrier.wait()
+            if work["external_id"] == works[0]["external_id"]:
+                raise creator_connectors.CreatorConnectorError("bilibili_risk_control", "请检查账号状态")
+            deadline = time.monotonic() + 5
+            while not kwargs["should_cancel"]():
+                if time.monotonic() > deadline:
+                    self.fail("风控未停止在途任务")
+                time.sleep(0.01)
+            return "imported", None
+        with patch.object(creator_sync_service, "_import_work", side_effect=transcribe):
+            self._process_with_catalog(run.id, lambda *_a, **_kw: {"items": works, "complete": True, "total_count": 12})
+        self.db.expire_all()
+        final = self.db.get(CreatorSyncRun, run.id)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual((final.status, final.new_count, final.failed_count), ("failed", 2, 1))
+        self.assertTrue(final.needs_action)
+        self.assertIsNone(final.lease_token)
 
     def test_automatic_transcription_requires_catalog_operation(self):
         with self.assertRaises(creator_sync_service.CreatorSyncError) as raised:

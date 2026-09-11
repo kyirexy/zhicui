@@ -12,6 +12,7 @@ import math
 import threading
 import uuid
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
@@ -56,6 +57,7 @@ ALLOWED_OPERATIONS = {
 }
 CATALOG_PLATFORMS = {"douyin", "bilibili"}
 RETRY_DELAYS_SECONDS = (30, 120, 600)
+FULL_TRANSCRIPT_CONCURRENCY = 3
 LEASE_SECONDS = 300
 LEASE_HEARTBEAT_SECONDS = 60
 
@@ -1651,6 +1653,214 @@ def _schedule_item_retry(
     return True
 
 
+def _prepare_parallel_item(run_id: str, lease_token: str, run_item_id: str):
+    """只在协调线程中认领作品，不在线程间共享 ORM 对象。"""
+    with SessionLocal() as db:
+        run = db.query(CreatorSyncRun).filter(CreatorSyncRun.id == run_id).first()
+        if run is None or run.lease_token != lease_token:
+            return
+        if run.cancellation_requested:
+            raise _RunCancelled("任务已取消")
+        run_item = db.query(CreatorSyncRunItem).filter(
+            CreatorSyncRunItem.id == run_item_id,
+            CreatorSyncRunItem.run_id == run_id,
+        ).first()
+        if run_item is None or run_item.state not in {"pending", "importing"}:
+            return None
+        retry_at = _aware(run_item.next_retry_at)
+        if retry_at is not None and retry_at > _utcnow():
+            return None
+        item = db.query(CreatorSourceItem).filter(
+            CreatorSourceItem.id == run_item.source_item_id,
+            CreatorSourceItem.user_id == run.user_id,
+        ).first()
+        if item is None:
+            _mark_item_result(
+                db, run, run_item, None,
+                state="failed",
+                error_code="item_missing",
+                error_message="目录作品不存在",
+            )
+            db.commit()
+            return None
+        if item.removed_at is not None or item.state == "removed":
+            _mark_item_result(
+                db, run, run_item, item,
+                state="skipped_removed",
+                error_code="removed",
+            )
+            db.commit()
+            return None
+        existing_note = db.query(Note).filter(Note.id == item.note_id, Note.user_id == run.user_id).first() if item.note_id else None
+        if existing_note and str(existing_note.transcript_raw or "").strip():
+            _mark_item_result(
+                db, run, run_item, item,
+                state="reused",
+                note_id=item.note_id,
+            )
+            db.commit()
+            return None
+        if item.note_id:
+            item.note_id = None
+        if (
+            item.metadata_quality == "quarantined"
+            or item.transcription_blocked
+        ):
+            item.needs_enrichment = True
+            item.transcription_blocked = True
+            item.quality_checked_at = _utcnow()
+            _mark_item_result(
+                db, run, run_item, item,
+                state="failed",
+                error_code="metadata_needs_enrichment",
+                error_message="作品元数据待补全，暂不准备文稿",
+            )
+            db.commit()
+            return None
+        run_item.state = "importing"
+        run_item.attempt_count += 1
+        run_item.next_retry_at = None
+        work = _work_from_item(item)
+        _heartbeat(db, run, lease_token, "transcribing")
+        return work
+
+
+def _process_parallel_transcripts(run_id: str, lease_token: str, run_snapshot: SimpleNamespace) -> None:
+    """全量文字提取使用有界并发；续租、计数和重试仍由同一个任务负责。"""
+    with SessionLocal() as db:
+        ids = [row.id for row in db.query(CreatorSyncRunItem).filter(
+            CreatorSyncRunItem.run_id == run_id,
+            CreatorSyncRunItem.state.in_(("pending", "importing")),
+        ).order_by(CreatorSyncRunItem.ordinal.asc()).all()]
+    remaining = iter(ids)
+    stop = threading.Event()
+    action_error = None
+    cancelled = False
+    exhausted = False
+
+    with _LeaseHeartbeat(run_id, lease_token) as guard:
+        def extract(work):
+            if stop.is_set() or guard.lost:
+                raise _RunCancelled("任务已停止")
+            return _import_work(run_snapshot, work, should_cancel=lambda: (
+                stop.is_set() or guard.lost or _catalog_should_cancel(run_id, lease_token)
+            ))
+
+        with ThreadPoolExecutor(max_workers=FULL_TRANSCRIPT_CONCURRENCY,
+                                thread_name_prefix="creator-transcript") as pool:
+            active = {}
+            try:
+                while active or not exhausted:
+                    if _catalog_should_cancel(run_id, lease_token) or guard.lost:
+                        cancelled = True
+                        stop.set()
+                    while not stop.is_set() and not exhausted and len(active) < FULL_TRANSCRIPT_CONCURRENCY:
+                        item_id = next(remaining, None)
+                        if item_id is None:
+                            exhausted = True
+                            break
+                        try:
+                            work = _prepare_parallel_item(run_id, lease_token, item_id)
+                        except _RunCancelled:
+                            cancelled = True
+                            stop.set()
+                            break
+                        if work is not None:
+                            active[pool.submit(extract, work)] = item_id
+                    if not active:
+                        break
+                    done, _ = wait(active, timeout=0.5, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        item_id = active.pop(future)
+                        try:
+                            status, note_id = future.result()
+                            error = None
+                        except _RunCancelled:
+                            # 取消或风控停止的在途项保留为待恢复，不算提取失败。
+                            if action_error is None:
+                                cancelled = True
+                            stop.set()
+                            continue
+                        except Exception as exc:
+                            error = exc
+                        with SessionLocal() as db:
+                            run = db.get(CreatorSyncRun, run_id)
+                            row = db.get(CreatorSyncRunItem, item_id)
+                            if run is None or row is None or run.lease_token != lease_token:
+                                raise _RunCancelled("任务租约已转移")
+                            item = db.get(CreatorSourceItem, row.source_item_id)
+                            if error is None:
+                                _mark_item_result(db, run, row, item,
+                                    state="reused" if status == "reused" else "succeeded", note_id=note_id)
+                            else:
+                                code, message = _safe_error(error)
+                                if _is_needs_action(code):
+                                    action_error = (code, message)
+                                    stop.set()
+                                if not _is_needs_action(code) and _is_transient(code) and 1 <= row.attempt_count <= len(RETRY_DELAYS_SECONDS):
+                                    row.state = "pending"
+                                    row.error_code = code[:80]
+                                    row.error_message = message[:240]
+                                    row.next_retry_at = _utcnow() + timedelta(seconds=RETRY_DELAYS_SECONDS[row.attempt_count - 1])
+                                    run.attempt_count = max(run.attempt_count, row.attempt_count)
+                                    run.error_code, run.error_message = code[:80], message[:240]
+                                else:
+                                    _mark_item_result(db, run, row, item, state="failed",
+                                        note_id=error.note_id if isinstance(error, _PartialImportError) else None,
+                                        error_code=code, error_message=message)
+                            if run.cancellation_requested:
+                                # 已完成的结果仍需落库，取消只停止后续和在途提取。
+                                db.commit()
+                                cancelled = True
+                                stop.set()
+                            else:
+                                _heartbeat(db, run, lease_token, "transcribing")
+            finally:
+                # 意外退出也先通知在途提取停止；线程池退出前等待，避免释放租约后仍写入。
+                stop.set()
+
+    with SessionLocal() as db:
+        run = db.get(CreatorSyncRun, run_id)
+        if run is None or run.lease_token != lease_token:
+            return
+        if run.cancellation_requested or cancelled:
+            _finish_cancelled(run_id, lease_token)
+            return
+        if action_error is not None:
+            code, message = action_error
+            run.status = "failed"
+            run.needs_action = True
+            run.needs_action_code, run.needs_action_message = code, message
+            run.error_code, run.error_message = code, message
+            run.finished_at = _utcnow()
+        else:
+            pending = db.query(CreatorSyncRunItem).filter(
+                CreatorSyncRunItem.run_id == run_id,
+                CreatorSyncRunItem.state.in_(("pending", "importing")),
+            ).all()
+            if pending:
+                run.status = "queued"
+                run.next_retry_at = min((_aware(row.next_retry_at) or _utcnow()) for row in pending)
+            else:
+                _recompute_run_counts(db, run)
+                run.status = "partial" if run.failed_count else "succeeded"
+                run.finished_at = _utcnow()
+                run.next_retry_at = None
+        _recompute_run_counts(db, run)
+        run.heartbeat_at = _utcnow()
+        run.lease_token = None
+        run.lease_until = None
+        source = db.get(CreatorSource, run.source_id)
+        if source is not None and run.status in {"succeeded", "partial", "failed"}:
+            source.last_synced_at = _utcnow()
+            if run.status == "succeeded":
+                source.last_success_at = source.last_synced_at
+                source.last_error_code = ""
+            else:
+                source.last_error_code = run.error_code or "item_failed"
+        db.commit()
+
+
 def _process_transcript_run(
     run_id: str,
     lease_token: str,
@@ -1971,7 +2181,7 @@ def process_run(run_id: str) -> None:
                     if not run_snapshot.discovery_complete:
                         if not _process_catalog(run_id, lease_token, source_snapshot, credentials):
                             return
-                    _process_transcript_run(run_id, lease_token, source_snapshot, run_snapshot, credentials)
+                    _process_parallel_transcripts(run_id, lease_token, run_snapshot)
             else:
                 _process_transcript_run(
                     run_id, lease_token, source_snapshot, run_snapshot, credentials,

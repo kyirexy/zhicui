@@ -51,9 +51,9 @@ class BilibiliCreatorProfileTests(unittest.TestCase):
     def test_upstream_rejection_does_not_start_second_connector(self):
         source = SimpleNamespace(platform="bilibili", profile_url="https://space.bilibili.com/123/video")
         for code in ("bilibili_risk_control", "bilibili_verification_required", "bilibili_login_required", "bilibili_catalog_failed", "empty_catalog_unverified"):
-            with self.subTest(code=code), patch.object(yutto, "discover_bilibili_catalog", side_effect=yutto.YuttoCatalogError(code, "读取失败")), patch.object(connector, "_discover_bilibili_catalog_fallback") as fallback:
+            with self.subTest(code=code), patch.object(connector.bilibili_user_catalog, "discover", side_effect=connector.bilibili_binding_service.BilibiliBindingError(code, "读取失败")), patch.object(connector, "_discover_bilibili_catalog_fallback") as fallback:
                 with self.assertRaises(connector.CreatorConnectorError) as raised:
-                    connector.discover_catalog(source)
+                    connector.discover_catalog(source, bilibili_user_id="owner")
                 self.assertEqual(raised.exception.code, code)
                 fallback.assert_not_called()
 

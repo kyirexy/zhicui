@@ -37,6 +37,8 @@ class RatePolicy:
 
 
 POLICIES: tuple[RatePolicy, ...] = (
+    RatePolicy("bilibili_binding_poll", "POST", "/api/platform-connections/bilibili/login/poll", 25, 60, "user"),
+    RatePolicy("bilibili_binding_start", "POST", "/api/platform-connections/bilibili/login", 6, 60, "user"),
     RatePolicy("phone_login_create", "POST", "/api/auth/phone-login/sessions", 12, 300, "user"),
     RatePolicy("phone_login_claim", "POST", "/api/auth/phone-login/sessions", 60, 300),
     RatePolicy("phone_login_poll", "POST", "/api/auth/phone-login/sessions", 1200, 300),
@@ -171,6 +173,8 @@ def _matches(policy: RatePolicy, request: Request) -> bool:
         return path.startswith(policy.path_prefix + "/") and path.endswith(("/claim", "/decision"))
     if policy.name == "phone_login_poll":
         return path.startswith(policy.path_prefix + "/") and path.endswith(("/status", "/token"))
+    if policy.name == "bilibili_binding_start":
+        return path == policy.path_prefix
     if policy.name == "desktop_login_create":
         return path == policy.path_prefix
     if policy.name == "desktop_login_approval":

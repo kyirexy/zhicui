@@ -92,3 +92,16 @@ test('all user-visible domain aliases match the Stable ProductActionRegistry con
     );
   }
 });
+
+
+test('Bilibili cloud binding exposes only own-user actions with destructive disconnect confirmation', () => {
+  const capabilities = { api_version: 'v1', actions: loadRegistryActions() };
+  for (const [verb, actionId] of [['bind', 'start'], ['status', 'status'], ['poll', 'poll'], ['disconnect', 'disconnect']]) {
+    const { action } = resolveDomainAction(capabilities, 'platform', verb);
+    assert.equal(action.id, `platform.binding.${actionId}`);
+    assert.equal(action.execution_location, 'cloud');
+    assert.deepEqual(action.input_schema.properties.platform.enum, ['bilibili']);
+    for (const forbidden of ['user_id', 'cookie', 'password', 'profile_key']) assert.equal(Object.hasOwn(action.input_schema.properties, forbidden), false);
+    if (verb === 'disconnect') { assert.ok(action.risk.includes('destructive')); assert.ok(action.error_codes.includes('CONFIRMATION_REQUIRED')); }
+  }
+});

@@ -5190,6 +5190,7 @@ def admin_test_creator_sync_connector(
             return creator_connectors.catalog_health(
                 platform,
                 douyin_session_scope=session_scope,
+                bilibili_user_id=current_user.id if platform == "bilibili" else "",
             )
         except Exception:
             return {

@@ -23,6 +23,7 @@ from app.services import (
     chat_credit_billing_service,
     chat_model_catalog_service,
     creator_sync_service,
+    bilibili_binding_service,
     creator_sync_worker,
     douyin_binding_service,
     douyin_library,
@@ -2045,6 +2046,34 @@ def analysis_account_get(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
     )
     ctx.db.commit()
     return video_analysis_billing_service.serialize_account(ctx.db, account)
+
+
+def _platform_call(operation):
+    try:
+        return operation()
+    except bilibili_binding_service.BilibiliBindingError as exc:
+        raise ActionHandlerError(exc.code.upper(), str(exc)) from exc
+
+
+def platform_binding_status(ctx, payload):
+    return bilibili_binding_service.public(bilibili_binding_service.get(ctx.db, ctx.user.id))
+
+
+def platform_binding_start(ctx, payload):
+    result = _platform_call(lambda: bilibili_binding_service.login_start(ctx.db, ctx.user.id))
+    result.pop("qr_url", None)  # 二维码只交给鉴权网页，不写入通用 Action 运行记录。
+    if result.get("session_id"):
+        from app.core.config import settings
+        result["login_url"] = settings.PUBLIC_APP_URL.rstrip("/") + "/connections/bilibili?session=" + result["session_id"]
+    return result
+
+
+def platform_binding_poll(ctx, payload):
+    return _platform_call(lambda: bilibili_binding_service.login_poll(ctx.db, ctx.user.id, payload["session_id"]))
+
+
+def platform_binding_disconnect(ctx, payload):
+    return _platform_call(lambda: bilibili_binding_service.disconnect(ctx.db, ctx.user.id))
 
 
 HANDLERS = {

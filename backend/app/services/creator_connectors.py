@@ -24,6 +24,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 
 from app.services import douyin_library, xhs_downloader_client, yutto_catalog_client
+from app.services import bilibili_binding_service, bilibili_user_catalog
 
 
 class CreatorConnectorError(RuntimeError):
@@ -455,23 +456,10 @@ def discover_works(
     douyin_session_scope: str = "",
     douyin_binding_ref: str = "",
     xhs_cookie: str = "",
+    bilibili_user_id: str = "",
 ) -> list[dict[str, Any]]:
     if source.platform == "bilibili":
-        data = _bilibili_playlist(source.profile_url, limit)
-        entries = data.get("entries") or []
-        result = []
-        for raw in entries[:limit]:
-            if not isinstance(raw, dict):
-                continue
-            external_id = str(raw.get("id") or "").strip()
-            if not external_id:
-                continue
-            result.append({
-                "external_id": external_id[:192],
-                "source_url": f"https://www.bilibili.com/video/{external_id}",
-                "media_type": "video",
-            })
-        return result
+        return _bilibili_user_catalog(source, bilibili_user_id, limit=limit)["items"]
     if source.platform == "douyin":
         try:
             items = douyin_library.list_creator_works(
@@ -719,11 +707,21 @@ def _discover_douyin_catalog(
     }
 
 
+def _bilibili_user_catalog(source, user_id, **kwargs):
+    if not user_id:
+        raise CreatorConnectorError("bilibili_login_required", "请先绑定自己的 B站账号：zhicui platform bind bilibili")
+    try:
+        return bilibili_user_catalog.discover(user_id, source.profile_url, **kwargs)
+    except bilibili_binding_service.BilibiliBindingError as exc:
+        raise CreatorConnectorError(exc.code, str(exc)) from exc
+
+
 def discover_catalog(
     source: Any,
     *,
     douyin_session_scope: str = "",
     douyin_binding_ref: str = "",
+    bilibili_user_id: str = "",
     on_item: Callable[[dict[str, Any], int, int | None], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
     run_id: str = "",
@@ -746,46 +744,7 @@ def discover_catalog(
             run_id=run_id,
         )
     if source.platform == "bilibili":
-        task_id_holder = {"value": ""}
-
-        def task_started(task_id: str) -> None:
-            task_id_holder["value"] = task_id
-            _register_catalog_cancel(
-                run_id,
-                lambda: yutto_catalog_client.cancel_task(task_id_holder["value"]),
-            )
-
-        yutto_error: yutto_catalog_client.YuttoCatalogError | None = None
-        try:
-            result = yutto_catalog_client.discover_bilibili_catalog(
-                source.profile_url,
-                on_item=on_item,
-                should_cancel=should_cancel,
-                task_started=task_started,
-            )
-            if result.get("items") or not result.get("complete"):
-                return result
-            raise CreatorConnectorError("empty_catalog_unverified", "B站没有返回可验证的公开作品，已停止同步，请勿连续刷新。")
-        except yutto_catalog_client.YuttoCatalogError as exc:
-            # 只有本机 sidecar 未就绪才允许兼容路径；上游拒绝不得换连接器重试。
-            if exc.code not in {"connector_disabled", "connector_unavailable", "connector_version_mismatch"}:
-                raise CreatorConnectorError(exc.code, str(exc)) from exc
-            yutto_error = exc
-        finally:
-            _clear_catalog_cancel(run_id)
-        try:
-            return _discover_bilibili_catalog_fallback(
-                source,
-                on_item=on_item,
-                should_cancel=should_cancel,
-                run_id=run_id,
-            )
-        except CreatorConnectorError as fallback_error:
-            if yutto_error is not None:
-                raise CreatorConnectorError(
-                    yutto_error.code, "B站全部作品连接器暂时无法完成读取"
-                ) from fallback_error
-            raise
+        return _bilibili_user_catalog(source, bilibili_user_id, on_item=on_item, should_cancel=should_cancel)
     raise CreatorConnectorError(
         "catalog_not_supported",
         "该平台首版暂不支持全量作品目录",
@@ -796,6 +755,7 @@ def catalog_health(
     platform: str,
     *,
     douyin_session_scope: str = "",
+    bilibili_user_id: str = "",
 ) -> dict[str, Any]:
     """Return a credential-free *live protocol* readiness summary.
 
@@ -824,16 +784,30 @@ def catalog_health(
         return result
 
     if platform == "bilibili":
-        state = yutto_catalog_client.health()
-        probe_ready = bool(state.get("healthy"))
-        return finalize({
-            "platform": platform,
-            "enabled": bool(state.get("enabled")),
-            "probe_ready": probe_ready,
-            "version": _safe_catalog_text(state.get("version"), 32),
-            "error_code": _safe_catalog_text(state.get("error_code"), 96) or None,
-            "degraded_source": None if probe_ready else "yt-dlp-metadata-fallback",
-        })
+        try:
+            bilibili_binding_service.cipher()
+            if bilibili_user_id:
+                with bilibili_user_catalog.SessionLocal() as db:
+                    row = bilibili_binding_service.require_binding(db, bilibili_user_id)
+                    profile = f"https://space.bilibili.com/{row.platform_user_id}/video"
+                # 用户级检查必须实际读取其授权下的投稿分页。
+                bilibili_user_catalog.discover(bilibili_user_id, profile, limit=1)
+            else:
+                # 全局探针只检查官方签名协议。目录发布资格仍要求近期管理员实测，
+                # 用户任务另行检查自己的绑定，绝不借用管理员会话。
+                with bilibili_binding_service.session() as client:
+                    response = client.get("https://api.bilibili.com/x/web-interface/nav", timeout=(5, 12), allow_redirects=False)
+                    payload = response.json() if response.status_code == 200 else {}
+                    if not isinstance(payload, dict) or payload.get("code") not in (0, -101):
+                        raise bilibili_binding_service.BilibiliBindingError("bilibili_protocol_unavailable", "B站签名协议暂不可用")
+                    bilibili_user_catalog._sign({"mid": "1"}, payload.get("data") or {})
+            return finalize({"platform": platform, "enabled": True, "probe_ready": True,
+                             "version": "user-session-v1", "session_ready": True if bilibili_user_id else None,
+                             "error_code": None, "degraded_source": None})
+        except (bilibili_binding_service.BilibiliBindingError, requests.RequestException, ValueError) as exc:
+            return finalize({"platform": platform, "enabled": True, "probe_ready": False,
+                             "version": "user-session-v1", "session_ready": False if bilibili_user_id else None,
+                             "error_code": getattr(exc, "code", "bilibili_protocol_unavailable"), "degraded_source": None})
     if platform == "douyin":
         try:
             raw = douyin_library._request("GET", "/api/v1/health", timeout=3.0)

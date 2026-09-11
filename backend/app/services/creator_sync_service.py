@@ -36,6 +36,7 @@ from app.services import (
     creator_connectors,
     creator_item_quality,
     douyin_binding_service,
+    bilibili_binding_service,
     douyin_library,
     library_extraction_service,
     platform_library_service,
@@ -220,6 +221,7 @@ def _require_enabled(db: Session, platform: str | None = None) -> dict[str, Any]
 def _connector_credentials(db: Session, user_id: str, platform: str) -> dict[str, str]:
     config = _require_enabled(db, platform)
     result = {
+        "bilibili_user_id": user_id if platform == "bilibili" else "",
         "douyin_session_scope": "",
         "douyin_binding_ref": "",
         "xhs_cookie": str(config.get("xhs_cookie") or ""),
@@ -457,6 +459,7 @@ def _require_catalog_health(
     health = health_check(
         source.platform,
         douyin_session_scope=credentials.get("douyin_session_scope", ""),
+        bilibili_user_id=credentials.get("bilibili_user_id", ""),
     )
     if not isinstance(health, dict) or not (
         health.get("probe_ready") is True
@@ -480,6 +483,11 @@ def create_run(
     normalized, requested_limit, selected_ids = _normalize_operation(operation, limit, item_ids)
     source = _get_source(db, user_id=user_id, source_id=source_id, active_only=True)
     credentials = _connector_credentials(db, user_id, source.platform)
+    if source.platform == "bilibili":
+        try:
+            bilibili_binding_service.require_binding(db, user_id)
+        except bilibili_binding_service.BilibiliBindingError as exc:
+            raise CreatorSyncError(exc.code, str(exc), exc.status_code) from exc
     if normalized == "catalog_all":
         if source.platform not in CATALOG_PLATFORMS:
             raise CreatorSyncError("catalog_unsupported", "该平台暂不支持全部作品目录", 422)
@@ -811,7 +819,7 @@ def retry_run(
 def _safe_error(exc: Exception) -> tuple[str, str]:
     if isinstance(exc, creator_connectors.CreatorConnectorError):
         return str(exc.code or "connector_failed")[:80], str(exc)[:240]
-    if isinstance(exc, CreatorSyncError):
+    if isinstance(exc, (CreatorSyncError, bilibili_binding_service.BilibiliBindingError)):
         return exc.code[:80], str(exc)[:240]
     if isinstance(exc, _RunCancelled):
         return "cancelled", "任务已取消"
@@ -1247,6 +1255,7 @@ def _process_catalog(
             source_snapshot,
             douyin_session_scope=credentials.get("douyin_session_scope", ""),
             douyin_binding_ref=credentials.get("douyin_binding_ref", ""),
+            bilibili_user_id=credentials.get("bilibili_user_id", ""),
             on_item=lambda item, *_progress: _catalog_on_item(run_id, lease_token, item),
             should_cancel=lambda: (
                 lease_guard.lost or _catalog_should_cancel(run_id, lease_token)
@@ -1900,10 +1909,13 @@ def process_run(run_id: str) -> None:
                 if run.platform == "douyin" else None
             )
             credentials = {
+                "bilibili_user_id": run.user_id if run.platform == "bilibili" else "",
                 "douyin_session_scope": binding.session_scope if binding else "",
                 "douyin_binding_ref": binding.id if binding else "",
                 "xhs_cookie": str(config.get("xhs_cookie") or ""),
             }
+            if run.platform == "bilibili":
+                bilibili_binding_service.require_binding(db, run.user_id)
             concurrency = int(config["concurrency"].get(run.platform) or 1)
             run_snapshot = SimpleNamespace(
                 id=run.id,

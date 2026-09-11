@@ -18,6 +18,7 @@ from app.models.creator_sync import (
 )
 from app.models.note import Note
 from app.models.system_setting import SystemSetting
+from app.models.bilibili_account_binding import BilibiliAccountBinding
 from app.models.user import User
 from app.services import creator_connectors, creator_sync_service, settings_service
 
@@ -81,7 +82,7 @@ class CreatorSyncServiceTests(unittest.TestCase):
         )
         Base.metadata.create_all(
             self.engine,
-            tables=[
+            tables=[BilibiliAccountBinding.__table__,
                 User.__table__,
                 Note.__table__,
                 SystemSetting.__table__,
@@ -105,6 +106,9 @@ class CreatorSyncServiceTests(unittest.TestCase):
             settings_service.CREATOR_SYNC_HEALTH_KEYS["bilibili"],
             "true",
         )
+
+        self.db.add(BilibiliAccountBinding(user_id=self.user.id, status="connected", platform_user_id="123", credential_encrypted="encrypted-test-fixture", credential_expires_at=datetime.now(timezone.utc) + timedelta(days=1)))
+        self.db.commit()
 
     def tearDown(self) -> None:
         self.db.close()

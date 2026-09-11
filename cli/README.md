@@ -60,7 +60,35 @@ zhicui plan task-complete <plan_id> <task_id> true --idempotency-key task-comple
 
 所有普通用户 Action 都可通过 `zhicui run actions --json` 发现；`zhicui run describe <action_id> --json` 返回当前服务的准确参数 Schema、权限与确认要求，`zhicui run <action_id> --field-name ...` 可直接调用。常用命令还可通过 `creator/ask/plan/analysis --help` 查看，无需登录。
 
-Windows 客户端运行时可调用固定本机动作：
+平台账号由每个用户自行绑定。知萃登录用于访问自己的资料与计划；B站、抖音等平台登录用于读取该用户授权的平台内容。未连接平台不会阻止查询已保存的知萃资料，但需要平台授权的同步应先完成对应平台连接。
+
+Windows 桌面客户端与 CLI 必须登录同一个知萃账号。用户可从 CLI 发起官方登录窗口，在窗口中自行扫码或登录，CLI 不接收平台密码、Cookie，也不能指定其他用户的账号：
+
+```bash
+zhicui local platform-login bilibili --json
+# 用户在 B站官方窗口完成授权，再查询本次连接操作结果
+zhicui local platform-status bilibili --json
+zhicui local platform-sync bilibili collect --limit 50 --json
+# 断开时由桌面端确认，只清理当前用户的平台会话
+zhicui local platform-disconnect bilibili --json
+```
+
+上述桌面绑定只保存在当前电脑。云端 B站同步使用独立的个人授权，无需安装桌面客户端：
+
+```bash
+zhicui platform bind bilibili --json
+# 打开返回的 login_url，登录与 CLI 相同的知萃账号，用 B站 App 扫码确认
+zhicui platform status bilibili --json
+# 需要从命令行查询扫码进度时，使用 bind 返回的 session_id
+zhicui platform poll bilibili <session_id> --json
+zhicui creator sync <source_id> --operation catalog_all --wait --json
+zhicui platform disconnect bilibili --json
+# 断开属于需确认的操作，按返回的 confirmation_id 完成确认
+```
+
+云端授权加密存储，绑定、状态和断开都只作用于当前知萃用户。取消或换绑后，旧二维码不能重新建立绑定；授权过期会停止同步并提示重新绑定。系统不会使用管理员或其他用户的 B站账号作为后备。`catalog_all` 同步的是博主公开投稿目录；桌面端点赞、收藏同步仍使用 `local platform-sync`。
+
+Windows 客户端运行时还可调用固定本机动作：
 
 ```bash
 zhicui local platform-sync douyin like --limit 50 --json

@@ -21,6 +21,7 @@ from app.models.creator_sync import (
 )
 from app.models.note import Note
 from app.models.system_setting import SystemSetting
+from app.models.bilibili_account_binding import BilibiliAccountBinding
 from app.models.user import User
 from app.services import (
     creator_catalog_quality_service as quality_service,
@@ -65,7 +66,7 @@ class CreatorCatalogQualityTests(unittest.TestCase):
         )
         Base.metadata.create_all(
             self.engine,
-            tables=[
+            tables=[BilibiliAccountBinding.__table__,
                 User.__table__, Note.__table__, SystemSetting.__table__,
                 CreatorSource.__table__, CreatorSyncRun.__table__,
                 CreatorSourceItem.__table__, CreatorSyncRunItem.__table__,
@@ -89,6 +90,9 @@ class CreatorCatalogQualityTests(unittest.TestCase):
             display_name="可信 UP",
         )
         self.db.add(self.source)
+        self.db.commit()
+
+        self.db.add(BilibiliAccountBinding(user_id=self.owner.id, status="connected", platform_user_id="123", credential_encrypted="encrypted-test-fixture", credential_expires_at=datetime.now(timezone.utc) + timedelta(days=1)))
         self.db.commit()
 
     def tearDown(self) -> None:
@@ -322,20 +326,12 @@ class CreatorCatalogQualityTests(unittest.TestCase):
 
 
 class ConnectorReadinessQualityTests(unittest.TestCase):
-    def test_missing_yutto_service_can_never_be_healthy(self) -> None:
-        with patch.object(
-            creator_connectors.yutto_catalog_client,
-            "health",
-            return_value={
-                "enabled": False,
-                "healthy": True,
-                "version": "2.2.0",
-            },
-        ):
+    def test_missing_encryption_can_never_be_healthy(self) -> None:
+        with patch.object(creator_connectors.bilibili_binding_service, "cipher", side_effect=creator_connectors.bilibili_binding_service.BilibiliBindingError("binding_unavailable", "未配置")):
             result = creator_connectors.catalog_health("bilibili")
         self.assertFalse(result["healthy"])
         self.assertFalse(result["supports_catalog_all"])
-        self.assertEqual(result["status"], "disabled")
+        self.assertEqual(result["status"], "unhealthy")
 
     def test_health_requires_full_yutto_protocol_capability_set(self) -> None:
         class FakeSocket:

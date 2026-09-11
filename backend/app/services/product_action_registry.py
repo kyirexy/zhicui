@@ -283,6 +283,24 @@ def _unavailable(
 
 
 _CORE_DEFINITIONS: tuple[ProductActionDefinition, ...] = (
+    _read("platform.binding.status", "平台绑定状态", "只读取当前知萃用户的平台绑定，不返回授权秘密。", "creator:read", "platform_binding_status", _object({"platform": {"type": "string", "enum": ["bilibili"]}}, ["platform"])),
+    ProductActionDefinition(
+        id="platform.binding.start", title="绑定平台账号", description="为当前用户发起 B站官方扫码授权，返回本人登录的网页入口。",
+        scopes=("creator:sync",), handler_name="platform_binding_start", risk=(RiskLevel.WRITE,),
+        input_schema=_object({"platform": {"type": "string", "enum": ["bilibili"]}}, ["platform"]), rate_limit_per_minute=6,
+        error_codes=("BINDING_UNAVAILABLE", "BILIBILI_UNAVAILABLE", "BILIBILI_RISK_CONTROL", "INVALID_UPSTREAM_RESPONSE"),
+    ),
+    ProductActionDefinition(
+        id="platform.binding.poll", title="查询扫码授权进度", description="仅检查当前用户发起的二维码；完成后保存本人的独立授权。",
+        scopes=("creator:sync",), handler_name="platform_binding_poll", risk=(RiskLevel.WRITE,), rate_limit_per_minute=20,
+        input_schema=_object({"platform": {"type": "string", "enum": ["bilibili"]}, "session_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"}}, ["platform", "session_id"]),
+        error_codes=("BINDING_SESSION_NOT_FOUND", "BILIBILI_LOGIN_REQUIRED", "BILIBILI_UNAVAILABLE", "BILIBILI_RISK_CONTROL", "BILIBILI_LOGIN_FAILED", "INVALID_UPSTREAM_RESPONSE"),
+    ),
+    ProductActionDefinition(
+        id="platform.binding.disconnect", title="断开平台绑定", description="经用户确认，清除当前用户的 B站授权及未完成二维码；保留已保存资料。",
+        scopes=("creator:sync",), handler_name="platform_binding_disconnect", risk=(RiskLevel.DESTRUCTIVE,), confirmation_required=True,
+        input_schema=_object({"platform": {"type": "string", "enum": ["bilibili"]}}, ["platform"]),
+    ),
     _read("account.me", "读取当前账号", "返回当前用户的公开账号资料，不包含管理员权限字段。", "account:read", "account_me"),
     _read("library.list", "列出视频资料", "分页读取当前用户已经整理的视频资料。", "library:read", "library_list", _object({**_PAGE, "search": {"type": "string", "maxLength": 120}})),
     _read("library.get", "读取视频资料", "读取一条归属于当前用户的资料与文稿。", "library:read", "library_get", _object({"note_id": {"type": "string", "minLength": 1, "maxLength": 64}}, ["note_id"])),

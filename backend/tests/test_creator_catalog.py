@@ -20,6 +20,7 @@ from app.models.creator_sync import (
 from app.models.note import Note
 from app.models.library_hidden_item import LibraryHiddenItem
 from app.models.system_setting import SystemSetting
+from app.models.bilibili_account_binding import BilibiliAccountBinding
 from app.models.user import User
 from app.services import creator_connectors, creator_sync_service, platform_library_service
 from app.services import library_extraction_service
@@ -36,7 +37,7 @@ class CreatorCatalogServiceTests(unittest.TestCase):
         )
         Base.metadata.create_all(
             self.engine,
-            tables=[
+            tables=[BilibiliAccountBinding.__table__,
                 User.__table__,
                 Note.__table__,
                 LibraryHiddenItem.__table__,
@@ -75,6 +76,9 @@ class CreatorCatalogServiceTests(unittest.TestCase):
             "concurrency": {"douyin": 1, "bilibili": 2, "xiaohongshu": 1},
             "xhs_cookie": "do-not-persist-cookie",
         }
+
+        self.db.add(BilibiliAccountBinding(user_id=self.user.id, status="connected", platform_user_id="123", credential_encrypted="encrypted-test-fixture", credential_expires_at=datetime.now(timezone.utc) + timedelta(days=1)))
+        self.db.commit()
 
     def tearDown(self) -> None:
         self.db.close()

@@ -232,8 +232,8 @@ class AgentInterfaceV1Tests(unittest.TestCase):
         ids = {definition.id for definition in definitions}
         # Deliberate explicit inventory: changing either count requires a
         # reviewed Registry update instead of accidental route reflection.
-        self.assertEqual(len(ids), 121)
-        self.assertEqual(sum(definition.available for definition in definitions), 103)
+        self.assertEqual(len(ids), 125)
+        self.assertEqual(sum(definition.available for definition in definitions), 107)
         self.assertFalse(any(action_id.startswith("admin.") for action_id in ids))
         self.assertTrue(ids.isdisjoint({
             "video.source_scan", "video.transcript_map", "web.public_research",

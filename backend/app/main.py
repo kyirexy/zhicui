@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes import router
 from app.api.desktop_login_routes import router as desktop_login_router
+from app.api.platform_connection_routes import router as platform_connection_router
 from app.api.phone_login_routes import router as phone_login_router
 from app.api.agent_routes import router as agent_router
 from app.api.video_analysis_routes import router as video_analysis_router
@@ -59,6 +60,7 @@ from app.models.feedback import Feedback  # noqa: F401
 from app.models.library_hidden_item import LibraryHiddenItem  # noqa: F401
 from app.models.library_sync import LibrarySyncRun  # noqa: F401
 from app.models.douyin_account_binding import DouyinAccountBinding  # noqa: F401
+from app.models.bilibili_account_binding import BilibiliAccountBinding  # noqa: F401
 from app.models.douyin_local_library_item import DouyinLocalLibraryItem  # noqa: F401
 from app.models.desktop_handoff import DesktopHandoff  # noqa: F401
 from app.models.desktop_login_session import DesktopLoginSession  # noqa: F401
@@ -393,6 +395,7 @@ def create_app() -> FastAPI:
     app.include_router(avatar_router)
     app.include_router(router)
     app.include_router(desktop_login_router)
+    app.include_router(platform_connection_router)
     app.include_router(phone_login_router)
     app.include_router(agent_router)
     app.include_router(video_analysis_router)

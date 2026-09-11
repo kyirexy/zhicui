@@ -567,6 +567,7 @@ async function domainCommand(
   const defaults: Record<string, string> = {
     account: 'get',
     local: 'status',
+    platform: 'status',
     ask: 'conversations',
     analysis: 'catalog',
   };

@@ -191,36 +191,14 @@ class YuttoCatalogContractTests(unittest.TestCase):
                 yutto_catalog_client._read_token()
         self.assertEqual(raised.exception.code, "unsafe_token_permissions")
 
-    def test_local_sidecar_unavailable_can_use_metadata_only_fallback(self) -> None:
-        source = SimpleNamespace(
-            platform="bilibili",
-            profile_url="https://space.bilibili.com/123/video",
-            display_name="测试 UP",
-        )
-        fallback_result = {
-            "items": [{"external_id": "BV1Fallback1"}],
-            "complete": True,
-            "total_count": 1,
-            "failures": [],
-            "connector": "yt-dlp-metadata-fallback",
-        }
-        with (
-            patch.object(
-                yutto_catalog_client,
-                "discover_bilibili_catalog",
-                side_effect=yutto_catalog_client.YuttoCatalogError("connector_disabled", "未启用"),
-            ),
-            patch.object(
-                creator_connectors,
-                "_discover_bilibili_catalog_fallback",
-                return_value=fallback_result,
-            ) as fallback,
-        ):
-            result = creator_connectors.discover_catalog(source)
-
-        fallback.assert_called_once()
-        self.assertEqual(result["connector"], "yt-dlp-metadata-fallback")
-        self.assertEqual(result["total_count"], 1)
+    def test_unbound_user_never_uses_shared_sidecar_or_fallback(self) -> None:
+        source = SimpleNamespace(platform="bilibili", profile_url="https://space.bilibili.com/123/video")
+        with patch.object(yutto_catalog_client, "discover_bilibili_catalog") as shared, patch.object(creator_connectors, "_discover_bilibili_catalog_fallback") as fallback:
+            with self.assertRaises(creator_connectors.CreatorConnectorError) as raised:
+                creator_connectors.discover_catalog(source)
+        self.assertEqual(raised.exception.code, "bilibili_login_required")
+        shared.assert_not_called()
+        fallback.assert_not_called()
 
     def test_ytdlp_fallback_is_flat_metadata_only_and_allowlisted(self) -> None:
         captured_command: list[str] = []
@@ -305,7 +283,7 @@ class YuttoCatalogContractTests(unittest.TestCase):
         ):
             creator_connectors.discover_catalog(source)
 
-        self.assertEqual(raised.exception.code, "empty_catalog_unverified")
+        self.assertEqual(raised.exception.code, "bilibili_login_required")
         self.assertNotIn("raw detail", str(raised.exception))
 
     def test_bilibili_risk_control_is_user_friendly_and_sanitized(self) -> None:
@@ -454,20 +432,14 @@ class CatalogHealthContractTests(unittest.TestCase):
         self.assertEqual(result["error_code"], "connector_unavailable")
         self.assertNotIn("secret socket detail", json.dumps(result))
 
-    def test_bilibili_health_is_allowlisted(self) -> None:
-        with patch.object(
-            creator_connectors.yutto_catalog_client,
-            "health",
-            return_value={
-                "enabled": True,
-                "healthy": True,
-                "version": "2.2.0",
-                "token": "must-not-escape",
-            },
-        ):
-            result = creator_connectors.catalog_health("bilibili")
+    def test_bilibili_health_checks_only_the_supplied_user(self) -> None:
+        from unittest.mock import MagicMock
+        context = MagicMock()
+        with patch.object(creator_connectors.bilibili_binding_service, "cipher"), patch.object(creator_connectors.bilibili_binding_service, "require_binding", return_value=SimpleNamespace(platform_user_id="123")), patch.object(creator_connectors.bilibili_user_catalog, "SessionLocal", return_value=context), patch.object(creator_connectors.bilibili_user_catalog, "discover", return_value={"token": "must-not-escape"}) as discover:
+            result = creator_connectors.catalog_health("bilibili", bilibili_user_id="owner")
+        discover.assert_called_once_with("owner", "https://space.bilibili.com/123/video", limit=1)
         self.assertTrue(result["supports_catalog_all"])
-        self.assertEqual(result["version"], "2.2.0")
+        self.assertEqual(result["version"], "user-session-v1")
         self.assertNotIn("token", json.dumps(result))
 
     def test_douyin_health_requires_metadata_catalog_capability(self) -> None:

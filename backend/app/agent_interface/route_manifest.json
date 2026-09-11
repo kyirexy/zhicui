@@ -30,6 +30,7 @@
     {"pattern": "^/api/auth/me$", "classification": "action", "domain": "account"},
     {"pattern": "^/api/auth/avatar$", "classification": "transport_internal", "reason": "用户本人在客户端选择预设头像，不向 Agent 开放账号外观写入"},
 
+    {"pattern": "^/api/platform-connections/bilibili(?:/|$)", "classification": "action", "domain": "platform"},
     {"pattern": "^/api/account(?:/|$)", "classification": "action", "domain": "account"},
     {"pattern": "^/api/feedback(?:/|$)", "classification": "action", "domain": "feedback"},
     {"pattern": "^/api/(?:video/info|extract)(?:/|$)", "classification": "action", "domain": "library"},

@@ -12,6 +12,8 @@ import {
 import { parseInvocation, type GlobalOptions } from './args.js';
 import { CredentialManager } from './credentials.js';
 import {
+  aliasFor,
+  domainAliasEntries,
   domainHelp,
   resolveDomainAction,
   USER_COMMAND_DOMAINS,
@@ -29,8 +31,9 @@ import type {
   StoredCredential,
 } from './types.js';
 import { isTerminalStatus } from './types.js';
+import { CLI_VERSION } from './version.js';
 
-export const CLI_VERSION = '1.0.0';
+export { CLI_VERSION } from './version.js';
 
 class ReportedCliError extends CliError {}
 
@@ -212,8 +215,9 @@ async function authCommand(
         store: credentials.store.kind,
       });
     } catch (error) {
-      if (previous) await credentials.save(previous);
-      else await credentials.delete();
+      // 校验期间若另一个进程已登录或退出，不能用旧快照覆盖它的决定。
+      if (previous) await credentials.saveIfUnchanged(credential, previous);
+      else await credentials.deleteIfUnchanged(credential);
       throw error;
     }
     return;
@@ -301,11 +305,12 @@ async function authCommand(
 }
 
 function syntheticTerminal(envelope: AgentEnvelope, sequence: number): AgentRunEvent {
+  const status = runFromEnvelope(envelope)?.status || envelope.status || 'succeeded';
   return {
     sequence,
-    event: 'run.completed',
-    status: typeof envelope.status === 'string' ? envelope.status : 'succeeded',
-    terminal: true,
+    event: status === 'waiting_for_user' ? 'run.waiting_for_user' : 'run.completed',
+    status,
+    terminal: isTerminalStatus(status),
     data: envelope as unknown as JsonObject,
   };
 }
@@ -397,12 +402,22 @@ async function renderEnvelope(
   options: GlobalOptions,
   wait: boolean,
   afterSequence = 0,
+  replayEvents = false,
 ): Promise<void> {
   const run = runFromEnvelope(envelope);
   const runId = runIdOf(run);
-  if (!runId) {
+  const status = run?.status || envelope.status;
+  if (!runId || (isTerminalStatus(status) && !replayEvents) || status === 'waiting_for_user') {
     if (options.jsonl) writer.event(syntheticTerminal(envelope, afterSequence + 1));
     else writer.result(envelope);
+    const outcomeError = runOutcomeError(envelope);
+    if (outcomeError) {
+      throw new ReportedCliError(outcomeError.code, outcomeError.message, {
+        exitCode: outcomeError.exitCode,
+        details: outcomeError.details,
+        retryAfterSeconds: outcomeError.retryAfterSeconds,
+      });
+    }
     return;
   }
   if (!wait && !options.jsonl) {
@@ -528,13 +543,13 @@ async function runCommand(
     if (command === 'get') writer.result(await client.getRun(runId));
     else if (command === 'cancel') writer.result(await client.cancelRun(runId));
     else await renderEnvelope(
-      await client.getRun(runId), client, writer, options, true, after,
+      await client.getRun(runId), client, writer, options, true, after, command === 'resume',
     );
     return;
   }
   const wait = takeFlag(args, '--wait');
-  const input = await buildActionInput(args);
   const action = await client.describeAction(command);
+  const input = await buildActionInput(args, [], action.input_schema);
   if (!action.available && action.execution_location !== 'local_windows') {
     throw new CliError('ACTION_NOT_AVAILABLE', action.unavailable_reason || 'Action 未开放');
   }
@@ -686,8 +701,24 @@ async function domainCommand(
   }
   const wait = takeFlag(args, '--wait');
   const capabilities = await client.capabilities();
-  const { action, alias } = resolveDomainAction(capabilities, domain, verb);
-  const input = await buildActionInput(args, alias.positionalKeys);
+  let resolved;
+  try {
+    resolved = resolveDomainAction(capabilities, domain, verb);
+  } catch (error) {
+    // 能力清单按凭据权限过滤；区分未开放与未授权，不把权限不足报成远端故障。
+    if (error instanceof CliError && error.code === 'ACTION_NOT_AVAILABLE') {
+      const candidate = aliasFor(domain, verb).candidates[0];
+      const descriptor = await client.describeAction(candidate).catch(() => null);
+      if (descriptor?.available && !capabilities.actions.some((item) => item.id === descriptor.id)) {
+        throw new CliError('SCOPE_DENIED', `当前授权缺少 ${descriptor.title} 所需权限，请重新授权对应 scope`, {
+          details: { required_scopes: descriptor.scopes },
+        });
+      }
+    }
+    throw error;
+  }
+  const { action, alias } = resolved;
+  const input = await buildActionInput(args, alias.positionalKeys, action.input_schema);
   await invokeAction(action, input, options, writer, client, wait, capabilities.user_hash);
 }
 
@@ -750,6 +781,25 @@ export async function runCli(argv: string[]): Promise<number> {
     }
     if (!USER_COMMAND_DOMAINS.includes(domain as (typeof USER_COMMAND_DOMAINS)[number])) {
       throw usageError(`未知命令域：${domain}`);
+    }
+    if (command.includes('--help') || command.includes('-h')) {
+      const verb = command.find((item) => !['--help', '-h'].includes(item));
+      const entries = domainAliasEntries().filter(([key]) =>
+        key.startsWith(`${domain}.`) && (!verb || key === `${domain}.${verb}`),
+      );
+      writer.result({
+        domain,
+        commands: entries.map(([key, alias]) => ({
+          command: `zhicui ${key.replace('.', ' ')} ${(alias.positionalKeys || []).map((value) => `<${value}>`).join(' ')}`.trim(),
+          action: alias.candidates[0],
+          named_inputs: alias.namedInputKeys || [],
+        })),
+        schema: '登录后可运行 zhicui run describe <action_id> --json 查看参数、权限和确认要求。',
+        input: '命名参数使用 --field-name；数组/对象传入 JSON，或通过 stdin 输入完整 JSON 对象。',
+        async: '长任务可加 --wait 或 --jsonl；重试同一操作时使用相同 --idempotency-key。',
+        ...(!entries.length ? { help: helpPayload() } : {}),
+      });
+      return EXIT_CODES.success;
     }
     const credentials = new CredentialManager(options.profile, options.apiUrl);
     const client = clientFor(options, credentials);

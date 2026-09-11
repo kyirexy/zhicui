@@ -823,11 +823,34 @@ def toggle_task(db: Session, plan_id: str, task_id: str, user_id: str = "") -> P
     plan = get_plan(db, plan_id, user_id=user_id)
     if plan is None:
         return None
+    return _change_task_completion(db, plan, task_id, done=None)
+
+
+def set_task_completion(
+    db: Session, plan_id: str, task_id: str, done: bool, *, user_id: str,
+) -> Plan | None:
+    """按目标值设置完成状态；重复提交不翻转、不重写完成时间。"""
+    if not isinstance(done, bool):
+        raise ValueError("done 必须为布尔值")
+    plan = db.query(Plan).filter(
+        Plan.id == plan_id, Plan.user_id == user_id,
+    ).populate_existing().with_for_update().first()
+    if plan is None:
+        return None
+    return _change_task_completion(db, plan, task_id, done=done)
+
+
+def _change_task_completion(
+    db: Session, plan: Plan, task_id: str, *, done: bool | None,
+) -> Plan | None:
 
     tasks, days = _task_state(plan)
     for task in tasks:
         if task.get("id") == task_id:
-            task["done"] = not task.get("done", False)
+            current = bool(task.get("done", False))
+            if done is not None and current == done:
+                return plan
+            task["done"] = not current if done is None else done
             if task["done"]:
                 task["completed_at"] = datetime.now(timezone.utc).isoformat()
                 task.pop("focus_date", None)

@@ -12,7 +12,7 @@ import type {
 } from './types.js';
 import { isJsonObject, isTerminalStatus } from './types.js';
 
-const CLIENT_VERSION = '1.0.0';
+import { CLI_VERSION as CLIENT_VERSION } from './version.js';
 
 type RecordValue = Record<string, unknown>;
 
@@ -60,7 +60,9 @@ function normalizeAction(value: unknown): AgentActionDefinition {
       ? item.unavailable_reason
       : null,
     aliases: stringList(item.aliases),
-    risk: (item.risk || item.risk_level) as JsonObject | string | undefined,
+    risk: (item.risk || item.risk_level) as JsonObject | string | string[] | undefined,
+    idempotency: stringValue(item.idempotency, 'optional'),
+    error_codes: stringList(item.error_codes),
     secure_direct: item.secure_direct === true,
     mcp_exposed: item.mcp_exposed !== false,
   };
@@ -145,25 +147,30 @@ export class AgentApiClient {
     return `${this.options.baseUrl}${path.startsWith('/') ? '' : '/'}${path}`;
   }
 
-  private async credentialToken(): Promise<string | null> {
+  private async currentCredential(): Promise<StoredCredential | null> {
     let credential = await this.options.credentials.load();
     if (!credential) return null;
     if (tokenExpired(credential) && credential.refresh_token) {
-      credential = await this.refreshSerialized(credential.refresh_token);
+      credential = await this.refreshSerialized(credential);
     }
-    return credential.access_token;
+    return credential;
   }
 
-  private async refreshSerialized(observedRefreshToken: string): Promise<StoredCredential> {
+  private async refreshSerialized(observed: StoredCredential): Promise<StoredCredential> {
     return this.options.credentials.withRefreshLock(async () => {
       const latest = await this.options.credentials.load();
+      // 旧请求只能续用同一次登录；退出或切换账号后，不再重放旧操作。
+      if (!latest || latest.kind !== observed.kind || latest.created_at !== observed.created_at) {
+        throw new CliError('AUTH_REQUIRED', '登录状态已更改，请重新运行命令');
+      }
       if (
-        latest
-        && latest.refresh_token
-        && latest.refresh_token !== observedRefreshToken
+        (latest.access_token !== observed.access_token || latest.refresh_token !== observed.refresh_token)
         && !tokenExpired(latest)
       ) return latest;
-      return this.refresh(observedRefreshToken);
+      if (!latest.refresh_token) {
+        throw new CliError('AUTH_REQUIRED', '当前凭据无法续期，请重新登录');
+      }
+      return this.exchangeRefreshToken(latest);
     }, Math.min(this.options.timeoutMs, 20_000));
   }
 
@@ -171,6 +178,7 @@ export class AgentApiClient {
     path: string,
     init: RequestInit & { authenticated?: boolean; timeoutMs?: number } = {},
     authRetried = false,
+    retryCredential?: StoredCredential,
   ): Promise<unknown> {
     const {
       authenticated = true,
@@ -186,12 +194,12 @@ export class AgentApiClient {
     if (this.options.idempotencyKey && !headers.has('Idempotency-Key')) {
       headers.set('Idempotency-Key', this.options.idempotencyKey);
     }
+    const credential = authenticated ? retryCredential ?? await this.currentCredential() : null;
     if (authenticated) {
-      const token = await this.credentialToken();
-      if (!token) {
+      if (!credential) {
         throw new CliError('AUTH_REQUIRED', '尚未授权，请先运行 zhicui auth login');
       }
-      headers.set('Authorization', `Bearer ${token}`);
+      headers.set('Authorization', `Bearer ${credential.access_token}`);
     }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -203,12 +211,10 @@ export class AgentApiClient {
         signal: controller.signal,
         redirect: 'error',
       });
-      if (response.status === 401 && authenticated && !authRetried) {
-        const credential = await this.options.credentials.load();
-        if (credential?.refresh_token) {
-          await this.refreshSerialized(credential.refresh_token);
-          return this.request(path, init, true);
-        }
+      if (response.status === 401 && credential?.refresh_token && !authRetried) {
+        await response.body?.cancel();
+        const refreshed = await this.refreshSerialized(credential);
+        return this.request(path, init, true, refreshed);
       }
       const text = await response.text();
       let payload: unknown = null;
@@ -263,6 +269,15 @@ export class AgentApiClient {
   }
 
   async refresh(refreshToken: string): Promise<StoredCredential> {
+    const observed = await this.options.credentials.load();
+    if (!observed || observed.refresh_token !== refreshToken) {
+      throw new CliError('AUTH_REQUIRED', '登录状态已更改，请重新运行命令');
+    }
+    return this.refreshSerialized(observed);
+  }
+
+  private async exchangeRefreshToken(observed: StoredCredential): Promise<StoredCredential> {
+    const refreshToken = observed.refresh_token!;
     const payload = await this.request('/api/agent-interface/v1/auth/refresh', {
       method: 'POST',
       authenticated: false,
@@ -281,9 +296,11 @@ export class AgentApiClient {
       expires_at: metadata.expiresAt,
       token_prefix: metadata.tokenPrefix || `${accessToken.slice(0, 6)}…`,
       scopes: metadata.scopes,
-      created_at: new Date().toISOString(),
+      created_at: observed.created_at,
     };
-    await this.options.credentials.save(credential);
+    if (!await this.options.credentials.saveIfUnchanged(observed, credential)) {
+      throw new CliError('AUTH_REQUIRED', '登录状态已更改，请重新运行命令');
+    }
     return credential;
   }
 
@@ -343,8 +360,8 @@ export class AgentApiClient {
   }
 
   async secureAccountExport(password: string): Promise<Uint8Array> {
-    const token = await this.credentialToken();
-    if (!token) throw new CliError('AUTH_REQUIRED', '尚未授权，请先运行 zhicui auth login');
+    const credential = await this.currentCredential();
+    if (!credential) throw new CliError('AUTH_REQUIRED', '尚未授权，请先运行 zhicui auth login');
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.options.timeoutMs);
     timer.unref?.();
@@ -354,7 +371,7 @@ export class AgentApiClient {
         headers: {
           Accept: 'application/zip, application/json',
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${credential.access_token}`,
           'User-Agent': `@zhicui/cli/${CLIENT_VERSION}`,
         },
         body: JSON.stringify({ password }),
@@ -530,10 +547,11 @@ export class AgentApiClient {
     afterSequence = 0,
     timeoutMs = this.options.timeoutMs,
     authRetried = false,
+    retryCredential?: StoredCredential,
   ): AsyncGenerator<AgentRunEvent> {
     const startedAt = Date.now();
-    const token = await this.credentialToken();
-    if (!token) throw new CliError('AUTH_REQUIRED', '尚未授权，请先运行 zhicui auth login');
+    const credential = retryCredential ?? await this.currentCredential();
+    if (!credential) throw new CliError('AUTH_REQUIRED', '尚未授权，请先运行 zhicui auth login');
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     timer.unref?.();
@@ -544,7 +562,7 @@ export class AgentApiClient {
       if (afterSequence > 0) url.searchParams.set('after', String(afterSequence));
       const headers = new Headers({
         Accept: 'text/event-stream, application/x-ndjson, application/json',
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${credential.access_token}`,
         'User-Agent': `@zhicui/cli/${CLIENT_VERSION}`,
       });
       if (afterSequence > 0) headers.set('Last-Event-ID', String(afterSequence));
@@ -553,16 +571,14 @@ export class AgentApiClient {
         signal: controller.signal,
         redirect: 'error',
       });
-      if (response.status === 401 && !authRetried) {
-        const credential = await this.options.credentials.load();
-        if (credential?.refresh_token) {
-          await this.refreshSerialized(credential.refresh_token);
-          const remaining = Math.max(1, timeoutMs - (Date.now() - startedAt));
-          for await (const event of this.events(runId, afterSequence, remaining, true)) {
-            yield event;
-          }
-          return;
+      if (response.status === 401 && credential.refresh_token && !authRetried) {
+        await response.body?.cancel();
+        const refreshed = await this.refreshSerialized(credential);
+        const remaining = Math.max(1, timeoutMs - (Date.now() - startedAt));
+        for await (const event of this.events(runId, afterSequence, remaining, true, refreshed)) {
+          yield event;
         }
+        return;
       }
       if (!response.ok) {
         let payload: unknown = null;
@@ -650,17 +666,18 @@ export function normalizeRunEvent(value: unknown): AgentRunEvent {
 }
 
 export function runFromEnvelope(envelope: AgentEnvelope): AgentRun | null {
-  if (envelope.run && typeof envelope.run === 'object') return envelope.run;
   const data = record(envelope.data);
-  const run = record(data.run);
-  if (Object.keys(run).length) return run as AgentRun;
+  const run = record(envelope.run ?? data.run);
+  // 顶层 run_id 属于 Agent 协议；业务结果中的 run 可能是博主或解析任务。
   if (envelope.run_id) {
+    if ((run.run_id || run.id) === envelope.run_id) return run as AgentRun;
     return {
       run_id: envelope.run_id,
       status: stringValue(envelope.status, 'queued'),
     };
   }
-  if (data.run_id || data.id) {
+  if (envelope.run && typeof envelope.run === 'object') return envelope.run;
+  if (data.run_id && typeof data.status === 'string') {
     return {
       ...(data as unknown as AgentRun),
       status: stringValue(data.status || envelope.status, 'queued'),

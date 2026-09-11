@@ -8,6 +8,7 @@ import {
   trustedLocalInputSchema,
 } from './local-adapter.js';
 import type { AgentActionDefinition, AgentEnvelope, JsonObject } from './types.js';
+import { CLI_VERSION } from './version.js';
 
 interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -313,7 +314,7 @@ export class StdioMcpServer {
           ? requested
           : '2025-06-18',
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: '@zhicui/cli', version: '1.0.0' },
+        serverInfo: { name: '@zhicui/cli', version: CLI_VERSION },
         instructions: '只调用知萃公开的普通用户 Action；不包含管理端、Shell、Cookie、JWT 或 API Key 工具。',
       };
     }

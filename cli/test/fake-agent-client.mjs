@@ -1,10 +1,13 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const [client, ...args] = process.argv.slice(2);
 const upper = client.toUpperCase();
 const statePath = process.env[`FAKE_${upper}_STATE`];
-const configPath = process.env[`ZHICUI_${upper}_CONFIG`];
+const configPath = process.env[`ZHICUI_${upper}_CONFIG`]
+  || (client === 'claude'
+    ? join(process.env.CLAUDE_CONFIG_DIR, '.claude.json')
+    : join(process.env.CODEX_HOME, 'config.toml'));
 const state = JSON.parse(await readFile(statePath, 'utf8').catch(() => '{"configured":false,"add_count":0}'));
 
 async function save() {

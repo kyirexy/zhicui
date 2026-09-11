@@ -457,6 +457,17 @@ _CORE_DEFINITIONS: tuple[ProductActionDefinition, ...] = (
         }, ["plan_id", "task_id"]), risk=(RiskLevel.WRITE,),
     ),
     ProductActionDefinition(
+        id="plan.task.set_completion", title="设置任务完成状态",
+        description="将当前用户的计划任务设为已完成或未完成；重复提交相同目标不会翻转状态。",
+        scopes=("plan:write",), handler_name="plan_task_set_completion",
+        input_schema=_object({
+            "plan_id": {"type": "string", "minLength": 1, "maxLength": 64},
+            "task_id": {"type": "string", "minLength": 1, "maxLength": 64},
+            "done": {"type": "boolean"},
+        }, ["plan_id", "task_id", "done"]),
+        risk=(RiskLevel.WRITE,), idempotency=IdempotencyStrategy.REQUIRED,
+    ),
+    ProductActionDefinition(
         id="plan.task.remove", title="删除计划任务", description="删除当前用户计划中的一条任务。",
         scopes=("plan:write",), handler_name="plan_task_remove",
         input_schema=_object({

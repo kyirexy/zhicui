@@ -360,6 +360,50 @@ test('Windows command discovery skips the extensionless npm shim and launches th
   assert.equal(payload.claude.configured, false);
 });
 
+test('agent probes honor the user timeout when an installed client hangs', async () => {
+  const directory = await temporaryDirectory();
+  const scriptPath = resolve(directory, 'hanging-client.mjs');
+  await writeFile(scriptPath, 'setTimeout(() => process.exit(0), 15000);\n');
+  const started = Date.now();
+  const result = await runCli(
+    ['agent', 'status', '--client', 'claude', '--timeout', '100ms', '--json'],
+    {
+      processTimeoutMs: 4000,
+      env: {
+        ZHICUI_CLAUDE_COMMAND: process.execPath,
+        ZHICUI_CLAUDE_COMMAND_ARGS: JSON.stringify([scriptPath]),
+        ZHICUI_CLAUDE_CONFIG: resolve(directory, 'claude.json'),
+        ZHICUI_CLAUDE_SKILLS_DIR: resolve(directory, 'claude-skills'),
+      },
+    },
+  );
+  assert.equal(result.code, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.claude.installed, false);
+  assert.match(payload.claude.error, /超时/u);
+  assert.ok(Date.now() - started < 3000);
+});
+
+test('Claude custom config directory is used for ownership checks and restoration', async () => {
+  const directory = await temporaryDirectory();
+  const claudeRoot = resolve(directory, 'custom-claude');
+  const claudeConfig = resolve(claudeRoot, '.claude.json');
+  const original = '{"isolatedCustomConfig":true}\n';
+  await mkdir(claudeRoot, { recursive: true });
+  await writeFile(claudeConfig, original);
+  const env = {
+    ...fakeEnv(directory),
+    CLAUDE_CONFIG_DIR: claudeRoot,
+    ZHICUI_CLAUDE_CONFIG: '',
+  };
+  const setup = await runCli(['agent', 'setup', '--client', 'claude', '--json'], { env });
+  assert.equal(setup.code, 0, setup.stderr);
+  assert.equal(JSON.parse(setup.stdout).claude.managed, true);
+  const uninstall = await runCli(['agent', 'uninstall', '--client', 'claude', '--json'], { env });
+  assert.equal(uninstall.code, 0, uninstall.stderr);
+  assert.equal(await readFile(claudeConfig, 'utf8'), original);
+});
+
 test('Windows PowerShell client shims receive literal argv through stdin without shell injection or argv disclosure', {
   skip: process.platform !== 'win32',
 }, async () => {

@@ -39,6 +39,7 @@ const PERMISSION_CODES = new Set([
 ]);
 const WAITING_CODES = new Set([
   'CONFIRMATION_REQUIRED',
+  'CONFIRMATION_INVALID',
   'WAITING_FOR_USER',
   'BILLING_CONFIRMATION_REQUIRED',
   'AUTHORIZATION_PENDING',
@@ -75,6 +76,9 @@ export function exitCodeForError(code: string): ExitCode {
     normalized === 'USAGE_ERROR'
     || normalized === 'SCHEMA_INVALID'
     || normalized === 'INVALID_INPUT'
+    || normalized === 'IDEMPOTENCY_KEY_REQUIRED'
+    || normalized === 'HTTP_400'
+    || normalized === 'HTTP_422'
   ) return EXIT_CODES.usage;
   return EXIT_CODES.remoteFailure;
 }

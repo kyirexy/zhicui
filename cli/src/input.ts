@@ -94,9 +94,34 @@ function parseScalar(value: string): JsonValue {
   if (value === 'null') return null;
   if (/^-?\d+(?:\.\d+)?$/u.test(value)) {
     const number = Number(value);
-    if (Number.isFinite(number)) return number;
+    if (Number.isFinite(number) && (!Number.isInteger(number) || Number.isSafeInteger(number))) return number;
   }
   return value;
+}
+
+function parseArgument(value: string, schema: JsonValue | undefined): JsonValue {
+  if (!isJsonObject(schema)) return parseScalar(value);
+  const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+  if (value === 'null' && types.includes('null')) return null;
+  // 视频 ID、标题和问题必须保留原文，尤其不能把 19 位抖音 ID 转为浮点数。
+  if (types.includes('string')) return value;
+  if (types.includes('array') || types.includes('object')) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(value); } catch {
+      throw usageError('数组或对象参数必须是有效 JSON，也可以通过 stdin 传入完整 JSON 对象');
+    }
+    if (types.includes('array') && Array.isArray(parsed)) return parsed as JsonValue;
+    if (types.includes('object') && isJsonObject(parsed)) return parsed;
+    throw usageError('参数 JSON 类型与 Action Schema 不一致');
+  }
+  const parsed = parseScalar(value);
+  if (types.includes('integer') && typeof parsed === 'number' && Number.isSafeInteger(parsed)) return parsed;
+  if (types.includes('number') && typeof parsed === 'number' && Number.isFinite(parsed)) return parsed;
+  if (types.includes('boolean') && typeof parsed === 'boolean') return parsed;
+  if (types.some((type) => ['integer', 'number', 'boolean', 'null'].includes(String(type)))) {
+    throw usageError('参数类型与 Action Schema 不一致，整数必须在 JavaScript 安全精度范围内');
+  }
+  return parsed;
 }
 
 function optionKey(value: string): string {
@@ -106,9 +131,11 @@ function optionKey(value: string): string {
 export async function buildActionInput(
   args: string[],
   positionalKeys: string[] = [],
+  schema: JsonObject = {},
 ): Promise<JsonObject> {
   const input = Object.create(null) as JsonObject;
   const positionals: string[] = [];
+  const properties = isJsonObject(schema.properties) ? schema.properties : {};
 
   for (let index = 0; index < args.length; index += 1) {
     const item = args[index];
@@ -120,11 +147,18 @@ export async function buildActionInput(
       const rawName = equals >= 0 ? item.slice(0, equals) : item;
       const key = optionKey(rawName);
       if (!key) throw usageError(`无效参数：${item}`);
-      if (equals >= 0) input[key] = parseScalar(item.slice(equals + 1));
+      if (equals >= 0) input[key] = parseArgument(item.slice(equals + 1), properties[key]);
       else if (args[index + 1] && !args[index + 1].startsWith('--')) {
-        input[key] = parseScalar(args[index + 1]);
+        input[key] = parseArgument(args[index + 1], properties[key]);
         index += 1;
-      } else input[key] = true;
+      } else {
+        const property = properties[key];
+        const type = isJsonObject(property) ? property.type : undefined;
+        if (type && type !== 'boolean' && !(Array.isArray(type) && type.includes('boolean'))) {
+          throw usageError(`${rawName} 需要一个值`);
+        }
+        input[key] = true;
+      }
     } else {
       positionals.push(item);
     }
@@ -134,7 +168,7 @@ export async function buildActionInput(
   if (raw.trim()) {
     let parsed: unknown;
     try { parsed = JSON.parse(raw); } catch {
-      throw usageError('stdin/input-file 必须是有效 JSON');
+      throw usageError('stdin 必须是有效 JSON');
     }
     if (!isJsonObject(parsed)) throw usageError('Action 输入必须是 JSON 对象');
     for (const [key, value] of Object.entries(parsed)) input[key] = value;
@@ -143,7 +177,7 @@ export async function buildActionInput(
   for (let index = 0; index < positionals.length; index += 1) {
     const key = positionalKeys[index];
     if (!key) throw usageError(`多余的位置参数：${positionals[index]}`);
-    input[key] = parseScalar(positionals[index]);
+    input[key] = parseArgument(positionals[index], properties[key]);
   }
   return input;
 }

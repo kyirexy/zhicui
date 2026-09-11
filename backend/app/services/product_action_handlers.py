@@ -1358,6 +1358,22 @@ def plan_task_update(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
     return row.to_dict()
 
 
+def plan_task_set_completion(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        row = plan_service.set_task_completion(
+            ctx.db,
+            _text(payload, "plan_id", required=True, maximum=64),
+            _text(payload, "task_id", required=True, maximum=64),
+            payload.get("done"),
+            user_id=ctx.user.id,
+        )
+    except ValueError as exc:
+        raise ActionHandlerError("INVALID_INPUT", str(exc)) from exc
+    if row is None:
+        raise ActionHandlerError("RESOURCE_NOT_FOUND", "计划或任务不存在")
+    return row.to_dict()
+
+
 def plan_task_remove(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
     plan_id = _text(payload, "plan_id", required=True, maximum=64)
     task_id = _text(payload, "task_id", required=True, maximum=64)

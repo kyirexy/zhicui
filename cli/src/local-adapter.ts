@@ -123,11 +123,13 @@ function validateDescriptor(value: unknown): DesktopBridgeDescriptor {
   if (
     !item
     || item.api_version !== 'v1'
-    || !item.url
+    || typeof item.url !== 'string'
+    || typeof item.token !== 'string'
     || !item.token
-    || !item.user_hash
+    || typeof item.user_hash !== 'string'
     || !/^[a-f0-9]{64}$/u.test(item.user_hash)
-    || !item.expires_at
+    || typeof item.expires_at !== 'string'
+    || !Number.isFinite(Date.parse(item.expires_at))
   ) {
     throw new CliError('DESKTOP_BRIDGE_UNAVAILABLE', '桌面端本机能力描述无效', {
       exitCode: EXIT_CODES.localUnavailable,
@@ -137,6 +139,8 @@ function validateDescriptor(value: unknown): DesktopBridgeDescriptor {
   if (
     url.protocol !== 'http:'
     || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)
+    || Boolean(url.username || url.password || url.search || url.hash)
+    || url.pathname !== '/'
   ) {
     throw new CliError('DESKTOP_BRIDGE_UNAVAILABLE', '桌面端桥接地址不是受信本机地址', {
       exitCode: EXIT_CODES.localUnavailable,
@@ -216,6 +220,8 @@ export class RestrictedLocalAdapter {
           },
           body: JSON.stringify({ input }),
           signal: controller.signal,
+          // 桌面桥不应跳转，避免本机凭据或写操作被转发至其他服务。
+          redirect: 'error',
         },
       );
       const payload = await response.json() as AgentEnvelope;

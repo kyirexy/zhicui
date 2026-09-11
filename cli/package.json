@@ -1,6 +1,6 @@
 {
   "name": "@zhicui/cli",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "知萃普通用户能力的 Agent CLI 与本地 MCP 入口",
   "license": "UNLICENSED",
   "homepage": "https://luxai.cn",

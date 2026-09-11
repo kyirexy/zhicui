@@ -45,7 +45,9 @@ export interface AgentActionDefinition {
   available: boolean;
   unavailable_reason?: string | null;
   aliases?: string[];
-  risk?: JsonObject | string;
+  risk?: JsonObject | string | string[];
+  idempotency?: string;
+  error_codes?: string[];
   secure_direct?: boolean;
   mcp_exposed?: boolean;
 }

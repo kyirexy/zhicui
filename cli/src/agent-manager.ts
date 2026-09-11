@@ -16,6 +16,7 @@ interface KnownTool {
   prefixArgs: string[];
   configPath: string;
   skillPath: string;
+  timeoutMs: number;
 }
 
 interface ConfigSnapshot {
@@ -98,7 +99,7 @@ function configPath(name: AgentClientName): string {
   if (name === 'codex') {
     return join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'config.toml');
   }
-  return join(homedir(), '.claude.json');
+  return join(process.env.CLAUDE_CONFIG_DIR || homedir(), '.claude.json');
 }
 
 function skillPath(name: AgentClientName): string {
@@ -109,7 +110,7 @@ function skillPath(name: AgentClientName): string {
   return join(root, 'zhicui', 'SKILL.md');
 }
 
-async function knownTool(name: AgentClientName): Promise<KnownTool | null> {
+async function knownTool(name: AgentClientName, timeoutMs: number): Promise<KnownTool | null> {
   const command = await resolveCommand(name);
   if (!command) return null;
   return {
@@ -118,6 +119,7 @@ async function knownTool(name: AgentClientName): Promise<KnownTool | null> {
     prefixArgs: envPrefixArgs(name),
     configPath: configPath(name),
     skillPath: skillPath(name),
+    timeoutMs,
   };
 }
 
@@ -139,10 +141,13 @@ async function runTool(
     ], {
       input: JSON.stringify({ command: tool.command, args: fullArgs }),
       allowFailure: options.allowFailure,
-      timeoutMs: options.timeoutMs,
+      timeoutMs: options.timeoutMs ?? tool.timeoutMs,
     });
   }
-  return runProcess(tool.command, fullArgs, options);
+  return runProcess(tool.command, fullArgs, {
+    ...options,
+    timeoutMs: options.timeoutMs ?? tool.timeoutMs,
+  });
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -522,7 +527,7 @@ export class AgentClientManager {
     const result: Record<string, ClientProbe> = {};
     for (const name of this.names(selection)) {
       try {
-        const tool = await knownTool(name);
+        const tool = await knownTool(name, this.timeoutMs);
         result[name] = tool
           ? await rawProbe(tool)
           : {
@@ -549,7 +554,7 @@ export class AgentClientManager {
   async setup(selection: AgentClientSelection): Promise<Record<string, unknown>> {
     const result: Record<string, unknown> = {};
     for (const name of this.names(selection)) {
-      const tool = await knownTool(name);
+      const tool = await knownTool(name, this.timeoutMs);
       if (!tool) {
         result[name] = { installed: false, changed: false, error: `${name} 未安装` };
         continue;
@@ -609,7 +614,7 @@ export class AgentClientManager {
   async uninstall(selection: AgentClientSelection): Promise<Record<string, unknown>> {
     const result: Record<string, unknown> = {};
     for (const name of this.names(selection)) {
-      const tool = await knownTool(name);
+      const tool = await knownTool(name, this.timeoutMs);
       if (!tool) {
         result[name] = { installed: false, changed: false };
         continue;

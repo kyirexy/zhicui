@@ -12,10 +12,11 @@ from app.services import creator_connectors, yutto_catalog_client
 
 
 class _FakeYuttoWebSocket:
-    def __init__(self, *, failures: list[dict] | None = None):
+    def __init__(self, *, failures: list[dict] | None = None, empty: bool = False):
         self.messages: list[str] = []
         self.methods: list[str] = []
         self.failures = failures or []
+        self.empty = empty
 
     async def __aenter__(self):
         return self
@@ -97,6 +98,8 @@ class _FakeYuttoWebSocket:
             result = {"task_id": "resolve-task-1", "state": "cancelled"}
         else:  # pragma: no cover - catches protocol drift in the fake itself
             raise AssertionError(f"unexpected method {method}")
+        if method == "task.get" and self.empty:
+            result["result"]["items"] = []
         self.messages.append(
             json.dumps({"jsonrpc": "2.0", "id": request_id, "result": result})
         )
@@ -110,6 +113,11 @@ class _FakeYuttoWebSocket:
 
 
 class YuttoCatalogContractTests(unittest.TestCase):
+    def test_empty_upstream_success_is_rejected_as_unverified(self) -> None:
+        with self.assertRaises(yutto_catalog_client.YuttoCatalogError) as raised:
+            self._run_fake(_FakeYuttoWebSocket(empty=True))
+        self.assertEqual(raised.exception.code, "empty_catalog_unverified")
+
     def _run_fake(self, fake: _FakeYuttoWebSocket, **kwargs):
         with (
             patch.object(yutto_catalog_client, "_websocket_connect", lambda *args, **options: fake),
@@ -183,7 +191,7 @@ class YuttoCatalogContractTests(unittest.TestCase):
                 yutto_catalog_client._read_token()
         self.assertEqual(raised.exception.code, "unsafe_token_permissions")
 
-    def test_empty_yutto_result_falls_back_to_metadata_only_ytdlp(self) -> None:
+    def test_local_sidecar_unavailable_can_use_metadata_only_fallback(self) -> None:
         source = SimpleNamespace(
             platform="bilibili",
             profile_url="https://space.bilibili.com/123/video",
@@ -200,12 +208,7 @@ class YuttoCatalogContractTests(unittest.TestCase):
             patch.object(
                 yutto_catalog_client,
                 "discover_bilibili_catalog",
-                return_value={
-                    "items": [],
-                    "complete": True,
-                    "total_count": 0,
-                    "failures": [],
-                },
+                side_effect=yutto_catalog_client.YuttoCatalogError("connector_disabled", "未启用"),
             ),
             patch.object(
                 creator_connectors,

@@ -258,6 +258,10 @@ def _rpc_error_code(payload: object) -> str:
         _clean_text(payload.get(key), 256).lower()
         for key in ("code", "type", "message")
     )
+    if re.search(r"(?<!\d)-(?:352|401|412|799)(?!\d)", combined) or any(
+        marker in combined for marker in ("request is rejected", "request is blocked", "too frequent", "http 412", "http 429")
+    ):
+        return "bilibili_risk_control"
     if any(marker in combined for marker in ("captcha", "challenge", "risk", "风控", "验证码")):
         return "bilibili_verification_required"
     if any(marker in combined for marker in ("login", "auth", "credential", "登录")):
@@ -478,6 +482,9 @@ async def _discover_async(
                 raise YuttoCatalogError("invalid_upstream_response", "yutto 任务结果缺少作品列表")
             items = _normalize_groups(raw_items)
             failures = _normalize_failures(result.get("failures"))
+            if not items and not failures:
+                # 固定版本的上游可能把目录读取失败吞成空列表，不能当作零投稿。
+                raise YuttoCatalogError("empty_catalog_unverified", "B站没有返回可验证的公开作品，已停止同步")
             if len(raw_items) > _MAX_CATALOG_ITEMS:
                 failures.append({"external_id": "", "error_code": "catalog_safety_limit"})
             complete = not failures

@@ -193,11 +193,56 @@ def normalize_profile_ref(platform: str, profile_ref: str) -> dict[str, str]:
     return {"platform": platform, "creator_id": creator_id, "profile_url": canonical}
 
 
+def _bilibili_profile(creator_id: str) -> dict[str, str]:
+    """只查询公开账号资料；添加博主不应先枚举投稿或触发下载器。"""
+    try:
+        with requests.Session() as session:
+            session.trust_env = False
+            response = session.get(
+                "https://api.bilibili.com/x/web-interface/card",
+                params={"mid": creator_id, "photo": "false"},
+                headers={"User-Agent": "Mozilla/5.0", "Referer": f"https://space.bilibili.com/{creator_id}/"},
+                timeout=(5, 12), allow_redirects=False,
+            )
+            if response.status_code in {403, 412, 429}:
+                raise _bilibili_command_error("request is blocked", catalog=False)
+            response.raise_for_status()
+            if response.status_code != 200:
+                raise CreatorConnectorError("invalid_upstream_response", "B站账号资料返回异常")
+            payload = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        raise CreatorConnectorError("connector_unavailable", "B站账号资料暂时无法读取") from exc
+    if not isinstance(payload, dict):
+        raise CreatorConnectorError("invalid_upstream_response", "B站账号资料返回格式异常")
+    code = payload.get("code")
+    if code in {-352, -401, -412, -799}:
+        raise _bilibili_command_error("request is blocked", catalog=False)
+    if code == -101:
+        raise CreatorConnectorError("bilibili_login_required", "B站要求验证登录状态")
+    if code != 0:
+        raise CreatorConnectorError("creator_unavailable", "无法读取该 B站账号的公开资料")
+    data = payload.get("data")
+    card = data.get("card") if isinstance(data, dict) else None
+    if not isinstance(card, dict) or str(card.get("mid")) != creator_id or not isinstance(card.get("name"), str) or not card["name"].strip():
+        raise CreatorConnectorError("invalid_upstream_response", "B站账号资料缺少可核验的身份")
+    avatar = str(card.get("face") or "")
+    parsed = urlparse(avatar)
+    if (parsed.scheme not in {"http", "https"} or parsed.hostname not in {"i0.hdslb.com", "i1.hdslb.com", "i2.hdslb.com"}
+            or parsed.username or parsed.password or parsed.query or parsed.fragment):
+        avatar = ""
+    return {"display_name": card["name"].strip()[:160], "avatar_url": avatar[:2048]}
+
+
 def _bilibili_playlist(profile_url: str, limit: int) -> dict[str, Any]:
     command = [
         sys.executable,
         "-m",
         "yt_dlp",
+        "--ignore-config",
+        "--retries", "0",
+        "--extractor-retries", "0",
+        "--socket-timeout", "15",
+        "--skip-download",
         "--flat-playlist",
         "--dump-single-json",
         "--playlist-end",
@@ -237,6 +282,8 @@ def _bilibili_command_error(stderr: str, *, catalog: bool) -> CreatorConnectorEr
         "-799",
         "(352)",
         "(412)",
+        "http error 412",
+        "http error 429",
     )):
         return CreatorConnectorError(
             "bilibili_risk_control",
@@ -260,6 +307,10 @@ def _discover_bilibili_catalog_fallback(
         sys.executable,
         "-m",
         "yt_dlp",
+        "--ignore-config",
+        "--retries", "0",
+        "--extractor-retries", "0",
+        "--socket-timeout", "15",
         "--flat-playlist",
         "--lazy-playlist",
         "--skip-download",
@@ -377,12 +428,7 @@ def resolve_creator(
 ) -> dict[str, str]:
     normalized = normalize_profile_ref(platform, profile_ref)
     if platform == "bilibili":
-        data = _bilibili_playlist(normalized["profile_url"], 1)
-        return {
-            **normalized,
-            "display_name": str(data.get("uploader") or data.get("channel") or data.get("title") or f"B站用户 {normalized['creator_id']}")[:160],
-            "avatar_url": str(data.get("thumbnail") or "")[:2048],
-        }
+        return {**normalized, **_bilibili_profile(normalized["creator_id"])}
     if platform == "douyin":
         if not douyin_session_scope:
             raise CreatorConnectorError("douyin_login_required", "请先连接自己的抖音账号")
@@ -719,8 +765,10 @@ def discover_catalog(
             )
             if result.get("items") or not result.get("complete"):
                 return result
+            raise CreatorConnectorError("empty_catalog_unverified", "B站没有返回可验证的公开作品，已停止同步，请勿连续刷新。")
         except yutto_catalog_client.YuttoCatalogError as exc:
-            if exc.code == "cancelled":
+            # 只有本机 sidecar 未就绪才允许兼容路径；上游拒绝不得换连接器重试。
+            if exc.code not in {"connector_disabled", "connector_unavailable", "connector_version_mismatch"}:
                 raise CreatorConnectorError(exc.code, str(exc)) from exc
             yutto_error = exc
         finally:

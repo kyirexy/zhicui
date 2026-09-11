@@ -193,10 +193,10 @@ class CreatorCatalogServiceTests(unittest.TestCase):
         self.assertLessEqual(importer.call_count, 3)
         self.assertEqual(self.db.get(CreatorSyncRun, run.id).processed_count, 3)
 
-    def test_full_transcription_really_overlaps_three_extractions(self):
-        works = [self._all_work(i) for i in range(9)]
+    def test_full_transcription_really_overlaps_fifty_extractions(self):
+        works = [self._all_work(i) for i in range(100)]
         run, _ = self._create_run(operation="catalog_all", auto_transcribe=True)
-        barrier = threading.Barrier(3, timeout=5)
+        barrier = threading.Barrier(50, timeout=10)
         lock = threading.Lock()
         active = peak = 0
         seen = []
@@ -213,11 +213,12 @@ class CreatorCatalogServiceTests(unittest.TestCase):
                 with lock:
                     active -= 1
         with patch.object(creator_sync_service, "_import_work", side_effect=transcribe):
-            self._process_with_catalog(run.id, lambda *_a, **_kw: {"items": works, "complete": True, "total_count": 9})
+            self._process_with_catalog(run.id, lambda *_a, **_kw: {"items": works, "complete": True, "total_count": 100})
         self.db.expire_all()
         final = self.db.get(CreatorSyncRun, run.id)
-        self.assertEqual((peak, len(set(seen)), final.new_count, final.status), (3, 9, 9, "succeeded"))
+        self.assertEqual((peak, len(set(seen)), final.new_count, final.status), (50, 100, 100, "succeeded"))
 
+    @patch.object(creator_sync_service, "FULL_TRANSCRIPT_CONCURRENCY", 3)
     def test_parallel_transient_failure_preserves_other_results_before_retry(self):
         works = [self._all_work(i) for i in range(6)]
         run, _ = self._create_run(operation="catalog_all", auto_transcribe=True)
@@ -245,6 +246,7 @@ class CreatorCatalogServiceTests(unittest.TestCase):
         self.assertEqual(self.db.get(CreatorSyncRun, run.id).new_count, 6)
         self.assertEqual(self.db.get(CreatorSyncRun, run.id).status, "succeeded")
 
+    @patch.object(creator_sync_service, "FULL_TRANSCRIPT_CONCURRENCY", 3)
     def test_parallel_risk_stops_dispatch_and_keeps_inflight_success(self):
         works = [self._all_work(i) for i in range(12)]
         run, _ = self._create_run(operation="catalog_all", auto_transcribe=True)

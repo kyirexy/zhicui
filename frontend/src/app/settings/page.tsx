@@ -103,7 +103,7 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     id: 'sync',
     label: '同步与问答',
     description: '手动更新多渠道视频并控制问答列表数量',
-    keywords: '同步 手动 风控 抖音 收藏 喜欢 作品 视频 数量 问答',
+    keywords: '同步 手动 风控 抖音 B站 bilibili 云端 平台 账号 绑定 扫码 CLI 收藏 喜欢 作品 视频 数量 问答',
     icon: ArrowsClockwise,
   },
   {

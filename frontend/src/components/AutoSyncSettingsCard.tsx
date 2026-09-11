@@ -30,7 +30,12 @@ export default function AutoSyncSettingsCard() {
           </div>
           <div>
             <strong>账号连接</strong>
-            <span>绑定抖音或 B站 账号只更新连接状态，不会自动抓取收藏、喜欢或作品。</span>
+            <span>绑定账号不会自动抓取资料。B站云端绑定供 CLI 和云端博主同步使用，扫码时沿用当前知萃账号。</span>
+            <Link href="/connections/bilibili">
+              <ShieldCheck size={15} aria-hidden="true" />
+              管理 B站云端绑定
+              <ArrowRight size={14} weight="bold" aria-hidden="true" />
+            </Link>
           </div>
           <div>
             <strong>任务进度</strong>

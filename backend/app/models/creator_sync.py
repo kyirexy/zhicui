@@ -425,6 +425,7 @@ class CreatorSyncRun(Base):
     )
     platform: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued", index=True)
+    auto_transcribe: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     operation: Mapped[str] = mapped_column(
         String(32), nullable=False, default="recent_transcript", index=True
     )
@@ -488,6 +489,7 @@ class CreatorSyncRun(Base):
             "platform": self.platform,
             "status": self.status,
             "operation": self.operation or "recent_transcript",
+            "auto_transcribe": bool(self.auto_transcribe),
             "requested_limit": self.requested_limit,
             "target_count": self.target_count or (
                 self.requested_limit if (self.operation or "recent_transcript") == "recent_transcript" else 0

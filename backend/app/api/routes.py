@@ -586,6 +586,7 @@ class CreatorSourceRequest(BaseModel):
 
 
 class CreatorSyncRunRequest(BaseModel):
+    auto_transcribe: bool = False
     operation: Literal[
         "recent_transcript", "catalog_all", "selected_transcript"
     ] | None = None
@@ -3636,6 +3637,7 @@ def create_creator_sync_run(
             limit=body.limit,
             operation=body.operation,
             item_ids=body.item_ids,
+            auto_transcribe=body.auto_transcribe,
         )
     except creator_sync_service.CreatorSyncError as exc:
         raise _creator_http_error(exc) from exc

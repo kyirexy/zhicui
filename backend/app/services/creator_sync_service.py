@@ -478,9 +478,12 @@ def create_run(
     limit: int | None = None,
     operation: str | None = None,
     item_ids: list[str] | None = None,
+    auto_transcribe: bool = False,
 ) -> tuple[CreatorSyncRun, bool]:
     _require_enabled(db)
     normalized, requested_limit, selected_ids = _normalize_operation(operation, limit, item_ids)
+    if auto_transcribe and normalized != "catalog_all":
+        raise CreatorSyncError("invalid_operation", "全部自动转写必须使用全量作品发现", 422)
     source = _get_source(db, user_id=user_id, source_id=source_id, active_only=True)
     credentials = _connector_credentials(db, user_id, source.platform)
     if source.platform == "bilibili":
@@ -540,6 +543,7 @@ def create_run(
         platform=source.platform,
         status="queued",
         operation=normalized,
+        auto_transcribe=auto_transcribe,
         requested_limit=requested_limit,
         target_count=target_count,
         source_snapshot_json=_snapshot_json(source),
@@ -769,7 +773,7 @@ def retry_run(
     ).first()
     if active_other is not None:
         raise CreatorSyncError("user_run_active", "当前已有博主同步任务正在运行", 409)
-    if run.operation != "catalog_all":
+    if run.operation != "catalog_all" or (run.auto_transcribe and run.discovery_complete):
         failed_items = db.query(CreatorSyncRunItem).filter(
             CreatorSyncRunItem.run_id == run.id,
             CreatorSyncRunItem.user_id == user_id,
@@ -1224,7 +1228,7 @@ def _process_catalog(
     lease_token: str,
     source_snapshot: SimpleNamespace,
     credentials: dict[str, str],
-) -> None:
+) -> bool | None:
     discover = getattr(creator_connectors, "discover_catalog", None)
     if not callable(discover):
         raise creator_connectors.CreatorConnectorError(
@@ -1318,6 +1322,26 @@ def _process_catalog(
                 },
                 synchronize_session=False,
             )
+            if run.auto_transcribe:
+                # 同一持久化任务从目录阶段进入转写，不另建受 50/100 条限制的任务。
+                existing = {row.source_item_id for row in db.query(CreatorSyncRunItem).filter_by(run_id=run.id)}
+                items = db.query(CreatorSourceItem).filter(
+                    CreatorSourceItem.user_id == run.user_id,
+                    CreatorSourceItem.source_id == run.source_id,
+                    CreatorSourceItem.last_seen_run_id == run.id,
+                    CreatorSourceItem.removed_at.is_(None),
+                    CreatorSourceItem.is_available.is_(True),
+                ).order_by(CreatorSourceItem.order_index.asc(), CreatorSourceItem.id.asc()).all()
+                for ordinal, item in enumerate(items, start=1):
+                    if item.id not in existing:
+                        db.add(CreatorSyncRunItem(run_id=run.id, user_id=run.user_id,
+                            source_id=run.source_id, source_item_id=item.id,
+                            external_id=item.external_id, ordinal=ordinal))
+                db.flush()
+                run.target_count = len(items)
+                _recompute_run_counts(db, run)
+                _heartbeat(db, run, lease_token, "importing")
+                return True
             run.status = "succeeded"
         else:
             run.total_count = None
@@ -1489,7 +1513,7 @@ def _import_work(
         raise _RunCancelled("任务已取消或租约已转移")
     if run.platform == "douyin":
         safe_item = None
-        if getattr(run, "operation", "recent_transcript") in {"selected_transcript", "recent_transcript"}:
+        if getattr(run, "auto_transcribe", False) or getattr(run, "operation", "recent_transcript") in {"selected_transcript", "recent_transcript"}:
             published = work.get("published_at")
             if isinstance(published, datetime):
                 recorded_at = _aware(published).isoformat()
@@ -1701,7 +1725,8 @@ def _process_transcript_run(
                 )
                 db.commit()
                 continue
-            if item.note_id and db.query(Note).filter(Note.id == item.note_id).first():
+            existing_note = db.query(Note).filter(Note.id == item.note_id, Note.user_id == run.user_id).first() if item.note_id else None
+            if existing_note and str(existing_note.transcript_raw or "").strip():
                 _mark_item_result(
                     db, run, run_item, item,
                     state="reused",
@@ -1923,6 +1948,8 @@ def process_run(run_id: str) -> None:
                 source_id=run.source_id,
                 platform=run.platform,
                 operation=run.operation,
+                auto_transcribe=run.auto_transcribe,
+                discovery_complete=run.discovery_complete,
                 requested_limit=run.requested_limit,
                 target_count=run.target_count,
             )
@@ -1938,7 +1965,13 @@ def process_run(run_id: str) -> None:
 
         with _gate(run_snapshot.platform, concurrency):
             if run_snapshot.operation == "catalog_all":
-                _process_catalog(run_id, lease_token, source_snapshot, credentials)
+                if not run_snapshot.auto_transcribe:
+                    _process_catalog(run_id, lease_token, source_snapshot, credentials)
+                else:
+                    if not run_snapshot.discovery_complete:
+                        if not _process_catalog(run_id, lease_token, source_snapshot, credentials):
+                            return
+                    _process_transcript_run(run_id, lease_token, source_snapshot, run_snapshot, credentials)
             else:
                 _process_transcript_run(
                     run_id, lease_token, source_snapshot, run_snapshot, credentials,

@@ -26,7 +26,7 @@ export default function AutoSyncSettingsCard() {
         <div className={styles.scope} aria-label="手动同步说明">
           <div>
             <strong>何时读取</strong>
-            <span>只有你选择来源和数量，并点击同步按钮后才会读取。</span>
+            <span>只有你主动点击同步，或保存博主并全部转写时才会读取。</span>
           </div>
           <div>
             <strong>账号连接</strong>

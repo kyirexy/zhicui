@@ -99,7 +99,7 @@ function creatorProgress(run: CreatorSyncRun): string {
   if (run.status === 'transcribing') return `正在准备文稿 · 已新增 ${run.new_count}`;
   if (run.status === 'cancelled') return '同步已取消';
   if (run.status === 'failed') return run.error_message || '同步失败';
-  if (run.operation === 'catalog_all') return `清单已更新 · 共发现 ${run.total_count ?? run.discovered_count} 条`;
+  if ((run.operation === 'catalog_all' && !run.auto_transcribe)) return `清单已更新 · 共发现 ${run.total_count ?? run.discovered_count} 条`;
   return `完成 · 新增 ${run.new_count} · 已存在 ${run.reused_count} · 失败 ${run.failed_count}`;
 }
 

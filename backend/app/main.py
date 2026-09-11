@@ -688,6 +688,7 @@ def _migrate_creator_sync(conn, insp) -> None:
     if insp.has_table("creator_sync_runs"):
         run_cols = {c["name"] for c in insp.get_columns("creator_sync_runs")}
         run_additions = {
+            "auto_transcribe": "BOOLEAN NOT NULL DEFAULT FALSE",
             "operation": "VARCHAR(32) NOT NULL DEFAULT 'recent_transcript'",
             "target_count": "INTEGER NOT NULL DEFAULT 0",
             "discovery_cursor_json": "TEXT NOT NULL DEFAULT '{}'",

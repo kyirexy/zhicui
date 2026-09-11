@@ -634,6 +634,7 @@ def creator_sync_start(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
             limit=payload.get("limit"),
             operation=_text(payload, "operation", maximum=32) or "recent_transcript",
             item_ids=list(payload.get("item_ids") or []),
+            auto_transcribe=bool(payload.get("auto_transcribe", False)),
         )
         return _attach_creator_run(ctx, row, reused=reused)
     except creator_sync_service.CreatorSyncError as exc:

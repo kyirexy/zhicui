@@ -805,6 +805,7 @@ export async function createCreatorSyncRun(
   sourceId: string,
   requestBody: (20 | 50 | 100) | {
     operation: CreatorSyncOperation;
+    auto_transcribe?: boolean;
     limit?: 20 | 50 | 100;
     item_ids?: string[];
   },

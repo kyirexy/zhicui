@@ -351,6 +351,7 @@ _CORE_DEFINITIONS: tuple[ProductActionDefinition, ...] = (
         input_schema=_object({
             "source_id": {"type": "string", "minLength": 1, "maxLength": 64},
             "operation": {"type": "string", "enum": ["recent_transcript", "catalog_all", "selected_transcript"]},
+            "auto_transcribe": {"type": "boolean", "description": "catalog_all 发现全部作品后自动逐条转写，不受近期数量限制"},
             "limit": {"type": ["integer", "null"], "enum": [20, 50, 100, None]},
             "item_ids": {"type": "array", "maxItems": 50, "items": {"type": "string", "maxLength": 64}},
         }, ["source_id"]), risk=(RiskLevel.WRITE,), run_type=RunType.LONG_TASK,

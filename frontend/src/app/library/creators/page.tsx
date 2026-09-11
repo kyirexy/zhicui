@@ -69,7 +69,8 @@ function platformLabel(platform: CreatorSourcePlatform): string {
   return '小红书';
 }
 
-function operationLabel(operation: CreatorSyncOperation): string {
+function operationLabel(operation: CreatorSyncOperation, autoTranscribe = false): string {
+  if (autoTranscribe) return '全部自动转写';
   if (operation === 'catalog_all') return '刷新全部清单';
   if (operation === 'selected_transcript') return '准备已选文稿';
   return '准备近期文稿';
@@ -92,7 +93,7 @@ function runStatusLabel(run: CreatorSyncRun): string {
 
 function runProgress(run: CreatorSyncRun): string {
   if (run.needs_action?.required) return run.needs_action.message || '请处理平台验证后重试';
-  if (run.operation === 'catalog_all') {
+  if (run.operation === 'catalog_all' && (!run.auto_transcribe || !run.discovery_complete)) {
     if (!run.discovery_complete && !TERMINAL_STATUSES.has(run.status)) {
       return `正在发现全部公开作品 · 已发现 ${run.discovered_count || 0} 条`;
     }
@@ -394,7 +395,19 @@ function CreatorLibraryWorkspace() {
     setPreview(null);
     setProfileRef('');
     await loadSources(response.data.item.id);
-    setNotice(response.data.reused ? '这个博主已恢复到来源列表' : '博主已保存');
+    if (response.data.item.platform === 'douyin' || response.data.item.platform === 'bilibili') {
+      setPendingAction('catalog_all');
+      const started = await createCreatorSyncRun(response.data.item.id, { operation: 'catalog_all', auto_transcribe: true });
+      setPendingAction('');
+      if (started.success && started.data) {
+        trackRun(started.data.run);
+        setNotice('博主已保存，正在发现全部作品并自动转写，切换页面不会中断');
+      } else {
+        setError(started.error || '博主已保存，但全部转写未启动，请检查平台连接后重试');
+      }
+    } else {
+      setNotice(response.data.reused ? '这个博主已恢复到来源列表' : '博主已保存');
+    }
   };
 
   const askAllCreatorVideos = async () => {
@@ -415,7 +428,7 @@ function CreatorLibraryWorkspace() {
     }
     if (firstPage.data.total === 0) {
       setPendingAction('');
-      setError('这个博主还没有可提问的文稿，请先准备近期文稿或勾选作品转写。');
+      setError('这个博主还没有可提问的文稿，请先点击“全部自动转写”。');
       return;
     }
     if (firstPage.data.total > HARNESS_MAX_SOURCES) {
@@ -461,12 +474,14 @@ function CreatorLibraryWorkspace() {
     operation: CreatorSyncOperation,
     limit?: 20 | 50 | 100,
     itemIds?: string[],
+    autoTranscribe = operation === 'catalog_all',
   ) => {
     if (!selectedSource || pendingAction || userActiveRun) return;
     setPendingAction(operation);
     setError('');
     const response = await createCreatorSyncRun(selectedSource.id, {
       operation,
+      auto_transcribe: autoTranscribe,
       ...(limit ? { limit } : {}),
       ...(itemIds ? { item_ids: itemIds } : {}),
     });
@@ -478,7 +493,7 @@ function CreatorLibraryWorkspace() {
     trackRun(response.data.run);
     setNotice(
       operation === 'catalog_all'
-        ? '正在后台刷新全部公开作品，切换页面不会中断'
+        ? (autoTranscribe ? '正在发现全部作品，随后自动逐条转写；切换页面不会中断' : '正在后台刷新全部公开作品，切换页面不会中断')
         : `正在后台准备 ${response.data.run.target_count || limit || itemIds?.length || 0} 条普通文稿`,
     );
     if (operation === 'selected_transcript') setSelectedIds(new Set());
@@ -625,7 +640,7 @@ function CreatorLibraryWorkspace() {
         <div className={styles.dialogCard}>
           <header className={styles.taskHeading}>
             <div>
-              <span>{detailRun ? operationLabel(detailRun.operation) : '任务详情'}</span>
+              <span>{detailRun ? operationLabel(detailRun.operation, detailRun.auto_transcribe) : '任务详情'}</span>
               <h2 id="creator-task-title">{detailRun ? runStatusLabel(detailRun) : '任务详情'}</h2>
             </div>
             <button type="button" onClick={() => closeDialog(taskDialogRef.current)} aria-label="关闭任务详情"><X size={18} /></button>
@@ -750,7 +765,7 @@ function CreatorLibraryWorkspace() {
               <div className={styles.previewCard}>
                 <span className={styles.avatar}>{preview.avatar_url ? <img src={preview.avatar_url} alt="" /> : <UserRound size={18} />}</span>
                 <div><strong>{preview.display_name}</strong><small>{platformLabel(preview.platform)}博主</small></div>
-                <button type="button" onClick={() => void saveSource()} disabled={Boolean(pendingAction)}>保存</button>
+                <button type="button" onClick={() => void saveSource()} disabled={Boolean(pendingAction)}>{preview.platform === 'xiaohongshu' ? '保存' : '保存并全部转写'}</button>
               </div>
             )}
           </section>
@@ -801,7 +816,7 @@ function CreatorLibraryWorkspace() {
                 </div>
                 <button type="button" data-primary="true" onClick={() => void startRun('catalog_all')} disabled={!selectedCatalogEnabled || Boolean(pendingAction) || Boolean(userActiveRun)}>
                   {pendingAction === 'catalog_all' ? <LoaderCircle size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-                  刷新全部清单
+                  全部自动转写
                 </button>
               </div>
               {!selectedPlatformEnabled ? (
@@ -817,20 +832,20 @@ function CreatorLibraryWorkspace() {
                   className={styles.activeRun}
                   data-indeterminate={sourceActiveRun.operation === 'catalog_all' && !sourceActiveRun.discovery_complete}
                   role="progressbar"
-                  aria-label={operationLabel(sourceActiveRun.operation)}
+                  aria-label={operationLabel(sourceActiveRun.operation, sourceActiveRun.auto_transcribe)}
                   aria-valuemin={0}
-                  aria-valuemax={sourceActiveRun.operation === 'catalog_all'
+                  aria-valuemax={sourceActiveRun.operation === 'catalog_all' && !sourceActiveRun.auto_transcribe
                     ? sourceActiveRun.total_count ?? undefined
                     : sourceActiveRun.target_count || sourceActiveRun.requested_limit}
                   aria-valuenow={sourceActiveRun.operation === 'catalog_all' && !sourceActiveRun.discovery_complete
                     ? undefined
-                    : sourceActiveRun.operation === 'catalog_all'
+                    : sourceActiveRun.operation === 'catalog_all' && !sourceActiveRun.auto_transcribe
                       ? sourceActiveRun.discovered_count
                       : sourceActiveRun.processed_count || sourceActiveRun.checked_count}
                   aria-valuetext={runProgress(sourceActiveRun)}
                 >
                   <span><LoaderCircle size={18} className="animate-spin" /></span>
-                  <div><strong>{operationLabel(sourceActiveRun.operation)}</strong><p>{runProgress(sourceActiveRun)}</p></div>
+                  <div><strong>{operationLabel(sourceActiveRun.operation, sourceActiveRun.auto_transcribe)}</strong><p>{runProgress(sourceActiveRun)}</p></div>
                   <button type="button" onClick={() => void openRunDetail(sourceActiveRun)}>详情</button>
                   <i aria-hidden="true" />
                 </article>
@@ -884,7 +899,7 @@ function CreatorLibraryWorkspace() {
                     onToggle={toggleItem}
                   />
                 )) : (
-                  <div className={styles.catalogEmpty}><FileText size={28} /><h3>还没有符合条件的作品</h3><p>点击“刷新全部清单”发现公开作品；目录同步不会下载媒体。</p></div>
+                  <div className={styles.catalogEmpty}><FileText size={28} /><h3>还没有符合条件的作品</h3><p>点击“全部自动转写”，自动发现并转写该博主的全部公开作品，已有文稿直接复用。</p></div>
                 )}
               </div>
 
@@ -902,7 +917,7 @@ function CreatorLibraryWorkspace() {
                   <div>
                     {sourceRuns.map((run) => (
                       <button key={run.id} type="button" onClick={() => void openRunDetail(run)}>
-                        <span><strong>{operationLabel(run.operation)}</strong><small>{new Date(run.created_at).toLocaleString('zh-CN')}</small></span>
+                        <span><strong>{operationLabel(run.operation, run.auto_transcribe)}</strong><small>{new Date(run.created_at).toLocaleString('zh-CN')}</small></span>
                         <span data-status={run.status}>{runStatusLabel(run)}</span>
                         <ChevronRight size={15} />
                       </button>

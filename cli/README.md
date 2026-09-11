@@ -81,7 +81,7 @@ zhicui platform bind bilibili --json
 zhicui platform status bilibili --json
 # 需要从命令行查询扫码进度时，使用 bind 返回的 session_id
 zhicui platform poll bilibili <session_id> --json
-zhicui creator sync <source_id> --operation catalog_all --wait --json
+zhicui creator sync <source_id> --operation catalog_all --auto-transcribe --wait --json
 zhicui platform disconnect bilibili --json
 # 断开属于需确认的操作，按返回的 confirmation_id 完成确认
 ```

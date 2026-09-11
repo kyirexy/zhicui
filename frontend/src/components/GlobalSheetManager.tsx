@@ -158,9 +158,9 @@ export default function GlobalSheetManager() {
                     {run.source_snapshot?.display_name || `${run.platform === 'douyin' ? '抖音' : run.platform === 'bilibili' ? 'B站' : '小红书'}博主`}
                   </strong>
                   <p className="mt-1 text-pretty text-xs text-foreground-muted">
-                    {run.operation === 'catalog_all'
+                    {(run.operation === 'catalog_all' && (!run.auto_transcribe || !run.discovery_complete))
                       ? `刷新全部清单 · 已发现 ${run.discovered_count || 0}${run.discovery_complete ? `/${run.total_count ?? run.discovered_count ?? 0}` : ''} 条`
-                      : `${run.operation === 'selected_transcript' ? '已选文稿' : '近期文稿'} · 处理 ${run.processed_count || run.checked_count}/${run.target_count || run.requested_limit} · 失败 ${run.failed_count}`}
+                      : `${run.auto_transcribe ? '全部文稿' : run.operation === 'selected_transcript' ? '已选文稿' : '近期文稿'} · 处理 ${run.processed_count || run.checked_count}/${run.target_count || run.requested_limit} · 失败 ${run.failed_count}`}
                   </p>
                   {run.needs_action?.required && (
                     <p className="mt-1 text-pretty text-xs text-amber-600">{run.needs_action.message || '需要处理平台验证后重试'}</p>
@@ -235,10 +235,10 @@ export default function GlobalSheetManager() {
         <aside className={analysisStyles.completionToast} role="status" aria-live="polite">
           <CloudArrowDown size={19} aria-hidden="true" />
           <div>
-            <strong>{completedCreatorRun.operation === 'catalog_all' ? '博主作品清单已更新' : completedCreatorRun.status === 'partial' ? '博主文稿部分完成' : completedCreatorRun.status === 'failed' ? '博主文稿未完成' : '博主文稿已完成'}</strong>
-            <p>{completedCreatorRun.operation === 'catalog_all' ? `已发现 ${completedCreatorRun.total_count ?? completedCreatorRun.discovered_count ?? 0} 条公开作品` : `新增 ${completedCreatorRun.new_count} · 已存在 ${completedCreatorRun.reused_count} · 失败 ${completedCreatorRun.failed_count}`}</p>
+            <strong>{(completedCreatorRun.operation === 'catalog_all' && !completedCreatorRun.auto_transcribe) ? '博主作品清单已更新' : completedCreatorRun.status === 'partial' ? '博主文稿部分完成' : completedCreatorRun.status === 'failed' ? '博主文稿未完成' : '博主文稿已完成'}</strong>
+            <p>{(completedCreatorRun.operation === 'catalog_all' && !completedCreatorRun.auto_transcribe) ? `已发现 ${completedCreatorRun.total_count ?? completedCreatorRun.discovered_count ?? 0} 条公开作品` : `新增 ${completedCreatorRun.new_count} · 已存在 ${completedCreatorRun.reused_count} · 失败 ${completedCreatorRun.failed_count}`}</p>
             <span>
-              <Link href={completedCreatorRun.operation === 'catalog_all' ? '/library/creators' : '/library'}>{completedCreatorRun.operation === 'catalog_all' ? '查看清单' : '查看视频'}</Link>
+              <Link href={(completedCreatorRun.operation === 'catalog_all' && !completedCreatorRun.auto_transcribe) ? '/library/creators' : '/library'}>{(completedCreatorRun.operation === 'catalog_all' && !completedCreatorRun.auto_transcribe) ? '查看清单' : '查看视频'}</Link>
               <button type="button" onClick={() => {
                 setCompletedCreatorRun(null);
                 setCreatorSheetOpen(true);

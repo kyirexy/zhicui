@@ -989,6 +989,7 @@ export interface CreatorSyncRun {
   platform: CreatorSourcePlatform;
   status: CreatorSyncStage;
   operation: CreatorSyncOperation;
+  auto_transcribe?: boolean;
   requested_limit: 20 | 50 | 100;
   target_count: number;
   checked_count: number;

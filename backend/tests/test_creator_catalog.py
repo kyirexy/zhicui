@@ -101,6 +101,99 @@ class CreatorCatalogServiceTests(unittest.TestCase):
         ):
             creator_sync_service.process_run(run_id)
 
+    def _all_work(self, index):
+        return {"external_id": f"BV{index:010d}", "source_url": f"https://www.bilibili.com/video/BV{index:010d}",
+                "title": f"计算机算法课程第{index}讲", "author_name": "计算机课堂", "description": "完整课程讲解",
+                "cover_url": "https://i0.hdslb.com/bfs/archive/course.jpg", "published_at": "2026-08-01T12:00:00Z"}
+
+    def test_full_automatic_transcription_exceeds_recent_limit_in_one_run(self):
+        works = [self._all_work(i) for i in range(121)]
+        run, _ = self._create_run(operation="catalog_all", auto_transcribe=True)
+        seen = []
+        def transcribe(snapshot, work, **kwargs):
+            self.assertTrue(snapshot.auto_transcribe)
+            seen.append(work["external_id"])
+            return "imported", None
+        with patch.object(creator_sync_service, "_import_work", side_effect=transcribe):
+            self._process_with_catalog(run.id, lambda *_a, **_kw: {"items": works, "complete": True, "total_count": len(works)})
+        self.db.expire_all(); final = self.db.get(CreatorSyncRun, run.id)
+        self.assertEqual(final.status, "succeeded")
+        self.assertEqual(len(seen), 121)
+        self.assertEqual(final.new_count, 121)
+        self.assertEqual(final.target_count, 121)
+        self.assertEqual(self.db.query(CreatorSyncRun).count(), 1)
+
+    def test_full_automatic_transcription_retries_only_failed_items_without_rediscovery(self):
+        works = [self._all_work(i) for i in range(3)]
+        run, _ = self._create_run(operation="catalog_all", auto_transcribe=True)
+        def transcribe(_run, work, **kwargs):
+            if work["external_id"] == works[1]["external_id"]:
+                raise ValueError("invalid fixture media")
+            return "imported", None
+        with patch.object(creator_sync_service, "_import_work", side_effect=transcribe):
+            self._process_with_catalog(run.id, lambda *_a, **_kw: {"items": works, "complete": True, "total_count": 3})
+        self.db.expire_all(); self.assertEqual(self.db.get(CreatorSyncRun, run.id).status, "partial")
+        creator_sync_service.retry_run(self.db, user_id=self.user.id, run_id=run.id)
+        with patch.object(creator_sync_service, "_import_work", return_value=("imported", None)) as importer:
+            self._process_with_catalog(run.id, lambda *_a, **_kw: self.fail("retry must not rediscover or repeat successful ASR"))
+        self.assertEqual(importer.call_count, 1)
+        self.db.expire_all(); self.assertEqual(self.db.get(CreatorSyncRun, run.id).status, "succeeded")
+
+    def test_all_transcription_reuses_only_own_nonempty_transcripts(self):
+        works = [self._all_work(i) for i in range(3)]
+        for index, work in enumerate(works):
+            note = Note(user_id=self.user.id if index != 2 else self.other.id,
+                video_id=work["external_id"], video_title=work["title"], video_url=work["source_url"],
+                transcript_raw="完整文稿" if index != 1 else "", seo_title="测试课程", seo_slug=f"auto-test-{index}", seo_meta="测试")
+            self.db.add(note); self.db.flush()
+            self.db.add(CreatorSourceItem(user_id=self.user.id, source_id=self.source.id,
+                platform="bilibili", external_id=work["external_id"], note_id=note.id, state="ready", title=work["title"]))
+        self.db.commit()
+        run, _ = self._create_run(operation="catalog_all", auto_transcribe=True)
+        with patch.object(creator_sync_service, "_import_work", return_value=("imported", None)) as importer:
+            self._process_with_catalog(run.id, lambda *_a, **_kw: {"items": works, "complete": True, "total_count": 3})
+        self.assertEqual(importer.call_count, 2)
+        self.db.expire_all(); final = self.db.get(CreatorSyncRun, run.id)
+        self.assertEqual(final.reused_count, 1)
+        self.assertEqual(final.new_count, 2)
+        self.assertEqual(final.status, "succeeded")
+
+    def test_incomplete_catalog_never_claims_all_transcripts_done(self):
+        run, _ = self._create_run(operation="catalog_all", auto_transcribe=True)
+        with patch.object(creator_sync_service, "_import_work") as importer:
+            self._process_with_catalog(run.id, lambda *_a, **_kw: {"items": [self._all_work(1)], "complete": False, "failures": [{"code": "bilibili_risk_control"}]})
+        importer.assert_not_called()
+        self.db.expire_all(); final = self.db.get(CreatorSyncRun, run.id)
+        self.assertFalse(final.discovery_complete)
+        self.assertNotEqual(final.status, "succeeded")
+        self.assertTrue(final.needs_action)
+
+    def test_full_automatic_transcription_cancel_then_resume_keeps_completed_items(self):
+        works = [self._all_work(i) for i in range(3)]
+        run, _ = self._create_run(operation="catalog_all", auto_transcribe=True)
+        calls = []
+        def transcribe(_run, work, **kwargs):
+            calls.append(work["external_id"])
+            if len(calls) == 1:
+                with self.Session() as db:
+                    creator_sync_service.request_cancel(db, user_id=self.user.id, run_id=run.id)
+            return "imported", None
+        with patch.object(creator_sync_service, "_import_work", side_effect=transcribe):
+            self._process_with_catalog(run.id, lambda *_a, **_kw: {"items": works, "complete": True, "total_count": 3})
+        self.db.expire_all(); self.assertEqual(self.db.get(CreatorSyncRun, run.id).status, "cancelled")
+        self.assertEqual(len(calls), 1)
+        creator_sync_service.retry_run(self.db, user_id=self.user.id, run_id=run.id)
+        with patch.object(creator_sync_service, "_import_work", return_value=("imported", None)) as importer:
+            self._process_with_catalog(run.id, lambda *_a, **_kw: self.fail("resume must keep discovered queue"))
+        self.db.expire_all(); self.assertEqual(self.db.get(CreatorSyncRun, run.id).status, "succeeded")
+        self.assertLessEqual(importer.call_count, 3)
+        self.assertEqual(self.db.get(CreatorSyncRun, run.id).processed_count, 3)
+
+    def test_automatic_transcription_requires_catalog_operation(self):
+        with self.assertRaises(creator_sync_service.CreatorSyncError) as raised:
+            self._create_run(operation="recent_transcript", auto_transcribe=True)
+        self.assertEqual(raised.exception.code, "invalid_operation")
+
     def test_operations_legacy_compatibility_selection_limit_and_scope(self) -> None:
         legacy, reused = self._create_run(limit=20)
         self.assertFalse(reused)

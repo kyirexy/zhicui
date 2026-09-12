@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import time
 import unittest
+import tempfile
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -59,10 +61,11 @@ def _note(user_id: str, *, note_id: str = "note-quality") -> Note:
 
 class CreatorCatalogQualityTests(unittest.TestCase):
     def setUp(self) -> None:
+        # 后台线程与轮询线程使用独立连接，避免共享内存连接交叉回滚。
+        self.database_dir = tempfile.TemporaryDirectory()
         self.engine = create_engine(
-            "sqlite://",
+            "sqlite:///" + (Path(self.database_dir.name) / "quality.db").as_posix(),
             connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
         )
         Base.metadata.create_all(
             self.engine,
@@ -98,6 +101,7 @@ class CreatorCatalogQualityTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.db.close()
         self.engine.dispose()
+        self.database_dir.cleanup()
 
     def _item(self, external_id: str, **values) -> CreatorSourceItem:
         item = CreatorSourceItem(

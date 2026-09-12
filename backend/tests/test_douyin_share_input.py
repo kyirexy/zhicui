@@ -267,25 +267,37 @@ class DouyinShareInputTests(unittest.TestCase):
         self.assertEqual(result["video_id"], "fallback-1")
         self.assertEqual(result["title"], "兜底成功")
 
-    def test_transcript_reuses_already_parsed_metadata(self) -> None:
+    def test_transcript_reuses_metadata_and_streams_compact_audio(self) -> None:
         processor = MagicMock()
-        processor.download_video.return_value = "video.mp4"
-        processor.extract_audio.return_value = "audio.mp3"
-        processor.extract_text_from_audio.return_value = "完整文稿"
-        with patch.object(video_extractor, "DouyinProcessor", return_value=processor):
+        with (
+            patch.object(video_extractor, "DouyinProcessor", return_value=processor),
+            patch.object(video_extractor, "extract_media_url_transcript", return_value="完整文稿") as stream,
+        ):
             result = video_extractor.extract_transcript(
-                SHARE_TEXT,
-                "asr-key",
-                video_info={
-                    "video_id": "123",
-                    "title": "测试作品",
-                    "download_url": "https://media.example/123.mp4",
-                },
+                SHARE_TEXT, "asr-key", "https://asr.example/v1", "test-asr",
+                video_info={"video_id": "123", "title": "测试作品", "download_url": "https://media.example/123.mp4"},
             )
-
         self.assertEqual(result, "完整文稿")
         processor.parse_share_url.assert_not_called()
-        processor.download_video.assert_called_once()
+        processor.download_video.assert_not_called()
+        processor.extract_text_from_audio.assert_not_called()
+        self.assertEqual(stream.call_args.args, ("https://media.example/123.mp4", "asr-key", "https://asr.example/v1", "test-asr"))
+        self.assertIn("User-Agent", stream.call_args.kwargs["request_headers"])
+
+    def test_douyin_stream_failure_does_not_download_video_again(self) -> None:
+        with (
+            patch.object(routes.video_extractor, "parse_video_info", return_value={"video_id": "123", "title": "测试作品", "download_url": "https://media.example/123.mp4"}),
+            patch.object(routes.settings_service, "get_asr_config", return_value={"api_key": "asr-key", "api_base_url": "https://asr.example/v1", "model": "private-model"}),
+            patch.object(routes.video_extractor, "extract_transcript", side_effect=RuntimeError("private-model upstream-details")),
+            patch.object(routes.video_extractor, "fallback_local_asr") as fallback,
+        ):
+            response = routes.extract_stream(url=SHARE_TEXT, db=MagicMock(), current_user=SimpleNamespace(id="user-1"))
+            body = asyncio.run(_stream_text(response))
+        fallback.assert_not_called()
+        self.assertIn("文字提取暂未完成", body)
+        self.assertNotIn("private-model", body)
+        self.assertNotIn("upstream-details", body)
+        self.assertNotIn("ASR", body)
 
     def test_video_info_route_does_not_leak_connector_exception(self) -> None:
         with patch.object(
@@ -529,6 +541,9 @@ class DouyinShareInputTests(unittest.TestCase):
         self.assertIn("/signed-cover", body)
         self.assertNotIn(loopback, body)
         self.assertNotIn(SESSION_SCOPE, body)
+        self.assertNotIn("test-asr", body)
+        self.assertNotIn("ASR", body)
+        self.assertNotIn("正在准备语音识别配置", body)
 
     def test_missing_local_cover_still_gets_signed_cover_capability(self) -> None:
         item = {

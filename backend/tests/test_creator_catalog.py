@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
+from pathlib import Path
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -32,10 +34,11 @@ from app.services import settings_service
 
 class CreatorCatalogServiceTests(unittest.TestCase):
     def setUp(self) -> None:
+        # 并发回调必须使用独立连接；共享内存连接会让一个线程的 rollback 撤销另一个线程的写入。
+        self.database_dir = tempfile.TemporaryDirectory()
         self.engine = create_engine(
-            "sqlite://",
+            "sqlite:///" + (Path(self.database_dir.name) / "catalog.db").as_posix(),
             connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
         )
         Base.metadata.create_all(
             self.engine,
@@ -85,6 +88,7 @@ class CreatorCatalogServiceTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.db.close()
         self.engine.dispose()
+        self.database_dir.cleanup()
 
     def _create_run(self, **kwargs):
         with patch.object(creator_sync_service, "_require_catalog_health"):

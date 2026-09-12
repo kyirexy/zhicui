@@ -35,9 +35,9 @@ export interface StepState {
 }
 
 const STEP_LABELS: Record<string, string> = {
-  parse: '解析视频',
-  transcribe: '提取文案',
-  ai: 'AI 榨汁',
+  parse: '读取内容',
+  transcribe: '提取文字',
+  ai: '整理内容',
   plan: '生成计划',
   save: '保存笔记',
 };

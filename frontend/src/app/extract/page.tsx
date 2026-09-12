@@ -237,8 +237,7 @@ export default function SingleLinkExtractPage() {
         <section className={styles.activity} aria-labelledby="single-link-progress-title" aria-live="polite">
           <header>
             <div>
-              <p>正在处理</p>
-              <h2 id="single-link-progress-title">单条解析进度</h2>
+              <h2 id="single-link-progress-title">导入进度</h2>
             </div>
             <button type="button" onClick={handleCancelOrReset}>取消导入</button>
           </header>

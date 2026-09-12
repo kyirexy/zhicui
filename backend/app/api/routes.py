@@ -1360,6 +1360,9 @@ def extract(
                 )
             except Exception:
                 traceback.print_exc()
+                if platform == "douyin":
+                    # 新链路已在同一份音频上尝试兜底，禁止再次下载整段视频。
+                    return _err("文字提取暂未完成，请稍后重试。")
                 # Fall through to local ASR
 
         # Fallback: local yt-dlp + faster-whisper
@@ -1441,6 +1444,18 @@ def extract_stream(
     Final event has ``step: "done"`` with ``data`` containing the note.
     """
     def _event(step: str, message: str, status: str = "active", data: Any = None) -> str:
+        # 用户只需要当前阶段；模型、连接器和诊断细节保留在服务端。
+        public_messages = {
+            "parse": ("正在读取内容…", "内容已就绪"),
+            "transcribe": ("正在提取文字…", "文字已提取"),
+            "ai": ("正在整理内容…", "内容已整理"),
+            "plan": ("正在整理计划…", "计划已整理"),
+            "save": ("正在保存…", "已保存"),
+        }
+        if step in public_messages and status != "error":
+            message = public_messages[step][1 if status == "done" else 0]
+        if isinstance(data, dict) and step != "done":
+            data = {key: value for key, value in data.items() if key not in {"model", "provider"}}
         payload: dict[str, Any] = {"step": step, "message": message, "status": status}
         if data is not None:
             payload["data"] = data
@@ -1711,6 +1726,11 @@ def extract_stream(
                         )
                 except Exception:
                     traceback.print_exc()
+                    if platform == "douyin":
+                        message = "文字提取暂未完成，请稍后重试。"
+                        yield _progress("transcribe", message, "error")
+                        yield _progress("error", message, "error")
+                        return
                     yield _progress(
                         "transcribe",
                         "云端 ASR 暂未成功，正在切换本地识别...",

@@ -8,6 +8,7 @@ backend can parse Douyin share links, download videos, and extract transcripts.
 from __future__ import annotations
 
 import os
+import logging
 import re
 import shutil
 import subprocess
@@ -1280,31 +1281,18 @@ def extract_transcript(
         # Cloud ASR failed → title fallback
         return f"[B站视频] {info.get('title', '')}"
 
-    # Douyin path
-    processor = DouyinProcessor(
-        api_key=api_key,
-        api_base_url=api_base_url,
-        model=model,
+    if video_info is not None:
+        resolved_video_info = _normalize_douyin_info(video_info)
+    else:
+        processor = DouyinProcessor(api_key=api_key, api_base_url=api_base_url, model=model)
+        resolved_video_info = _parse_douyin_share_info(processor, url)
+
+    # 与资料库共用受限的流式音频提取，不再下载完整视频后调用无超时的旧转写器。
+    return extract_media_url_transcript(
+        resolved_video_info["url"], api_key, api_base_url, model,
+        request_headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1"},
     )
-    resolved_video_info = (
-        _normalize_douyin_info(video_info)
-        if video_info is not None
-        else _parse_douyin_share_info(processor, url)
-    )
 
-    # Download video to temp dir
-    video_path = processor.download_video(resolved_video_info, show_progress=False)
-
-    # Extract audio
-    audio_path = processor.extract_audio(video_path, show_progress=False)
-
-    # Transcribe (supports automatic splitting for long audio)
-    text = processor.extract_text_from_audio(audio_path, show_progress=False)
-
-    # Cleanup
-    processor.cleanup_files(video_path, audio_path)
-
-    return text
 
 
 def _drain_process_stderr(stream: Any, tail: deque[bytes]) -> None:
@@ -1352,6 +1340,7 @@ def extract_media_url_transcript(
         ):
             raise ValueError("抖音连接器媒体地址不在本机回环范围内")
 
+    media_started = time.monotonic()
     temp_dir = Path(tempfile.mkdtemp(prefix="zhicui-library-"))
     audio_path = temp_dir / "audio.mp3"
     failures: list[str] = []
@@ -1453,13 +1442,22 @@ def extract_media_url_transcript(
                     pass
             stderr_reader.join(timeout=2)
 
+        logging.getLogger(__name__).info(
+            "transcript_media_ready duration_ms=%d media_bytes=%d audio_bytes=%d",
+            int((time.monotonic() - media_started) * 1000), written, audio_path.stat().st_size,
+        )
         if api_key:
             try:
+                asr_started = time.monotonic()
                 transcript = _asr_audio_file(
                     str(audio_path),
                     api_key,
                     api_base_url,
                     model,
+                )
+                logging.getLogger(__name__).info(
+                    "transcript_text_ready duration_ms=%d chars=%d",
+                    int((time.monotonic() - asr_started) * 1000), len(transcript or ""),
                 )
                 if transcript and transcript.strip():
                     return transcript.strip()

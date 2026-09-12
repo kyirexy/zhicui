@@ -13,6 +13,29 @@ from app.api import routes
 
 
 class SingleLinkStreamPreviewTests(unittest.TestCase):
+    def test_metadata_after_transcription_reads_only_existing_session_cache(self) -> None:
+        info = {"video_id": "7681642132423200019", "title": "分享标题", "author_name": ""}
+        binding = SimpleNamespace(id="binding", session_scope="scope", status="connected")
+        with (
+            patch.object(routes.douyin_binding_service, "get_by_user", return_value=binding),
+            patch.object(routes.douyin_library, "resolve_item_metadata", return_value={"caption": "真实完整标题", "author_name": "真实作者"}) as metadata,
+        ):
+            routes._refresh_bound_video_metadata(MagicMock(), user_id="owner", video_info=info)
+        metadata.assert_called_once_with("scope", "binding", "7681642132423200019", cache_only=True)
+        self.assertEqual(info["title"], "真实完整标题")
+        self.assertEqual(info["author_name"], "真实作者")
+
+    def test_missing_cached_metadata_preserves_share_title_without_live_query(self) -> None:
+        info = {"video_id": "7681642132423200019", "title": "分享标题", "author_name": ""}
+        binding = SimpleNamespace(id="binding", session_scope="scope", status="connected")
+        with (
+            patch.object(routes.douyin_binding_service, "get_by_user", return_value=binding),
+            patch.object(routes.douyin_library, "resolve_item_metadata", return_value=None) as metadata,
+        ):
+            routes._refresh_bound_video_metadata(MagicMock(), user_id="owner", video_info=info)
+        self.assertEqual(info["title"], "分享标题")
+        self.assertTrue(metadata.call_args.kwargs["cache_only"])
+
     def test_repeat_import_returns_owned_note_and_plan_without_reprocessing(self) -> None:
         note = SimpleNamespace(id="owned-note", to_dict=lambda: {"id": "owned-note", "video_title": "原视频标题"})
         db = MagicMock()

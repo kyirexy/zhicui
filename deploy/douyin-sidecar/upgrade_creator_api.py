@@ -22,7 +22,7 @@ subprocess.run(['chown', '-R', 'ubuntu:ubuntu', str(target)], check=True)
 env = dict(os.environ)
 env['PYTHONDONTWRITEBYTECODE'] = '1'
 env['XDG_CACHE_HOME'] = str(root / '.cache')
-probe = "from config import ConfigLoader; from server.app import build_app; a=build_app(ConfigLoader('/opt/douyin-downloader/config.yml')); p={r.path for r in a.routes}; assert {'/api/v1/creators/health','/api/v1/creators/resolve','/api/v1/creators/works','/api/v1/creators/catalog','/api/v1/items/{aweme_id}'} <= p; assert a.state.creator_reader.prewarm_media is not None; print('creator_routes_verified')"
+probe = "from config import ConfigLoader; from server.app import build_app; a=build_app(ConfigLoader('/opt/douyin-downloader/config.yml')); p={r.path for r in a.routes}; assert {'/api/v1/creators/health','/api/v1/creators/resolve','/api/v1/creators/works','/api/v1/creators/catalog','/api/v1/items/{aweme_id}','/api/v1/items/{aweme_id}/cached'} <= p; assert a.state.creator_reader.prewarm_media is not None; print('creator_routes_verified')"
 subprocess.run(['sudo', '-u', 'ubuntu', str(root / '.venv/bin/python'), '-c', probe], cwd=target, env=env, check=True)
 
 def switch(path):
@@ -43,7 +43,7 @@ try:
             with opener.open('http://127.0.0.1:9000/api/v1/creators/health', timeout=2) as response:
                 state = json.load(response)
                 healthy = (state.get('protocol_version') == 1 and state.get('identity_checked') is True
-                           and 'item_metadata' in state.get('operations', []))
+                           and {'item_metadata', 'item_metadata_cache'} <= set(state.get('operations', [])))
             if healthy:
                 break
         except Exception:

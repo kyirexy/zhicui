@@ -984,14 +984,17 @@ def resolve_item_metadata(
     session_scope: str,
     binding_ref: str,
     aweme_id: str,
+    *,
+    cache_only: bool = False,
 ) -> dict[str, Any] | None:
     """用当前绑定读取单条真实元数据；旧版连接器不支持时交回调用方处理。"""
     clean_id = str(aweme_id or "").strip()
     if not re.fullmatch(r"[0-9]{5,32}", clean_id):
         raise DouyinLibraryError("抖音作品标识无效")
+    suffix = "/cached" if cache_only else ""
     raw = _request(
-        "GET", f"/api/v1/items/{clean_id}", session_scope=session_scope,
-        timeout=10.0, missing_ok=True,
+        "GET", f"/api/v1/items/{clean_id}{suffix}", session_scope=session_scope,
+        timeout=2.0 if cache_only else 10.0, missing_ok=True,
     )
     if raw is None:
         return None

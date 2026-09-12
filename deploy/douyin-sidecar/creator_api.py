@@ -12,6 +12,8 @@ from fastapi import Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 ITEM_METADATA_TIMEOUT_SECONDS = 8.0
+ITEM_METADATA_CACHE_TTL_SECONDS = 3600.0
+ITEM_METADATA_CACHE_MAX_ITEMS = 256
 
 
 class ProfileRequest(BaseModel):
@@ -112,11 +114,73 @@ class CreatorReader:
     def client(self, scoped):
         return self.client_factory(scoped.cookie_manager.get_cookies(), proxy=scoped.config.get('proxy'))
 
+    @staticmethod
+    def remember_item(scoped, aweme_id, raw):
+        """媒体详情读取后只留公开元数据，不缓存 Cookie、媒体地址或原始响应。"""
+        if (not re.fullmatch(r'[0-9]{5,32}', aweme_id) or not isinstance(raw, dict)
+                or str(raw.get('aweme_id') or '') != aweme_id):
+            fail('video_identity_mismatch', '返回的作品与当前视频不一致')
+        author = raw.get('author') if isinstance(raw.get('author'), dict) else {}
+        video = raw.get('video') if isinstance(raw.get('video'), dict) else {}
+        image_post = raw.get('image_post_info') if isinstance(raw.get('image_post_info'), dict) else {}
+        images = raw.get('images') or raw.get('image_list') or image_post.get('images')
+
+        def integer(value):
+            try:
+                return max(0, int(value or 0))
+            except (ValueError, TypeError, OverflowError):
+                return 0
+
+        result = {
+            'aweme_id': aweme_id,
+            'desc': str(raw.get('desc') or '').strip()[:5000],
+            'author_name': str(author.get('nickname') or '').strip()[:160],
+            'media_type': 'gallery' if images else 'video',
+            'gallery_count': min(len(images), 30) if isinstance(images, list) else 0,
+            'publish_timestamp': integer(raw.get('create_time')),
+            'duration_ms': min(integer(video.get('duration') or raw.get('duration')), 604800000),
+        }
+        now = time.monotonic()
+        cache = getattr(scoped, 'item_metadata_cache', None)
+        if cache is None:
+            cache = scoped.item_metadata_cache = {}
+        for key, (expires, _) in list(cache.items()):
+            if expires <= now:
+                cache.pop(key, None)
+        cache.pop(aweme_id, None)
+        cache[aweme_id] = (now + ITEM_METADATA_CACHE_TTL_SECONDS, result)
+        while len(cache) > ITEM_METADATA_CACHE_MAX_ITEMS:
+            cache.pop(next(iter(cache)))
+        return dict(result)
+
+    @staticmethod
+    def cached_item(scoped, aweme_id):
+        cache = getattr(scoped, 'item_metadata_cache', {})
+        entry = cache.get(aweme_id)
+        if entry is None:
+            return None
+        expires, item = entry
+        if expires <= time.monotonic():
+            cache.pop(aweme_id, None)
+            return None
+        return dict(item)
+
+    def cached_item_metadata(self, scope, aweme_id):
+        if not re.fullmatch(r'[0-9]{5,32}', aweme_id):
+            fail('invalid_video_id', '作品标识无效')
+        result = self.cached_item(self.session(scope), aweme_id)
+        if result is None:
+            fail('metadata_not_cached', '视频信息尚未就绪', 404)
+        return result
+
     async def item_metadata(self, scope, aweme_id):
         """只读取目标作品；借用当前会话的媒体缓存，避免转写再次查询详情。"""
         if not re.fullmatch(r'[0-9]{5,32}', aweme_id):
             fail('invalid_video_id', '作品标识无效')
         scoped = self.session(scope)
+        cached = self.cached_item(scoped, aweme_id)
+        if cached is not None:
+            return cached
 
         async def fetch():
             async with scoped.media_resolve_semaphore:
@@ -125,28 +189,7 @@ class CreatorReader:
                     raw = await client.get_video_detail(aweme_id)
                     if not isinstance(raw, dict):
                         self.upstream_error(client)
-                if str(raw.get('aweme_id') or '') != aweme_id:
-                    fail('video_identity_mismatch', '返回的作品与当前视频不一致')
-                author = raw.get('author') if isinstance(raw.get('author'), dict) else {}
-                video = raw.get('video') if isinstance(raw.get('video'), dict) else {}
-                image_post = raw.get('image_post_info') if isinstance(raw.get('image_post_info'), dict) else {}
-                images = raw.get('images') or raw.get('image_list') or image_post.get('images')
-
-                def integer(value):
-                    try:
-                        return max(0, int(value or 0))
-                    except (ValueError, TypeError, OverflowError):
-                        return 0
-
-                result = {
-                    'aweme_id': aweme_id,
-                    'desc': str(raw.get('desc') or '').strip()[:5000],
-                    'author_name': str(author.get('nickname') or '').strip()[:160],
-                    'media_type': 'gallery' if images else 'video',
-                    'gallery_count': min(len(images), 30) if isinstance(images, list) else 0,
-                    'publish_timestamp': integer(raw.get('create_time')),
-                    'duration_ms': min(integer(video.get('duration') or raw.get('duration')), 604800000),
-                }
+                result = self.remember_item(scoped, aweme_id, raw)
                 if self.prewarm_media is not None:
                     await self.prewarm_media(scoped, [raw])
                 return result
@@ -296,7 +339,11 @@ def install_creator_routes(app, deps, scope_dependency, client_factory, cookie_v
     @app.get('/api/v1/creators/health')
     async def health():
         return {'status': 'ok', 'protocol_version': 1, 'storage_mode': 'metadata_only',
-                'operations': ['resolve', 'recent', 'catalog', 'cancel', 'item_metadata'], 'identity_checked': True}
+                'operations': ['resolve', 'recent', 'catalog', 'cancel', 'item_metadata', 'item_metadata_cache'], 'identity_checked': True}
+
+    @app.get('/api/v1/items/{aweme_id}/cached')
+    async def cached_item_metadata(aweme_id: str, scope: str = Depends(scope_dependency)):
+        return reader.cached_item_metadata(scope, aweme_id)
 
     @app.get('/api/v1/items/{aweme_id}')
     async def item_metadata(aweme_id: str, scope: str = Depends(scope_dependency)):

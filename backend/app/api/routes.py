@@ -119,6 +119,7 @@ def _recover_bound_douyin_video(
     user_id: str,
     error: video_extractor.VideoMetadataUnavailableError,
     share_text: str = "",
+    cache_only: bool = True,
 ) -> tuple[dict[str, Any], str, dict[str, str]] | None:
     """Recover one public-page failure through the user's existing sidecar.
 
@@ -143,6 +144,7 @@ def _recover_bound_douyin_video(
             binding.session_scope,
             binding.id,
             aweme_id,
+            cache_only=cache_only,
         )
     except douyin_library.DouyinLibraryError:
         pass
@@ -897,6 +899,29 @@ def _save_generated_note(
     return result, plan_id is not None
 
 
+def _refresh_bound_video_metadata(db: Session, *, user_id: str, video_info: dict[str, Any]) -> None:
+    """读取视频时已获得详情，完成后只取会话缓存，不再请求平台。"""
+    binding = douyin_binding_service.get_by_user(db, user_id)
+    if binding is None or str(binding.status or "") != "connected":
+        return
+    try:
+        item = douyin_library.resolve_item_metadata(
+            binding.session_scope, binding.id, str(video_info.get("video_id") or ""),
+            cache_only=True,
+        )
+    except douyin_library.DouyinLibraryError:
+        return
+    if not item:
+        return
+    caption = str(item.get("caption") or "").strip()
+    title = caption.splitlines()[0].strip() if caption else str(item.get("title") or "").strip()
+    if title and title != f"抖音作品 {video_info.get('video_id', '')}":
+        video_info["title"] = title[:512]
+    author = str(item.get("author_name") or "").strip()
+    if author:
+        video_info["author_name"] = author[:160]
+
+
 def _reuse_single_video_result(
     db: Session, *, user_id: str, source_url: str, share_text: str,
     video_info: dict[str, Any] | None = None,
@@ -914,6 +939,7 @@ def _reuse_single_video_result(
             db, user_id=user_id,
             error=video_extractor.VideoMetadataUnavailableError("", item_id=note.video_id),
             share_text=share_text,
+            cache_only=False,
         )
         if recovery is not None:
             updated = single_video_reuse_service.find_reusable_note(
@@ -1440,6 +1466,8 @@ def extract(
                 return _err("语音识别失败，请稍后重试或检查视频链接。")
 
         # 3. AI processing — mini agent chain
+        if sidecar_media_url:
+            _refresh_bound_video_metadata(db, user_id=current_user.id, video_info=video_info)
         use_images = False
         if not transcript or not transcript.strip():
             # Try image-based extraction as fallback
@@ -1901,6 +1929,8 @@ def extract_stream(
                     )
                     return
 
+            if sidecar_media_url:
+                _refresh_bound_video_metadata(db, user_id=current_user.id, video_info=video_info)
             use_images = False
             if not transcript or not transcript.strip():
                 # Try image-based extraction
@@ -1944,7 +1974,10 @@ def extract_stream(
                     "transcribe",
                     f"文案提取完成，共 {char_count} 字",
                     "done",
-                    _transcript_progress_payload(transcript, platform=platform),
+                    {
+                        **_transcript_progress_payload(transcript, platform=platform),
+                        "video": _safe_extraction_video_preview(video_info, source_url=source_url, platform=platform),
+                    },
                 )
 
                 # Mini Agent 1: classify intent

@@ -69,10 +69,11 @@ sudo systemctl restart zhicui-douyin-sidecar
 - `POST /api/v1/creators/catalog`：`{"creator_id":"...","cursor":null,"page_size":50,"metadata_only":true}`，逐页返回安全元数据、`catalog_id / next_cursor / has_more / total_count / complete / needs_action`；不登记或下载媒体。
 - `DELETE /api/v1/creators/catalog/{catalog_id}`：只取消当前 `X-Zhicui-Scope` 的全量任务；API 分页受限时尝试无媒体浏览器回退，遇到验证码/风控则返回 `needs_action`，不自动死循环。
 - `GET /api/v1/items/{aweme_id}`：用当前有效会话读取指定作品的标题、作者和时长，精确校验作品 ID。单次读取连同排队限制为 8 秒，不扫描博主或本人列表；成功后复用该会话的即时媒体缓存，避免转写再查一次详情。响应不包含 Cookie 或签名媒体地址。
+- `GET /api/v1/items/{aweme_id}/cached`：只读该会话已有的公开元数据，未命中即返回 404，绝不请求抖音。即时媒体解析成功后直接缓存真实标题、作者、时长，主应用可在转写后读取，不额外等待一次详情查询。每会话最多 256 条、有效期 1 小时；导入 Cookie 或退出绑定时清空。
 
 博主接口由 `creator_api.py` 提供，`install_creator_api.py` 在固定补丁应用后接入。`GET /api/v1/creators/health` 必须返回协议版本 1 和真实路由操作列表；不能只依据旧 health 中的 `creator_catalog` 字符串开放功能。
 
-单条元数据接口部署后，健康信息的 `operations` 还须包含 `item_metadata`。主应用升级不会自动更新独立伴随服务，需用下述增量升级器单独发布；主应用遇到旧伴随服务的 404 时保留原有降级行为。
+单条元数据接口部署后，健康信息的 `operations` 还须包含 `item_metadata` 和 `item_metadata_cache`。主应用升级不会自动更新独立伴随服务，需用下述增量升级器单独发布；主应用遇到旧伴随服务的 404 时保留原有降级行为。
 
 近期与全量接口只返回指定博主的公开元数据，不登记到本人喜欢/收藏/作品快照。知萃主服务按用户与博主持久化目录，再将该条作品元数据传给已有即时转写流程。抖音主页资料接口受限时，可以从作者标识已匹配的公开作品识别真实作者名。
 

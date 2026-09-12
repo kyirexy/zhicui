@@ -37,6 +37,13 @@ test('routes a single video link to single-link extraction', () => {
   );
 });
 
+test('preserves the complete video share message through home navigation', () => {
+  const share = '4.12 cNj:/ 02/22 G@l.ic :1pm 【闪客】GPT-6 Astra 信息背面 https://v.douyin.com/AbCdEf12/ 复制此链接';
+  const destination = new URL(buildHomeLinkDestination(share), 'https://luxai.cn');
+  assert.equal(destination.pathname, '/extract');
+  assert.equal(destination.searchParams.get('url'), share);
+});
+
 test('uses creator wording to route a short profile share link', () => {
   assert.deepEqual(
     resolveHomeLinkDestination('复制博主主页 https://v.douyin.com/creator-demo/'),

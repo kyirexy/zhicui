@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import secrets
 import time
 from typing import Literal
@@ -9,6 +10,8 @@ from urllib.parse import urlsplit
 
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
+
+ITEM_METADATA_TIMEOUT_SECONDS = 8.0
 
 
 class ProfileRequest(BaseModel):
@@ -91,10 +94,11 @@ def public_item(raw: dict, creator_id: str) -> dict:
 
 
 class CreatorReader:
-    def __init__(self, deps, client_factory, cookie_valid):
+    def __init__(self, deps, client_factory, cookie_valid, prewarm_media=None):
         self.deps = deps
         self.client_factory = client_factory
         self.cookie_valid = cookie_valid
+        self.prewarm_media = prewarm_media
         self.jobs = {}
 
     def session(self, scope):
@@ -107,6 +111,54 @@ class CreatorReader:
 
     def client(self, scoped):
         return self.client_factory(scoped.cookie_manager.get_cookies(), proxy=scoped.config.get('proxy'))
+
+    async def item_metadata(self, scope, aweme_id):
+        """只读取目标作品；借用当前会话的媒体缓存，避免转写再次查询详情。"""
+        if not re.fullmatch(r'[0-9]{5,32}', aweme_id):
+            fail('invalid_video_id', '作品标识无效')
+        scoped = self.session(scope)
+
+        async def fetch():
+            async with scoped.media_resolve_semaphore:
+                await scoped.rate_limiter.acquire()
+                async with self.client(scoped) as client:
+                    raw = await client.get_video_detail(aweme_id)
+                    if not isinstance(raw, dict):
+                        self.upstream_error(client)
+                if str(raw.get('aweme_id') or '') != aweme_id:
+                    fail('video_identity_mismatch', '返回的作品与当前视频不一致')
+                author = raw.get('author') if isinstance(raw.get('author'), dict) else {}
+                video = raw.get('video') if isinstance(raw.get('video'), dict) else {}
+                image_post = raw.get('image_post_info') if isinstance(raw.get('image_post_info'), dict) else {}
+                images = raw.get('images') or raw.get('image_list') or image_post.get('images')
+
+                def integer(value):
+                    try:
+                        return max(0, int(value or 0))
+                    except (ValueError, TypeError, OverflowError):
+                        return 0
+
+                result = {
+                    'aweme_id': aweme_id,
+                    'desc': str(raw.get('desc') or '').strip()[:5000],
+                    'author_name': str(author.get('nickname') or '').strip()[:160],
+                    'media_type': 'gallery' if images else 'video',
+                    'gallery_count': min(len(images), 30) if isinstance(images, list) else 0,
+                    'publish_timestamp': integer(raw.get('create_time')),
+                    'duration_ms': min(integer(video.get('duration') or raw.get('duration')), 604800000),
+                }
+                if self.prewarm_media is not None:
+                    await self.prewarm_media(scoped, [raw])
+                return result
+
+        try:
+            return await asyncio.wait_for(fetch(), timeout=ITEM_METADATA_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            fail('network_error', '视频信息读取超时，请稍后重试', 504)
+        except HTTPException:
+            raise
+        except Exception:
+            fail('network_error', '视频信息暂时无法读取，请稍后重试', 502)
 
     @staticmethod
     def upstream_error(client):
@@ -237,14 +289,18 @@ class CreatorReader:
         fail('catalog_safety_limit', '本次未能确认近期作品范围，请稍后重试', 409)
 
 
-def install_creator_routes(app, deps, scope_dependency, client_factory, cookie_valid):
-    reader = CreatorReader(deps, client_factory, cookie_valid)
+def install_creator_routes(app, deps, scope_dependency, client_factory, cookie_valid, prewarm_media=None):
+    reader = CreatorReader(deps, client_factory, cookie_valid, prewarm_media)
     app.state.creator_reader = reader
 
     @app.get('/api/v1/creators/health')
     async def health():
         return {'status': 'ok', 'protocol_version': 1, 'storage_mode': 'metadata_only',
-                'operations': ['resolve', 'recent', 'catalog', 'cancel'], 'identity_checked': True}
+                'operations': ['resolve', 'recent', 'catalog', 'cancel', 'item_metadata'], 'identity_checked': True}
+
+    @app.get('/api/v1/items/{aweme_id}')
+    async def item_metadata(aweme_id: str, scope: str = Depends(scope_dependency)):
+        return await reader.item_metadata(scope, aweme_id)
 
     @app.post('/api/v1/creators/resolve')
     async def resolve(req: ProfileRequest, scope: str = Depends(scope_dependency)):

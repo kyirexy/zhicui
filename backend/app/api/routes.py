@@ -7,6 +7,7 @@ from __future__ import annotations
 import io
 import hashlib
 import json
+import logging
 import importlib.util
 import time
 import traceback
@@ -63,6 +64,7 @@ from app.services import (
     plan_service,
     privacy_account_service,
     settings_service,
+    single_video_reuse_service,
     user_ai_provider_service,
     video_source_ledger_service,
     video_extractor,
@@ -116,6 +118,7 @@ def _recover_bound_douyin_video(
     *,
     user_id: str,
     error: video_extractor.VideoMetadataUnavailableError,
+    share_text: str = "",
 ) -> tuple[dict[str, Any], str, dict[str, str]] | None:
     """Recover one public-page failure through the user's existing sidecar.
 
@@ -136,20 +139,25 @@ def _recover_bound_douyin_video(
 
     manifest_item: dict[str, Any] | None = None
     try:
-        manifest_item = douyin_library.get_item(
+        manifest_item = douyin_library.resolve_item_metadata(
             binding.session_scope,
             binding.id,
             aweme_id,
         )
     except douyin_library.DouyinLibraryError:
-        # A work need not have been synchronized into the manifest. The media
-        # endpoint can still resolve it with this user's bound session.
-        manifest_item = None
+        pass
+    if not manifest_item:
+        try:
+            manifest_item = douyin_library.get_item(
+                binding.session_scope, binding.id, aweme_id,
+            )
+        except douyin_library.DouyinLibraryError:
+            pass
     if str((manifest_item or {}).get("media_type") or "video") == "gallery":
         return None
 
     caption = str((manifest_item or {}).get("caption") or "").strip()
-    title = str((manifest_item or {}).get("title") or "").strip()
+    title = caption.splitlines()[0].strip() if caption else str((manifest_item or {}).get("title") or "").strip()
     if not title:
         title = caption.splitlines()[0].strip() if caption else f"抖音作品 {aweme_id}"
     video_info: dict[str, Any] = {
@@ -167,6 +175,7 @@ def _recover_bound_douyin_video(
             binding.id,
         ),
     }
+    video_info = video_extractor.merge_douyin_share_metadata(video_info, share_text)
     return (
         video_info,
         douyin_library.companion_media_url(aweme_id),
@@ -888,6 +897,37 @@ def _save_generated_note(
     return result, plan_id is not None
 
 
+def _reuse_single_video_result(
+    db: Session, *, user_id: str, source_url: str, share_text: str,
+    video_info: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """重复导入仅复用当前用户已完成的同一作品，保留原有计划。"""
+    note = single_video_reuse_service.find_reusable_note(
+        db, user_id=user_id, source_url=source_url, share_text=share_text,
+        video_info=video_info,
+    )
+    if note is None:
+        return None
+    if video_info is None and single_video_reuse_service.needs_metadata(note):
+        # 已有文稿只补信息；不能为了作者字段再次下载、识别整段视频。
+        recovery = _recover_bound_douyin_video(
+            db, user_id=user_id,
+            error=video_extractor.VideoMetadataUnavailableError("", item_id=note.video_id),
+            share_text=share_text,
+        )
+        if recovery is not None:
+            updated = single_video_reuse_service.find_reusable_note(
+                db, user_id=user_id, source_url=source_url, share_text=share_text,
+                video_info=recovery[0],
+            )
+            if updated is not None:
+                note = updated
+    result = note.to_dict()
+    plan = plan_service.get_plan_by_note(db, note.id, user_id=user_id)
+    result["plan_id"] = plan.id if plan else None
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Content type display labels (for progress messages)
 # ---------------------------------------------------------------------------
@@ -1210,7 +1250,7 @@ def get_video_info(
     """Parse a video link and return metadata without downloading."""
     try:
         source_url = video_extractor.normalize_share_url(body.url)
-        info = video_extractor.parse_video_info(source_url)
+        info = video_extractor.parse_video_info(body.url)
         return _ok(info)
     except Exception as exc:
         if not isinstance(exc, (video_extractor.VideoExtractionError, NotImplementedError)):
@@ -1228,6 +1268,11 @@ def extract(
     try:
         source_url = video_extractor.normalize_share_url(body.url)
         platform = _detect_platform(source_url)
+        reused = _reuse_single_video_result(
+            db, user_id=current_user.id, source_url=source_url, share_text=body.url,
+        )
+        if reused is not None:
+            return _ok(reused)
 
         # ── Xiaohongshu path: note content IS the transcript ──────────────
         if platform == "xiaohongshu":
@@ -1312,13 +1357,22 @@ def extract(
         sidecar_media_url = ""
         sidecar_media_headers: dict[str, str] | None = None
         try:
-            video_info = video_extractor.parse_video_info(source_url)
+            video_info = video_extractor.parse_video_info(body.url)
         except video_extractor.VideoMetadataUnavailableError as exc:
+            if platform == "douyin" and exc.item_id:
+                reused = _reuse_single_video_result(
+                    db, user_id=current_user.id,
+                    source_url=f"https://www.douyin.com/video/{exc.item_id}",
+                    share_text=body.url,
+                )
+                if reused is not None:
+                    return _ok(reused)
             recovery = (
                 _recover_bound_douyin_video(
                     db,
                     user_id=current_user.id,
                     error=exc,
+                    share_text=body.url,
                 )
                 if platform == "douyin"
                 else None
@@ -1328,6 +1382,15 @@ def extract(
             video_info, sidecar_media_url, sidecar_media_headers = recovery
         video_info.setdefault("source_url", source_url)
         video_info.setdefault("platform", platform)
+        reused = _reuse_single_video_result(
+            db, user_id=current_user.id,
+            source_url=(f"https://www.douyin.com/video/{video_info.get('video_id', '')}"
+                        if platform == "douyin" else video_info["source_url"]),
+            share_text=body.url,
+            video_info=video_info,
+        )
+        if reused is not None:
+            return _ok(reused)
 
         # 2. Extract transcript (with fallback)
         transcript = None
@@ -1443,7 +1506,14 @@ def extract_stream(
 
     Final event has ``step: "done"`` with ``data`` containing the note.
     """
+    request_started = time.monotonic()
+
     def _event(step: str, message: str, status: str = "active", data: Any = None) -> str:
+        if status in {"done", "error"} or step in {"ai", "plan"}:
+            logging.getLogger("uvicorn.error.extraction").info(
+                "single_video_step step=%s status=%s elapsed_ms=%d",
+                step, status, int((time.monotonic() - request_started) * 1000),
+            )
         # 用户只需要当前阶段；模型、连接器和诊断细节保留在服务端。
         public_messages = {
             "parse": ("正在读取内容…", "内容已就绪"),
@@ -1477,6 +1547,12 @@ def extract_stream(
         try:
             source_url = video_extractor.normalize_share_url(url)
             platform = _detect_platform(source_url)
+            reused = _reuse_single_video_result(
+                db, user_id=current_user.id, source_url=source_url, share_text=url,
+            )
+            if reused is not None:
+                yield _event("done", "导入完成", "done", reused)
+                return
             yield _progress(
                 "parse",
                 f"已识别平台：{_PLATFORM_LABELS.get(platform, platform)}",
@@ -1558,13 +1634,23 @@ def extract_stream(
             recovered_from_binding = False
             try:
                 try:
-                    video_info = video_extractor.parse_video_info(source_url)
+                    video_info = video_extractor.parse_video_info(url)
                 except video_extractor.VideoMetadataUnavailableError as exc:
+                    if platform == "douyin" and exc.item_id:
+                        reused = _reuse_single_video_result(
+                            db, user_id=current_user.id,
+                            source_url=f"https://www.douyin.com/video/{exc.item_id}",
+                            share_text=url,
+                        )
+                        if reused is not None:
+                            yield _event("done", "导入完成", "done", reused)
+                            return
                     recovery = (
                         _recover_bound_douyin_video(
                             db,
                             user_id=current_user.id,
                             error=exc,
+                            share_text=url,
                         )
                         if platform == "douyin"
                         else None
@@ -1575,6 +1661,16 @@ def extract_stream(
                     recovered_from_binding = True
                 video_info.setdefault("source_url", source_url)
                 video_info.setdefault("platform", platform)
+                reused = _reuse_single_video_result(
+                    db, user_id=current_user.id,
+                    source_url=(f"https://www.douyin.com/video/{video_info.get('video_id', '')}"
+                                if platform == "douyin" else video_info["source_url"]),
+                    share_text=url,
+                    video_info=video_info,
+                )
+                if reused is not None:
+                    yield _event("done", "导入完成", "done", reused)
+                    return
                 yield _progress(
                     "parse",
                     (

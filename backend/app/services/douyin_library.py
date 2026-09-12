@@ -56,6 +56,7 @@ class DouyinLibraryError(RuntimeError):
 
 
 _CONNECTOR_ERROR_MESSAGES = {
+    "video_identity_mismatch": "返回的作品与当前视频不一致，请重新粘贴链接",
     "creator_identity_mismatch": "作品归属与所选博主不一致，已停止本次同步",
     "invalid_discovery_cursor": "博主分页顺序异常，已有资料保留，请重新同步",
     "invalid_upstream_response": "抖音未返回完整博主数据，请稍后重试",
@@ -165,6 +166,7 @@ def _request(
     session_scope: str | None = None,
     json_body: dict[str, Any] | None = None,
     timeout: float = 8.0,
+    missing_ok: bool = False,
 ) -> Any:
     base_url = _base_url()
     if not base_url:
@@ -189,6 +191,8 @@ def _request(
                     "抖音收藏连接器返回了不安全的重定向",
                     code="connector_error",
                 )
+            if missing_ok and response.status_code == 404:
+                return None
             if not response.ok:
                 try:
                     payload = response.json()
@@ -974,6 +978,34 @@ def get_item(
         if item["aweme_id"] == clean_id:
             return item
     return None
+
+
+def resolve_item_metadata(
+    session_scope: str,
+    binding_ref: str,
+    aweme_id: str,
+) -> dict[str, Any] | None:
+    """用当前绑定读取单条真实元数据；旧版连接器不支持时交回调用方处理。"""
+    clean_id = str(aweme_id or "").strip()
+    if not re.fullmatch(r"[0-9]{5,32}", clean_id):
+        raise DouyinLibraryError("抖音作品标识无效")
+    raw = _request(
+        "GET", f"/api/v1/items/{clean_id}", session_scope=session_scope,
+        timeout=10.0, missing_ok=True,
+    )
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or str(raw.get("aweme_id") or "") != clean_id:
+        raise DouyinLibraryError(
+            _CONNECTOR_ERROR_MESSAGES["video_identity_mismatch"],
+            code="video_identity_mismatch",
+        )
+    normalized = _normalize_item(raw, binding_ref)
+    try:
+        normalized["duration"] = max(0, min(int(raw.get("duration_ms") or 0), 604800000)) / 1000
+    except (ValueError, TypeError, OverflowError):
+        normalized["duration"] = 0
+    return normalized
 
 
 def trigger_collect(

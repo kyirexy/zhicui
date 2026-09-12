@@ -58,7 +58,8 @@ export default function SingleLinkExtractPage() {
 
   const handleSubmit = useCallback((url: string) => {
     navigationArmedRef.current = true;
-    observedLoadingRef.current = false;
+    // 已有资料可能立即返回，无需等待中间的加载状态单独渲染。
+    observedLoadingRef.current = true;
     setCompletedWithoutId(false);
     setOpeningVideo(false);
     startExtraction(url);

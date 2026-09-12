@@ -3,7 +3,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Link2, Loader2, AlertCircle, X, LogIn } from 'lucide-react';
-import { normalizeSingleLinkSubmission } from '@/lib/singleLinkImport';
 
 interface InputBarProps {
   onSubmit: (url: string) => void;
@@ -60,7 +59,8 @@ export default function InputBar({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const submittedValue = normalizeSingleLinkSubmission(url);
+    // 分享文案中的标题、作者交给服务端一并识别。
+    const submittedValue = url.trim();
     if (submittedValue && !isLoading) {
       onSubmit(submittedValue);
     }

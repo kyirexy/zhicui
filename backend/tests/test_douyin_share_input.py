@@ -81,19 +81,60 @@ class DouyinShareInputTests(unittest.TestCase):
         malicious = "https://evil-douyin.com/video/123?next=douyin.com"
         self.assertEqual(video_extractor._detect_platform(malicious), "unknown")
 
-    def test_parse_video_info_passes_normalized_url_to_connector(self) -> None:
+    def test_parse_video_info_keeps_public_metadata_and_bounds_requests(self) -> None:
         processor = MagicMock()
-        processor.parse_share_url.return_value = {
+        payload = {
             "video_id": "123",
-            "title": "测试作品",
+            "title": "测试作品：为什么？",
             "url": "https://media.example/video.mp4",
+            "author": {"nickname": "真实作者"},
+            "cover_url": "https://image.example/cover.jpg",
         }
-        with patch.object(video_extractor, "DouyinProcessor", return_value=processor):
+        with (
+            patch.object(video_extractor, "DouyinProcessor", return_value=processor) as constructor,
+            patch.object(video_extractor, "_fetch_douyin_router_page", return_value=("123", payload)) as fetch,
+        ):
             result = video_extractor.parse_video_info(SHARE_TEXT)
 
-        processor.parse_share_url.assert_called_once_with(SHARE_URL)
+        constructor.assert_not_called()
+        fetch.assert_called_once_with(SHARE_URL)
         self.assertEqual(result["video_id"], "123")
+        self.assertEqual(result["title"], "测试作品：为什么？")
+        self.assertEqual(result["author_name"], "真实作者")
+        self.assertEqual(result["cover_url"], "https://image.example/cover.jpg")
         self.assertEqual(result["source_url"], SHARE_URL)
+
+    def test_share_caption_recovers_title_without_guessing_author(self) -> None:
+        share_text = (
+            "4.12 cNj:/ 02/22 G@l.ic :1pm 【闪客】GPT-6 Astra 信息背面 "
+            f"真的提升这么大吗？ #大模型 {SHARE_URL} 复制此链接，打开抖音搜索"
+        )
+        original = {"video_id": AWEME_ID, "title": f"抖音作品 {AWEME_ID}", "author_name": ""}
+        result = video_extractor.merge_douyin_share_metadata(original, share_text)
+        self.assertEqual(result["title"], "【闪客】GPT-6 Astra 信息背面 真的提升这么大吗？ #大模型")
+        self.assertEqual(result["author_name"], "")
+        self.assertEqual(original["title"], f"抖音作品 {AWEME_ID}")
+
+    def test_share_wrapper_supplies_explicit_author_only_when_missing(self) -> None:
+        result = video_extractor.merge_douyin_share_metadata(
+            {"title": "抖音作品", "author_name": "未知作者"}, SHARE_TEXT,
+        )
+        self.assertEqual(result["title"], "#测试")
+        self.assertEqual(result["author_name"], "测试作者")
+        native = {"title": "平台的原始标题", "author_name": "平台作者"}
+        self.assertEqual(video_extractor.merge_douyin_share_metadata(native, SHARE_TEXT), native)
+
+    def test_plain_url_does_not_become_a_title(self) -> None:
+        original = {"title": "", "author_name": ""}
+        self.assertEqual(video_extractor.merge_douyin_share_metadata(original, SHARE_URL), original)
+        self.assertEqual(video_extractor.merge_douyin_share_metadata(original, "https://example.com/video/123"), original)
+
+    def test_parse_video_info_retains_share_caption_when_public_title_empty(self) -> None:
+        payload = {"video_id": AWEME_ID, "url": "https://media.example/video.mp4"}
+        with patch.object(video_extractor, "_fetch_douyin_router_page", return_value=(AWEME_ID, payload)):
+            result = video_extractor.parse_video_info(SHARE_TEXT)
+        self.assertEqual(result["title"], "#测试")
+        self.assertEqual(result["author_name"], "测试作者")
 
     def test_loader_data_shape_is_probed_without_fixed_page_key(self) -> None:
         payload = {
@@ -124,6 +165,16 @@ class DouyinShareInputTests(unittest.TestCase):
         self.assertEqual(result["title"], "结构探测作品")
         self.assertEqual(result["author_name"], "测试作者")
         self.assertEqual(result["url"], "https://media.example/456.mp4")
+
+    def test_public_page_uses_requested_item_not_another_video(self) -> None:
+        other = {"aweme_id": "1234567890", "title": "推荐视频", "url": "https://media.example/other.mp4"}
+        expected = {"aweme_id": AWEME_ID, "title": "目标视频", "url": "https://media.example/target.mp4"}
+        result = video_extractor._normalize_douyin_info(
+            {"item_list": [other, expected]}, expected_id=AWEME_ID,
+        )
+        self.assertEqual(result["title"], "目标视频")
+        with self.assertRaises(video_extractor.VideoMetadataUnavailableError):
+            video_extractor._normalize_douyin_info({"item_list": [other]}, expected_id=AWEME_ID)
 
     def test_bounded_router_fallback_recovers_loader_data(self) -> None:
         payload = {
@@ -225,7 +276,6 @@ class DouyinShareInputTests(unittest.TestCase):
 
     def test_missing_video_info_becomes_safe_user_error(self) -> None:
         processor = MagicMock()
-        processor.parse_share_url.side_effect = KeyError("videoInfoRes")
         with (
             patch.object(
                 video_extractor,
@@ -240,10 +290,10 @@ class DouyinShareInputTests(unittest.TestCase):
         self.assertIn("抖音暂时未返回", message)
         self.assertNotIn("videoInfoRes", message)
         self.assertNotIn(SHARE_URL, message)
+        processor.parse_share_url.assert_not_called()
 
-    def test_missing_fixed_key_uses_router_fallback(self) -> None:
+    def test_public_parser_accepts_new_router_page_keys(self) -> None:
         processor = MagicMock()
-        processor.parse_share_url.side_effect = KeyError("videoInfoRes")
         payload = {
             "item_list": [
                 {
@@ -310,7 +360,7 @@ class DouyinShareInputTests(unittest.TestCase):
                 current_user=None,
             )
 
-        parse.assert_called_once_with(SHARE_URL)
+        parse.assert_called_once_with(SHARE_TEXT)
         self.assertFalse(response["success"])
         self.assertIn("暂时无法解析", response["error"])
         self.assertNotIn("videoInfoRes", response["error"])
@@ -331,7 +381,7 @@ class DouyinShareInputTests(unittest.TestCase):
                 current_user=SimpleNamespace(id="user-1"),
             )
 
-        parse.assert_called_once_with(SHARE_URL)
+        parse.assert_called_once_with(SHARE_TEXT)
         self.assertFalse(response["success"])
         self.assertIn("抖音暂时未返回", response["error"])
         self.assertNotIn("videoInfoRes", response["error"])
@@ -372,7 +422,7 @@ class DouyinShareInputTests(unittest.TestCase):
                 current_user=SimpleNamespace(id="user-1"),
             )
 
-        parse.assert_called_once_with(SHARE_URL)
+        parse.assert_called_once_with(SHARE_TEXT)
         self.assertTrue(response["success"])
         self.assertIs(transcribe.call_args.kwargs["video_info"], parsed)
         self.assertEqual(parsed["source_url"], SHARE_URL)
@@ -393,7 +443,7 @@ class DouyinShareInputTests(unittest.TestCase):
             )
             body = asyncio.run(_stream_text(response))
 
-        parse.assert_called_once_with(SHARE_URL)
+        parse.assert_called_once_with(SHARE_TEXT)
         self.assertIn("抖音暂时未返回", body)
         self.assertNotIn("videoInfoRes", body)
         self.assertNotIn("signature=", body)
@@ -423,6 +473,7 @@ class DouyinShareInputTests(unittest.TestCase):
                 return_value=binding,
             ),
             patch.object(routes.douyin_library, "get_item", return_value=None) as manifest,
+            patch.object(routes.douyin_library, "resolve_item_metadata", return_value=None),
             patch.object(routes.douyin_library, "public_media_url", return_value="/signed-media"),
             patch.object(routes.douyin_library, "public_cover_url", return_value="/signed-cover"),
             patch.object(routes.douyin_library, "companion_media_url", return_value=loopback),
@@ -458,7 +509,7 @@ class DouyinShareInputTests(unittest.TestCase):
             )
 
         self.assertTrue(response["success"])
-        parse.assert_called_once_with(SHARE_URL)
+        parse.assert_called_once_with(SHARE_TEXT)
         manifest.assert_called_once_with(SESSION_SCOPE, BINDING_ID, AWEME_ID)
         transcribe.assert_called_once_with(
             loopback,
@@ -486,6 +537,7 @@ class DouyinShareInputTests(unittest.TestCase):
         with (
             patch.object(routes.video_extractor, "parse_video_info", side_effect=unavailable),
             patch.object(routes.douyin_binding_service, "get_by_user", return_value=binding),
+            patch.object(routes.douyin_library, "resolve_item_metadata", return_value=None),
             patch.object(
                 routes.douyin_library,
                 "get_item",

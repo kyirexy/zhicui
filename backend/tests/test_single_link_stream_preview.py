@@ -1,4 +1,6 @@
 import os
+import asyncio
+import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -7,9 +9,66 @@ os.environ.setdefault("JWT_SECRET", "test-single-link-preview-secret")
 
 from app.api.routes import _safe_extraction_video_preview, _save_generated_note, _transcript_progress_payload
 from app.services.platform_library_service import serialize_item
+from app.api import routes
 
 
 class SingleLinkStreamPreviewTests(unittest.TestCase):
+    def test_repeat_import_returns_owned_note_and_plan_without_reprocessing(self) -> None:
+        note = SimpleNamespace(id="owned-note", to_dict=lambda: {"id": "owned-note", "video_title": "原视频标题"})
+        db = MagicMock()
+        with (
+            patch.object(routes.single_video_reuse_service, "find_reusable_note", return_value=note) as find,
+            patch.object(routes.single_video_reuse_service, "needs_metadata", return_value=False),
+            patch.object(routes.plan_service, "get_plan_by_note", return_value=SimpleNamespace(id="owned-plan")) as plan,
+            patch.object(routes.video_extractor, "parse_video_info") as parse,
+            patch.object(routes.video_extractor, "extract_transcript") as asr,
+            patch.object(routes.ai_juicer, "generate_card") as generate,
+            patch.object(routes.note_service, "create_note") as create,
+        ):
+            result = routes.extract(routes.ExtractRequest(url="https://www.douyin.com/video/7681642132423200019"), db=db, current_user=SimpleNamespace(id="owner"))
+        self.assertEqual(result["data"]["id"], "owned-note")
+        self.assertEqual(result["data"]["plan_id"], "owned-plan")
+        self.assertEqual(find.call_args.kwargs["user_id"], "owner")
+        plan.assert_called_once_with(db, "owned-note", user_id="owner")
+        for operation in (parse, asr, generate, create):
+            operation.assert_not_called()
+
+    def test_short_link_reuses_resolved_video_even_when_public_metadata_is_missing(self) -> None:
+        note = SimpleNamespace(id="owned-note", to_dict=lambda: {"id": "owned-note"})
+        async def collect(response):
+            return [json.loads(chunk.removeprefix("data: ").strip()) async for chunk in response.body_iterator]
+        with (
+            patch.object(routes.single_video_reuse_service, "find_reusable_note", side_effect=[None, note]) as find,
+            patch.object(routes.single_video_reuse_service, "needs_metadata", return_value=False),
+            patch.object(routes.plan_service, "get_plan_by_note", return_value=None),
+            patch.object(routes.video_extractor, "parse_video_info", side_effect=routes.video_extractor.VideoMetadataUnavailableError("公开信息不可用", item_id="7681642132423200019")),
+            patch.object(routes, "_recover_bound_douyin_video") as recover,
+            patch.object(routes.video_extractor, "extract_transcript") as asr,
+        ):
+            events = asyncio.run(collect(routes.extract_stream(url="https://v.douyin.com/example/", db=MagicMock(), current_user=SimpleNamespace(id="owner"))))
+        self.assertEqual(events[-1]["step"], "done")
+        self.assertEqual(events[-1]["data"]["id"], "owned-note")
+        self.assertEqual(find.call_args.kwargs["source_url"], "https://www.douyin.com/video/7681642132423200019")
+        recover.assert_not_called()
+        asr.assert_not_called()
+
+    def test_bound_uncatalogued_video_uses_live_title_and_author(self) -> None:
+        binding = SimpleNamespace(id="binding", session_scope="private-scope", status="connected", cookie_count=1)
+        with (
+            patch.object(routes.douyin_binding_service, "get_by_user", return_value=binding),
+            patch.object(routes.douyin_library, "resolve_item_metadata", return_value={"title": "真实标题", "author_name": "真实作者", "media_type": "video"}),
+            patch.object(routes.douyin_library, "get_item") as manifest,
+            patch.object(routes.douyin_library, "public_media_url", return_value="/api/signed/media"),
+            patch.object(routes.douyin_library, "public_cover_url", return_value="/api/signed/cover"),
+            patch.object(routes.douyin_library, "companion_media_url", return_value="http://127.0.0.1/media"),
+            patch.object(routes.douyin_library, "companion_headers", return_value={"X-Zhicui-Scope": "private-scope"}),
+        ):
+            recovered = routes._recover_bound_douyin_video(MagicMock(), user_id="owner", error=routes.video_extractor.VideoMetadataUnavailableError("不可用", item_id="7681642132423200019"))
+        self.assertEqual(recovered[0]["title"], "真实标题")
+        self.assertEqual(recovered[0]["author_name"], "真实作者")
+        self.assertNotIn("private-scope", str(recovered[0]))
+        manifest.assert_not_called()
+
     def test_preview_exposes_only_ui_fields(self) -> None:
         result = _safe_extraction_video_preview(
             {

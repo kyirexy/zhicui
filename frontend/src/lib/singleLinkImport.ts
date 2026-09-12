@@ -77,7 +77,8 @@ export function resolveHomeLinkDestination(value: string): HomeLinkDestination {
   } catch {
     // 非 URL 内容继续交给单条解析，以便显示后端的具体校验说明。
   }
-  return { kind: 'video', url };
+  // 单条导入保留分享文案，让服务端在平台信息不完整时补齐标题。
+  return { kind: 'video', url: value.trim() };
 }
 
 export function buildHomeLinkDestination(value: string): string {

@@ -207,6 +207,49 @@ def _detect_platform(value: str) -> str:
     return _platform_from_url(normalize_share_url(value))
 
 
+def merge_douyin_share_metadata(
+    video_info: Mapping[str, Any], share_text: str,
+) -> dict[str, Any]:
+    """仅用分享文案补齐缺失字段，不覆盖平台返回的标题和作者。"""
+    result = dict(video_info)
+    raw = unescape(str(share_text or "")).strip()
+    clean_url = normalize_share_url(raw)
+    if _platform_from_url(clean_url) != "douyin" or clean_url not in raw:
+        return result
+    caption = raw.split(clean_url, 1)[0].strip()
+    if not caption or _SHARE_URL_PATTERN.search(caption):
+        return result
+
+    # 抖音复制文案前面的口令、日期并非标题；保留正文中的英文和话题。
+    caption = re.sub(r"^\d{1,2}\.\d{1,2}\s+", "", caption)
+    caption = re.sub(
+        r"^(?:(?:[A-Za-z0-9@._]+:/|\d{1,2}/\d{1,2}|"
+        r"[A-Za-z0-9.]+@[A-Za-z0-9.]+|:[A-Za-z0-9]+)\s+)+",
+        "", caption,
+    )
+    shared_author = ""
+    wrapper = re.match(
+        r"^(?:复制打开抖音[，,、\s]*)?看看【([^\r\n【】]{1,200})的作品】\s*",
+        caption,
+    )
+    if wrapper:
+        shared_author = wrapper.group(1).strip()
+        caption = caption[wrapper.end():].strip()
+    else:
+        caption = re.sub(r"^复制打开抖音[，,、\s]*", "", caption).strip()
+    caption = re.sub(r"\s+", " ", caption).strip()
+    title = str(result.get("title") or "").strip()
+    if not title or re.fullmatch(
+        r"(?:抖音作品\s*\d*|douyin[_ -]?\d*|未知标题)", title, flags=re.IGNORECASE,
+    ):
+        if caption:
+            result["title"] = caption[:512]
+    author = str(result.get("author_name") or "").strip()
+    if shared_author and author in {"", "未知作者"}:
+        result["author_name"] = shared_author
+    return result
+
+
 def _first_http_url(value: object) -> str:
     if isinstance(value, str) and value.startswith(("http://", "https://")):
         return value
@@ -223,13 +266,16 @@ def _first_http_url(value: object) -> str:
     return ""
 
 
-def _probe_douyin_item(payload: object, *, depth: int = 0) -> Mapping[str, Any] | None:
+def _probe_douyin_item(
+    payload: object, *, depth: int = 0, expected_id: str = "",
+) -> Mapping[str, Any] | None:
     """Find a Douyin item in normalized or loader-data shaped output."""
     if depth > 5:
         return None
     if isinstance(payload, Mapping):
         has_id = any(payload.get(key) for key in ("video_id", "aweme_id", "id"))
-        if has_id and (
+        item_id = str(payload.get("video_id") or payload.get("aweme_id") or payload.get("id") or "")
+        if has_id and (not expected_id or item_id == expected_id) and (
             payload.get("url")
             or payload.get("download_url")
             or isinstance(payload.get("video"), Mapping)
@@ -238,28 +284,28 @@ def _probe_douyin_item(payload: object, *, depth: int = 0) -> Mapping[str, Any] 
         item_list = payload.get("item_list") or payload.get("aweme_list")
         if isinstance(item_list, list):
             for item in item_list[:5]:
-                found = _probe_douyin_item(item, depth=depth + 1)
+                found = _probe_douyin_item(item, depth=depth + 1, expected_id=expected_id)
                 if found is not None:
                     return found
         for key in ("videoInfoRes", "aweme_detail", "data", "loaderData"):
-            found = _probe_douyin_item(payload.get(key), depth=depth + 1)
+            found = _probe_douyin_item(payload.get(key), depth=depth + 1, expected_id=expected_id)
             if found is not None:
                 return found
         if depth <= 2:
             for item in list(payload.values())[:30]:
-                found = _probe_douyin_item(item, depth=depth + 1)
+                found = _probe_douyin_item(item, depth=depth + 1, expected_id=expected_id)
                 if found is not None:
                     return found
     elif isinstance(payload, list):
         for item in payload[:10]:
-            found = _probe_douyin_item(item, depth=depth + 1)
+            found = _probe_douyin_item(item, depth=depth + 1, expected_id=expected_id)
             if found is not None:
                 return found
     return None
 
 
-def _normalize_douyin_info(payload: object) -> dict[str, Any]:
-    item = _probe_douyin_item(payload)
+def _normalize_douyin_info(payload: object, *, expected_id: str = "") -> dict[str, Any]:
+    item = _probe_douyin_item(payload, expected_id=expected_id)
     if item is None:
         raise VideoMetadataUnavailableError(_DOUYIN_INFO_UNAVAILABLE)
 
@@ -398,8 +444,8 @@ def _fetch_douyin_router_page(
                         break
                     resolved_id = _douyin_aweme_id_from_url(final_url) or resolved_id
                     payload = _read_douyin_router_payload(response)
-                    if payload is not None and _probe_douyin_item(payload) is not None:
-                        item = _probe_douyin_item(payload)
+                    item = _probe_douyin_item(payload, expected_id=resolved_id)
+                    if item is not None:
                         payload_id = str(
                             (item or {}).get("video_id")
                             or (item or {}).get("aweme_id")
@@ -442,22 +488,22 @@ def resolve_douyin_aweme_id(value: str) -> str:
     return resolved_id
 
 
-def _parse_douyin_share_info(processor: DouyinProcessor, value: str) -> dict[str, Any]:
+def _parse_douyin_share_info(processor: DouyinProcessor | None, value: str) -> dict[str, Any]:
     clean_url = normalize_share_url(value)
+    # 直接保留页面里的作者与封面。旧连接器只返回文件名式标题和媒体地址，
+    # 还会先做两次无超时请求；这里统一走有边界的公开页面读取。
+    resolved_id, payload = _fetch_douyin_router_page(clean_url)
+    if payload is None:
+        raise VideoMetadataUnavailableError(
+            _DOUYIN_INFO_UNAVAILABLE, item_id=resolved_id,
+        )
     try:
-        payload = processor.parse_share_url(clean_url)
-    except KeyError:
-        # The upstream connector historically indexed ``videoInfoRes``
-        # directly. Probe the bounded official page before giving up.
-        resolved_id, payload = _fetch_douyin_router_page(clean_url)
-        if payload is None:
-            raise VideoMetadataUnavailableError(
-                _DOUYIN_INFO_UNAVAILABLE,
-                item_id=resolved_id,
-            ) from None
-    except (IndexError, TypeError):
-        raise VideoMetadataUnavailableError(_DOUYIN_INFO_UNAVAILABLE) from None
-    return _normalize_douyin_info(payload)
+        info = _normalize_douyin_info(payload, expected_id=resolved_id)
+    except VideoMetadataUnavailableError:
+        raise VideoMetadataUnavailableError(
+            _DOUYIN_INFO_UNAVAILABLE, item_id=resolved_id,
+        ) from None
+    return merge_douyin_share_metadata(info, value)
 
 
 _BILI_HEADERS = [
@@ -1165,6 +1211,7 @@ def parse_video_info(url: str) -> dict[str, Any]:
     Supports Douyin (抖音) and Bilibili (B站).
     Does NOT require an API key -- only fetches metadata.
     """
+    share_text = url
     url = normalize_share_url(url)
     platform = _detect_platform(url)
 
@@ -1199,8 +1246,7 @@ def parse_video_info(url: str) -> dict[str, Any]:
         )
 
     # Douyin path
-    processor = DouyinProcessor(api_key="")
-    info = _parse_douyin_share_info(processor, url)
+    info = _parse_douyin_share_info(None, share_text)
     return {
         "video_id": info["video_id"],
         "title": info["title"],
@@ -1442,7 +1488,7 @@ def extract_media_url_transcript(
                     pass
             stderr_reader.join(timeout=2)
 
-        logging.getLogger(__name__).info(
+        logging.getLogger("uvicorn.error.extraction").info(
             "transcript_media_ready duration_ms=%d media_bytes=%d audio_bytes=%d",
             int((time.monotonic() - media_started) * 1000), written, audio_path.stat().st_size,
         )
@@ -1455,7 +1501,7 @@ def extract_media_url_transcript(
                     api_base_url,
                     model,
                 )
-                logging.getLogger(__name__).info(
+                logging.getLogger("uvicorn.error.extraction").info(
                     "transcript_text_ready duration_ms=%d chars=%d",
                     int((time.monotonic() - asr_started) * 1000), len(transcript or ""),
                 )

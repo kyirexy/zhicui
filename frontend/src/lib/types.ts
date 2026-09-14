@@ -747,6 +747,7 @@ export interface DouyinLibraryListResult {
   };
   permanent_hidden_total: number;
   catalog_warning?: string;
+  catalog_recovery_pending?: boolean;
   catalog_channels?: {
     desktop_local: number;
     legacy_sidecar: number;

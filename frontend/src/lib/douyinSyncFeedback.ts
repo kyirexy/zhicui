@@ -45,12 +45,18 @@ export function formatTranscriptPreparationProgress(job: {
 }): string {
   const completed = boundedCount(job.success);
   const total = boundedCount(job.total);
-  if (job.status === 'failed') return `文稿任务未完成：${job.error || '进度已中断，可稍后重试'}`;
-  if (job.status === 'partial' || (job.status === 'success' && job.failed > 0)) {
-    return `文稿已完成 ${completed}/${total} 条，${boundedCount(job.failed)} 条未完成，可稍后重试`;
+  if (job.status === 'failed') {
+    const hint = /余额|额度|配额/.test(job.error || '') ? '请检查可用额度后重试'
+      : /登录|401/.test(job.error || '') ? '请重新登录后重试'
+        : /未配置|配置.*(?:缺失|无效)|API.*(?:key|密钥)/i.test(job.error || '') ? '请检查文案提取设置后重试'
+          : '请稍后重试';
+    return `文案准备未完成 · 已完成 ${completed}/${total}，${hint}`;
   }
-  if (job.status === 'success') return `文稿已完成 ${completed}/${total} 条`;
-  return `文稿任务已启动：已完成 ${completed}/${total} 条，处理中 ${boundedCount(job.active)} 条，等待 ${boundedCount(job.queued)} 条`;
+  if (job.status === 'partial' || (job.status === 'success' && job.failed > 0)) {
+    return `文案已完成 ${completed}/${total}，${boundedCount(job.failed)} 条未完成，可重试`;
+  }
+  if (job.status === 'success') return `文案已完成 ${completed}/${total}`;
+  return `文案准备中 · 已完成 ${completed}/${total}${job.failed > 0 ? `，${boundedCount(job.failed)} 条未完成` : ''}`;
 }
 
 function boundedCount(value: number | undefined): number {
@@ -74,7 +80,7 @@ export function formatMultiSourceSyncSummary(
   const failed = results.filter((result) => Boolean(result.error));
   if (successful.length === 0) {
     return failed.length > 0
-      ? failed.map((result) => `${result.sourceLabel}：${result.error}`).join('；')
+      ? failed.map((result) => `${result.sourceLabel}：${formatDouyinSyncError(result.error, result.sourceLabel)}`).join('；')
       : '没有可同步的来源';
   }
   const checked = successful.reduce(
@@ -86,12 +92,12 @@ export function formatMultiSourceSyncSummary(
     0,
   );
   const failedSuffix = failed.length > 0
-    ? `；${failed.map((result) => `${result.sourceLabel}：${result.error}`).join('；')}`
+    ? `；${failed.map((result) => `${result.sourceLabel}：${formatDouyinSyncError(result.error, result.sourceLabel)}`).join('；')}`
     : '';
   const counts = successful.every((result) => result.created !== undefined && result.reused !== undefined)
-    ? `新增 ${successful.reduce((sum, item) => sum + boundedCount(item.created), 0)} 条，复用 ${successful.reduce((sum, item) => sum + boundedCount(item.reused), 0)} 条；历史资料已保留`
-    : `新显示 ${newlyVisible} 条`;
-  return `已同步 ${successful.length} 个来源，共检查 ${checked} 条，${counts}${failedSuffix}`;
+    ? `新增 ${successful.reduce((sum, item) => sum + boundedCount(item.created), 0)} 条，已有 ${successful.reduce((sum, item) => sum + boundedCount(item.reused), 0)} 条`
+    : `已同步 ${checked} 条${newlyVisible > 0 ? `，新显示 ${newlyVisible} 条` : ''}`;
+  return `${counts}${failedSuffix}`;
 }
 
 export function formatDouyinSyncError(
@@ -106,34 +112,37 @@ export function formatDouyinSyncError(
 
   const retrySeconds = boundedCount(diagnostics.retry_after_seconds);
   const retryHint = retrySeconds > 0
-    ? `约 ${Math.max(1, Math.ceil(retrySeconds / 60))} 分钟后可再试。`
-    : '请稍后再试。';
+    ? `约 ${Math.max(1, Math.ceil(retrySeconds / 60))} 分钟后再试。`
+    : '请稍后重试。';
+  if (/已取消|用户取消/.test(cleaned)) return '已取消同步。';
   if (
     diagnostics.error_code === 'argus_uifid_missing'
     || /收藏登录信息不完整|UIFID/i.test(cleaned)
   ) {
-    return '收藏读取条件还没有完成。请重新连接抖音账号，扫码后等待页面确认登录完成；喜欢和我的作品仍可正常同步。';
+    return '请重新登录抖音后同步收藏。';
   }
   if (diagnostics.error_code === 'verification_required' || diagnostics.needs_action) {
-    return `抖音要求重新验证账号后才能读取${sourceLabel}。已有资料不会丢失，请在账号管理中完成验证。`;
+    return `请在抖音完成验证，再继续同步${sourceLabel}。`;
   }
   if (
     diagnostics.error_code === 'source_blocked'
     || diagnostics.error_code === 'risk_controlled'
     || /403|风控|www-hj\.douyin\.com|挑战域|平台风控拒绝/i.test(cleaned)
   ) {
-    return `抖音暂时限制了${sourceLabel}列表读取。账号仍保持绑定，已有资料不会丢失；${retryHint}暂时不要连续同步。`;
+    return `${sourceLabel}暂时无法同步，${retryHint}`;
   }
   if (/429|限频|请求过于频繁/i.test(cleaned)) {
-    return `${sourceLabel}同步得太频繁了。已有资料不会丢失，请稍后再试。`;
+    return `${sourceLabel}同步较频繁，请稍后重试。`;
   }
-  if (/登录状态失效|重新扫码登录|cookie.*(?:失效|无效)|请先.*绑定/i.test(cleaned)) {
-    return `抖音登录状态已失效，请重新绑定账号后再同步${sourceLabel}。`;
+  if (/登录.*失效|会话.*失效|重新.*(?:登录|连接.*账号)|cookie.*(?:失效|无效)|请先.*绑定/i.test(cleaned)) {
+    return `请重新登录抖音后同步${sourceLabel}。`;
   }
-  if (/未读取到/.test(cleaned) && /保留上次同步结果/.test(cleaned)) {
-    return `暂时没有读到新的${sourceLabel}。账号仍保持绑定，已有资料已经保留，请稍后再试。`;
+  if (/首屏|列表开头|确认官方页面|没有找到抖音.*列表|本人主页|对应标签|还未确认.*列表/.test(cleaned)) {
+    return `请打开抖音的“${sourceLabel}”，完成操作后重试。`;
   }
-  return cleaned || `${sourceLabel}同步暂时没有完成，请稍后重试。`;
+  if (/验证|验证码/.test(cleaned)) return `请在抖音完成验证，再继续同步${sourceLabel}。`;
+  if (/\d+\s*分钟/.test(cleaned)) return `${sourceLabel}暂时无法同步，约 ${cleaned.match(/(\d+)\s*分钟/)![1]} 分钟后再试。`;
+  return `${sourceLabel}同步未完成，请稍后重试。`;
 }
 
 export function formatCollectionSyncMessage({
@@ -163,9 +172,9 @@ export function formatCollectionSyncMessage({
 
   if (status === 'pending' || status === 'running') {
     if (safeProcessed > 0) {
-      return `已读取 ${safeProcessed}/${safeTarget} 条${sourceLabel}，正在继续同步…`;
+      return `${sourceLabel}同步中 · ${safeProcessed}/${safeTarget}`;
     }
-    return `正在读取最近 ${safeRequestedCount} 条${sourceLabel}，请稍候…`;
+    return `正在同步最近 ${safeRequestedCount} 条${sourceLabel}…`;
   }
 
   // 部分连接器版本会同时返回 success 和受限诊断，不能让传输状态掩盖风控。
@@ -184,9 +193,9 @@ export function formatCollectionSyncMessage({
   if (status === 'success') {
     const synchronized = safeSuccess || safeTotal;
     if (synchronized > 0) {
-      return `已检查 ${synchronized} 条${sourceLabel}，正在更新资料库…`;
+      return `${sourceLabel}已同步 ${synchronized} 条`;
     }
-    return `本次未读取到${sourceLabel}，不计为同步成功。可能是该列表为空、登录账号不匹配，或抖音暂时限制了列表读取；请稍后再试，暂时不要连续同步。`;
+    return `还没有同步到${sourceLabel}，请在抖音确认列表后重试。`;
   }
 
   return `正在准备${sourceLabel}同步…`;

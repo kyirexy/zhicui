@@ -5,7 +5,6 @@ import Link from 'next/link';
 import {
   Captions,
   CheckCircle2,
-  Clock3,
   LoaderCircle,
   Sparkles,
   TriangleAlert,
@@ -60,19 +59,16 @@ export default function LibraryExtractionLiveProgress({
             : summary.failed > 0 ? <TriangleAlert size={17} /> : <CheckCircle2 size={17} />}
         </span>
         <div>
-          <strong>
-            {libraryExtractionHeading(job)}
+          <strong className="tabular-nums">
+            {libraryExtractionHeading(job)} · 已完成 {summary.completed}/{summary.total}
           </strong>
           <p>
-            {job.status === 'running'
-              ? `同时处理中 ${summary.active} 条 · 已完成 ${summary.completed}/${summary.total} · 排队 ${summary.queued} 条。已完成的文案可直接查看和提问。`
-              : `已完成 ${summary.completed}/${summary.total} 条${summary.failed > 0 ? `，${summary.failed} 条未完成，可重试` : '，可以查看和提问'}。`}
+            {summary.failed > 0
+              ? `${summary.failed} 条未完成，${job.status === 'running' ? '其余会继续处理' : '可重试'}`
+              : job.status === 'running' ? '其余会继续处理'
+                : job.status === 'failed' || job.status === 'partial' ? '未完成的视频可以重试' : '现在可以查看或提问'}
           </p>
         </div>
-        <b className="library-live-progress-total">
-          {summary.completed}
-          <span>/{summary.total}</span>
-        </b>
       </div>
 
       <div
@@ -84,27 +80,6 @@ export default function LibraryExtractionLiveProgress({
         aria-valuetext={`已完成 ${summary.completed} 条，失败 ${summary.failed} 条，共 ${summary.total} 条`}
       >
         <span style={progressStyle} />
-      </div>
-
-      <div className="library-live-progress-stats" aria-label="当前处理状态">
-        <span className="is-complete">
-          <CheckCircle2 size={13} />
-          已完成 <b>{summary.completed}</b>
-        </span>
-        <span>
-          <LoaderCircle size={13} />
-          同时处理 <b>{summary.active}</b>
-        </span>
-        <span>
-          <Clock3 size={13} />
-          等待 <b>{summary.queued}</b>
-        </span>
-        {summary.failed > 0 && (
-          <span className="is-error">
-            <TriangleAlert size={13} />
-            失败 <b>{summary.failed}</b>
-          </span>
-        )}
       </div>
 
       {recentResults.length > 0 && (

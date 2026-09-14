@@ -509,6 +509,7 @@ app.on('before-quit', () => {
   stopDesktopUpdateChecks = null;
   void douyinLogin.cancel();
   void zhicuiLogin.cancel();
+  void platformAccounts.cancel();
   void agentActionBridge?.stop().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[desktop] Agent 本机桥接清理失败：${message}`);

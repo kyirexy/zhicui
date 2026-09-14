@@ -119,6 +119,7 @@ import {
 } from '@/lib/libraryListCache';
 import { getLibraryRevision, isLibraryRevisionCurrent, subscribeLibraryUpdates } from '@/lib/libraryUpdates';
 import { findNewLibraryItems } from '@/lib/librarySyncDiff';
+import { LibraryExtractionBatchTracker, runReservedExtractionBatches } from '@/lib/libraryExtractionQueue';
 import { selectPlatformLibrarySource, type PlatformLibrarySourceFilter } from '@/lib/platformLibraryOrder';
 import { formatPlatformSyncSourceResults, withPlatformSyncWarning, type PlatformSyncSourceResult } from '@/lib/platformSyncFeedback';
 import { capturePlatformSyncSnapshot } from '@/lib/platformSyncSnapshot';
@@ -168,6 +169,8 @@ interface SyncCollectionModeResult {
   finalJob: DouyinCollectionJob | null;
   error: string;
   queueMayStillBeRunning?: boolean;
+  needsAction?: boolean;
+  cancelled?: boolean;
   warning?: string;
   coverage?: PlatformSyncSourceResult['coverage'];
   orderReliable?: boolean;
@@ -399,6 +402,8 @@ export default function VideoLibraryPage() {
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [syncCount, setSyncCount] = useState(() => readLibraryQuickSyncPreferences().count);
   const [items, setItems] = useState<DouyinLibraryItem[]>([]);
+  const [catalogRecoveryPending, setCatalogRecoveryPending] = useState(false);
+  const catalogRecoveryPollRef = useRef(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectedPlatform, setSelectedPlatform] = useState<Set<string>>(new Set());
   const [extractProgress, setExtractProgress] = useState<Record<string, ExtractProgress>>({});
@@ -459,6 +464,7 @@ export default function VideoLibraryPage() {
   const [syncRecoveryFocusing, setSyncRecoveryFocusing] = useState(false);
   const [syncRecoveryActionError, setSyncRecoveryActionError] = useState('');
   const activeDesktopSyncRef = useRef<{ userId: string; mode: DouyinSourceMode; count: number; generation: number } | null>(null);
+  const sourceSyncRunRef = useRef<{ cancelled: boolean; userId?: string; sessionKey: string } | null>(null);
   const activeDesktopLoginRef = useRef<{ userId: string; generation: number } | null>(null);
   const syncRecoveryActionRef = useRef<symbol | null>(null);
   const syncRecoveryCancelRef = useRef<symbol | null>(null);
@@ -511,6 +517,8 @@ export default function VideoLibraryPage() {
   const batchExtractingRef = useRef(false);
   const extractionUserEpochRef = useRef(0);
   const extractionOwnerRef = useRef(0);
+  const extractionQueueRef = useRef<LibraryExtractionBatchTracker | null>(null);
+  const extractionNoticeRef = useRef<(message: string) => void>(() => {});
   const sourceSyncGenerationRef = useRef(0);
   const sourceSyncNoticeOwnedRef = useRef(false);
   const extractionRevisionRef = useRef('');
@@ -541,6 +549,7 @@ export default function VideoLibraryPage() {
 
   const applyLibraryListResult = useCallback((result: DouyinLibraryListResult) => {
     setItems(result.items);
+    setCatalogRecoveryPending(result.catalog_recovery_pending === true);
     setLibraryOverview({
       sourceTotal: result.source_total,
       temporaryHidden: result.hidden.temporary,
@@ -693,6 +702,8 @@ export default function VideoLibraryPage() {
     sourceSyncGenerationRef.current += 1;
     extractionUserEpochRef.current += 1;
     extractionOwnerRef.current += 1;
+    extractionQueueRef.current = null;
+    extractionNoticeRef.current = () => {};
     sourceSyncNoticeOwnedRef.current = false;
     batchExtractingRef.current = false;
     setRefreshing(false);
@@ -709,14 +720,23 @@ export default function VideoLibraryPage() {
     setSyncRecoveryIssues([]);
     setSyncRecoveryActionError('');
     setSyncRecoveryFocusing(false);
+    setCatalogRecoveryPending(false);
+    catalogRecoveryPollRef.current = 0;
     setScanning(false);
     activeDesktopSyncRef.current = null;
+    sourceSyncRunRef.current = null;
     activeDesktopLoginRef.current = null;
     syncRecoveryActionRef.current = null;
     syncRecoveryCancelRef.current = null;
     syncRecoveryRetryRef.current = null;
     return () => {
       activeRef.current = false;
+      const running = sourceSyncRunRef.current;
+      if (running && running.userId === user?.id) {
+        running.cancelled = true;
+        sourceSyncRunRef.current = null;
+        void window.zhicuiDesktop?.cancelPlatformAccountAction().catch(() => undefined);
+      }
       sourceSyncGenerationRef.current += 1;
       libraryRequestRef.current += 1;
     };
@@ -726,6 +746,23 @@ export default function VideoLibraryPage() {
     if (!user?.id) return;
     return subscribeLibraryUpdates(() => { void loadLibrary(true); });
   }, [loadLibrary, user?.id]);
+
+  useEffect(() => {
+    if (!catalogRecoveryPending || !user?.id) {
+      catalogRecoveryPollRef.current = 0;
+      return;
+    }
+    if (catalogRecoveryPollRef.current >= 15) return;
+    const timer = window.setInterval(() => {
+      if (++catalogRecoveryPollRef.current > 15) {
+        window.clearInterval(timer);
+        return;
+      }
+      // 旧目录恢复后安静更新列表，不在界面暴露迁移或连接器信息。
+      void loadLibrary(true);
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [catalogRecoveryPending, loadLibrary, user?.id]);
 
   useEffect(() => {
     if (!sortMenuOpen) return;
@@ -817,8 +854,16 @@ export default function VideoLibraryPage() {
           const issue = getDouyinSyncRecoveryIssue({ ...request, phase: 'waiting',
             code: nextStatus.code, error: nextStatus.message });
           if (issue) setSyncRecoveryIssues((current) => updateDouyinSyncRecovery(current, request.mode, issue));
-        } else if (nextStatus.stage === 'collecting') {
+        } else if (nextStatus.stage === 'success') {
+          setSyncRecoveryIssues((current) => updateDouyinSyncRecovery(current, request.mode, null));
+        } else if (nextStatus.stage === 'collecting' || nextStatus.stage === 'cancelled') {
           setSyncRecoveryIssues((current) => current.filter((item) => item.mode !== request.mode || item.phase !== 'waiting'));
+        } else if (nextStatus.stage === 'error') {
+          const issue = getDouyinSyncRecoveryIssue({ ...request, phase: 'failed',
+            code: nextStatus.code, error: nextStatus.message });
+          setSyncRecoveryIssues((current) => issue
+            ? updateDouyinSyncRecovery(current, request.mode, issue)
+            : current.map((item) => item.mode === request.mode && item.phase === 'waiting' ? { ...item, phase: 'failed' } : item));
         }
       }
       if (!sourceSyncNoticeOwnedRef.current) {
@@ -1188,8 +1233,7 @@ export default function VideoLibraryPage() {
 
   const waitForExtractionJob = async (
     initial: DouyinBatchExtractionJob,
-    background = false,
-    publishNotice: (message: string) => void = setNotice,
+    onUpdate: (job: DouyinBatchExtractionJob) => void,
   ): Promise<DouyinBatchExtractionJob> => {
     let current = initial;
     const userEpoch = extractionUserEpochRef.current;
@@ -1232,20 +1276,7 @@ export default function VideoLibraryPage() {
       }
     };
     if (!isCurrentUser()) return current;
-    applyExtractionJob(current);
-    const updateProgressNotice = () => {
-      if (!isCurrentUser()) return;
-      publishNotice(
-        current.operation === 'transcript'
-          ? background
-            ? formatTranscriptPreparationProgress(current)
-            : `并发提取 ${current.total} 条完整文案：正在转写 ${current.active} 条，等待 ${current.queued} 条，已完成 ${current.success} 条`
-          : current.operation === 'full'
-            ? `结构化文案 ${current.total} 条：正在整理 ${current.active} 条，等待 ${current.queued} 条，已完成 ${current.success} 条`
-            : `智能分析 ${current.total} 条：处理中 ${current.active} 条，等待 ${current.queued} 条，已完成 ${current.success} 条`,
-      );
-    };
-    updateProgressNotice();
+    onUpdate(current);
     for (let attempt = 0; attempt < 2400 && isCurrentUser(); attempt += 1) {
       if (current.status !== 'running') {
         // 任务结束后以数据库为准刷新一次，并同步更新会话缓存，避免重新打开
@@ -1260,8 +1291,8 @@ export default function VideoLibraryPage() {
         () => controller.abort(),
         JOB_POLL_TIMEOUT_MS,
       );
-      const response = await getDouyinBatchExtraction(current.job_id, controller.signal);
-      window.clearTimeout(timeoutId);
+      const response = await getDouyinBatchExtraction(current.job_id, controller.signal)
+        .finally(() => window.clearTimeout(timeoutId));
       if (!isCurrentUser()) return current;
       if (!response.success || !response.data) {
         consecutiveFailures += 1;
@@ -1272,10 +1303,10 @@ export default function VideoLibraryPage() {
         ) {
           const interrupted: DouyinBatchExtractionJob = {
             ...current,
-            status: 'failed',
+            status: 'running',
             error: response.status === 404
-              ? '文案任务状态已中断，可能是开发服务刚刚重启；已完成的视频会保留，可以稍后补提'
-              : response.error || '文案任务进度连接中断，可以稍后补提',
+              ? '暂时无法读取文稿任务进度；已提交任务与完成结果会保留，可以稍后重新查看'
+              : response.error || '文稿进度连接中断，已提交任务仍在服务端执行',
           };
           await refreshPersistedState();
           return interrupted;
@@ -1284,7 +1315,7 @@ export default function VideoLibraryPage() {
       }
       consecutiveFailures = 0;
       current = response.data;
-      if (applyExtractionJob(current)) updateProgressNotice();
+      onUpdate(current);
       if (current.status !== 'running') {
         await refreshPersistedState();
         return current;
@@ -1299,116 +1330,59 @@ export default function VideoLibraryPage() {
     operation: DouyinBatchExtractionOperation,
     options: { background?: boolean; onNotice?: (message: string) => void } = {},
   ): Promise<ExtractionRunResult> => {
-    if (batchExtractingRef.current) {
-      return { success: 0, status: 'skipped', error: '已有文案任务正在处理' };
-    }
     const background = options.background === true;
-    const publishNotice = options.onNotice || setNotice;
     const userEpoch = extractionUserEpochRef.current;
     const isCurrentUser = () => activeRef.current && user?.id === currentUserIdRef.current
       && userEpoch === extractionUserEpochRef.current;
     if (!isCurrentUser()) return { success: 0, status: 'skipped' };
-    const pending = targets.filter((item) => {
-      if (!item.can_extract) return false;
-      if (operation === 'transcript') return !hasReadyTranscript(item);
-      if (operation === 'ai') return hasReadyTranscript(item) && !item.ai_initialized;
-      return !hasReadyTranscript(item) || !item.ai_initialized;
-    });
-    if (pending.length === 0) {
-      publishNotice('文稿均已就绪，无需重复处理');
-      return { success: 0, status: 'success' };
+    const tracker = extractionQueueRef.current ||= new LibraryExtractionBatchTracker();
+    const isCurrentTask = () => isCurrentUser() && extractionQueueRef.current === tracker;
+    const batches = tracker.reserve(targets, operation);
+    if (!batches.length) {
+      if (!tracker.busy) (options.onNotice || setNotice)('文稿已就绪或已提交，无需重复处理');
+      return { success: 0, status: 'skipped' };
     }
-    const owner = ++extractionOwnerRef.current;
-    const isCurrentTask = () => isCurrentUser() && owner === extractionOwnerRef.current;
-    batchExtractingRef.current = true;
-    setBatchExtracting(true);
-    setActiveBatchOperation(operation);
-    extractionRevisionRef.current = '';
-    setExtractionJob(null);
+    extractionNoticeRef.current = options.onNotice || setNotice;
     if (!background) setPipelineStage('extract');
-    setExtractProgress((current) => {
-      const next = { ...current };
-      pending.forEach((item) => {
-        next[item.aweme_id] = { state: 'queued' };
-      });
-      return next;
-    });
-
-    publishNotice(
-      operation === 'transcript'
-        ? background
-          ? `正在提交 ${pending.length} 条文稿任务`
-          : `正在同时启动 ${pending.length} 条视频的完整文案提取`
-        : operation === 'full'
-          ? `正在同时提取 ${pending.length} 条视频的结构化文案`
-          : `正在同时整理 ${pending.length} 条视频的摘要笔记`,
-    );
-    const response = await startDouyinBatchExtraction(
-      pending.map((item) => item.aweme_id),
-      operation,
-    );
-    if (!isCurrentTask()) return { success: 0, status: 'skipped' };
-    if (!response.success || !response.data) {
-      setExtractProgress((current) => {
-        const next = { ...current };
-        pending.forEach((item) => {
-          next[item.aweme_id] = {
-            state: 'error',
-            error: response.error || '批量任务启动失败',
-          };
-        });
-        return next;
-      });
-      batchExtractingRef.current = false;
-      setBatchExtracting(false);
-      setActiveBatchOperation(null);
-      publishNotice(background
-        ? `文稿任务未启动：${response.error || '提交失败，可稍后重试'}`
-        : response.error || (
-          operation === 'transcript'
-            ? '批量文案任务启动失败'
-            : operation === 'full'
-              ? '结构化文案任务启动失败'
-              : '批量分析任务启动失败'
-        ));
-      return {
-        success: 0,
-        status: 'failed',
-        error: response.error || '批量任务启动失败',
-      };
-    }
-
-    const finalJob = await waitForExtractionJob(response.data, background, publishNotice);
-    if (!isCurrentTask()) return { success: 0, status: 'skipped' };
-    batchExtractingRef.current = false;
-    setBatchExtracting(false);
-    setActiveBatchOperation(null);
-    if (finalJob.status === 'running') {
-      publishNotice(background
-        ? '文稿任务仍在后台运行，稍后回来即可查看'
-        : '批量任务仍在后台运行，刷新页面后可查看已完成的文案');
-    } else if (finalJob.status === 'failed') {
-      const interruptedMessage = finalJob.error || '文案任务已中断，可以稍后补提';
-      setExtractProgress((current) => {
-        const next = { ...current };
-        finalJob.items.forEach((item) => {
-          if (item.state === 'done') return;
-          next[item.aweme_id] = { state: 'error', error: interruptedMessage };
-        });
-        return next;
-      });
-      publishNotice(background
-        ? `文稿任务未完成：${interruptedMessage}`
-        : interruptedMessage);
-    } else if (background) {
-      publishNotice(formatTranscriptPreparationProgress(finalJob));
-    }
-    return {
-      success: finalJob.success,
-      status: finalJob.status,
-      error: finalJob.error,
-      job: finalJob,
+    const publishProgress = () => {
+      if (!isCurrentTask()) return;
+      const aggregate = tracker.snapshot();
+      batchExtractingRef.current = tracker.busy;
+      setBatchExtracting(tracker.busy);
+      setActiveBatchOperation(tracker.busy ? aggregate?.operation || operation : null);
+      if (!aggregate) return;
+      applyExtractionJob(aggregate);
+      extractionNoticeRef.current(
+        aggregate.operation === 'transcript'
+          ? formatTranscriptPreparationProgress(aggregate)
+          : `${aggregate.operation === 'full' ? '结构化文案' : '智能分析'} ${aggregate.total} 条：处理中 ${aggregate.active} 条，等待 ${aggregate.queued} 条，已完成 ${aggregate.success} 条${aggregate.failed ? `，${aggregate.failed} 条可重试` : ''}`,
+      );
     };
+    // 先预留全部分块再发请求，进度总数包括正在提交的任务，旧批次结束不能清空追加任务。
+    publishProgress();
+    const finalJob = await runReservedExtractionBatches(tracker, batches, {
+      isCurrent: isCurrentTask,
+      submit: async (ids, requestedOperation) => {
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(() => controller.abort(), 30_000);
+        const response = await startDouyinBatchExtraction(ids, requestedOperation, controller.signal)
+          .finally(() => window.clearTimeout(timeoutId));
+        if (!response.success || !response.data) throw new Error(response.error || '文稿任务提交失败，可重试');
+        return response.data;
+      },
+      observe: (initial, onUpdate) => waitForExtractionJob(initial, onUpdate),
+      onChange: publishProgress,
+    });
+    if (!isCurrentTask() || !finalJob) return { success: 0, status: 'skipped' };
+    if (!tracker.busy) {
+      const aggregate = tracker.snapshot() || finalJob;
+      if (aggregate.status === 'running') {
+        extractionNoticeRef.current(`文案仍在准备中，稍后回来即可查看${aggregate.failed ? `；${aggregate.failed} 条未开始，可重试` : ''}`);
+      } else if (aggregate.failed > 0) {
+        extractionNoticeRef.current(`文案已完成 ${aggregate.success}/${aggregate.total} 条；${aggregate.failed} 条未完成，可重试`);
+      }
+    }
+    return { success: finalJob.success, status: finalJob.status, error: finalJob.error, job: finalJob };
   };
 
   const extractStructuredSelected = async () => {
@@ -1428,6 +1402,7 @@ export default function VideoLibraryPage() {
     }
 
     const result = await extractItems(snapshot, 'full');
+    if (result.status === 'skipped') return;
     if (result.status === 'success') {
       setPipelineStage('done');
       setNotice(`已选 ${snapshot.length} 条视频的结构化文案已就绪`);
@@ -1462,6 +1437,7 @@ export default function VideoLibraryPage() {
     if (missingTranscript.length > 0) {
       setNotice(`正在为 ${missingTranscript.length} 条视频准备文稿，完成后将自动进入知萃 AI`);
       const result = await extractItems(missingTranscript, 'transcript');
+      if (result.status === 'skipped') return;
       result.job?.items.forEach((item) => {
         if (item.state === 'done' && item.note_id && item.transcript_chars > 0) {
           resolvedNoteIds.set(item.aweme_id, item.note_id);
@@ -2241,6 +2217,8 @@ export default function VideoLibraryPage() {
     reportNotice: (message: string) => void,
     isCurrentSync: () => boolean,
     interactive = false,
+    sessionKey?: string,
+    keepSessionOpen = false,
   ): Promise<SyncCollectionModeResult> => {
     const syncUserId = user?.id;
     const ensureSyncUser = () => {
@@ -2286,7 +2264,7 @@ export default function VideoLibraryPage() {
           error: '未检测到可用的知萃桌面连接器',
         };
       }
-      reportNotice(`正在本机读取抖音${requestedSourceLabel}…`);
+      reportNotice(`正在同步抖音${requestedSourceLabel}…`);
       const sourceSyncedAt = new Date().toISOString();
       const activeRequest = { userId: user.id, mode: requestedMode, count: requestedCount, generation: sourceSyncGenerationRef.current };
       activeDesktopSyncRef.current = activeRequest;
@@ -2302,6 +2280,8 @@ export default function VideoLibraryPage() {
           mode: requestedMode,
           limit: requestedCount,
           interactive,
+          sessionKey,
+          keepSessionOpen,
         });
       } finally {
         if (activeDesktopSyncRef.current === activeRequest) activeDesktopSyncRef.current = null;
@@ -2324,16 +2304,18 @@ export default function VideoLibraryPage() {
           newlyVisible: [],
           overview: null,
           finalJob: null,
+          needsAction: Boolean(issue),
+          cancelled: Boolean(collected.cancelled),
           error: collected.cancelled
-            ? '本机读取已取消'
+            ? '同步已取消'
             : issue
-              ? `还未确认${requestedSourceLabel}列表，请按页面引导在抖音检查后重试；已有资料已保留`
-              : collected.error || `没有读取到抖音${requestedSourceLabel}`,
+              ? `请在抖音完成操作后继续同步${requestedSourceLabel}`
+              : `暂时无法同步${requestedSourceLabel}，请稍后重试`,
         };
       }
       setSyncRecoveryIssues((current) => updateDouyinSyncRecovery(current, requestedMode, null));
       reportNotice(
-        `本机已读取 ${collected.items.length} 条${requestedSourceLabel}，正在登记公开资料…`,
+        `正在保存 ${collected.items.length} 条${requestedSourceLabel}…`,
       );
       const ingested = await ingestLocalDouyinLibrary(
         requestedMode,
@@ -2349,7 +2331,7 @@ export default function VideoLibraryPage() {
           newlyVisible: [],
           overview: null,
           finalJob: null,
-          error: ingested.error || '本机已读取作品，但服务器登记失败',
+          error: '作品保存失败，请稍后重新同步',
         };
       }
       const revision = getLibraryRevision();
@@ -2388,7 +2370,7 @@ export default function VideoLibraryPage() {
       };
       if (ingested.data.quarantined > 0) {
         reportNotice(
-          `已读取 ${ingested.data.accepted} 条${requestedSourceLabel}，其中 ${ingested.data.quarantined} 条公开资料不完整，已安全隔离；请完成桌面端更新后重新同步`,
+          `${ingested.data.quarantined} 条${requestedSourceLabel}暂未同步，可稍后重试`,
         );
       }
       return {
@@ -2554,7 +2536,7 @@ export default function VideoLibraryPage() {
       );
       return { started: false };
     }
-    if (refreshing || !loggedIn) return { started: false };
+    if (refreshing || sourceSyncRunRef.current || !loggedIn) return { started: false };
     const syncUserId = user?.id;
     const generation = ++sourceSyncGenerationRef.current;
     const isSyncUserCurrent = () => activeRef.current && syncUserId === currentUserIdRef.current
@@ -2609,10 +2591,12 @@ export default function VideoLibraryPage() {
     setSyncCount(requestedCount);
     setSourceSyncWarning('');
     setRefreshing(true);
+    const syncRun = { cancelled: false, userId: syncUserId, sessionKey: crypto.randomUUID() };
+    sourceSyncRunRef.current = syncRun;
     if (!batchExtractingRef.current) setExtractionJob(null);
     setPipelineStage('collect');
     reportNotice(
-      `即将按顺序同步 ${modes.length} 个来源：${modes
+      `正在同步${modes
         .map((value) => SOURCE_MODES.find((mode) => mode.value === value)?.label || '')
         .filter(Boolean)
         .join('、')}`,
@@ -2621,7 +2605,7 @@ export default function VideoLibraryPage() {
     const results: SyncCollectionModeResult[] = [];
     let failed = blockedModes.length > 0;
     for (const [modeIndex, requestedMode] of modes.entries()) {
-      if (!isSyncUserCurrent()) return { started: true };
+      if (!isSyncUserCurrent() || syncRun.cancelled) break;
       setSourceSyncQueue({
         current: modeIndex + 1,
         total: modes.length,
@@ -2629,7 +2613,9 @@ export default function VideoLibraryPage() {
       });
       let result: SyncCollectionModeResult;
       try {
-        result = await collectOneSource(requestedMode, requestedCount, reportNotice, isSyncUserCurrent, interactive);
+        result = await collectOneSource(requestedMode, requestedCount, reportNotice,
+          () => isSyncUserCurrent() && !syncRun.cancelled, interactive,
+          syncRun.sessionKey, modeIndex < modes.length - 1);
       } catch (error) {
         result = {
           requestedMode,
@@ -2637,23 +2623,23 @@ export default function VideoLibraryPage() {
           newlyVisible: [],
           overview: null,
           finalJob: null,
-          error: error instanceof Error && error.message
-            ? `同步连接异常：${error.message}`
-            : '同步连接异常，请稍后重试',
+          error: syncRun.cancelled ? '已取消同步' : '同步暂时中断，请重试',
+          cancelled: syncRun.cancelled,
         };
       }
-      if (!isSyncUserCurrent()) return { started: true };
+      if (!isSyncUserCurrent()) break;
       results.push(result);
       if (result.error) {
         failed = true;
         if (desktopLocalDouyin) {
-          setSyncRecoveryIssues((current) => current.map((issue) => issue.mode === requestedMode
-            ? { ...issue, phase: 'failed' } : issue));
+          setSyncRecoveryIssues((current) => result.cancelled
+            ? updateDouyinSyncRecovery(current, requestedMode, null)
+            : current.map((issue) => issue.mode === requestedMode ? { ...issue, phase: 'failed' } : issue));
         }
         reportNotice(
           `${SOURCE_MODES.find((mode) => mode.value === requestedMode)?.label || '该来源'}：${result.error}`,
         );
-        if (result.queueMayStillBeRunning) break;
+        if (result.queueMayStillBeRunning || result.cancelled || result.needsAction || syncRun.cancelled) break;
         continue;
       }
       if (result.revision !== undefined && !isLibraryRevisionCurrent(result.revision)) {
@@ -2666,6 +2652,7 @@ export default function VideoLibraryPage() {
       if (isVisibleSource) {
         libraryRequestRef.current += 1;
         setItems(refreshed);
+        setCatalogRecoveryPending(overview?.catalog_recovery_pending === true);
         setSelected(new Set());
         setError('');
         setLoading(false);
@@ -2693,9 +2680,20 @@ export default function VideoLibraryPage() {
       reportNotice(`${SOURCE_MODES.find((mode) => mode.value === requestedMode)?.label || '该来源'}已更新，视频资料现有 ${refreshed.length} 条`);
     }
 
+    if (sourceSyncRunRef.current === syncRun) {
+      // 仅清理本轮租用的窗口；中断后不自动启动另一个来源。
+      if (desktopLocalDouyin) await window.zhicuiDesktop?.cancelPlatformAccountAction().catch(() => undefined);
+      sourceSyncRunRef.current = null;
+    }
+    if (!isSyncUserCurrent()) return { started: true };
     setRefreshing(false);
     setSourceSyncQueue(null);
     setPipelineStage(failed ? 'idle' : 'done');
+
+    if (syncRun.cancelled) {
+      reportNotice('已取消同步');
+      return { started: true };
+    }
 
     const successful = results.filter((result) => !result.error && result.finalJob);
     const allRefreshed = results.filter((result) => !result.error && result.refreshed !== null);
@@ -2727,7 +2725,7 @@ export default function VideoLibraryPage() {
       result.finalJob?.url === 'desktop-local' ? nonNegativeInteger(result.finalJob.failed) : 0
     ), 0);
     const completedSummary = [summary, blockedNotice,
-      quarantined > 0 ? `另有 ${quarantined} 条公开资料不完整，已安全隔离` : '',
+      quarantined > 0 ? `另有 ${quarantined} 条暂未同步，可稍后重试` : '',
     ].filter(Boolean).join('；');
     const reportPreparation = createSyncNoticeReporter(completedSummary, isSyncUserCurrent, publishSourceManagerNotice);
     reportPreparation('');
@@ -2742,28 +2740,22 @@ export default function VideoLibraryPage() {
         warning: result.warning,
       }))));
 
-    // 普通同步只为新增条目准备文稿；历史欠账由用户明确点击“准备文稿”后重试。
+    // 本轮同步到的未完成文稿可以续做；已完成内容和范围外历史资料不重复处理。
     const transcriptTargets = prepareExisting
       ? selectTranscriptPreparationTargets(allRefreshed.map((result) => selectSyncedSourceScope(
           result.syncedVideoIds
             ? result.refreshed?.filter((item) => result.syncedVideoIds!.includes(item.aweme_id))
             : result.refreshed,
           requestedCount,
-        )), MAX_TRANSCRIPT_PREPARATION)
+        )), Number.MAX_SAFE_INTEGER)
       : selectAutomaticTranscriptPreparationTargets(allRefreshed.map((result) => ({
-          items: result.refreshed, createdVideoIds: result.createdVideoIds,
-        })), MAX_TRANSCRIPT_PREPARATION);
+          items: result.refreshed, createdVideoIds: result.createdVideoIds, syncedVideoIds: result.syncedVideoIds,
+        })), Number.MAX_SAFE_INTEGER);
     if (!isSyncUserCurrent() || transcriptTargets.length === 0) return { started: true };
-    if (batchExtractingRef.current) {
-      reportPreparation(
-        `本次 ${transcriptTargets.length} 条视频尚未提交文稿任务；已有任务完成后可手动准备`,
-      );
-      return { started: true };
-    }
     void (async () => {
       // 立即创建服务端任务；不能先延迟，否则用户在同步完成后马上离开页面时，
       // 任务可能根本没有提交，重新进入后又全部显示为“待整理”。
-      if (!isSyncUserCurrent() || batchExtractingRef.current) return;
+      if (!isSyncUserCurrent()) return;
       await extractItems(
         transcriptTargets,
         'transcript',
@@ -2811,6 +2803,7 @@ export default function VideoLibraryPage() {
       setDeletionError(response.error || '删除知识结果失败');
       return false;
     }
+    extractionQueueRef.current?.forget(item.aweme_id);
 
     setItems((current) => current.map((currentItem) => (
       currentItem.aweme_id === item.aweme_id
@@ -2895,6 +2888,7 @@ export default function VideoLibraryPage() {
     if (syncRecoveryCancelRef.current || !request || request.userId !== user?.id) return;
     const action = Symbol();
     syncRecoveryCancelRef.current = action;
+    if (sourceSyncRunRef.current?.userId === user?.id) sourceSyncRunRef.current.cancelled = true;
     setSyncRecoveryActionError('');
     try {
       await window.zhicuiDesktop?.cancelPlatformAccountAction();
@@ -3651,7 +3645,7 @@ export default function VideoLibraryPage() {
                 <small>{desktopDouyinUpdateRequired
                   ? `需要更新 ${desktopVersion}`
                   : desktopLocalDouyin
-                  ? loggedIn ? '本机登录有效' : '等待本机登录'
+                  ? loggedIn ? syncRecoveryIssues.length > 0 ? '请在抖音完成操作' : '已登录' : '等待登录'
                   : statusError ? '连接待检测' : loggedIn ? '已连接' : '等待登录'}</small>
               </div>
               <div className={styles.sourceAccountActions}>
@@ -3712,29 +3706,22 @@ export default function VideoLibraryPage() {
                 )}
               </div>
             </div>
-            {loggedIn && (
+            {loggedIn && !desktopLocalDouyin && (
               <section className={styles.sourceAccountStatus} aria-label="抖音账号连接详情">
                 <header>
                   <span className={styles.sourceAccountStateIcon} aria-hidden="true">
                     <CheckCircle2 size={16} />
                   </span>
                   <span>
-                    <strong>{desktopLocalDouyin && syncRecoveryIssues.length > 0 ? '会话已保存，列表读取待确认' : '连接正常'}</strong>
-                    <small>
-                      {desktopLocalDouyin
-                        ? '账号会话只保存在当前设备'
-                        : '账号连接可用于手动同步'}
-                    </small>
+                    <strong>连接正常</strong>
+                    <small>账号连接可用于手动同步</small>
                   </span>
-                  {desktopLocalDouyin && <b>仅存本机</b>}
                 </header>
                 <dl className={styles.sourceAccountSummary}>
                   <div>
-                    <dt>{desktopLocalDouyin ? '保存位置' : '绑定时间'}</dt>
+                    <dt>绑定时间</dt>
                     <dd className={styles.accountTime}>
-                      {desktopLocalDouyin
-                        ? '这台电脑'
-                        : formatAccountTime(status?.binding?.bound_at, '本次已连接')}
+                      {formatAccountTime(status?.binding?.bound_at, '本次已连接')}
                     </dd>
                   </div>
                   <div>
@@ -3743,21 +3730,17 @@ export default function VideoLibraryPage() {
                       className={styles.accountTime}
                       data-status={syncRecoveryIssues.length > 0 || desktopDouyinStage === 'needs-action' ? 'attention' : 'connected'}
                     >
-                      {desktopLocalDouyin
-                        ? syncRecoveryIssues.length > 0 || desktopDouyinStage === 'needs-action' ? '请检查官方页面' : '当前有效'
-                        : formatAccountTime(status?.binding?.last_verified_at, '刚刚验证')}
+                      {formatAccountTime(status?.binding?.last_verified_at, '刚刚验证')}
                     </dd>
                   </div>
                   <div>
-                    <dt>{desktopLocalDouyin ? '同步方式' : '最近同步'}</dt>
+                    <dt>最近同步</dt>
                     <dd className={styles.accountTime}>
-                      {desktopLocalDouyin
-                        ? '点击后手动同步'
-                        : formatAccountTime(status?.binding?.last_sync_at)}
+                      {formatAccountTime(status?.binding?.last_sync_at)}
                     </dd>
                   </div>
                 </dl>
-                {!desktopLocalDouyin && status?.private_list_readiness?.reported && (
+                {status?.private_list_readiness?.reported && (
                   <div className={styles.sourceReadiness} aria-label="抖音来源读取状态">
                     <span data-status={status.private_list_readiness.like_ready ? 'connected' : 'attention'}>
                       喜欢 · {status.private_list_readiness.like_ready ? '可以同步' : '需要重新连接'}
@@ -3772,7 +3755,7 @@ export default function VideoLibraryPage() {
             <div className={styles.sourcePickerHeader}>
               <div>
                 <strong>选择同步范围</strong>
-                <span>可多选，系统会按卡片顺序逐项读取，不会并发请求多个来源</span>
+                <span>选择要同步的内容</span>
               </div>
               <small>已选 {sourceManagerModes.length} 项</small>
             </div>
@@ -4374,7 +4357,7 @@ export default function VideoLibraryPage() {
           )}
 
           {!sourceManagerOpen && recoveryCard}
-          {(notice || (showDouyinItems && sourceSyncWarning)) && (
+          {!recoveryCard && !(batchExtracting && extractionJob) && (notice || (showDouyinItems && sourceSyncWarning)) && (
             <div className="library-notice" role="status">
               <Info size={14} />
               {withPlatformSyncWarning(notice, showDouyinItems ? sourceSyncWarning : '')}

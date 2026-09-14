@@ -38,6 +38,16 @@ const DOUYIN_LOGIN_URL = 'https://www.douyin.com/?showLogin=true';
 const DOUYIN_PROFILE_URL = 'https://www.douyin.com/user/self?from_tab_name=main';
 const DOUYIN_SOURCE_FIRST_PAGE_REQUIRED = 'DOUYIN_SOURCE_FIRST_PAGE_REQUIRED';
 const DOUYIN_SOURCE_ACTION_TIMEOUT_MS = 120_000;
+const DOUYIN_SESSION_IDLE_TIMEOUT_MS = 30_000;
+
+interface RetainedDouyinSession {
+  context: BrowserContext;
+  browser: SupportedBrowser;
+  profileKey: string;
+  sessionKey: string;
+  lease: DesktopActionLease;
+  timer?: ReturnType<typeof setTimeout>;
+}
 
 class PlatformAccountActionError extends Error {
   constructor(message: string, readonly code: string, readonly mode: PlatformAccountSourceMode) {
@@ -72,6 +82,38 @@ export interface PlatformSourceCollection {
 
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function boundedWindowAction(action: Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([action, new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('显示官方窗口超时，请从任务栏切换到本次窗口')), 4000);
+    })]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** 显式恢复最小化窗口并激活标签；保留最大化等用户窗口状态。 */
+export async function showPlatformAccountPage(page: Page): Promise<void> {
+  await boundedWindowAction((async () => {
+    const context = page.context?.();
+    const session = context?.newCDPSession ? await context.newCDPSession(page).catch(() => null) : null;
+    try {
+      if (session) {
+        try {
+          const state = await session.send('Browser.getWindowForTarget');
+          if (state.bounds.windowState === 'minimized') {
+            await session.send('Browser.setWindowBounds', { windowId: state.windowId, bounds: { windowState: 'normal' } });
+          }
+        } catch { /* 浏览器不支持窗口状态指令时，仍尝试激活当前标签。 */ }
+      }
+      await page.bringToFront();
+    } finally {
+      if (session) await session.detach().catch(() => undefined);
+    }
+  })());
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -796,6 +838,11 @@ export class PlatformAccountConnector {
   private activePlatform: PlatformAccountProvider = 'bilibili';
   private activeProfileKey = '';
   private activeMode: PlatformAccountSourceMode | undefined;
+  private activeFocus: Promise<void> | null = null;
+  private activeBrowser: SupportedBrowser = 'chrome';
+  private restoredBrowser: { context: BrowserContext; browser: SupportedBrowser } | null = null;
+  private retainedSession: RetainedDouyinSession | null = null;
+  private closingSession: Promise<void> | null = null;
   private cancelled = false;
   private running = false;
 
@@ -821,7 +868,7 @@ export class PlatformAccountConnector {
           : XHS_LOGIN_URL;
       await page.goto(loginUrl, { waitUntil: 'commit', timeout: 20_000 })
         .catch(() => undefined);
-      await page.bringToFront().catch(() => undefined);
+      await showPlatformAccountPage(page).catch(() => undefined);
       this.notifyStatus(
         request.platform,
         'browser-open',
@@ -867,15 +914,19 @@ export class PlatformAccountConnector {
     return this.runExclusive(request, async () => {
       this.activeMode = request.mode;
       const profilePath = await this.profilePath(request);
+      if (this.cancelled) return { success: false, cancelled: true, platform: request.platform };
       this.notifyStatus(request.platform, 'starting', '正在读取本机登录会话…');
-      const launched = await this.launchBrowser(
+      const launched = this.restoredBrowser || await this.launchBrowser(
         profilePath,
         request.platform === 'douyin' && !request.interactive,
       );
+      this.restoredBrowser = null;
+      this.activeBrowser = launched.browser;
       this.activeContext = launched.context;
+      if (this.cancelled) return { success: false, cancelled: true, platform: request.platform };
       if (request.interactive) {
         const page = launched.context.pages()[0];
-        if (page) await page.bringToFront().catch(() => undefined);
+        if (page) await showPlatformAccountPage(page).catch(() => undefined);
       }
       if (!hasPlatformAuthCookie(request.platform, await launched.context.cookies())) {
         throw new Error('账号登录已失效，请先重新登录');
@@ -925,7 +976,7 @@ export class PlatformAccountConnector {
         ...collection,
         count: urls.length,
       };
-    });
+    }, { sessionKey: request.sessionKey, keepSessionOpen: request.keepSessionOpen });
   }
 
   async cancel(): Promise<PlatformAccountResult> {
@@ -933,6 +984,7 @@ export class PlatformAccountConnector {
     const platform = this.activePlatform;
     const context = this.activeContext;
     if (context) await context.close().catch(() => undefined);
+    await this.closeRetainedSession();
     this.notifyStatus(platform, 'cancelled', '已取消平台账号操作');
     return { success: false, cancelled: true, platform };
   }
@@ -946,11 +998,15 @@ export class PlatformAccountConnector {
     }
     const page = context.pages().find((candidate) => !candidate.isClosed());
     if (!page) return { success: false, platform: request.platform, code: 'LOCAL_ACTION_NOT_FOUND', error: '官方窗口已关闭，请重新同步' };
+    const focused = this.activeFocus || showPlatformAccountPage(page);
+    this.activeFocus = focused;
     try {
-      await page.bringToFront();
+      await focused;
       return { success: true, platform: request.platform, mode: this.activeMode };
     } catch {
       return { success: false, platform: request.platform, code: 'LOCAL_ACTION_NOT_FOUND', error: '官方窗口已关闭，请重新同步' };
+    } finally {
+      if (this.activeFocus === focused) this.activeFocus = null;
     }
   }
 
@@ -966,6 +1022,7 @@ export class PlatformAccountConnector {
   private async runExclusive(
     request: PlatformAccountRequest,
     action: () => Promise<PlatformAccountResult>,
+    batch: { sessionKey?: string; keepSessionOpen?: boolean } = {},
   ): Promise<PlatformAccountResult> {
     const platform = request.platform;
     if (this.running) {
@@ -976,33 +1033,39 @@ export class PlatformAccountConnector {
         error: '已有平台账号操作正在进行',
       };
     }
-    let lease: DesktopActionLease;
-    try {
-      lease = await this.actionLocks.acquire(
-        localPlatformLockKey(request.profileKey, request.platform),
-      );
-    } catch (error) {
-      if (error instanceof LocalActionBusyError) {
-        return {
-          success: false,
-          platform,
-          code: error.code,
-          error: error.message,
-        };
-      }
-      throw error;
-    }
+    // 在任何 await 前占有本进程操作，防止两个账号同时通过 running 检查。
     this.running = true;
     this.cancelled = false;
     this.activePlatform = platform;
     this.activeProfileKey = request.profileKey;
     this.activeMode = undefined;
+    let lease: DesktopActionLease | null = null;
+    let result: PlatformAccountResult | null = null;
     try {
-      return normalizeLocalPlatformResult(platform, await action());
+      if (this.closingSession) await this.closingSession;
+      const retained = this.retainedSession;
+      if (retained) {
+        if (platform === 'douyin' && batch.sessionKey && retained.sessionKey === batch.sessionKey
+          && retained.profileKey === request.profileKey
+          && retained.context.pages().some((page) => !page.isClosed?.())) {
+          clearTimeout(retained.timer);
+          this.retainedSession = null;
+          lease = retained.lease;
+          this.restoredBrowser = { context: retained.context, browser: retained.browser };
+          this.activeContext = retained.context;
+        } else {
+          await this.closeRetainedSession(retained);
+        }
+      }
+      if (!lease) lease = await this.actionLocks.acquire(localPlatformLockKey(request.profileKey, platform));
+      if (this.cancelled) return { success: false, cancelled: true, platform };
+      result = normalizeLocalPlatformResult(platform, await action());
+      return result;
     } catch (error) {
       if (this.cancelled) {
         return { success: false, cancelled: true, platform };
       }
+      if (error instanceof LocalActionBusyError) return { success: false, platform, code: error.code, error: error.message };
       const message = publicError(platform, error);
       const code = error instanceof PlatformAccountActionError ? error.code : undefined;
       const mode = error instanceof PlatformAccountActionError ? error.mode : this.activeMode;
@@ -1011,12 +1074,50 @@ export class PlatformAccountConnector {
     } finally {
       const context = this.activeContext;
       this.activeContext = null;
-      if (context) await context.close().catch(() => undefined);
+      // 前置窗口与首屏完成可能同时发生，不能在窗口恢复操作尚未结束时关掉同一会话。
+      if (this.activeFocus) await this.activeFocus.catch(() => undefined);
+      if (context && lease && !this.cancelled && platform === 'douyin' && batch.sessionKey
+        && batch.keepSessionOpen && result?.success && result.orderReliable === true
+        && context.pages().some((page) => !page.isClosed?.())) {
+        this.retainDouyinSession({ context, browser: this.activeBrowser, profileKey: request.profileKey,
+          sessionKey: batch.sessionKey, lease });
+        lease = null;
+      } else if (context) {
+        await context.close().catch(() => undefined);
+      }
+      if (lease) await lease.release().catch(() => undefined);
       this.running = false;
       this.activeProfileKey = '';
       this.activeMode = undefined;
-      await lease.release().catch(() => undefined);
+      this.restoredBrowser = null;
     }
+  }
+
+  private retainDouyinSession(session: RetainedDouyinSession): void {
+    this.retainedSession = session;
+    session.timer = setTimeout(() => {
+      if (this.retainedSession === session) void this.closeRetainedSession(session);
+    }, DOUYIN_SESSION_IDLE_TIMEOUT_MS);
+    session.timer.unref?.();
+    session.context.once?.('close', () => {
+      if (this.retainedSession === session) void this.closeRetainedSession(session);
+    });
+  }
+
+  private async closeRetainedSession(session = this.retainedSession): Promise<void> {
+    if (!session || this.retainedSession !== session) {
+      if (this.closingSession) await this.closingSession;
+      return;
+    }
+    this.retainedSession = null;
+    clearTimeout(session.timer);
+    const closing = (async () => {
+      try { await session.context.close().catch(() => undefined); }
+      finally { await session.lease.release().catch(() => undefined); }
+    })();
+    this.closingSession = closing;
+    try { await closing; }
+    finally { if (this.closingSession === closing) this.closingSession = null; }
   }
 
   private async profilePath(
@@ -1091,7 +1192,7 @@ export class PlatformAccountConnector {
     let page = context.pages()[0] || await context.newPage();
     await page.goto(XHS_LOGIN_URL, { waitUntil: 'commit', timeout: 20_000 })
       .catch(() => undefined);
-    await page.bringToFront().catch(() => undefined);
+    await showPlatformAccountPage(page).catch(() => undefined);
     this.notifyStatus(
       'xiaohongshu',
       'waiting',
@@ -1198,7 +1299,7 @@ export class PlatformAccountConnector {
       browser,
       DOUYIN_SOURCE_FIRST_PAGE_REQUIRED,
     );
-    await page.bringToFront().catch(() => undefined);
+    await showPlatformAccountPage(page).catch(() => undefined);
     const actionDeadline = Date.now() + XHS_PROFILE_TIMEOUT_MS;
     while (!this.cancelled && Date.now() < actionDeadline) {
       if (await confirmTab(true)) return;
@@ -1221,7 +1322,7 @@ export class PlatformAccountConnector {
     const activeRequests = new Set<Request>();
     let nextRequestSequence = 0;
     let lastRequestAt = Date.now();
-    let lastResponseAt = Date.now();
+    let responseRevision = 0;
     let ownProfileSeen = false;
     let ownAccount: string | null = null;
     let profileChanged = false;
@@ -1265,7 +1366,7 @@ export class PlatformAccountConnector {
       this.notifyStatus('douyin', 'needs-action',
         `请查看已打开的抖音窗口：如有登录或验证提示请先完成，再确认本人主页的“${label}”已显示；列表仍为空白时，刷新页面并重新点击“${label}”。读取成功后会自动继续，已有资料和顺序已保留。`,
         browser, DOUYIN_SOURCE_FIRST_PAGE_REQUIRED);
-      await page.bringToFront().catch(() => undefined);
+      await showPlatformAccountPage(page).catch(() => undefined);
       while (!this.cancelled && Date.now() < recoveryDeadline) {
         assertProfile();
         if (pages.snapshot(limit).orderReliable) {
@@ -1312,7 +1413,9 @@ export class PlatformAccountConnector {
       const work = readDouyinMetadataPayload(response, mode)
         .then((payload) => {
           if (payload === null || !checkProfile()) return;
-          if (pages.add(captured.source, payload, captured.sequence)) lastResponseAt = Date.now();
+          if (pages.add(captured.source, payload, captured.sequence)) {
+            responseRevision += 1;
+          }
         })
         .catch(() => undefined);
       pending.add(work);
@@ -1346,13 +1449,13 @@ export class PlatformAccountConnector {
         }
         const before = pages.snapshot(limit);
         if (before.coverage !== 'partial') break;
+        const responseBeforeScroll = responseRevision;
         const scrollAdvanced = await page.evaluate(scrollDouyinSourcePanel, { tabId: DOUYIN_SOURCE_TAB_IDS[mode], reset: false })
           .catch(() => false);
         const responseDeadline = Date.now() + 2200;
-        const responseAt = lastResponseAt;
-        while (!this.cancelled && Date.now() < responseDeadline) {
+        while (!this.cancelled && Date.now() < responseDeadline
+          && responseRevision === responseBeforeScroll && pages.snapshot(limit).coverage === 'partial') {
           await wait(200);
-          if (lastResponseAt !== responseAt) break;
         }
         const after = pages.snapshot(limit);
         // 长列表尚未滚到底时数量会暂时不变，不能把正常滚动误判为分页停滞。

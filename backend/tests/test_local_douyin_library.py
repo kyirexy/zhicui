@@ -11,6 +11,8 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
 from app.models.douyin_local_library_item import DouyinLocalLibraryItem
+from app.models.douyin_account_binding import DouyinAccountBinding
+from app.models.douyin_legacy_catalog import DouyinLegacyCatalog
 from app.models.library_sync import LibrarySyncRun
 from app.models.note import Note
 from app.models.plan import Plan
@@ -37,6 +39,8 @@ class LocalDouyinLibraryTests(unittest.TestCase):
                 Note.__table__,
                 Plan.__table__,
                 DouyinLocalLibraryItem.__table__,
+                DouyinAccountBinding.__table__,
+                DouyinLegacyCatalog.__table__,
                 VideoSourceLedger.__table__,
                 LibrarySyncRun.__table__,
             ],
@@ -427,6 +431,102 @@ class LocalDouyinLibraryTests(unittest.TestCase):
         self.assertEqual(item["caption"], "这是一段用于测试的作品发布文案")
         self.assertEqual(item["author_name"], "测试作者")
         self.assertEqual(item["cover_url"], "https://p3.douyinpic.com/example.jpg")
+
+    def test_confirmed_catalog_shows_all_fifty_before_transcripts_are_ready(self) -> None:
+        ids = [str(7672579366093622600 + index) for index in range(50)]
+        values = [self.item(video_id=video_id, source_rank=index,
+                            author_name="测试作者" if index == 0 else "",
+                            cover_url="https://p3.douyinpic.com/example.jpg" if index == 0 else "")
+                  for index, video_id in enumerate(ids)]
+        result = local_douyin_library_service.ingest_items(
+            self.db, user_id=self.user_a.id, source_mode="like", items=values,
+            source_order_reliable=True,
+        )
+        self.assertEqual((result["accepted"], result["ready"], result["quarantined"]), (50, 50, 0))
+        self.assertEqual(self.db.query(Note).count(), 0, "目录显示不能等待文稿或 AI")
+        catalog = local_douyin_library_service.list_items(
+            self.db, user_id=self.user_a.id, source_mode="like",
+        )
+        self.assertEqual([item["aweme_id"] for item in catalog], ids)
+        self.assertTrue(all(item["can_extract"] for item in catalog))
+        self.assertEqual(local_douyin_library_service.list_items(
+            self.db, user_id=self.user_a.id, source_mode="collect",
+        ), [])
+        self.assertEqual(local_douyin_library_service.list_items(
+            self.db, user_id=self.user_b.id, source_mode="like",
+        ), [])
+        with (
+            patch.object(library_extraction_service, "SessionLocal", self.Session),
+            patch.object(library_extraction_service.douyin_library, "list_items") as sidecar,
+        ):
+            prefetched = library_extraction_service._prefetch_items(self.user_a.id, set(ids))
+        self.assertEqual(set(prefetched), set(ids))
+        sidecar.assert_not_called()
+        from app.api import routes
+        with (
+            patch.object(routes.douyin_binding_service, "get_or_create", return_value=SimpleNamespace(
+                id="dyb-0123456789abcdef0123", session_scope="S" * 32,
+            )),
+            patch.object(douyin_library, "list_items") as sidecar,
+            patch.object(routes.library_hidden_service, "list_hidden_modes", return_value={}),
+            patch.object(routes.library_hidden_service, "count_hidden", return_value=0),
+        ):
+            response = routes.list_douyin_library_items(
+                limit=0, mode="like", sort="collection", refresh_order=False,
+                local_only=True, db=self.db, current_user=self.user_a,
+            )
+        self.assertEqual(response["data"]["total"], 50)
+        self.assertEqual([item["aweme_id"] for item in response["data"]["items"]], ids)
+        self.assertTrue(all(not item["extracted"] for item in response["data"]["items"]))
+        sidecar.assert_not_called()
+
+    def test_old_quality_cache_recovers_only_with_this_source_order(self) -> None:
+        video_id = "7672579366093622651"
+        value = self.item(video_id=video_id, author_name="")
+        local_douyin_library_service.ingest_items(
+            self.db, user_id=self.user_a.id, source_mode="like", items=[value],
+            source_order_reliable=True,
+        )
+        local_douyin_library_service.ingest_items(
+            self.db, user_id=self.user_a.id, source_mode="collect", items=[value],
+            source_order_reliable=False,
+        )
+        # 模拟旧版把已确认列表里的作品因缺作者标成不可用。
+        row = self.db.query(DouyinLocalLibraryItem).filter_by(video_id=video_id).one()
+        row.available = False
+        self.db.commit()
+        restored = local_douyin_library_service.list_items(
+            self.db, user_id=self.user_a.id, source_mode="like",
+        )
+        self.assertEqual([item["aweme_id"] for item in restored], [video_id])
+        self.assertTrue(restored[0]["can_extract"])
+        self.assertEqual(local_douyin_library_service.list_items(
+            self.db, user_id=self.user_a.id, source_mode="collect",
+        ), [], "收藏不能借用喜欢的可信顺序来恢复旧 DOM 占位")
+        item = local_douyin_library_service.get_item(self.db, user_id=self.user_a.id, video_id=video_id)
+        self.assertEqual(item["source_mode"], "like")
+        self.assertTrue(item["can_extract"])
+        self.assertEqual(local_douyin_library_service.get_cover_url(
+            self.db, user_id=self.user_a.id, video_id=video_id,
+        ), value["cover_url"])
+        self.assertIsNone(local_douyin_library_service.get_item(
+            self.db, user_id=self.user_b.id, video_id=video_id,
+        ))
+
+    def test_confirmed_catalog_without_caption_is_visible_but_blank_placeholder_is_not(self) -> None:
+        real_id, blank_id = "7672579366093622652", "7672579366093622653"
+        result = local_douyin_library_service.ingest_items(
+            self.db, user_id=self.user_a.id, source_mode="collect", source_order_reliable=True,
+            items=[self.item(real_id, title="", caption=""), self.item(
+                blank_id, title="", caption="", author_name="", cover_url="",
+                published_at="", duration_seconds=0, source_rank=1,
+            )],
+        )
+        self.assertEqual((result["ready"], result["quarantined"]), (1, 1))
+        items = local_douyin_library_service.list_items(
+            self.db, user_id=self.user_a.id, source_mode="collect",
+        )
+        self.assertEqual([item["aweme_id"] for item in items], [real_id])
 
     def test_local_item_uses_bound_sidecar_for_transcript_extraction(self) -> None:
         item = self.item()

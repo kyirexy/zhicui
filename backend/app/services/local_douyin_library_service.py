@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -12,6 +13,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.douyin_local_library_item import DouyinLocalLibraryItem
+from app.models.douyin_account_binding import DouyinAccountBinding
+from app.models.douyin_legacy_catalog import DouyinLegacyCatalog
 from app.models.user import User
 from app.models.video_source_ledger import VideoSourceLedger
 from app.services import library_sync_service, note_service, video_source_ledger_service
@@ -217,6 +220,29 @@ def is_displayable_snapshot(value: dict[str, Any] | DouyinLocalLibraryItem) -> b
     return _is_displayable_snapshot(value)
 
 
+def _is_catalog_snapshot(
+    value: dict[str, Any] | DouyinLocalLibraryItem,
+    *,
+    order_reliable: bool,
+) -> bool:
+    """官方列表已确认的作品先进入目录，缺少封面、作者不能阻塞后续文稿。
+
+    旧 DOM 占位仍使用完整元数据门槛。可靠来源还必须有至少一项作品
+    元数据，避免把被清除的整页重复文案重新当成有效视频展示。
+    """
+    return _is_displayable_snapshot(value) or bool(
+        order_reliable and _snapshot_quality(value) > 0
+    )
+
+
+def _has_reliable_order(ledger: VideoSourceLedger | None) -> bool:
+    return bool(
+        ledger is not None
+        and ledger.source_rank is not None
+        and ledger.source_rank >= 0
+    )
+
+
 def ingest_items(
     db: Session,
     *,
@@ -257,6 +283,25 @@ def ingest_items(
         )
     ).scalars().all()
     existing_by_id = {row.video_id: row for row in existing_rows}
+    # 新建桌面快照不等于新增视频：同一用户当前绑定的明确归档也算已有资料。
+    # 仅读数据库，不等待尚未完成的后台归档，更不借用其他账号或旧绑定的目录。
+    archive_json = db.execute(select(DouyinLegacyCatalog.items_json).join(
+        DouyinAccountBinding,
+        DouyinAccountBinding.id == DouyinLegacyCatalog.binding_id,
+    ).where(
+        DouyinLegacyCatalog.user_id == user_id,
+        DouyinAccountBinding.user_id == user_id,
+    )).scalar_one_or_none()
+    archived_ids = {
+        item["aweme_id"] for item in json.loads(archive_json or "[]")
+        if item.get("aweme_id") in seen
+    }
+    existing_sources = db.execute(select(VideoSourceLedger).where(
+        VideoSourceLedger.user_id == user_id,
+        VideoSourceLedger.source_mode == mode,
+        VideoSourceLedger.video_id.in_([item["video_id"] for item in normalized]),
+    )).scalars().all()
+    source_by_id = {row.video_id: row for row in existing_sources}
     note_map = note_service.get_notes_by_video_ids(
         db,
         [item["video_id"] for item in normalized],
@@ -290,12 +335,15 @@ def ingest_items(
     ready = 0
     try:
         for item in normalized:
+            order_reliable = source_order_reliable or _has_reliable_order(
+                source_by_id.get(item["video_id"])
+            )
             row = existing_by_id.get(item["video_id"])
             if row is None:
                 row = DouyinLocalLibraryItem(
                     user_id=user_id,
                     first_seen_at=now,
-                    available=_is_displayable_snapshot(item),
+                    available=_is_catalog_snapshot(item, order_reliable=order_reliable),
                     **{
                         key: value
                         for key, value in item.items()
@@ -307,8 +355,9 @@ def ingest_items(
                     },
                 )
                 db.add(row)
-                created += 1
-                created_video_ids.append(item["video_id"])
+                if item["video_id"] not in archived_ids:
+                    created += 1
+                    created_video_ids.append(item["video_id"])
             else:
                 existing_quality = _snapshot_quality(row)
                 incoming_quality = _snapshot_quality(item)
@@ -332,8 +381,8 @@ def ingest_items(
                 row.author_name = item["author_name"] or row.author_name
                 row.published_at = item["published_at"] or row.published_at
                 row.duration_seconds = item["duration_seconds"] or row.duration_seconds
-                row.available = _is_displayable_snapshot(row)
-            if row.available:
+                row.available = _is_catalog_snapshot(row, order_reliable=order_reliable)
+            if _is_catalog_snapshot(row, order_reliable=order_reliable):
                 ready += 1
             row.last_seen_at = now
             row.updated_at = now
@@ -391,28 +440,28 @@ def list_items(
     snapshots = db.execute(
         select(DouyinLocalLibraryItem).where(
             DouyinLocalLibraryItem.user_id == user_id,
-            DouyinLocalLibraryItem.available.is_(True),
         )
     ).scalars().all()
-    snapshot_by_id = {
-        row.video_id: row
-        for row in snapshots
-        if _is_displayable_snapshot(row)
-    }
+    # available 是旧版质量缓存；可靠目录不依赖它，已落库条目刷新即可恢复。
+    snapshot_by_id = {row.video_id: row for row in snapshots}
     result: list[dict[str, Any]] = []
     emitted: set[str] = set()
     for ledger in rows:
         if ledger.video_id in emitted:
             continue
         snapshot = snapshot_by_id.get(ledger.video_id)
-        if snapshot is None:
+        if snapshot is None or not _is_catalog_snapshot(
+            snapshot, order_reliable=_has_reliable_order(ledger),
+        ):
             continue
         emitted.add(ledger.video_id)
-        result.append(snapshot.to_library_item(
+        item = snapshot.to_library_item(
             source_mode=ledger.source_mode,
             source_rank=ledger.source_rank,
             source_synced_at=ledger.source_synced_at,
-        ))
+        )
+        item["can_extract"] = True
+        result.append(item)
     return result
 
 
@@ -424,10 +473,9 @@ def get_item(db: Session, *, user_id: str, video_id: str) -> dict[str, Any] | No
         select(DouyinLocalLibraryItem).where(
             DouyinLocalLibraryItem.user_id == user_id,
             DouyinLocalLibraryItem.video_id == clean_id,
-            DouyinLocalLibraryItem.available.is_(True),
         )
     ).scalar_one_or_none()
-    if snapshot is None or not _is_displayable_snapshot(snapshot):
+    if snapshot is None:
         return None
     ledgers = db.execute(
         select(VideoSourceLedger)
@@ -437,26 +485,41 @@ def get_item(db: Session, *, user_id: str, video_id: str) -> dict[str, Any] | No
         )
         .order_by(VideoSourceLedger.last_seen_at.desc())
     ).scalars().all()
-    ledger = ledgers[0] if ledgers else None
-    return snapshot.to_library_item(
+    eligible = [ledger for ledger in ledgers if _is_catalog_snapshot(
+        snapshot, order_reliable=_has_reliable_order(ledger),
+    )]
+    ledger = eligible[0] if eligible else None
+    if ledger is None and not _is_displayable_snapshot(snapshot):
+        return None
+    item = snapshot.to_library_item(
         source_mode=ledger.source_mode if ledger else "unknown",
         source_rank=ledger.source_rank if ledger else None,
         source_synced_at=ledger.source_synced_at if ledger else snapshot.last_seen_at,
     )
+    item["can_extract"] = True
+    return item
 
 
 def get_cover_url(db: Session, *, user_id: str, video_id: str) -> str:
     clean_id = str(video_id or "").strip()
     if not _VIDEO_ID_PATTERN.fullmatch(clean_id):
         return ""
-    value = db.execute(
-        select(DouyinLocalLibraryItem.cover_url).where(
-            DouyinLocalLibraryItem.user_id == user_id,
-            DouyinLocalLibraryItem.video_id == clean_id,
-            DouyinLocalLibraryItem.available.is_(True),
-        )
-    ).scalar_one_or_none()
+    snapshot = db.execute(select(DouyinLocalLibraryItem).where(
+        DouyinLocalLibraryItem.user_id == user_id,
+        DouyinLocalLibraryItem.video_id == clean_id,
+    )).scalar_one_or_none()
+    if snapshot is None or not snapshot.cover_url:
+        return ""
+    if not _is_displayable_snapshot(snapshot):
+        # 完整封面请求保持一次查询；只有旧版隐藏的目录才补查来源凭据。
+        trusted_ledger = db.execute(select(VideoSourceLedger.id).where(
+            VideoSourceLedger.user_id == user_id,
+            VideoSourceLedger.video_id == clean_id,
+            VideoSourceLedger.source_rank >= 0,
+        ).limit(1)).scalar_one_or_none()
+        if trusted_ledger is None:
+            return ""
     try:
-        return _safe_cover_url(value) if value else ""
+        return _safe_cover_url(snapshot.cover_url)
     except ValueError:
         return ""

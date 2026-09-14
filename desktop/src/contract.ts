@@ -92,6 +92,8 @@ export interface PlatformAccountCollectRequest extends PlatformAccountRequest {
   mode: PlatformAccountSourceMode;
   limit: number;
   interactive?: boolean;
+  sessionKey?: string;
+  keepSessionOpen?: boolean;
 }
 
 export interface PlatformAccountStatus {

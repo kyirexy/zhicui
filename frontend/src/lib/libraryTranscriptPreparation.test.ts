@@ -117,3 +117,12 @@ test('跨来源重复新增 ID 只提交一次，任一来源已有文稿就不�
   ]);
   assert.deepEqual(selected.map((entry) => entry.aweme_id), ['new']);
 });
+
+test('重复同步补齐本轮范围的未完成文稿，不重复处理已完成或范围外历史视频', () => {
+  const selected = selectAutomaticTranscriptPreparationTargets([{
+    items: [item('pending'), item('ready', { extracted_note_id: 'note', transcript_chars: 200 }), item('outside')],
+    createdVideoIds: [],
+    syncedVideoIds: ['pending', 'ready'],
+  }]);
+  assert.deepEqual(selected.map((entry) => entry.aweme_id), ['pending']);
+});

@@ -1,61 +1,38 @@
 .card {
   min-width: 0;
-  padding: 24px;
-  border: 1px solid color-mix(in srgb, var(--accent-brand) 45%, var(--card-border));
-  border-left: 4px solid var(--accent-brand);
+  padding: 16px;
+  border: 1px solid var(--card-border);
+  border-left: 3px solid var(--accent-brand);
   border-radius: var(--radius-card-inner, 12px);
   color: var(--foreground);
   background: var(--card-bg);
 }
 
-.header {
+.mainRow {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
 }
 
-.marker {
-  display: grid;
-  flex: 0 0 32px;
-  width: 32px;
-  height: 32px;
-  place-items: center;
-  border-radius: 50%;
-  color: var(--accent-brand);
-  background: var(--accent-brand-soft);
-  font-size: 20px;
-  font-weight: 700;
-}
-
-.heading { min-width: 0; }
-
-.eyebrow {
-  margin: 0 0 4px;
-  color: var(--accent-brand);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.5;
-  text-wrap: pretty;
-}
-
+.heading { flex: 1 1 240px; min-width: 0; }
 .heading h2 {
   margin: 0;
   color: var(--foreground);
-  font-size: 18px;
-  font-weight: 700;
+  font-size: 16px;
+  font-weight: 600;
   line-height: 1.5;
   text-wrap: balance;
 }
 
 .description,
-.steps p,
-.windowHint,
-.retention,
+.help p,
 .actionError {
-  margin: 8px 0 0;
+  margin: 4px 0 0;
   color: var(--text-secondary, var(--foreground-secondary));
   font-size: 14px;
-  line-height: 1.65;
+  line-height: 1.6;
   overflow-wrap: anywhere;
   text-wrap: pretty;
 }
@@ -64,7 +41,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 20px;
+  margin-bottom: 12px;
 }
 
 .sources button,
@@ -74,7 +51,7 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 10px 16px;
+  padding: 10px 12px;
   border: 1px solid var(--card-border);
   border-radius: var(--radius-button, 10px);
   color: var(--foreground);
@@ -88,88 +65,48 @@
 }
 
 .sources button span { font-size: 12px; font-weight: 400; }
-
 .sources button[aria-pressed='true'] {
   border-color: var(--accent-brand);
   color: var(--accent-brand);
   background: var(--accent-brand-soft);
 }
-
-.sources button:hover,
+.sources button:hover:not(:disabled),
 .actions .secondary:hover { border-color: var(--accent-brand); }
 
 .sources button:focus-visible,
-.actions button:focus-visible {
+.actions button:focus-visible,
+.help summary:focus-visible {
   outline: 2px solid var(--accent-brand);
   outline-offset: 3px;
 }
 
-.steps {
-  display: grid;
-  gap: 16px;
-  margin: 20px 0;
-  padding: 0;
-  list-style: none;
-}
-
-.steps li { display: flex; align-items: flex-start; gap: 12px; }
-.steps li > div { min-width: 0; }
-.steps strong { font-size: 14px; font-weight: 600; line-height: 1.65; }
-.steps p { margin-top: 4px; }
-
-.stepNumber {
-  display: grid;
-  flex: 0 0 24px;
-  width: 24px;
-  height: 24px;
-  place-items: center;
-  border: 1px solid var(--card-border);
-  border-radius: 50%;
-  color: var(--accent-brand);
-  font-size: 12px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.windowHint {
-  margin: 0 0 16px;
-  padding: 12px 16px;
-  border-radius: 8px;
-  background: var(--accent-brand-soft);
-}
-
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-
 .actions .primary {
   border-color: var(--accent-brand);
   color: var(--background, #fff);
   background: var(--accent-brand);
 }
-
 .actions .primary:hover:not(:disabled) { background: var(--accent-brand-strong, var(--accent-brand)); }
-.actions button:disabled { opacity: 0.55; cursor: not-allowed; }
+.actions button:disabled,
+.sources button:disabled { opacity: 0.55; cursor: not-allowed; }
 
-.actionError {
-  padding: 12px 16px;
-  border: 1px solid var(--card-border);
-  border-radius: 8px;
-  color: var(--foreground);
-  background: var(--background-secondary, var(--card-bg));
-}
+.actionError { margin-top: 12px; color: var(--foreground); }
 
-.retention {
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: 1px solid var(--card-border);
+.help { margin-top: 4px; }
+.help summary {
+  width: fit-content;
+  min-height: 44px;
+  align-content: center;
+  border-radius: 4px;
+  color: var(--text-secondary, var(--foreground-secondary));
   font-size: 12px;
-  font-variant-numeric: tabular-nums;
+  cursor: pointer;
 }
+.help p { margin: 0; }
 
 @media (max-width: 640px) {
-  .card { padding: 16px; }
-  .header { gap: 8px; }
-  .heading h2 { font-size: 16px; }
-  .sources button { flex: 1 1 auto; padding-inline: 12px; }
-  .actions { align-items: stretch; flex-direction: column; }
-  .actions button { width: 100%; }
+  .card { padding: 12px; }
+  .sources button { flex: 1 1 auto; }
+  .actions { width: 100%; }
+  .actions button { flex: 1 1 auto; }
 }

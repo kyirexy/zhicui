@@ -43,15 +43,15 @@ test('中途断线保留已成功项，其余明确标记可重试，不假报�
   assert.deepEqual(result.data?.items.map((item) => item.input), urls(25));
 });
 
-test('来源完整性警告保留，旧桌面不凭空声明已经校准顺序', () => {
+test('普通同步不重复提示，未完成仍给出下一步', () => {
   assert.equal(platformSyncWarning({}), '');
   assert.equal(platformSyncWarning({ coverage: 'complete', orderReliable: true }), '');
-  assert.match(platformSyncWarning({ coverage: 'limited' }), /未扫描全部/);
-  assert.match(platformSyncWarning({ coverage: 'partial' }), /部分/);
-  assert.match(platformSyncWarning({ orderReliable: false }), /顺序/);
-  assert.equal(platformSyncWarning({ warning: '收藏夹缺少时间，顺序不能确认' }), '收藏夹缺少时间，顺序不能确认');
-  const warning = platformSyncWarning({ coverage: 'limited' });
-  assert.match(withPlatformSyncWarning('10 条文案已就绪', warning), /未扫描全部/);
+  assert.equal(platformSyncWarning({ coverage: 'limited' }), '');
+  assert.match(platformSyncWarning({ coverage: 'partial' }), /剩余视频未同步/);
+  assert.match(platformSyncWarning({ orderReliable: false }), /同步还未完成/);
+  assert.equal(platformSyncWarning({ warning: '收藏夹缺少时间，顺序不能确认' }), '部分视频还未同步，请重试');
+  const warning = platformSyncWarning({ coverage: 'partial' });
+  assert.match(withPlatformSyncWarning('10 条文案已就绪', warning), /剩余视频未同步/);
   assert.equal(withPlatformSyncWarning(warning, warning), warning);
   const page = readFileSync(new URL('../app/library/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /withPlatformSyncWarning\(sourceManagerNotice, sourceSyncWarning\)/);
@@ -73,7 +73,13 @@ test('同步快照固定为开始采集的时间，分批和重试不会生成�
   const api = readFileSync(new URL('./api.ts', import.meta.url), 'utf8');
   assert.match(api, /source_synced_at: snapshot\.sourceSyncedAt/);
   const page = readFileSync(new URL('../app/library/page.tsx', import.meta.url), 'utf8');
-  assert.match(page, /const sourceSyncedAt = new Date\(\)\.toISOString\(\);\s+const collected = await bridge\.collectPlatformAccount/);
+  const boundAt = page.indexOf('const sourceSyncedAt = new Date().toISOString();');
+  const collectedAt = page.indexOf('collected = await bridge.collectPlatformAccount', boundAt);
+  const capturedAt = page.indexOf('capturePlatformSyncSnapshot(collected, sourceSyncedAt)', boundAt);
+  assert.ok(boundAt >= 0 && collectedAt > boundAt && capturedAt > collectedAt, '快照时间必须在开始采集前绑定，并由本轮采集结果沿用');
+  const collectionScope = page.slice(boundAt, capturedAt);
+  assert.match(collectionScope, /let collected;\s+try \{\s+collected = await bridge\.collectPlatformAccount/);
+  assert.equal((collectionScope.match(/sourceSyncedAt\s*=/g) || []).length, 1, '采集、等待和清理期间不能重置本轮快照时间');
 });
 
 test('重复链接只登记首次位置，每批snapshot_size都使用去重总数', async () => {

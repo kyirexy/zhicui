@@ -1104,12 +1104,18 @@ export async function extractDouyinLibraryItem(
 export async function startDouyinBatchExtraction(
   awemeIds: string[],
   operation: DouyinBatchExtractionOperation = 'full',
+  signal?: AbortSignal,
 ): Promise<ApiResponse<DouyinBatchExtractionJob>> {
-  const boundedIds = awemeIds.slice(0, operation === 'transcript' ? 100 : 50);
+  const boundedIds = [...new Set(awemeIds.map((id) => id.trim()).filter(Boolean))];
+  const limit = operation === 'transcript' ? 100 : 50;
+  if (boundedIds.length === 0 || boundedIds.length > limit) {
+    return { success: false, status: 400, error: `单次文稿任务需为 1–${limit} 条，请分批提交` };
+  }
   return request<DouyinBatchExtractionJob>(
     '/api/library/douyin/extractions/batch',
     {
       method: 'POST',
+      signal,
       body: JSON.stringify({
         aweme_ids: boundedIds,
         operation,

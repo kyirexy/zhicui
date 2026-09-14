@@ -18,7 +18,7 @@ from typing import Any, Literal
 from urllib.parse import urljoin, urlparse
 
 import requests as http_requests
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
@@ -47,6 +47,7 @@ from app.services import (
     creator_sync_worker,
     desktop_handoff_service,
     douyin_binding_service,
+    douyin_legacy_catalog_service,
     douyin_library,
     error_log_service,
     feedback_service,
@@ -198,6 +199,11 @@ def _mint_douyin_item_capabilities(
             aweme_id,
             binding_ref,
         )
+    elif item.get("provider") == "legacy-archive":
+        item["gallery_images"] = [
+            douyin_library.public_gallery_image_url(aweme_id, binding_ref, index)
+            for index in range(int(item.get("gallery_count") or 0))
+        ]
     # The sidecar resolves a fresh cover by aweme id.  Older local snapshots
     # therefore get a usable cover even when they never stored an upstream URL.
     item["cover_proxy_url"] = douyin_library.public_cover_url(
@@ -2708,6 +2714,10 @@ def get_douyin_library_job(
         except (TypeError, ValueError):
             sync_count = 0
         if source_mode != "unknown" and sync_count > 0:
+            # 旧版连接器仍可继续同步；完成后允许补归档新目录，不能永久停在旧缓存。
+            douyin_legacy_catalog_service.invalidate_recovery(
+                db, user_id=current_user.id, binding_id=binding.id,
+            )
             try:
                 synced_items = douyin_library.list_items(
                     binding.session_scope,
@@ -2732,6 +2742,9 @@ def get_douyin_library_job(
                     notes_by_video_id=notes_by_video_id,
                     observed_at=completed_at or datetime.now(timezone.utc),
                     source_synced_at=completed_at or datetime.now(timezone.utc),
+                )
+                douyin_legacy_catalog_service.archive_items(
+                    db, user_id=current_user.id, binding_id=binding.id, items=synced_items, complete=False,
                 )
             except Exception:
                 # The downloader job itself succeeded. A transient follow-up
@@ -2856,6 +2869,11 @@ def stream_douyin_library_cover(
         user_id=account_binding.user_id,
         video_id=aweme_id,
     )
+    if not local_cover_url:
+        archived = douyin_legacy_catalog_service.get_item(
+            db, user_id=account_binding.user_id, binding_id=account_binding.id, video_id=aweme_id,
+        )
+        local_cover_url = str(archived.get("cover_url") or "") if archived else ""
     return _proxy_douyin_image(
         target_url,
         account_binding.session_scope,
@@ -2904,6 +2922,7 @@ def stream_douyin_library_gallery_image(
 
 @router.get("/api/library/douyin/items")
 def list_douyin_library_items(
+    background_tasks: BackgroundTasks = None,
     limit: int = Query(
         default=0,
         ge=0,
@@ -2933,22 +2952,50 @@ def list_douyin_library_items(
         user_id=current_user.id,
         source_mode=mode,
     )
+    archived_items = douyin_legacy_catalog_service.list_items(
+        db, user_id=current_user.id, binding_id=binding.id, mode=mode,
+    )
     sidecar_items: list[dict[str, Any]] = []
     catalog_warning = ""
     # 桌面端快照已经落库，是当前资料页的数据源；有本地数据时不再让首屏
     # 等待旧连接器最多 15 秒。只有尚无本地快照的旧版云端账号才走兼容回退。
-    if not local_items and not local_only:
+    explicit_refresh = bool(
+        refresh_order and not local_only and sort == "collection" and mode in {"like", "collect"}
+    )
+    needs_legacy_catalog = not local_items and not archived_items and not local_only and not douyin_legacy_catalog_service.recovery_completed(
+        db, user_id=current_user.id, binding_id=binding.id,
+    )
+    if explicit_refresh or needs_legacy_catalog:
         try:
-            sidecar_items = douyin_library.list_items(
+            if explicit_refresh:
+                douyin_library.refresh_source_order(binding.session_scope, mode)
+            complete_catalog = douyin_library.list_items(
                 binding.session_scope,
                 binding.id,
                 0,
-                mode=mode,
                 sort_by=sort,
-                refresh_order=refresh_order,
+                preserve_sources=True,
             )
+            douyin_legacy_catalog_service.archive_items(
+                db, user_id=current_user.id, binding_id=binding.id, items=complete_catalog,
+                refresh_existing=explicit_refresh,
+            )
+            sidecar_items = [item for item in complete_catalog if mode is None or item.get("source_mode") == mode]
         except douyin_library.DouyinLibraryError as exc:
-            catalog_warning = str(exc)
+            catalog_warning = "暂时无法更新列表，已有资料仍可查看"
+
+    # 已有本地资料时立即返回目录；仅对未归档账号安排一次后台补历史。
+    # local_only 不发起前台连接器读取，也不会让一次本地新增遮住所有旧目录。
+    if background_tasks is not None and douyin_legacy_catalog_service.claim_recovery(
+        db, user_id=current_user.id, binding_id=binding.id,
+    ):
+        background_tasks.add_task(douyin_legacy_catalog_service.recover, current_user.id, binding.id)
+
+    archived_ids = {str(item.get("aweme_id") or "") for item in sidecar_items}
+    sidecar_items.extend(
+        _mint_douyin_item_capabilities(dict(item), binding.id)
+        for item in archived_items if str(item.get("aweme_id") or "") not in archived_ids
+    )
 
     # The legacy companion may still contain old title-only manifest rows.
     # Apply the same durable public-metadata contract as the desktop channel
@@ -3105,6 +3152,9 @@ def list_douyin_library_items(
             "permanent",
         ),
         "catalog_warning": catalog_warning,
+        "catalog_recovery_pending": douyin_legacy_catalog_service.recovery_pending(
+            db, user_id=current_user.id, binding_id=binding.id,
+        ),
         "catalog_channels": {
             "desktop_local": len(local_items),
             "legacy_sidecar": len(sidecar_items),
@@ -3220,21 +3270,18 @@ def get_douyin_library_item(
     if library_hidden_service.is_hidden(db, current_user.id, aweme_id):
         raise HTTPException(status_code=404, detail="视频已从当前资料库移除")
     binding = douyin_binding_service.get_or_create(db, current_user.id)
-    item: dict[str, Any] | None = None
-    try:
-        item = douyin_library.get_item(
-            binding.session_scope,
-            binding.id,
-            aweme_id,
-        )
-    except douyin_library.DouyinLibraryError as exc:
-        item = None
+    item = local_douyin_library_service.get_item(
+        db, user_id=current_user.id, video_id=aweme_id,
+    )
     if item is None:
-        item = local_douyin_library_service.get_item(
-            db,
-            user_id=current_user.id,
-            video_id=aweme_id,
+        item = douyin_legacy_catalog_service.get_item(
+            db, user_id=current_user.id, binding_id=binding.id, video_id=aweme_id,
         )
+    if item is None:
+        try:
+            item = douyin_library.get_item(binding.session_scope, binding.id, aweme_id)
+        except douyin_library.DouyinLibraryError:
+            item = None
     if item is None:
         raise HTTPException(status_code=404, detail="视频不存在或尚未同步")
     item = _mint_douyin_item_capabilities(dict(item), binding.id)

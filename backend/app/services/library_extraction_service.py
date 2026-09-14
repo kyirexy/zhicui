@@ -18,6 +18,7 @@ from app.models.library_extraction_batch import (
 from app.services import (
     ai_juicer,
     douyin_binding_service,
+    douyin_legacy_catalog_service,
     douyin_library,
     local_douyin_library_service,
     note_service,
@@ -348,6 +349,10 @@ def extract_library_item(
                     user_id=user_id,
                     video_id=clean_id,
                 )
+                if item is None:
+                    item = douyin_legacy_catalog_service.get_item(
+                        db, user_id=user_id, binding_id=binding.id, video_id=clean_id,
+                    )
             asr_config = (
                 settings_service.get_asr_config(db)
                 if not existing_transcript
@@ -709,6 +714,14 @@ def _prefetch_items(
             if aweme_ids is not None and aweme_ids.issubset(result):
                 return result
             binding = douyin_binding_service.get_or_create(db, user_id)
+            for item in douyin_legacy_catalog_service.list_items(
+                db, user_id=user_id, binding_id=binding.id,
+            ):
+                aweme_id = item["aweme_id"]
+                if aweme_ids is None or aweme_id in aweme_ids:
+                    result.setdefault(aweme_id, item)
+            if aweme_ids is not None and aweme_ids.issubset(result):
+                return result
             session_scope, binding_id = binding.session_scope, binding.id
         # 本地已有全部所选项时不访问 sidecar；缺项才补查，且已释放 DB 连接。
         sidecar_items = douyin_library.list_items(session_scope, binding_id, limit=0)

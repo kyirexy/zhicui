@@ -387,6 +387,7 @@ _EXPORT_GROUPS: dict[str, tuple[str, ...]] = {
         "creator_sources",
         "creator_source_items",
         "douyin_local_library_items",
+        "douyin_legacy_catalogs",
         "video_source_ledgers",
         "library_hidden_items",
         "library_extraction_batches",

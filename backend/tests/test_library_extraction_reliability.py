@@ -43,6 +43,7 @@ class LibraryExtractionSchedulingTests(unittest.TestCase):
 
         with (
             patch.object(service, "SessionLocal", return_value=session),
+            patch.object(service.douyin_legacy_catalog_service, "list_items", return_value=[]),
             patch.object(service.local_douyin_library_service, "list_items", return_value=[
                 {"aweme_id": "a", "title": "本地标题"},
             ]),
@@ -58,6 +59,7 @@ class LibraryExtractionSchedulingTests(unittest.TestCase):
         local = {"aweme_id": "a"}
         with (
             patch.object(service, "SessionLocal"),
+            patch.object(service.douyin_legacy_catalog_service, "list_items", return_value=[]),
             patch.object(service.local_douyin_library_service, "list_items", return_value=[local]),
             patch.object(service.douyin_binding_service, "get_or_create", return_value=
                          SimpleNamespace(session_scope="s" * 32, id="binding")),

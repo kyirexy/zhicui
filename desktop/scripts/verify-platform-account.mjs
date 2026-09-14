@@ -12,6 +12,7 @@ import {
   readDouyinSourceRecords,
   requestBilibiliJson,
   scrollDouyinSourcePanel,
+  showPlatformAccountPage,
 } from '../dist/platform-account.js';
 import {
   validatePlatformAccountCollectRequest,
@@ -167,6 +168,9 @@ assert.throws(
 );
 assert.equal(validatePlatformAccountCollectRequest({ platform: 'douyin', profileKey: 'user_123-safe', mode: 'like', limit: 20, interactive: true }).interactive, true);
 assert.throws(() => validatePlatformAccountCollectRequest({ platform: 'douyin', profileKey: 'user_123-safe', mode: 'like', limit: 20, interactive: 'true' }), /布尔值/);
+assert.throws(() => validatePlatformAccountCollectRequest({ platform: 'douyin', profileKey: 'user_123-safe', mode: 'like', limit: 20, keepSessionOpen: true }), /批次标识/);
+assert.throws(() => validatePlatformAccountCollectRequest({ platform: 'douyin', profileKey: 'user_123-safe', mode: 'like', limit: 20, sessionKey: '../escape' }), /批次标识无效/);
+assert.throws(() => validatePlatformAccountCollectRequest({ platform: 'bilibili', profileKey: 'user_123-safe', mode: 'like', limit: 20, sessionKey: 'test-session-0000001' }), /批次标识无效/);
 
 {
   let focused = 0;
@@ -265,6 +269,197 @@ assert.deepEqual(
 // 抖音后页先完成、重复 ID、内嵌相关作品、缺页和重复游标均不能改变来源顺序。
 const aweme = (id, created = 1) => ({ aweme_id: String(id), desc: `作品${id}`, create_time: created });
 const douyinPageUrl = (cursor) => `https://www.douyin.com/aweme/v1/web/aweme/favorite/?max_cursor=${cursor}`;
+
+for (const initialState of ['minimized', 'maximized']) {
+  const calls = [];
+  const session = { send: async (command, input) => {
+    calls.push([command, input]);
+    return { windowId: 1, bounds: { windowState: initialState } };
+  }, detach: async () => { calls.push(['detach']); } };
+  await showPlatformAccountPage({ context: () => ({ newCDPSession: async () => session }),
+    bringToFront: async () => { calls.push(['bringToFront']); } });
+  assert.deepEqual(calls.map(([name]) => name), initialState === 'minimized'
+    ? ['Browser.getWindowForTarget', 'Browser.setWindowBounds', 'bringToFront', 'detach']
+    : ['Browser.getWindowForTarget', 'bringToFront', 'detach']);
+}
+{
+  let focused = 0;
+  await showPlatformAccountPage({ context: () => ({ newCDPSession: async () => { throw new Error('CDP unavailable'); } }),
+    bringToFront: async () => { focused += 1; } });
+  assert.equal(focused, 1, '窗口状态能力不可用时仍使用浏览器的标签激活能力');
+}
+
+// 运行真实 collect/runExclusive/来源监听主循环：仅官方浏览器响应由固定夹具提供。
+for (const scenario of ['same-batch', 'other-profile', 'other-batch', 'cancel-retained', 'failed-next', 'idle-expired', 'user-closed']) {
+  let launched = 0;
+  let closed = 0;
+  let acquired = 0;
+  let released = 0;
+  let navigated = 0;
+  const contexts = [];
+  const connector = new PlatformAccountConnector(() => 'unused-test-profile', () => {});
+  connector.profilePath = async () => 'unused-test-profile';
+  connector.actionLocks = { acquire: async () => { acquired += 1; return { release: async () => { released += 1; } }; } };
+  connector.launchBrowser = async () => {
+    launched += 1;
+    let isClosed = false;
+    const listeners = new Map();
+    const closeListeners = [];
+    const emit = (event, value) => { for (const listener of listeners.get(event) || []) listener(value); };
+    const page = {
+      url: () => 'https://www.douyin.com/user/self', isClosed: () => isClosed,
+      on: (event, callback) => { if (!listeners.has(event)) listeners.set(event, new Set()); listeners.get(event).add(callback); },
+      off: (event, callback) => listeners.get(event)?.delete(callback),
+      goto: async () => { navigated += 1; emit('request', { url: () => 'https://www.douyin.com/aweme/v1/web/aweme/post/?sec_user_id=SELF_TEST&max_cursor=0' }); },
+      evaluate: async () => true, bringToFront: async () => {},
+      respond: async (mode) => {
+        const request = { url: () => mode === 'like' ? douyinPageUrl(0)
+          : 'https://www.douyin.com/aweme/v1/web/aweme/listcollection/?cursor=0', method: () => 'GET', postData: () => null };
+        emit('request', request);
+        emit('response', { url: request.url, request: () => request, ok: () => true,
+          allHeaders: async () => ({ 'content-type': 'application/json' }),
+          json: async () => ({ aweme_list: [aweme(mode === 'like' ? 69001 : 69002)], has_more: false }),
+        });
+        emit('requestfinished', request);
+        for (let index = 0; index < 12; index += 1) await Promise.resolve();
+      },
+    };
+    const context = { pages: () => [page], browser: () => null,
+      cookies: async () => [{ name: 'sessionid', value: 'fixture-only', domain: '.douyin.com' }],
+      once: (_event, callback) => closeListeners.push(callback),
+      close: async () => { if (isClosed) return; isClosed = true; closed += 1; for (const callback of closeListeners) callback(); },
+    };
+    contexts.push(context);
+    return { context, browser: 'chrome' };
+  };
+  connector.selectDouyinTab = async (page, _platform, mode) => {
+    if (scenario === 'failed-next' && mode === 'collect') throw new Error('fixture: next source unavailable');
+    await page.respond(mode);
+  };
+  const request = { platform: 'douyin', profileKey: 'owner-one', mode: 'like', limit: 3,
+    sessionKey: 'test-session-0000001', keepSessionOpen: true };
+  const originalSetTimeout = globalThis.setTimeout;
+  let expireSession;
+  globalThis.setTimeout = (callback, delay, ...args) => {
+    if (delay === 30_000) expireSession = callback;
+    return originalSetTimeout(callback, delay, ...args);
+  };
+  try {
+    const first = await connector.collect(request);
+    globalThis.setTimeout = originalSetTimeout;
+    assert.equal(first.success, true, scenario);
+    assert.equal(first.orderReliable, true);
+    assert.equal(closed, 0, '批次未结束时保留同一个官方窗口');
+    assert.equal(released, 0, '保留窗口期间不能释放用户资料目录的跨进程锁');
+    const lateFocus = await connector.focus({ platform: 'douyin', profileKey: 'owner-one' });
+    assert.equal(lateFocus.success, false, '已完成来源的晚到focus不重新开启采集');
+    assert.equal(launched, 1);
+    if (scenario === 'cancel-retained') {
+      await connector.cancel();
+      assert.equal(closed, 1);
+      assert.equal(released, 1);
+      assert.equal(connector.retainedSession, null);
+      continue;
+    }
+    if (scenario === 'idle-expired' || scenario === 'user-closed') {
+      if (scenario === 'idle-expired') expireSession();
+      else await contexts[0].close();
+      if (connector.closingSession) await connector.closingSession;
+      assert.equal(closed, 1);
+      assert.equal(released, 1, '空闲超时或用户关窗必须释放保留中的跨进程锁');
+      assert.equal(connector.retainedSession, null);
+    }
+    const second = await connector.collect({ ...request, mode: 'collect', keepSessionOpen: false,
+      profileKey: scenario === 'other-profile' ? 'owner-two' : request.profileKey,
+      sessionKey: scenario === 'other-batch' ? 'test-session-0000002' : request.sessionKey });
+    const expectedLaunches = ['other-profile', 'other-batch', 'idle-expired', 'user-closed'].includes(scenario) ? 2 : 1;
+    assert.equal(second.success, scenario !== 'failed-next', scenario);
+    assert.equal(launched, expectedLaunches, '仅同账号同批次复用浏览器');
+    assert.equal(acquired, expectedLaunches);
+    assert.equal(closed, expectedLaunches);
+    assert.equal(released, expectedLaunches);
+    assert.equal(navigated, 2, '每个来源仍重新捕获官方本人首页，不沿用上一分类数据');
+    assert.equal(connector.retainedSession, null);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    await connector.cancel();
+    for (const context of contexts) await context.close();
+  }
+}
+
+// 前置和采集完成相撞：必须先完成同一窗口恢复，再执行最终关闭；不能新建替代窗口。
+{
+  let finishCollection;
+  let finishFocus;
+  let started;
+  let focusStarted;
+  let closed = 0;
+  const collecting = new Promise((resolve) => { finishCollection = resolve; });
+  const focused = new Promise((resolve) => { finishFocus = resolve; });
+  const startedPromise = new Promise((resolve) => { started = resolve; });
+  const focusStartedPromise = new Promise((resolve) => { focusStarted = resolve; });
+  const page = { isClosed: () => false, bringToFront: async () => { focusStarted(); await focused; } };
+  const context = { pages: () => [page], cookies: async () => [{ name: 'sessionid', value: 'fixture', domain: '.douyin.com' }],
+    close: async () => { closed += 1; } };
+  const connector = new PlatformAccountConnector(() => 'unused-test-profile', () => {});
+  connector.profilePath = async () => 'unused-test-profile';
+  connector.launchBrowser = async () => ({ context, browser: 'chrome' });
+  connector.actionLocks = { acquire: async () => ({ release: async () => {} }) };
+  connector.collectDouyin = async () => { started(); await collecting; return { urls: ['https://www.douyin.com/video/69001'], coverage: 'complete', orderReliable: true }; };
+  const task = connector.collect({ platform: 'douyin', profileKey: 'owner', mode: 'like', limit: 1 });
+  await startedPromise;
+  const focus = connector.focus({ platform: 'douyin', profileKey: 'owner' });
+  await focusStartedPromise;
+  const repeatedFocus = connector.focus({ platform: 'douyin', profileKey: 'owner' });
+  finishCollection();
+  for (let index = 0; index < 12; index += 1) await Promise.resolve();
+  assert.equal(closed, 0, '结果完成不能抢先关闭正在前置的窗口');
+  finishFocus();
+  assert.equal((await focus).success, true);
+  assert.equal((await repeatedFocus).success, true);
+  assert.equal((await task).success, true);
+  assert.equal(closed, 1);
+}
+
+// 启动浏览器期间取消：浏览器返回后直接关闭，不能继续导航或读取 Cookie。
+{
+  let finishLaunch;
+  let started;
+  let closed = 0;
+  let released = 0;
+  const launching = new Promise((resolve) => { finishLaunch = resolve; });
+  const startedPromise = new Promise((resolve) => { started = resolve; });
+  const context = { close: async () => { closed += 1; }, cookies: async () => { throw new Error('取消后不应再读取Cookie'); } };
+  const connector = new PlatformAccountConnector(() => 'unused-test-profile', () => {});
+  connector.profilePath = async () => 'unused-test-profile';
+  connector.actionLocks = { acquire: async () => ({ release: async () => { released += 1; } }) };
+  connector.launchBrowser = async () => { started(); await launching; return { context, browser: 'chrome' }; };
+  const task = connector.collect({ platform: 'douyin', profileKey: 'owner', mode: 'like', limit: 1 });
+  await startedPromise;
+  await connector.cancel();
+  finishLaunch();
+  assert.equal((await task).cancelled, true);
+  assert.equal(closed, 1);
+  assert.equal(released, 1);
+}
+
+// 跨进程锁尚未返回时已占有本进程操作，第二账号不能并行启动另一浏览器。
+{
+  let finishAcquire;
+  let acquired = 0;
+  let actions = 0;
+  const acquiring = new Promise((resolve) => { finishAcquire = resolve; });
+  const connector = new PlatformAccountConnector(() => 'unused-test-profile', () => {});
+  connector.actionLocks = { acquire: async () => { acquired += 1; await acquiring; return { release: async () => {} }; } };
+  const action = async () => { actions += 1; return { success: true, platform: 'douyin' }; };
+  const first = connector.runExclusive({ platform: 'douyin', profileKey: 'owner-one' }, action);
+  const second = await connector.runExclusive({ platform: 'douyin', profileKey: 'owner-two' }, action);
+  assert.equal(second.code, 'LOCAL_ACTION_BUSY');
+  finishAcquire();
+  assert.equal((await first).success, true);
+  assert.equal(acquired, 1);
+  assert.equal(actions, 1);
+}
 const sourcePages = new DouyinSourcePages();
 sourcePages.add(douyinPageUrl(90), {
   aweme_list: [aweme(10002, 999), aweme(10003, 500)], has_more: 0, max_cursor: 0,
@@ -647,8 +842,13 @@ for (const longList of [true, false]) {
   let time = 1_000;
   let scrolls = 0;
   let resets = 0;
+  let finalResponseObserved = false;
+  let idleWaitsAfterResponse = 0;
   Date.now = () => time;
-  globalThis.setTimeout = (callback, milliseconds, ...args) => originalTimeout(() => { time += Number(milliseconds) || 0; callback(...args); }, 0);
+  globalThis.setTimeout = (callback, milliseconds, ...args) => {
+    if (finalResponseObserved && milliseconds === 200) idleWaitsAfterResponse += 1;
+    return originalTimeout(() => { time += Number(milliseconds) || 0; callback(...args); }, 0);
+  };
   try {
     const listeners = new Map();
     const emit = (name, value) => { for (const callback of listeners.get(name) || []) callback(value); };
@@ -669,7 +869,12 @@ for (const longList of [true, false]) {
       evaluate: async (_fn, input) => {
         if (input.reset) { resets += 1; return true; }
         scrolls += 1;
-        if (longList && scrolls === 6) respond(90, { aweme_list: [aweme(50002), aweme(50003)], max_cursor: 80, has_more: true });
+        if (longList && scrolls === 6) {
+          respond(90, { aweme_list: [aweme(50002), aweme(50003)], max_cursor: 80, has_more: true });
+          // 网络回调可以早于 evaluate 返回；此时不能再白等整个 2200ms 窗口。
+          for (let index = 0; index < 12; index += 1) await Promise.resolve();
+          finalResponseObserved = true;
+        }
         return longList;
       },
     };
@@ -680,6 +885,7 @@ for (const longList of [true, false]) {
     assert.equal(scrolls, longList ? 6 : 5);
     assert.equal(result.coverage, longList ? 'limited' : 'partial');
     assert.equal(result.items.length, longList ? 3 : 2);
+    if (longList) assert.equal(idleWaitsAfterResponse, 0, '快速响应已满足数量时直接交付，不重复等待');
   } finally {
     Date.now = originalNow;
     globalThis.setTimeout = originalTimeout;

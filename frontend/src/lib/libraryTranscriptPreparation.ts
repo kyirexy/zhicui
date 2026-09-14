@@ -59,15 +59,15 @@ export function selectTranscriptPreparationTargets(
   return selected;
 }
 
-/** 普通同步只处理服务端明确登记为新增的ID，缺少新增范围时不能用分类列表差集猜测。 */
+/** 只处理本轮明确同步范围内尚无文稿的视频，旧接口退回明确新增范围。 */
 export function selectAutomaticTranscriptPreparationTargets(
-  results: Array<{ items: DouyinLibraryItem[] | null; createdVideoIds?: string[] }>,
+  results: Array<{ items: DouyinLibraryItem[] | null; createdVideoIds?: string[]; syncedVideoIds?: string[] }>,
   maxItems = 100,
 ): DouyinLibraryItem[] {
   const readyIds = new Set(results.flatMap(({ items }) => (items || [])
     .filter(hasReadyTranscript).map((item) => item.aweme_id)));
-  const lists = results.map(({ items, createdVideoIds }) => {
-    const created = new Set(createdVideoIds || []);
+  const lists = results.map(({ items, createdVideoIds, syncedVideoIds }) => {
+    const created = new Set(syncedVideoIds ?? createdVideoIds ?? []);
     return selectSyncedSourceScope(
       (items || []).filter((item) => created.has(item.aweme_id) && !readyIds.has(item.aweme_id)),
       created.size,

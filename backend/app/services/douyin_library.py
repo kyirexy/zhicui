@@ -937,6 +937,7 @@ def list_items(
     mode: str | None = None,
     sort_by: str = "collection",
     refresh_order: bool = False,
+    preserve_sources: bool = False,
 ) -> list[dict[str, Any]]:
     """返回标准化下载器条目；``limit=0`` 表示读取全部 manifest。"""
     if refresh_order and sort_by == "collection" and mode in {"collect", "like"}:
@@ -953,12 +954,13 @@ def list_items(
     if sort_by == "collection":
         normalized.sort(key=source_order_key)
     unique_items: list[dict[str, Any]] = []
-    seen_aweme_ids: set[str] = set()
+    seen_aweme_ids: set[object] = set()
     for item in normalized:
         aweme_id = item["aweme_id"]
-        if not aweme_id or aweme_id in seen_aweme_ids:
+        identity = (item["source_mode"], aweme_id) if preserve_sources else aweme_id
+        if not aweme_id or identity in seen_aweme_ids:
             continue
-        seen_aweme_ids.add(aweme_id)
+        seen_aweme_ids.add(identity)
         unique_items.append(item)
     if limit <= 0:
         return unique_items

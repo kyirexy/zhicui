@@ -153,7 +153,19 @@ export function validatePlatformAccountCollectRequest(
   if (value.interactive !== undefined && typeof value.interactive !== 'boolean') {
     throw new Error('同步窗口显示选项必须为布尔值');
   }
-  return { ...request, mode, limit, ...(value.interactive === undefined ? {} : { interactive: value.interactive }) };
+  if (value.sessionKey !== undefined && (typeof value.sessionKey !== 'string'
+    || !/^[A-Za-z0-9_-]{16,80}$/.test(value.sessionKey) || request.platform !== 'douyin')) {
+    throw new Error('抖音同步批次标识无效');
+  }
+  if (value.keepSessionOpen !== undefined && typeof value.keepSessionOpen !== 'boolean') {
+    throw new Error('保留同步窗口选项必须为布尔值');
+  }
+  if (value.keepSessionOpen && !value.sessionKey) throw new Error('保留同步窗口需要批次标识');
+  return { ...request, mode, limit,
+    ...(value.interactive === undefined ? {} : { interactive: value.interactive }),
+    ...(value.sessionKey === undefined ? {} : { sessionKey: value.sessionKey }),
+    ...(value.keepSessionOpen === undefined ? {} : { keepSessionOpen: value.keepSessionOpen }),
+  };
 }
 
 export function validateDesktopAgentIntegrationRequest(

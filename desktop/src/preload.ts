@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
+  DesktopAgentAuthorizationStatus,
   DesktopAgentIntegrationOverview,
   DesktopAgentIntegrationRequest,
   DesktopAgentIntegrationResult,
@@ -108,6 +109,11 @@ const bridge: ZhicuiDesktopBridge = {
       request,
     ) as Promise<DesktopAgentIntegrationResult>
   ),
+  onAgentAuthorizationStatus: (listener: (status: DesktopAgentAuthorizationStatus) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, status: DesktopAgentAuthorizationStatus) => listener(status);
+    ipcRenderer.on('desktop:agent-authorization-status', handler);
+    return () => ipcRenderer.removeListener('desktop:agent-authorization-status', handler);
+  },
   getMediaSettings: () => (
     ipcRenderer.invoke('desktop:get-media-settings')
   ),

@@ -654,14 +654,14 @@ def start_device_auth(body: DeviceStartRequest, request: Request, db: Session = 
         row, device_code, user_code = create_device_authorization(
             db, client_name=body.client_name, client_type=body.client_type, scopes=body.scopes
         )
-        verify = f"{settings.PUBLIC_APP_URL.rstrip('/')}/settings?section=agent"
+        verify = f"{settings.PUBLIC_APP_URL.rstrip('/')}/agent/authorize"
         return _envelope(
             action="auth.device.start", request_id=_request_id(request),
             data={
                 "device_code": device_code,
                 "user_code": user_code,
                 "verification_uri": verify,
-                "verification_uri_complete": f"{verify}&user_code={user_code}",
+                "verification_uri_complete": f"{verify}?user_code={user_code}",
                 "expires_in": max(1, int((row.expires_at - row.created_at).total_seconds())),
                 "interval": row.interval_seconds,
             },

@@ -6,6 +6,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CliError, EXIT_CODES } from './errors.js';
 import { redactedProcessMessage, runProcess } from './process-utils.js';
+import { LEGACY_CLI_RELEASES } from './legacy-releases.js';
 
 export type AgentClientName = 'codex' | 'claude';
 export type AgentClientSelection = AgentClientName | 'all';
@@ -40,6 +41,8 @@ interface ClientProbe {
   version?: string;
   configured: boolean;
   managed: boolean;
+  current?: boolean;
+  migration_available?: boolean;
   skill_installed: boolean;
   skill_current: boolean;
   error?: string;
@@ -202,9 +205,10 @@ function ownedBackupPath(target: string, backup: string): boolean {
 async function writeConfigProvenance(
   tool: KnownTool,
   snapshot: ConfigSnapshot,
+  replace = false,
 ): Promise<void> {
   const path = configProvenancePath(tool.configPath);
-  if (await exists(path)) {
+  if (!replace && await exists(path)) {
     throw new CliError(
       'AGENT_CONFIG_CONFLICT',
       `${tool.name} 存在未完成的知萃配置记录，未覆盖`,
@@ -338,6 +342,10 @@ async function uninstallSkill(path: string): Promise<boolean> {
   if (!(await exists(path))) return false;
   const current = await readFile(path, 'utf8');
   if (!current.includes(MANAGED_MARKER)) return false;
+  // 用户可在受管 Skill 上增补内容；卸载也须先保留原文。
+  if (current !== await managedSkillSource()) {
+    await copyFile(path, `${path}.zhicui-backup-${timestamp()}`);
+  }
   await rm(path, { force: true });
   await rm(dirname(path), { recursive: false }).catch(() => undefined);
   return true;
@@ -380,89 +388,77 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function exactClaudeCommandSpec(
-  value: unknown,
-  expected: ReturnType<typeof selfMcpCommand>,
-): boolean {
-  if (!isRecord(value)) return false;
+interface StdioSpec { command: string; args: string[]; env: Record<string, string> }
 
-  // Claude user-scoped stdio servers are stored at
-  // ~/.claude.json -> mcpServers.<name>.  Only accept the fields Claude's
-  // own `mcp add --scope user` writes for this transport.  Unknown fields
-  // (for example cwd/alwaysLoad) can change execution semantics and must
-  // therefore make the entry user-owned rather than CLI-owned.
-  const allowedKeys = new Set(['type', 'command', 'args', 'env']);
-  if (Object.keys(value).some((key) => !allowedKeys.has(key))) return false;
-  if (value.type !== undefined && value.type !== 'stdio') return false;
-  if (typeof value.command !== 'string') return false;
-  if (!Array.isArray(value.args) || !value.args.every((arg) => typeof arg === 'string')) {
-    return false;
+function stdioSpec(value: unknown, codex: boolean): StdioSpec | null {
+  if (!isRecord(value)) return null;
+  let item = value;
+  if (codex && isRecord(value.transport)) {
+    const allowed = new Set(['name', 'enabled', 'disabled_reason', 'transport', 'startup_timeout_sec',
+      'tool_timeout_sec', 'enabled_tools', 'disabled_tools']);
+    if ((value.name != null && value.name !== SERVER_NAME) || Object.keys(value).some((key) => !allowed.has(key)) || value.enabled === false
+      || value.disabled_reason || value.startup_timeout_sec != null || value.tool_timeout_sec != null
+      || value.enabled_tools != null || value.disabled_tools != null) return null;
+    item = value.transport;
   }
-  if (value.env !== undefined && !isRecord(value.env)) return false;
-
-  const expectedArgs = [...expected.args, 'mcp', 'serve', '--stdio'];
-  const actualArgs = value.args as string[];
-  if (normalizeProbeValue(value.command) !== normalizeProbeValue(expected.command)) return false;
-  if (actualArgs.length !== expectedArgs.length) return false;
-  if (!actualArgs.every((arg, index) => (
-    normalizeProbeValue(arg) === normalizeProbeValue(expectedArgs[index])
-  ))) return false;
-
-  const expectedEnvironment = [...expected.env].map(normalizeProbeValue).sort();
-  const actualEnvironment = normalizedEnvironment(value.env);
-  return actualEnvironment.length === expectedEnvironment.length
-    && actualEnvironment.every((item, index) => item === expectedEnvironment[index]);
+  const allowed = new Set(['type', 'command', 'args', 'env', ...(codex ? ['env_vars', 'cwd'] : [])]);
+  if (Object.keys(item).some((key) => !allowed.has(key))) return null;
+  if (item.type !== undefined && item.type !== 'stdio') return null;
+  if (typeof item.command !== 'string' || !Array.isArray(item.args)
+    || !item.args.every((arg) => typeof arg === 'string')) return null;
+  if (item.cwd != null || (item.env_vars != null
+    && (!Array.isArray(item.env_vars) || item.env_vars.length !== 0))) return null;
+  if (item.env != null && (!isRecord(item.env)
+    || Object.values(item.env).some((entry) => typeof entry !== 'string'))) return null;
+  return { command: item.command, args: item.args as string[], env: (item.env || {}) as Record<string, string> };
 }
 
-async function claudeConfigIsManaged(
-  tool: KnownTool,
-  expected: ReturnType<typeof selfMcpCommand>,
-): Promise<boolean> {
-  try {
-    const root = JSON.parse(await readFile(tool.configPath, 'utf8')) as unknown;
-    if (!isRecord(root) || !isRecord(root.mcpServers)) return false;
-    return exactClaudeCommandSpec(root.mcpServers[SERVER_NAME], expected);
-  } catch {
-    // Missing, unreadable, or invalid JSON cannot prove ownership.  Fail
-    // closed so update/uninstall never overwrites a merely similar entry.
-    return false;
-  }
-}
-
-function exactCommandSpec(value: unknown, expected: ReturnType<typeof selfMcpCommand>): boolean {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const item = value as Record<string, unknown>;
-  if (
-    typeof item.command === 'string'
-    && Array.isArray(item.args)
-    && item.args.every((arg) => typeof arg === 'string')
-    && normalizeProbeValue(item.command) === normalizeProbeValue(expected.command)
-  ) {
-    const actualArgs = item.args as string[];
-    const expectedEnvironment = [...expected.env].map(normalizeProbeValue).sort();
-    const actualEnvironment = normalizedEnvironment(item.env);
-    if (
-      actualArgs.length === expected.args.length + 3
-      && actualArgs.every((arg, index) => normalizeProbeValue(arg) === normalizeProbeValue(
-        [...expected.args, 'mcp', 'serve', '--stdio'][index],
-      ))
-      && actualEnvironment.length === expectedEnvironment.length
-      && actualEnvironment.every((item, index) => item === expectedEnvironment[index])
-    ) return true;
-  }
-  return Object.values(item).some((child) => exactCommandSpec(child, expected));
-}
-
-async function managedProbe(tool: KnownTool, stdout: string): Promise<boolean> {
+function matchesSelf(spec: StdioSpec): boolean {
   const expected = selfMcpCommand();
-  if (tool.name === 'codex') {
-    try {
-      return exactCommandSpec(JSON.parse(stdout), expected);
-    } catch {
-      return false;
+  return spec.args.slice(-3).join(' ') === 'mcp serve --stdio'
+    && normalizeProbeValue(spec.command) === normalizeProbeValue(expected.command)
+    && JSON.stringify(spec.args.map(normalizeProbeValue))
+      === JSON.stringify([...expected.args, 'mcp', 'serve', '--stdio'].map(normalizeProbeValue))
+    && JSON.stringify(normalizedEnvironment(spec.env))
+      === JSON.stringify(expected.env.map(normalizeProbeValue).sort());
+}
+
+async function legacyPackageMatches(spec: StdioSpec): Promise<boolean> {
+  if (spec.args.length !== 4 || spec.args.slice(1).join(' ') !== 'mcp serve --stdio') return false;
+  if (!['node', 'node.exe'].includes(basename(spec.command).toLowerCase())
+    || Object.keys(spec.env).length !== 0) return false;
+  const entry = spec.args[0];
+  if (basename(entry) !== 'index.js' || basename(dirname(entry)) !== 'dist') return false;
+  const root = resolve(dirname(entry), '..');
+  try {
+    const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+    if (pkg.name !== '@zhicui/cli' || pkg.type !== 'module' || pkg.bin?.zhicui !== 'dist/index.js') return false;
+    for (const release of LEGACY_CLI_RELEASES.filter((candidate) => candidate.version === pkg.version)) {
+      let match = true;
+      for (const [path, hash] of Object.entries(release.files)) {
+        if (path.startsWith('skills/')) continue; // Skill 可独立更新，执行文件必须全部一致。
+        if (await fileSha256(join(root, path)) !== hash) { match = false; break; }
+      }
+      if (match) return true;
     }
-  }
-  return claudeConfigIsManaged(tool, expected);
+  } catch { /* 旧目录不存在或无法完整校验，不猜测所有权。 */ }
+  return false;
+}
+
+async function managedProbe(tool: KnownTool, stdout: string): Promise<{ managed: boolean; current: boolean }> {
+  try {
+    const raw = tool.name === 'codex' ? JSON.parse(stdout)
+      : JSON.parse(await readFile(tool.configPath, 'utf8')).mcpServers?.[SERVER_NAME];
+    const spec = stdioSpec(raw, tool.name === 'codex');
+    if (!spec) return { managed: false, current: false };
+    if (matchesSelf(spec)) return { managed: true, current: true };
+    // 只有完整原配置记录，或已验收发行包的全部执行文件指纹，可以证明旧注册归属。
+    const provenance = await readConfigProvenance(tool);
+    const recorded = Boolean(provenance && await fileSha256(tool.configPath) === provenance.managed_sha256);
+    const canonical = spec.args.slice(-3).join(' ') === 'mcp serve --stdio'
+      && spec.args.length <= 4 && Object.entries(spec.env).every(([key, value]) => key === 'ELECTRON_RUN_AS_NODE' && value === '1');
+    return { managed: canonical && (recorded || await legacyPackageMatches(spec)), current: false };
+  } catch { return { managed: false, current: false }; }
 }
 
 async function rawProbe(tool: KnownTool): Promise<ClientProbe> {
@@ -481,6 +477,7 @@ async function rawProbe(tool: KnownTool): Promise<ClientProbe> {
     : ['mcp', 'get', SERVER_NAME];
   const configured = await runTool(tool, getArgs, { allowFailure: true });
   const isConfigured = configured.code === 0;
+  const ownership = isConfigured ? await managedProbe(tool, configured.stdout) : { managed: false, current: false };
   const installedSkill = await exists(tool.skillPath)
     ? await readFile(tool.skillPath, 'utf8')
     : null;
@@ -490,7 +487,9 @@ async function rawProbe(tool: KnownTool): Promise<ClientProbe> {
     installed: true,
     version: version.stdout.trim() || version.stderr.trim(),
     configured: isConfigured,
-    managed: isConfigured && await managedProbe(tool, configured.stdout),
+    managed: ownership.managed,
+    current: ownership.current,
+    migration_available: ownership.managed && !ownership.current,
     skill_installed: skillInstalled,
     skill_current: skillCurrent,
   };
@@ -522,6 +521,28 @@ async function removeMcp(tool: KnownTool): Promise<void> {
 
 export class AgentClientManager {
   constructor(private readonly timeoutMs = 30_000) {}
+
+  async mcpHealth(profile: string, apiUrl: string): Promise<{ ok: boolean; tool_count: number; code: string }> {
+    const self = selfMcpCommand();
+    const input = [
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } },
+      { jsonrpc: '2.0', method: 'notifications/initialized' },
+      { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
+    ].map((value) => JSON.stringify(value)).join('\n') + '\n';
+    try {
+      const result = await runProcess(self.command, [...self.args, 'mcp', 'serve', '--stdio', '--profile', profile], {
+        input, timeoutMs: this.timeoutMs, allowFailure: true,
+        env: { ...process.env, ZHICUI_API_URL: apiUrl, ...Object.fromEntries(self.env.map((value) => value.split('='))) },
+      });
+      const messages = result.stdout.trim().split(/\r?\n/u).map((line) => JSON.parse(line));
+      const initialized = messages.find((item) => item.id === 1)?.result?.serverInfo?.name === '@zhicui/cli';
+      const tools = messages.find((item) => item.id === 2)?.result?.tools;
+      const count = Array.isArray(tools) ? tools.filter((tool) => typeof tool.name === 'string'
+        && tool.name.startsWith('zhicui_') && !['zhicui_run_get', 'zhicui_run_events', 'zhicui_run_cancel'].includes(tool.name)).length : 0;
+      const ok = result.code === 0 && initialized && count > 0;
+      return { ok, tool_count: count, code: ok ? 'READY' : 'MCP_UNAVAILABLE' };
+    } catch { return { ok: false, tool_count: 0, code: 'MCP_UNAVAILABLE' }; }
+  }
 
   async status(selection: AgentClientSelection): Promise<Record<string, ClientProbe>> {
     const result: Record<string, ClientProbe> = {};
@@ -560,7 +581,7 @@ export class AgentClientManager {
         continue;
       }
       const before = await rawProbe(tool);
-      if (before.managed && before.skill_current) {
+      if (before.managed && before.current && before.skill_current) {
         result[name] = { ...before, changed: false };
         continue;
       }
@@ -571,31 +592,44 @@ export class AgentClientManager {
           { exitCode: EXIT_CODES.permission },
         );
       }
-      const snapshot = before.configured ? null : await snapshotConfig(tool.configPath);
+      const migrating = before.configured && before.managed && !before.current;
+      const snapshot = !before.configured || migrating ? await snapshotConfig(tool.configPath) : null;
+      const previousProvenance = await readFile(configProvenancePath(tool.configPath), 'utf8').catch(() => null);
       const previousSkill = await exists(tool.skillPath)
         ? await readFile(tool.skillPath, 'utf8')
         : null;
+      if (previousSkill !== null && !previousSkill.includes(MANAGED_MARKER)) {
+        throw new CliError('SKILL_CONFLICT', `${name} 已有自定义知萃 Skill，已保留原文`, { exitCode: EXIT_CODES.permission });
+      }
       let provenanceCreated = false;
       try {
-        if (!before.configured) await addMcp(tool);
+        let baseline = snapshot;
+        if (migrating) {
+          await removeMcp(tool);
+          if ((await rawProbe(tool)).configured) throw new CliError('AGENT_SETUP_FAILED', '旧注册未移除');
+          baseline = await snapshotConfig(tool.configPath);
+        }
+        if (!before.configured || migrating) await addMcp(tool);
         const skill = await installSkill(tool.skillPath);
         const after = await rawProbe(tool);
-        if (!after.configured || !after.managed || !after.skill_current) {
+        if (!after.configured || !after.managed || !after.current || !after.skill_current) {
           throw new CliError('AGENT_SETUP_FAILED', `${name} 配置校验失败`);
         }
-        if (snapshot) {
-          await writeConfigProvenance(tool, snapshot);
+        if (baseline) {
+          await writeConfigProvenance(tool, baseline, migrating);
           provenanceCreated = true;
         }
         result[name] = {
           ...after,
           changed: true,
           skill_changed: skill.changed,
+          migrated: migrating,
+          skill_backup: skill.backup || null,
           backup_created: Boolean(snapshot?.backup || skill.backup),
         };
       } catch (error) {
         if (provenanceCreated) {
-          await rm(configProvenancePath(tool.configPath), { force: true }).catch(() => undefined);
+          await restoreTextFile(configProvenancePath(tool.configPath), previousProvenance).catch(() => undefined);
         }
         if (snapshot) await restoreConfig(snapshot).catch(() => undefined);
         await restoreTextFile(tool.skillPath, previousSkill).catch(() => undefined);
@@ -609,6 +643,23 @@ export class AgentClientManager {
 
   async update(selection: AgentClientSelection): Promise<Record<string, unknown>> {
     return this.setup(selection);
+  }
+
+  async reconcile(selection: AgentClientSelection): Promise<Record<string, unknown>> {
+    const result: Record<string, unknown> = {};
+    const status = await this.status(selection);
+    for (const name of this.names(selection)) {
+      const probe = status[name];
+      if (!probe.installed || !probe.configured) {
+        result[name] = { ...probe, changed: false, skipped: true, code: 'NOT_CONFIGURED' };
+      } else if (!probe.managed) {
+        result[name] = { ...probe, changed: false, code: 'AGENT_CONFIG_CONFLICT' };
+      } else {
+        try { Object.assign(result, await this.setup(name)); }
+        catch (error) { result[name] = { ...probe, changed: false, code: error instanceof CliError ? error.code : 'AGENT_SETUP_FAILED' }; }
+      }
+    }
+    return result;
   }
 
   async uninstall(selection: AgentClientSelection): Promise<Record<string, unknown>> {
@@ -663,10 +714,12 @@ export class AgentClientManager {
     const status = await this.status(selection);
     const checks = Object.entries(status).map(([client, value]) => ({
       client,
-      ok: value.installed && value.configured && value.managed && value.skill_current,
+      ok: value.installed && value.configured && value.managed && value.current && value.skill_current,
       installed: value.installed,
       configured: value.configured,
       managed: value.managed,
+      current: value.current === true,
+      migration_available: value.migration_available === true,
       skill_installed: value.skill_installed,
       skill_current: value.skill_current,
       version: value.version,

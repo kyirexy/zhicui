@@ -796,6 +796,23 @@ class AgentInterfaceRouteTests(unittest.TestCase):
         )
         self.assertEqual(started.status_code, 200, started.text)
         auth_data = started.json()["data"]
+        expected_uri = f"{settings.PUBLIC_APP_URL.rstrip('/')}/agent/authorize"
+        self.assertEqual(auth_data["verification_uri"], expected_uri)
+        self.assertEqual(
+            auth_data["verification_uri_complete"],
+            f"{expected_uri}?user_code={auth_data['user_code']}",
+        )
+        self.assertNotIn(auth_data["device_code"], auth_data["verification_uri_complete"])
+        anonymous_preview = self.client.get(
+            "/api/agent-interface/v1/auth/device/request",
+            params={"user_code": auth_data["user_code"]},
+        )
+        self.assertEqual(anonymous_preview.status_code, 401)
+        anonymous_approval = self.client.post(
+            "/api/agent-interface/v1/auth/device/approve",
+            json={"user_code": auth_data["user_code"], "approve": True},
+        )
+        self.assertEqual(anonymous_approval.status_code, 401)
         headers = {"Authorization": f"Bearer {self.jwt}"}
 
         preview = self.client.get(

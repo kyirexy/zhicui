@@ -4,6 +4,19 @@
   gap: 18px;
 }
 
+.advanced > summary {
+  min-height: 44px;
+  padding: 12px 4px;
+  color: var(--foreground-secondary);
+  cursor: pointer;
+  font-size: .875rem;
+}
+
+.advanced > summary:focus-visible {
+  outline: 2px solid var(--accent-brand);
+  outline-offset: 3px;
+}
+
 .hero,
 .card {
   border: 1px solid var(--card-border);

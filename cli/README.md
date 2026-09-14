@@ -2,13 +2,21 @@
 
 知萃普通用户能力的 Node 22 CLI 与本地 MCP 入口。它只调用版本化 Action 接口，不包含管理端、数据库、任意 Shell、Cookie、JWT、API Key 或内部视频研究工具。
 
+桌面客户端内置 CLI 和 Skill，可以在「Agent 接入」中安装到 Codex / Claude Code，再完成独立设备授权，无需安装 Node 或等待 npm 发布。独立 CLI 可从已审核的本地发行包安装；安装后执行：
+
 ```bash
-npx @zhicui/cli auth login
-npx @zhicui/cli library list --json
-npx @zhicui/cli creator --help --json
-npx @zhicui/cli run actions --json
-npx @zhicui/cli mcp serve --stdio
+zhicui auth login
+zhicui library list --json
+zhicui creator --help --json
+zhicui run actions --json
+zhicui mcp serve --stdio
 ```
+
+`zhicui agent doctor --client codex --json` 分别返回 `configured`（有注册）、`configuration_ready`（当前入口和 Skill 正确）、`authenticated`（授权已验证）、`cloud_available`（Agent 接口可用）和 `mcp_healthy`（真正启动 stdio 并成功发现业务工具）。只有全部满足时 `ready` / `ok` 才为真。网站健康另记 `service_available`，不能替代 Agent 接口状态。
+
+`agent update` 可迁移旧入口；桌面启动使用 `agent reconcile --client all --json --non-interactive`，只核对已接入项。CLI 按原安装完整性记录，或已验收发行包的全部执行文件 SHA-256 识别旧注册，不执行旧路径。未知同名配置返回 `AGENT_CONFIG_CONFLICT`，可升级旧入口返回 `AGENT_UPDATE_REQUIRED`。改动过的受管 Skill 会先保存原文备份再同步新版；无所有权标记的自定义 Skill 保留并返回 `SKILL_CONFLICT`。
+
+桌面独立授权协议为 `auth login --jsonl --no-open --non-interactive --timeout 10m`。首条 `device_authorization` 事件包含官方 `verification_url`、`user_code`、`scopes`、`expires_at` 和 `interval_seconds`；用户在浏览器批准后，CLI 将凭据存入系统存储，再发送唯一终态 `authorization_complete`。机器授权码和令牌不出现在事件中。取消时结束该独立进程，原凭据保留；授权过程中另一次登录、退出或新授权会阻止旧结果覆盖当前凭据。
 
 设备授权默认只申请普通用户的只读 scope；需要导入、同步、提问或修改计划时，
 请在授权中心明确增选对应写入 scope，CLI 不会自行扩权。

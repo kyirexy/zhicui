@@ -169,17 +169,29 @@ export type DesktopAgentOperation =
   | 'doctor'
   | 'status'
   | 'update'
-  | 'uninstall';
+  | 'uninstall'
+  | 'authorize'
+  | 'cancel_authorization';
 
 export interface DesktopAgentIntegrationRequest {
   client: DesktopAgentClient;
   operation: DesktopAgentOperation;
+  authorization_id?: string;
 }
 
 export interface DesktopAgentClientStatus {
   client: DesktopAgentClient;
   installed: boolean;
   configured: boolean;
+  managed?: boolean;
+  skill_current?: boolean;
+  authenticated?: boolean;
+  cloud_available?: boolean;
+  mcp_healthy?: boolean;
+  ready?: boolean;
+  local_available?: boolean;
+  account_binding_verified?: boolean;
+  code?: string;
   version?: string;
   message: string;
 }
@@ -189,6 +201,9 @@ export interface DesktopAgentIntegrationOverview {
   cli_available: boolean;
   cli_version?: string;
   clients: DesktopAgentClientStatus[];
+  capabilities?: { version: 2; supports_authorization: true; managed_updates: true };
+  setup_prompt?: string;
+  authorization?: DesktopAgentAuthorizationStatus;
   code?: string;
   message?: string;
 }
@@ -201,8 +216,26 @@ export interface DesktopAgentIntegrationResult {
   message: string;
   installed?: boolean;
   configured?: boolean;
+  managed?: boolean;
+  skill_current?: boolean;
+  authenticated?: boolean;
+  cloud_available?: boolean;
+  mcp_healthy?: boolean;
+  ready?: boolean;
+  local_available?: boolean;
+  account_binding_verified?: boolean;
   version?: string;
   diagnostics?: string[];
+}
+
+export interface DesktopAgentAuthorizationStatus {
+  client: DesktopAgentClient;
+  authorization_id?: string;
+  status: 'starting' | 'waiting' | 'success' | 'cancelled' | 'error';
+  user_code?: string;
+  expires_at?: string;
+  message: string;
+  code?: string;
 }
 
 export interface DesktopMediaSettings {
@@ -264,6 +297,9 @@ export interface ZhicuiDesktopBridge {
   runAgentIntegrationAction(
     request: DesktopAgentIntegrationRequest,
   ): Promise<DesktopAgentIntegrationResult>;
+  onAgentAuthorizationStatus?(
+    listener: (status: DesktopAgentAuthorizationStatus) => void,
+  ): () => void;
   getMediaSettings(): Promise<DesktopMediaSettings>;
   setMediaAutoSave(enabled: boolean): Promise<DesktopMediaSettings>;
   chooseMediaDirectory(): Promise<DesktopMediaSettings>;

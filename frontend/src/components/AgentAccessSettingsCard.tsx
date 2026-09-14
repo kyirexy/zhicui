@@ -6,7 +6,6 @@ import {
   ChevronRight,
   CircleX,
   Clipboard,
-  Cloud,
   Code2,
   KeyRound,
   Laptop,
@@ -50,23 +49,26 @@ import {
 } from '@/lib/agentAccessUi';
 import {
   supportsDesktopAgentIntegration,
+  type DesktopAgentAuthorizationStatus,
   type DesktopAgentClient,
   type DesktopAgentIntegrationOverview,
   type DesktopAgentOperation,
 } from '@/lib/desktopRuntime';
 import styles from './AgentAccessSettingsCard.module.css';
+import AgentQuickConnect from './AgentQuickConnect';
 
 const FALLBACK_SCOPES: AgentScopeDefinition[] = [
   { id: 'library:read', title: '读取资料', description: '查看你已保存的视频资料与文稿。' },
   { id: 'ask:run', title: '发起问答', description: '基于你选择的资料创建和继续问答。' },
   { id: 'knowledge:read', title: '读取知识', description: '查看你保存的知识与卡片。' },
   { id: 'plan:read', title: '读取计划', description: '查看你的计划与任务状态。' },
+  { id: 'plan:write', title: '整理计划', description: '创建和更新你的计划与任务。' },
+  { id: 'knowledge:write', title: '整理知识', description: '保存和更新你的知识内容。' },
+  { id: 'local:invoke', title: '使用本机同步', description: '由桌面客户端执行你发起的视频同步。' },
   { id: 'creator:sync', title: '手动同步博主', description: '只在 Agent 明确调用时启动一次同步。' },
   { id: 'library:write', title: '整理资料', description: '导入链接、提取文稿并修改资料。' },
 ];
 
-const INSTALL_COMMAND = 'npm install -g @zhicui/cli';
-const NPX_COMMAND = 'npx @zhicui/cli auth login';
 const LOGIN_COMMAND = 'zhicui auth login';
 const LOCAL_MCP_SETUP_COMMAND = 'zhicui agent setup --client all';
 const REMOTE_MCP_COMMAND = 'codex mcp add zhicui --url https://luxai.cn/mcp --bearer-token-env-var ZHICUI_AGENT_TOKEN';
@@ -143,6 +145,14 @@ export default function AgentAccessSettingsCard({
   const [desktopOverview, setDesktopOverview] = useState<DesktopAgentIntegrationOverview | null>(null);
   const [localPending, setLocalPending] = useState('');
   const [pendingLocalRemoval, setPendingLocalRemoval] = useState<DesktopAgentClient | null>(null);
+  const [automaticAuthorization, setAutomaticAuthorization] = useState(false);
+  const [manualAuthorizationOpen, setManualAuthorizationOpen] = useState(false);
+  const localPendingRef = useRef('');
+  const authorizationRevision = useRef(0);
+  const authorizationCodeRef = useRef('');
+  const localActionRevision = useRef(0);
+  const runningLocalAction = useRef<number | null>(null);
+  const activeAuthorizationRef = useRef<{ client: DesktopAgentClient; id: string } | null>(null);
   const desktopBridge = typeof window === 'undefined' ? undefined : window.zhicuiDesktop;
 
   const loadAccessData = useCallback(async () => {
@@ -183,13 +193,70 @@ export default function AgentAccessSettingsCard({
     setLoading(false);
   }, []);
 
+  const handleDesktopAuthorization = useCallback((event: DesktopAgentAuthorizationStatus) => {
+      if (!mountedRef.current) return;
+      if (activeAuthorizationRef.current && activeAuthorizationRef.current.id !== event.authorization_id) return;
+      if (event.status === 'waiting' && event.user_code) {
+        if (!event.authorization_id) return;
+        activeAuthorizationRef.current = { client: event.client, id: event.authorization_id };
+        localPendingRef.current = `${event.client}:authorize`;
+        setLocalPending(localPendingRef.current);
+        if (authorizationCodeRef.current === event.user_code) return;
+        authorizationCodeRef.current = event.user_code;
+        const revision = ++authorizationRevision.current;
+        setAutomaticAuthorization(true);
+        setDeviceApprovalComplete(false);
+        setDeviceApprovalPending('');
+        setDeviceRequestPreview(null);
+        setPreviewedDeviceCode('');
+        setDeviceUserCode(event.user_code);
+        setDevicePreviewPending(true);
+        void getAgentDeviceAuthorizationRequest(event.user_code).then((preview) => {
+          if (!mountedRef.current || authorizationRevision.current !== revision) return;
+          setDeviceRequestPreview(preview);
+          setPreviewedDeviceCode(event.user_code!);
+        }).catch(() => {
+          if (mountedRef.current && authorizationRevision.current === revision) {
+            setErrorContext('local');
+            setError('暂时无法读取授权信息，请取消后重新连接。');
+          }
+        }).finally(() => {
+          if (mountedRef.current && authorizationRevision.current === revision) setDevicePreviewPending(false);
+        });
+      } else if (event.status === 'success' || event.status === 'cancelled' || event.status === 'error') {
+        if (!activeAuthorizationRef.current) return;
+        authorizationRevision.current += 1;
+        authorizationCodeRef.current = '';
+        activeAuthorizationRef.current = null;
+        if (runningLocalAction.current === null) {
+          localPendingRef.current = '';
+          setLocalPending('');
+        }
+        setDevicePreviewPending(false);
+        setAutomaticAuthorization(false);
+        setDeviceUserCode('');
+        setDeviceRequestPreview(null);
+        setPreviewedDeviceCode('');
+        if (event.status === 'success') {
+          void loadAccessData();
+          void window.zhicuiDesktop?.getAgentIntegrationStatus?.().then((overview) => {
+            if (mountedRef.current) setDesktopOverview(overview);
+          }).catch(() => undefined);
+        }
+      }
+  }, [loadAccessData]);
+
   const loadDesktopStatus = useCallback(async () => {
     if (!canRunLocalAgentActions(platform)) return;
     const bridge = window.zhicuiDesktop;
     if (!supportsDesktopAgentIntegration(bridge)) return;
+    const revision = authorizationRevision.current;
     try {
       const overview = await bridge.getAgentIntegrationStatus();
-      if (mountedRef.current) setDesktopOverview(overview);
+      if (mountedRef.current && authorizationRevision.current === revision) {
+        setDesktopOverview(overview);
+        if (overview.authorization) handleDesktopAuthorization(overview.authorization);
+      }
     } catch (statusError) {
       if (mountedRef.current) {
         setDesktopOverview({
@@ -201,7 +268,7 @@ export default function AgentAccessSettingsCard({
         });
       }
     }
-  }, [platform]);
+  }, [platform, handleDesktopAuthorization]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -214,8 +281,24 @@ export default function AgentAccessSettingsCard({
     };
   }, [loadAccessData, loadDesktopStatus]);
 
+  useEffect(() => {
+    const bridge = window.zhicuiDesktop;
+    if (!bridge?.onAgentAuthorizationStatus) return;
+    const unsubscribe = bridge.onAgentAuthorizationStatus(handleDesktopAuthorization);
+    return () => {
+      unsubscribe();
+      authorizationRevision.current += 1;
+      authorizationCodeRef.current = '';
+      const active = activeAuthorizationRef.current;
+      if (active) {
+        void bridge.runAgentIntegrationAction?.({ client: active.client, operation: 'cancel_authorization', authorization_id: active.id }).catch(() => undefined);
+      }
+    };
+  }, [handleDesktopAuthorization]);
+
   const previewDeviceRequest = async () => {
     const code = deviceUserCode.trim().toUpperCase();
+    const revision = authorizationRevision.current;
     if (code.length < 8) {
       setErrorContext('global');
       setError('请输入 CLI 中显示的完整授权码');
@@ -227,19 +310,22 @@ export default function AgentAccessSettingsCard({
     setNotice('');
     try {
       const preview = await getAgentDeviceAuthorizationRequest(code);
+      if (!mountedRef.current || authorizationRevision.current !== revision) return;
       setDeviceRequestPreview(preview);
       setPreviewedDeviceCode(code);
     } catch (previewError) {
+      if (!mountedRef.current || authorizationRevision.current !== revision) return;
       setDeviceRequestPreview(null);
       setPreviewedDeviceCode('');
       setError(previewError instanceof Error ? previewError.message : '读取 Agent 授权请求失败');
     } finally {
-      setDevicePreviewPending(false);
+      if (mountedRef.current && authorizationRevision.current === revision) setDevicePreviewPending(false);
     }
   };
 
   const submitDeviceApproval = async (approve: boolean) => {
     const code = deviceUserCode.trim().toUpperCase();
+    const revision = authorizationRevision.current;
     if (code.length < 8) {
       setErrorContext('global');
       setError('请输入 CLI 中显示的完整授权码');
@@ -256,6 +342,7 @@ export default function AgentAccessSettingsCard({
     setNotice('');
     try {
       const result = await approveAgentDeviceAuthorization(code, approve);
+      if (!mountedRef.current || authorizationRevision.current !== revision) return;
       setDeviceApprovalComplete(true);
       setDeviceRequestPreview(null);
       setPreviewedDeviceCode('');
@@ -265,13 +352,14 @@ export default function AgentAccessSettingsCard({
           : '已拒绝本次连接请求。CLI 不会获得访问权限。',
       );
       if (approve) await loadAccessData();
+      if (!mountedRef.current || authorizationRevision.current !== revision) return;
       const url = new URL(window.location.href);
       url.searchParams.delete('user_code');
       window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
     } catch (approvalError) {
-      setError(approvalError instanceof Error ? approvalError.message : '处理 Agent 授权失败');
+      if (mountedRef.current && authorizationRevision.current === revision) setError(approvalError instanceof Error ? approvalError.message : '处理 Agent 授权失败');
     } finally {
-      setDeviceApprovalPending('');
+      if (mountedRef.current && authorizationRevision.current === revision) setDeviceApprovalPending('');
     }
   };
 
@@ -422,21 +510,60 @@ export default function AgentAccessSettingsCard({
       setError('当前 Windows 客户端版本不支持 Agent 接入，请先更新客户端');
       return;
     }
+    if (operation === 'cancel_authorization') {
+      const active = activeAuthorizationRef.current;
+      if (!active) return;
+      await bridge.runAgentIntegrationAction({ client: active.client, operation, authorization_id: active.id }).catch(() => {
+        if (mountedRef.current) { setErrorContext('local'); setError('取消未完成，请稍后重试。'); }
+      });
+      return;
+    }
+    if (localPendingRef.current) return;
+    const actionRevision = ++localActionRevision.current;
+    runningLocalAction.current = actionRevision;
+    const ownsAction = () => mountedRef.current && localActionRevision.current === actionRevision;
+    const authorizationId = operation === 'authorize' ? crypto.randomUUID() : undefined;
+    if (authorizationId) activeAuthorizationRef.current = { client, id: authorizationId };
     const key = `${client}:${operation}`;
+    localPendingRef.current = key;
     setLocalPending(key);
     setErrorContext('local');
     setError('');
     setNotice('');
     try {
-      const result = await bridge.runAgentIntegrationAction({ client, operation });
+      const result = await bridge.runAgentIntegrationAction({ client, operation, ...(authorizationId ? { authorization_id: authorizationId } : {}) });
+      if (!ownsAction()) return;
+      if (result.code === 'AUTHORIZATION_CANCELLED') { setNotice('已取消授权'); return; }
       if (!result.success) throw new Error(result.message || '本机操作没有完成');
       setNotice(result.message || '本机 Agent 配置已更新');
       if (operation === 'uninstall') setPendingLocalRemoval(null);
+      if (operation === 'setup' && desktopOverview?.capabilities?.supports_authorization && !interfaceDisabled) {
+        const checked = await bridge.getAgentIntegrationStatus();
+        if (!ownsAction()) return;
+        setDesktopOverview(checked);
+        const clientStatus = checked.clients.find((item) => item.client === client);
+        if (clientStatus?.configured && clientStatus.authenticated === false && !['INTERFACE_DISABLED', 'ROLLOUT_RESTRICTED'].includes(clientStatus.code || '')) {
+          localPendingRef.current = `${client}:authorize`;
+          setLocalPending(localPendingRef.current);
+          const id = crypto.randomUUID();
+          activeAuthorizationRef.current = { client, id };
+          const authorization = await bridge.runAgentIntegrationAction({ client, operation: 'authorize', authorization_id: id });
+          if (!ownsAction()) return;
+          if (authorization.code === 'AUTHORIZATION_CANCELLED') { setNotice('已取消授权'); return; }
+          if (!authorization.success) throw new Error(authorization.message || '授权尚未完成');
+          setNotice(authorization.message);
+        }
+      }
       await loadDesktopStatus();
     } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : '本机 Agent 操作失败');
+      if (ownsAction()) setError(actionError instanceof Error ? actionError.message : '本机 Agent 操作失败');
     } finally {
-      setLocalPending('');
+      if (localActionRevision.current === actionRevision) {
+        runningLocalAction.current = null;
+        activeAuthorizationRef.current = null;
+        localPendingRef.current = '';
+        if (mountedRef.current) setLocalPending('');
+      }
     }
   };
 
@@ -453,10 +580,9 @@ export default function AgentAccessSettingsCard({
       <section className={styles.hero} aria-labelledby="agent-access-title">
         <div className={styles.heroIcon} aria-hidden="true"><Bot size={22} /></div>
         <div className={styles.heroCopy}>
-          <h2 id="agent-access-title">让你自己的 Agent 使用知萃</h2>
+          <h2 id="agent-access-title">Agent 接入</h2>
           <p>
-            Codex、Claude Code 等本地 Agent 可以通过受限 Action 读取和整理你的资料。
-            管理端、任意 Shell、Cookie、JWT、API Key 和临时媒体地址始终不会开放。
+            把知萃连接到你常用的 AI 工具，直接使用已保存的视频和知识。
           </p>
         </div>
         <span className={styles.platformBadge}>
@@ -464,33 +590,36 @@ export default function AgentAccessSettingsCard({
         </span>
       </section>
 
+      <AgentQuickConnect
+        desktop={canRunLocalAgentActions(platform)}
+        bridgeAvailable={supportsDesktopAgentIntegration(desktopBridge)}
+        overview={desktopOverview}
+        interfaceDisabled={interfaceDisabled}
+        pending={localPending}
+        copied={copied === 'agent-prompt'}
+        onAction={(client, operation) => void runDesktopAction(client, operation)}
+        onCopy={(text) => void runCopy('agent-prompt', text)}
+      />
+
       {notice && <div className={styles.noticeBanner} role="status">{notice}</div>}
-      {error && errorContext === 'global' && (
+      {error && errorContext === 'global' && !interfaceDisabled && (
         <div className={styles.errorBanner} role="alert">{error}</div>
       )}
 
-      {interfaceDisabled && (
-        <section className={styles.card} aria-labelledby="agent-disabled-title">
-          <header className={styles.cardHeader}>
-            <span className={styles.cardIcon}><Cloud size={19} /></span>
-            <div>
-              <h3 id="agent-disabled-title">Agent 接入尚未在当前环境开放</h3>
-              <p>授权、PAT、远程 MCP 和本机连接入口会在服务启用后显示。</p>
-            </div>
-          </header>
-        </section>
+      {error && errorContext === 'local' && (
+        <div className={styles.errorBanner} role="alert">{error}</div>
       )}
 
-      {!interfaceDisabled && <section className={`${styles.card} ${styles.authorizationCard}`} aria-labelledby="device-authorization-title">
+      {!interfaceDisabled && (deviceUserCode || manualAuthorizationOpen) && <section className={`${styles.card} ${styles.authorizationCard}`} aria-labelledby="device-authorization-title">
         <header className={styles.cardHeader}>
           <span className={styles.cardIcon}><ShieldCheck size={19} /></span>
           <div>
-            <h3 id="device-authorization-title">批准本地 Agent 登录</h3>
-            <p>核对 CLI 中显示的授权码。只有你点击允许后，当前设备才会获得所选权限。</p>
+            <h3 id="device-authorization-title">确认连接权限</h3>
+            <p>{automaticAuthorization ? '请核对下面的请求方和权限，再决定是否允许连接。' : '输入 Agent 提供的授权码，核对后允许连接。'}</p>
           </div>
         </header>
         <div className={styles.authorizationForm}>
-          <label>
+          {!automaticAuthorization && <label>
             <span>授权码</span>
             <input
               value={deviceUserCode}
@@ -501,13 +630,15 @@ export default function AgentAccessSettingsCard({
               spellCheck={false}
               placeholder="例如 ZHC-8K4M"
               onChange={(event) => {
+                authorizationRevision.current += 1;
+                setDevicePreviewPending(false);
                 setDeviceApprovalComplete(false);
                 setDeviceRequestPreview(null);
                 setPreviewedDeviceCode('');
                 setDeviceUserCode(event.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, ''));
               }}
             />
-          </label>
+          </label>}
           <div className={styles.authorizationActions}>
             <button
               type="button"
@@ -515,7 +646,7 @@ export default function AgentAccessSettingsCard({
               onClick={() => void previewDeviceRequest()}
             >
               {devicePreviewPending ? <Loader2 size={16} /> : <ShieldCheck size={16} />}
-              核对权限
+              {devicePreviewPending ? '正在读取权限…' : '核对权限'}
             </button>
             <button
               type="button"
@@ -663,27 +794,17 @@ export default function AgentAccessSettingsCard({
       )}
 
       {!interfaceDisabled && canShowAgentInstallGuide(platform) && (
+        <details className={styles.advanced}>
+        <summary>高级接入：已有 CLI 或远程 MCP</summary>
         <section className={styles.card} aria-labelledby="agent-install-title">
           <header className={styles.cardHeader}>
             <span className={styles.cardIcon}><Code2 size={19} /></span>
             <div>
-              <h3 id="agent-install-title">安装 CLI 与本地 MCP</h3>
-              <p>网页只负责授权和配置，不提供命令终端，也不能操作你的电脑。</p>
+              <h3 id="agent-install-title">已有 CLI 的连接方式</h3>
+              <p>推荐使用上方的客户端安装连接。以下命令适用于已自行安装 CLI 的用户。</p>
             </div>
           </header>
           <div className={styles.commandGrid}>
-            <CommandRow
-              label="全局安装"
-              value={INSTALL_COMMAND}
-              copied={copied === 'install'}
-              onCopy={() => void runCopy('install', INSTALL_COMMAND)}
-            />
-            <CommandRow
-              label="免安装试用"
-              value={NPX_COMMAND}
-              copied={copied === 'npx'}
-              onCopy={() => void runCopy('npx', NPX_COMMAND)}
-            />
             <CommandRow
               label="浏览器授权"
               value={LOGIN_COMMAND}
@@ -715,16 +836,20 @@ export default function AgentAccessSettingsCard({
             {' '}<code>ZHICUI_AGENT_TOKEN</code> 环境变量；Codex 配置只保存变量名，不保存令牌明文。
             Claude Code 首版使用上面的本地 stdio MCP，避免把 PAT 写入其配置文件。
           </p>
+          <button type="button" className={styles.primaryAction} onClick={() => setManualAuthorizationOpen(true)}>输入其他设备的授权码</button>
         </section>
+        </details>
       )}
 
-      {!interfaceDisabled && canRunLocalAgentActions(platform) && (
+      {canRunLocalAgentActions(platform) && (
+        <details className={styles.advanced}>
+        <summary>连接管理与诊断</summary>
         <section className={styles.card} aria-labelledby="desktop-agent-title">
           <header className={styles.cardHeader}>
             <span className={styles.cardIcon}><Laptop size={19} /></span>
             <div>
-              <h3 id="desktop-agent-title">连接 Windows 本机 Agent</h3>
-              <p>按钮只执行知萃内置的固定安装与诊断动作，不接收命令、路径或密钥。</p>
+              <h3 id="desktop-agent-title">管理本机连接</h3>
+              <p>重新检查、更新或解除已安装的连接。</p>
             </div>
             <button
               type="button"
@@ -736,9 +861,6 @@ export default function AgentAccessSettingsCard({
               <RefreshCw size={16} />
             </button>
           </header>
-          {error && errorContext === 'local' && (
-            <p className={styles.inlineError} role="alert">{error}</p>
-          )}
           {!supportsDesktopAgentIntegration(desktopBridge) ? (
             <p className={styles.emptyState}>请先更新 Windows 客户端，再连接本机 Agent。</p>
           ) : (
@@ -753,10 +875,10 @@ export default function AgentAccessSettingsCard({
                       <span className={styles.agentMark}>{client === 'codex' ? 'C' : 'A'}</span>
                       <span>
                         <strong>{title}</strong>
-                        <small>{status?.message || (configured ? '已连接知萃' : '尚未连接')}</small>
+                        <small>{status?.message || (configured ? '连接已安装，尚未检查' : '尚未安装连接')}</small>
                       </span>
-                      <b className={configured ? styles.statusActive : styles.statusQuiet}>
-                        {configured ? '已连接' : status?.installed ? '可连接' : '未检测到'}
+                      <b className={status?.ready ? styles.statusActive : styles.statusQuiet}>
+                        {status?.ready ? '检查通过' : configured ? '已安装' : status?.installed ? '可安装' : '未检测到'}
                       </b>
                     </div>
                     <div className={styles.localActions}>
@@ -822,9 +944,12 @@ export default function AgentAccessSettingsCard({
             </div>
           </dialog>
         </section>
+        </details>
       )}
 
-      {!interfaceDisabled && <section className={styles.card} aria-labelledby="pat-title">
+      {!interfaceDisabled && <details className={styles.advanced}>
+      <summary>高级接入：个人访问令牌</summary>
+      <section className={styles.card} aria-labelledby="pat-title">
         <header className={styles.cardHeader}>
           <span className={styles.cardIcon}><KeyRound size={19} /></span>
           <div>
@@ -905,7 +1030,7 @@ export default function AgentAccessSettingsCard({
             创建 PAT
           </button>
         </div>
-      </section>}
+      </section></details>}
 
       {!interfaceDisabled && <section className={styles.card} aria-labelledby="connections-title">
         <header className={styles.cardHeader}>

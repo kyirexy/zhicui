@@ -109,7 +109,7 @@ function helpPayload(): Record<string, unknown> {
       'run actions',
       'run describe <action_id>',
       'mcp serve --stdio',
-      'agent setup|doctor|status|update|uninstall [--client all|codex|claude]',
+      'agent setup|doctor|status|update|reconcile|uninstall [--client all|codex|claude]',
       'account export --output <new-file.zip>  # password via no-echo stdin',
       'account delete                          # password + phrase via no-echo stdin',
       'models custom-create --name <name> --provider-name <provider> --model <model> --api-base <url> [--select] [--disabled] [--confirmation-id <id>]  # 先批准，再用无回显 stdin 输入 API Key',
@@ -226,27 +226,49 @@ async function authCommand(
   const scopes = scopesValue
     ? scopesValue.split(',').map((value) => value.trim()).filter(Boolean)
     : DEFAULT_DEVICE_SCOPES;
+  const authorizationSession = await credentials.beginDeviceAuthorization();
   const started = await client.startDeviceAuthorization(scopes);
   const deviceCode = typeof started.device_code === 'string' ? started.device_code : '';
   const userCode = typeof started.user_code === 'string' ? started.user_code : '';
-  const verificationUrl = typeof started.verification_uri_complete === 'string'
+  const rawVerificationUrl = typeof started.verification_uri_complete === 'string'
     ? started.verification_uri_complete
     : typeof started.verification_uri === 'string'
       ? started.verification_uri
       : '';
-  if (!deviceCode || !userCode || !verificationUrl) {
+  if (!deviceCode || !/^[A-Za-z0-9-]{3,64}$/u.test(userCode) || !rawVerificationUrl) {
     throw new CliError('REMOTE_FAILURE', '设备授权响应字段不完整');
   }
+  let parsedVerification: URL;
+  try { parsedVerification = new URL(rawVerificationUrl); }
+  catch { throw new CliError('REMOTE_FAILURE', '设备授权地址无效'); }
+  if (parsedVerification.origin !== new URL(options.apiUrl).origin
+    || parsedVerification.username || parsedVerification.password) {
+    throw new CliError('REMOTE_FAILURE', '设备授权地址不是当前知萃服务');
+  }
+  // 只公开用户验证码；不原样输出服务端查询串，避免意外携带机器授权码。
+  const publicVerification = new URL(options.apiUrl === 'https://luxai.cn'
+    ? '/agent/authorize' : parsedVerification.pathname, options.apiUrl);
+  publicVerification.searchParams.set('user_code', userCode);
+  const verificationUrl = publicVerification.toString();
+  let intervalMs = Math.max(1_000, Math.min(60_000, Number(started.interval || 5) * 1_000));
+  const serverExpiry = Math.max(1_000, Math.min(600_000, Number(started.expires_in || 600) * 1_000));
+  if (!Number.isFinite(intervalMs) || !Number.isFinite(serverExpiry)) {
+    throw new CliError('REMOTE_FAILURE', '设备授权有效期无效');
+  }
+  const deadline = Date.now() + Math.min(serverExpiry, options.timeoutMs);
+  if (options.jsonl) writer.event({
+    sequence: 1, event: 'device_authorization', status: 'waiting_for_user', terminal: false,
+    verification_url: verificationUrl, user_code: userCode,
+    expires_at: new Date(deadline).toISOString(), interval_seconds: intervalMs / 1_000, scopes,
+  });
   writer.diagnostic('请求方：知萃 CLI（当前命令行设备）');
   writer.diagnostic(`请求权限：${scopes.join(', ')}`);
   writer.diagnostic(`请在浏览器确认知萃授权，验证码：${userCode}`);
   writer.diagnostic(`授权地址：${verificationUrl}`);
   if (!noOpen) await openBrowser(verificationUrl).catch(() => undefined);
-  let intervalMs = Math.max(1_000, Number(started.interval || 5) * 1_000);
-  const serverExpiry = Math.max(10_000, Number(started.expires_in || 600) * 1_000);
-  const deadline = Date.now() + Math.min(serverExpiry, options.timeoutMs);
   while (Date.now() < deadline) {
-    await delay(intervalMs);
+    await delay(Math.min(intervalMs, Math.max(0, deadline - Date.now())));
+    if (Date.now() >= deadline) break;
     try {
       const data = await client.pollDeviceAuthorization(deviceCode);
       const accessToken = typeof data.access_token === 'string' ? data.access_token : '';
@@ -279,15 +301,21 @@ async function authCommand(
         scopes: returnedScopes.filter((scope): scope is string => typeof scope === 'string'),
         created_at: new Date().toISOString(),
       };
-      await credentials.save(credential);
-      writer.result({
+      if (!await credentials.completeDeviceAuthorization(authorizationSession, credential)) {
+        throw new CliError('AUTH_REQUIRED', '授权期间登录状态已更改，请重新授权');
+      }
+      const publicResult = {
         authenticated: true,
         kind: 'device',
-        token_prefix: credential.token_prefix,
         expires_at: credential.expires_at || null,
         scopes: credential.scopes,
         store: credentials.store.kind,
+      };
+      if (options.jsonl) writer.event({
+        sequence: 2, event: 'authorization_complete', status: 'succeeded', terminal: true,
+        ...publicResult,
       });
+      else writer.result(publicResult);
       return;
     } catch (error) {
       const normalized = normalizeUnknownError(error);
@@ -735,27 +763,63 @@ async function agentCommand(
   const manager = new AgentClientManager(options.timeoutMs);
   if (command === 'setup') writer.result(await manager.setup(selection));
   else if (command === 'update') writer.result(await manager.update(selection));
+  else if (command === 'reconcile') writer.result(await manager.reconcile(selection));
   else if (command === 'uninstall') writer.result(await manager.uninstall(selection));
   else if (command === 'status') writer.result(await manager.status(selection));
   else if (command === 'doctor') {
-    const credential = await credentials.status();
+    const configuration = await manager.doctor(selection);
+    const client = clientFor(options, credentials);
+    let credential: Record<string, unknown>;
+    let errorCode: string | null = null;
+    try { credential = await credentials.status(); }
+    catch (error) { credential = { authenticated: false }; errorCode = normalizeUnknownError(error).code; }
+    let authenticated = false;
+    let cloudAvailable = false;
+    let serviceAvailable = false;
     let expectedUserHash: string | null = null;
-    let bindingVerified = false;
+    let actions = 0;
+    let featureEnabled = false;
     if (credential.authenticated === true) {
       try {
-        const capabilities = await clientFor(options, credentials).capabilities();
+        const capabilities = await client.capabilities();
+        authenticated = true;
+        serviceAvailable = true;
+        featureEnabled = capabilities.feature_enabled !== false;
+        cloudAvailable = featureEnabled;
         expectedUserHash = capabilities.user_hash || null;
-      } catch {
-        expectedUserHash = null;
-      }
-    }
-    bindingVerified = Boolean(expectedUserHash);
+        actions = capabilities.actions.filter((action) => action.available && action.mcp_exposed && !action.secure_direct).length;
+        if (!featureEnabled) errorCode = 'INTERFACE_DISABLED';
+        else if (!actions) errorCode = 'TOOLS_UNAVAILABLE';
+      } catch (error) { errorCode = normalizeUnknownError(error).code; }
+    } else errorCode ||= 'AUTH_REQUIRED';
+    if (!serviceAvailable) serviceAvailable = await client.serviceHealth().catch(() => false);
+    const mcp = authenticated && featureEnabled && actions > 0
+      ? await manager.mcpHealth(options.profile, options.apiUrl)
+      : { ok: false, tool_count: 0, code: 'NOT_CHECKED' };
+    const checks = (configuration.checks as Record<string, unknown>[]).map((check) => {
+      const configured = check.configured === true;
+      const configurationReady = check.ok === true;
+      const ready = configurationReady && authenticated && cloudAvailable && mcp.ok;
+      const configurationCode = check.migration_available === true ? 'AGENT_UPDATE_REQUIRED'
+        : check.configured === true && check.managed !== true ? 'AGENT_CONFIG_CONFLICT' : 'CONFIGURATION_REQUIRED';
+      return { ...check, configured, configuration_ready: configurationReady, authenticated, cloud_available: cloudAvailable,
+        mcp_healthy: mcp.ok, ready, ok: ready,
+        code: ready ? 'READY' : !configurationReady ? configurationCode : errorCode || mcp.code };
+    });
+    const configured = checks.every((check) => check.configured);
+    const configurationReady = checks.every((check) => check.configuration_ready);
+    const ready = checks.every((check) => check.ready);
     writer.result({
-      ...await manager.doctor(selection),
-      credential,
+      ...configuration, checks, ok: ready, ready, configured, configuration_ready: configurationReady, authenticated,
+      cloud_available: cloudAvailable, service_available: serviceAvailable, mcp_healthy: mcp.ok,
+      code: ready ? 'READY' : !configurationReady ? checks.find((check) => !check.configuration_ready)?.code : errorCode || mcp.code,
+      credential: { ...credential, authenticated, present: credential.authenticated === true, valid: authenticated },
+      authorization: { verified: authenticated, code: errorCode },
+      cloud: { available: cloudAvailable, service_available: serviceAvailable, feature_enabled: featureEnabled, actions },
+      mcp,
       local: {
         ...await new RestrictedLocalAdapter().status(expectedUserHash),
-        account_binding_verified: bindingVerified,
+        account_binding_verified: Boolean(expectedUserHash),
       },
     });
   } else throw usageError(`未知 agent 命令：${command}`);

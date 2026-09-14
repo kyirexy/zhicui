@@ -1,0 +1,23 @@
+.panel { padding: 24px; border: 1px solid var(--card-border); border-radius: 12px; background: var(--card-bg); color: var(--foreground); }
+.heading h3 { margin: 0; font-size: 1.1rem; font-weight: 700; }
+.heading p, .webHint { margin: 8px 0 0; font-size: .875rem; line-height: 1.65; color: var(--foreground-secondary); }
+.choices { display: flex; gap: 8px; margin-top: 20px; }
+.panel button, .actions a { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 10px 16px; border: 1px solid var(--card-border); border-radius: 8px; background: var(--card-bg); color: var(--foreground); font: inherit; font-size: .875rem; cursor: pointer; text-decoration: none; }
+.choices button[aria-pressed='true'] { border-color: var(--accent-brand); color: var(--accent-brand); background: color-mix(in srgb, var(--accent-brand) 7%, var(--card-bg)); }
+.panel button:focus-visible, .actions a:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 3px; }
+.panel button:disabled { cursor: default; opacity: .55; }
+.panel button:not(:disabled):hover, .actions a:hover { filter: brightness(.96); }
+.steps { display: flex; flex-wrap: wrap; gap: 16px 28px; padding: 0; margin: 24px 0; list-style: none; }
+.steps li { display: flex; align-items: center; gap: 8px; font-size: .8125rem; color: var(--foreground-secondary); }
+.steps li > span { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--card-border); font-size: .75rem; }
+.steps li[data-done='true'] > span { background: var(--accent-brand); color: #fff; border-color: var(--accent-brand); }
+.state { border-top: 1px solid var(--card-border); padding-top: 20px; }
+.state strong { font-size: .9375rem; }
+.state p { color: var(--foreground-secondary); margin: 6px 0 0; line-height: 1.65; font-size: .875rem; overflow-wrap: anywhere; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.actions .primary { background: var(--accent-brand); border-color: var(--accent-brand); color: #fff; }
+.hint { margin: 14px 0 0; color: var(--foreground-secondary); font-size: .8125rem; line-height: 1.6; }
+.spinner { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 560px) { .panel { padding: 18px 16px; } .steps { gap: 12px; flex-direction: column; margin: 20px 0; } .actions > button, .actions > a { flex: 1 1 100%; } .choices > button { flex: 1; } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }

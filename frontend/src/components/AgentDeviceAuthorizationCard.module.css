@@ -1,0 +1,58 @@
+.page {
+  display: grid;
+  place-items: start center;
+  padding: 48px 20px;
+  min-width: 0;
+}
+
+.card {
+  width: min(100%, 520px);
+  min-width: 0;
+  padding: 28px;
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  background: var(--card-bg);
+  color: var(--foreground);
+}
+
+.icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 20px;
+  border-radius: 12px;
+  color: var(--accent-brand);
+  background: color-mix(in srgb, var(--accent-brand) 10%, transparent);
+}
+
+.card h1 { margin: 0; font-size: 1.5rem; line-height: 1.4; text-wrap: balance; }
+.card h2 { margin: 0; font-size: 1rem; text-wrap: balance; overflow-wrap: anywhere; }
+.card p { margin: 10px 0; font-size: .875rem; line-height: 1.65; color: var(--text-secondary); text-wrap: pretty; }
+.card .account { margin: 20px 0; overflow-wrap: anywhere; }
+.account strong { color: var(--foreground); }
+.form label { display: block; margin-bottom: 8px; font-size: .875rem; font-weight: 600; }
+.codeRow { display: flex; gap: 8px; min-width: 0; }
+.codeRow input { width: 100%; min-width: 0; font: inherit; font-variant-numeric: tabular-nums; }
+.codeRow input, .card button, .link { min-height: 44px; padding: 10px 14px; border: 1px solid var(--card-border); border-radius: 8px; background: var(--background); color: var(--foreground); }
+.card button { font: inherit; font-size: .875rem; font-weight: 600; cursor: pointer; }
+.codeRow button { flex-shrink: 0; }
+.card button:disabled { opacity: .5; cursor: default; }
+.card button:focus-visible, .codeRow input:focus-visible, .link:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 3px; }
+.preview { margin-top: 20px; padding: 16px; border-radius: 10px; background: var(--background-secondary); }
+.preview ul { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; padding: 0; list-style: none; }
+.preview li { padding: 6px 10px; border: 1px solid var(--card-border); border-radius: 6px; font-size: .8125rem; overflow-wrap: anywhere; }
+.card .expiry { font-size: .75rem; font-variant-numeric: tabular-nums; }
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 24px; }
+.card .primary { border-color: var(--accent-brand); background: var(--accent-brand); color: var(--background); }
+.card .error { color: var(--danger, #dc2626); }
+.card .hint { margin: 16px 0 0; font-size: .75rem; }
+.link { display: inline-flex; align-items: center; margin-top: 12px; text-decoration: none; font-size: .875rem; }
+
+@media (max-width: 480px) {
+  .page { padding: 24px 16px; }
+  .card { padding: 20px; }
+  .card h1 { font-size: 1.25rem; }
+  .codeRow { flex-wrap: wrap; }
+  .codeRow input { flex: 1 1 160px; }
+}

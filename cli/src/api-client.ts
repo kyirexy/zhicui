@@ -257,6 +257,11 @@ export class AgentApiClient {
     return record(envelope.data ?? payload);
   }
 
+  async serviceHealth(): Promise<boolean> {
+    const health = record(await this.request('/api/health', { authenticated: false }));
+    return health.success !== false && Object.keys(health).length > 0;
+  }
+
   async pollDeviceAuthorization(deviceCode: string): Promise<RecordValue> {
     const payload = await this.request('/api/agent-interface/v1/auth/device/token', {
       method: 'POST',

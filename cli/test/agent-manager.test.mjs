@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { cp, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import { dirname, resolve } from 'node:path';
-import { runCli, temporaryDirectory } from './helpers.mjs';
+import { action, credentialEnv, envelope, json, runCli, startServer, temporaryDirectory } from './helpers.mjs';
 
 function fakeEnv(directory) {
   const fake = resolve('test', 'fake-agent-client.mjs');
@@ -46,6 +46,117 @@ function runCliEntry(entry, args, options = {}) {
       resolveResult({ code, stdout, stderr });
     });
     child.stdin.end(options.input || '');
+  });
+}
+
+test('reconcile migrates recorded old install paths, updates Skills and preserves unrelated configuration', async (t) => {
+  const directory = await temporaryDirectory();
+  const previousCli = resolve(directory, 'old-cli');
+  await cp(resolve('dist'), resolve(previousCli, 'dist'), { recursive: true });
+  await cp(resolve('skills'), resolve(previousCli, 'skills'), { recursive: true });
+  await writeFile(resolve(previousCli, 'package.json'), '{"type":"module"}\n');
+  const server = await startServer((_request, response) => json(response, 200, { status: 'ok' }));
+  t.after(server.close);
+  const env = { ...fakeEnv(directory), ...credentialEnv(directory, server.url) };
+  await mkdir(dirname(env.ZHICUI_CODEX_CONFIG), { recursive: true });
+  const original = 'user_setting="must survive migration"\n';
+  await writeFile(env.ZHICUI_CODEX_CONFIG, original);
+  const setup = await runCliEntry(resolve(previousCli, 'dist', 'index.js'), ['agent', 'setup', '--client', 'codex', '--json'], { env });
+  assert.equal(setup.code, 0, setup.stderr);
+  const skill = resolve(directory, 'codex-skills', 'zhicui', 'SKILL.md');
+  const custom = (await readFile(skill, 'utf8')) + '\n用户追加的工作流，请保留。\n';
+  await writeFile(skill, custom);
+  const status = await runCli(['agent', 'status', '--client', 'codex', '--json'], { env });
+  assert.equal(JSON.parse(status.stdout).codex.migration_available, true);
+  const doctor = await runCli(['agent', 'doctor', '--client', 'codex', '--json'], { env });
+  assert.equal(JSON.parse(doctor.stdout).configured, true);
+  assert.equal(JSON.parse(doctor.stdout).configuration_ready, false);
+  assert.equal(JSON.parse(doctor.stdout).code, 'AGENT_UPDATE_REQUIRED');
+  const migrated = await runCli(['agent', 'reconcile', '--client', 'all', '--json'], { env });
+  assert.equal(migrated.code, 0, migrated.stderr);
+  const data = JSON.parse(migrated.stdout);
+  assert.equal(data.codex.migrated, true);
+  assert.equal(data.codex.current, true);
+  assert.equal(data.claude.skipped, true);
+  assert.equal(data.claude.configured, false);
+  assert.equal(await readFile(data.codex.skill_backup, 'utf8'), custom);
+  const repeated = await runCli(['agent', 'reconcile', '--client', 'all', '--json'], { env });
+  assert.equal(JSON.parse(repeated.stdout).codex.changed, false);
+  assert.equal(JSON.parse(await readFile(env.FAKE_CODEX_STATE, 'utf8')).add_count, 2);
+  const removed = await runCli(['agent', 'uninstall', '--client', 'codex', '--json'], { env });
+  assert.equal(removed.code, 0, removed.stderr);
+  assert.match(await readFile(env.ZHICUI_CODEX_CONFIG, 'utf8'), /must survive migration/u);
+});
+
+test('reconcile preserves unknown same-name commands instead of executing or replacing them', async () => {
+  const directory = await temporaryDirectory();
+  const env = fakeEnv(directory);
+  await mkdir(dirname(env.ZHICUI_CODEX_CONFIG), { recursive: true });
+  await writeFile(env.ZHICUI_CODEX_CONFIG, 'custom=true\n');
+  const oldState = { configured: true, add_count: 0, command: process.execPath,
+    args: [resolve(directory, 'untrusted', 'dist', 'index.js'), 'mcp', 'serve', '--stdio'] };
+  await writeFile(env.FAKE_CODEX_STATE, JSON.stringify(oldState));
+  const result = await runCli(['agent', 'reconcile', '--client', 'all', '--json'], { env });
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).codex.code, 'AGENT_CONFIG_CONFLICT');
+  assert.deepEqual(JSON.parse(await readFile(env.FAKE_CODEX_STATE, 'utf8')), oldState);
+  assert.equal(await readFile(env.ZHICUI_CODEX_CONFIG, 'utf8'), 'custom=true\n');
+});
+
+test('a failed migration restores the old registration, provenance and user Skill', async () => {
+  const directory = await temporaryDirectory();
+  const oldCli = resolve(directory, 'old-cli');
+  await cp(resolve('dist'), resolve(oldCli, 'dist'), { recursive: true });
+  await cp(resolve('skills'), resolve(oldCli, 'skills'), { recursive: true });
+  await writeFile(resolve(oldCli, 'package.json'), '{"type":"module"}\n');
+  const env = fakeEnv(directory);
+  const setup = await runCliEntry(resolve(oldCli, 'dist', 'index.js'), ['agent', 'setup', '--client', 'codex', '--json'], { env });
+  assert.equal(setup.code, 0, setup.stderr);
+  const paths = [env.ZHICUI_CODEX_CONFIG, `${env.ZHICUI_CODEX_CONFIG}.zhicui-provenance.json`,
+    resolve(directory, 'codex-skills', 'zhicui', 'SKILL.md')];
+  const before = await Promise.all(paths.map((path) => readFile(path, 'utf8')));
+  const update = await runCli(['agent', 'update', '--client', 'codex', '--json'], {
+    env: { ...env, FAKE_AGENT_FAIL_ADD: 'codex' },
+  });
+  assert.equal(update.code, 7);
+  assert.deepEqual(await Promise.all(paths.map((path) => readFile(path, 'utf8'))), before);
+});
+
+for (const mode of ['missing-auth', 'revoked', 'disabled', 'offline', 'empty-tools', 'unsafe-tools', 'ready']) {
+  test(`doctor distinguishes configuration, authorization, Agent availability and MCP tools: ${mode}`, async (t) => {
+    const directory = await temporaryDirectory();
+    let capabilityCalls = 0;
+    const server = await startServer((request, response) => {
+      if (request.url === '/api/health') return json(response, mode === 'offline' ? 503 : 200, { status: 'ok' });
+      capabilityCalls++;
+      if (mode === 'revoked') return json(response, 401, { error: { code: 'TOKEN_REVOKED', message: 'revoked' } });
+      if (mode === 'disabled') return json(response, 503, { error: { code: 'INTERFACE_DISABLED', message: 'disabled' } });
+      if (mode === 'offline') return json(response, 503, { error: { code: 'HTTP_503', message: 'offline' } });
+      return json(response, 200, envelope({ user_hash: 'isolated-doctor-owner',
+        actions: mode === 'empty-tools' ? [] : [action(mode === 'unsafe-tools' ? 'shell.exec' : 'library.list')] }));
+    });
+    t.after(server.close);
+    const env = { ...fakeEnv(directory), ...credentialEnv(directory, server.url) };
+    if (mode !== 'missing-auth') await writeFile(env.ZHICUI_CREDENTIALS_FILE, JSON.stringify({
+      kind: 'pat', access_token: 'isolated_doctor_token', created_at: '2026-01-01T00:00:00Z', server_origin: server.url,
+    }));
+    assert.equal((await runCli(['agent', 'setup', '--client', 'codex', '--json'], { env })).code, 0);
+    const result = await runCli(['agent', 'doctor', '--client', 'codex', '--json', '--timeout', '3s'], { env });
+    assert.equal(result.code, 0, result.stderr);
+    const data = JSON.parse(result.stdout);
+    assert.equal(data.configured, true);
+    assert.equal(data.configuration_ready, true);
+    assert.equal(data.ok, mode === 'ready');
+    assert.equal(data.ready, mode === 'ready');
+    assert.equal(data.authenticated, ['empty-tools', 'unsafe-tools', 'ready'].includes(mode));
+    assert.equal(data.cloud_available, ['empty-tools', 'unsafe-tools', 'ready'].includes(mode));
+    assert.equal(data.mcp_healthy, mode === 'ready');
+    assert.equal(data.checks[0].ready, data.ready);
+    assert.equal(data.code, { 'missing-auth': 'AUTH_REQUIRED', revoked: 'TOKEN_REVOKED', disabled: 'INTERFACE_DISABLED',
+      offline: 'HTTP_503', 'empty-tools': 'TOOLS_UNAVAILABLE', 'unsafe-tools': 'MCP_UNAVAILABLE', ready: 'READY' }[mode]);
+    if (mode === 'missing-auth') assert.equal(capabilityCalls, 0);
+    if (mode === 'ready') assert.equal(capabilityCalls, 2); // capabilities + 真正 stdio tools/list
+    assert.doesNotMatch(result.stdout + result.stderr, /isolated_doctor_token/u);
   });
 }
 

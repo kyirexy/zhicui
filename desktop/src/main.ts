@@ -9,6 +9,7 @@ import {
   shell,
 } from 'electron';
 import type {
+  DesktopAgentAuthorizationStatus,
   DesktopLoginRequest,
   DesktopLoginStatus,
   DesktopMediaAsset,
@@ -120,7 +121,13 @@ function emitZhicuiLoginStatus(status: DesktopZhicuiLoginStatus): void {
   mainWindow.webContents.send('desktop:zhicui-login-status', status);
 }
 
+function emitAgentAuthorizationStatus(status: DesktopAgentAuthorizationStatus): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('desktop:agent-authorization-status', status);
+}
+
 function emitZhicuiSession(session: DesktopZhicuiSession): void {
+  agentIntegration.bindUser(session.user.agent_profile_key || null);
   const publish = () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.webContents.send('desktop:zhicui-session', session);
@@ -174,7 +181,7 @@ const agentIntegration = new DesktopAgentIntegration(() => (
     resourcesPath: process.resourcesPath,
     compiledDirectory: __dirname,
   })
-));
+), process.execPath, emitAgentAuthorizationStatus);
 
 function desktopIconPath(): string {
   return app.isPackaged
@@ -303,6 +310,7 @@ function registerIpc(): void {
     const normalized = profileKey === null
       ? null
       : validatePlatformAccountRequest({ platform: 'douyin', profileKey }).profileKey;
+    agentIntegration.bindUser(normalized);
     return agentActionBridge.bindUser(normalized);
   });
   ipcMain.handle(
@@ -503,6 +511,8 @@ app.whenReady().then(() => {
     console.error(`[desktop] Agent 本机桥接启动失败：${message}`);
   });
   mainWindow = createMainWindow();
+  // 只刷新用户此前已选择的受管接入；CLI 不会为未接入的 Agent 新建配置。
+  if (app.isPackaged) void agentIntegration.reconcileManaged();
 });
 
 app.on('activate', () => {
@@ -510,6 +520,7 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', () => {
+  agentIntegration.cancelAuthorization();
   stopDesktopUpdateChecks?.();
   stopDesktopUpdateChecks = null;
   void douyinLogin.cancel();

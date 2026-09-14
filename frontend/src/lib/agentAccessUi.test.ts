@@ -54,8 +54,8 @@ test('接入中心没有网页终端，PAT 仅保存在一次性 UI state', () =
   const component = read('components/AgentAccessSettingsCard.tsx');
   const css = read('components/AgentAccessSettingsCard.module.css');
 
-  assert.match(component, /网页只负责授权和配置，不提供命令终端/);
-  assert.match(component, /npx @zhicui\/cli auth login/);
+  assert.match(component, /推荐使用上方的客户端安装连接/);
+  assert.doesNotMatch(component, /npx @zhicui\/cli auth login|npm install -g/);
   assert.match(component, /本地 stdio MCP/);
   assert.doesNotMatch(component, /Beta|@beta/);
   assert.match(component, /codex mcp add zhicui --url https:\/\/luxai\.cn\/mcp --bearer-token-env-var ZHICUI_AGENT_TOKEN/);
@@ -69,7 +69,7 @@ test('接入中心没有网页终端，PAT 仅保存在一次性 UI state', () =
   assert.match(component, /typeof window === 'undefined'/);
   assert.match(component, /确认吊销/);
   assert.match(component, /INTERFACE_DISABLED/);
-  assert.match(component, /Agent 接入尚未在当前环境开放/);
+  assert.match(component, /AgentQuickConnect/);
   assert.match(component, /!interfaceDisabled &&/);
   assert.match(component, /getAgentDeviceAuthorizationRequest/);
   assert.match(component, /submitDeviceApproval\(false\)/);

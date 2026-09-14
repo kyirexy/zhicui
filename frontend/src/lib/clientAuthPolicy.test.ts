@@ -52,6 +52,15 @@ test('login remains public in every runtime', () => {
   assert.equal(policy.browserClientGate, false);
 });
 
+test('Agent browser authorization requires login without opening client settings', () => {
+  const runtime = { desktop: false, nativeAndroid: false, development: false };
+  const authorization = resolveClientAuthPolicy('/agent/authorize', runtime);
+  assert.equal(authorization.publicRoute, false);
+  assert.equal(authorization.browserClientGate, false);
+  assert.equal(authorization.clientOnlyRoute, false);
+  assert.equal(resolveClientAuthPolicy('/settings', runtime).browserClientGate, true);
+});
+
 test('法律、支持、平台限制与下载入口在所有客户端无需登录', () => {
   for (const pathname of [
     '/legal/terms',

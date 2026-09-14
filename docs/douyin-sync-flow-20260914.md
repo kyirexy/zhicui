@@ -32,4 +32,9 @@ Windows继续既有Beta通道，最终版本1.1.7。1.1.6安装包已在中间�
 - Windows1.1.7构建源码：`ba1cf497ce52f4a099bb31f3f94f322232177414`。
 - 安装包：`Zhicui-Setup-1.1.7-x64.exe`，93,675,320字节。
 - SHA-256：`6161d88a895c05588a42b13e7bbcb18c6df0f60d133c048ff5e8ba0897092f3c`。
-- 既有Beta发行脚本完成隔离构建、内置CLI与更新契约检查，并上传版本化安装包、blockmap及beta feed。公网完整回读和Jenkins结果待最终追加。
+- 既有Beta发行脚本完成隔离构建、内置CLI与更新契约检查，并上传版本化安装包、blockmap及beta feed。
+- 公网HTTPS完整回读通过：安装包12段合并后的大小、SHA-256和SHA-512均匹配；manifest、blockmap、beta.yml一致。回读未执行安装包，证据为`public-beta-1.1.7-20260914T045743Z-7b41220e/verification.json`。
+- 网页/后端部署提交：`03e528af50c57cba13c9671c2e76c523d03d4a6c`，已推送GitHub和Gitee master。Jenkins237于2026-09-14 13:11（北京时间）成功，19个发布闸门全部通过，无需回滚。
+- 运行目录：`/opt/zhicui-runtime/releases/jenkins-zhicui-deploy-237`；前端、后端、抖音sidecar均active。公网health=ok、readiness=ready，Agent维持dark。
+- 公开网页构建标记：`03e528af50c5-20260914050952`；实际引用JS确认包含精简恢复卡、任务追加队列、总进度和按批次取消共13个标记。报告为`public-web-verification.json`，生产证据为`production-verification.json`。
+- 可选集成子模块下载超时后沿用已安装sidecar；发布后旧runtime/npm缓存自动清理给出非阻塞提示。当前根分区仍有约3.20GB可用，服务与发布验收正常。本轮已在发布前限定清理229/230的构建目录约4.41GB，未删除业务资料。

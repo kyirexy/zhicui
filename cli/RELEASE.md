@@ -20,10 +20,14 @@ CLI 与服务端 Agent v1 必须通过生产门禁后一起发布。源码和 np
 桌面构建复制 `cli/dist/` 和 `cli/skills/` 到安装目录的固定 `resources/cli/`。Electron 主进程只允许执行固定形式：
 
 ```text
-ELECTRON_RUN_AS_NODE=1 <desktop-executable> <resources/cli/index.js> agent <setup|doctor|status|update|uninstall> --client <codex|claude|all> --json --non-interactive
+ELECTRON_RUN_AS_NODE=1 <desktop-executable> <resources/cli/index.js> agent <setup|doctor|status|update|reconcile|uninstall> --client <codex|claude|all> --json --non-interactive
 ```
 
 Renderer 不得传入可执行文件、路径、环境变量或任意 argv。Windows CLI 与安装包必须由发布流水线生成，完成 Authenticode、可信时间戳、发布者匹配、安装/更新/回滚验证后，Stable 清单才可标记为 `available`。
+
+1.0.2 的桌面接入使用安装包内置 CLI，不依赖 npm 拉取。独立设备授权只能使用固定 `auth login --jsonl --no-open --non-interactive` 子进程，渲染层只接收安全事件。开始新授权或账号变化应结束旧进程；不得复制桌面 JWT 充当 CLI 授权。
+
+旧注册迁移清单在 `src/legacy-releases.ts`，包含已验收 1.0.0 / 1.0.1 包的全部执行文件指纹。早期 `cli-acceptance` 的 1.0.0 已与历史提交 `8263858` 独立编译出的 14 个 JS 逐字节核对。新增历史指纹必须来自可验证发行包或源码构建；路径、文件名或 package name 相似不能单独证明所有权。迁移失败恢复注册、完整性记录和 Skill；成功迁移后的卸载保留无关用户配置。
 
 ## 上线与回滚
 

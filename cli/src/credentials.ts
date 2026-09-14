@@ -435,9 +435,37 @@ export class CredentialManager {
   }
 
   save(credential: StoredCredential): Promise<void> {
-    return this.withMutationLock(() => this.store.save(this.storageProfile, {
-      ...credential, server_origin: this.origin,
-    }));
+    return this.withMutationLock(async () => {
+      await this.endDeviceAuthorization();
+      await this.store.save(this.storageProfile, { ...credential, server_origin: this.origin });
+    });
+  }
+
+  private authorizationPath(): string {
+    return join(coordinationRoot(), `credential-${this.coordinationProfile}.authorization.json`);
+  }
+
+  private async endDeviceAuthorization(): Promise<void> {
+    await rm(this.authorizationPath(), { force: true });
+  }
+
+  beginDeviceAuthorization(): Promise<string> {
+    return this.withMutationLock(async () => {
+      const id = randomUUID();
+      // 不包含 device_code 或令牌；新授权、登录和退出都会废止旧进程的落盘资格。
+      await atomicWrite(this.authorizationPath(), JSON.stringify({ id }));
+      return id;
+    });
+  }
+
+  completeDeviceAuthorization(id: string, credential: StoredCredential): Promise<boolean> {
+    return this.withMutationLock(async () => {
+      const current = await readFile(this.authorizationPath(), 'utf8').catch(() => null);
+      if (!current || JSON.parse(current).id !== id) return false;
+      await this.store.save(this.storageProfile, { ...credential, server_origin: this.origin });
+      await this.endDeviceAuthorization();
+      return true;
+    });
   }
 
   private withMutationLock<T>(operation: () => Promise<T>): Promise<T> {
@@ -474,7 +502,10 @@ export class CredentialManager {
   }
 
   delete(): Promise<void> {
-    return this.withMutationLock(() => this.store.delete(this.storageProfile));
+    return this.withMutationLock(async () => {
+      await this.endDeviceAuthorization();
+      await this.store.delete(this.storageProfile);
+    });
   }
 
   async withRefreshLock<T>(operation: () => Promise<T>, timeoutMs = 20_000): Promise<T> {

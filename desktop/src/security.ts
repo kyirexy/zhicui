@@ -43,6 +43,8 @@ const DESKTOP_AGENT_OPERATIONS = new Set<DesktopAgentOperation>([
   'status',
   'update',
   'uninstall',
+  'authorize',
+  'cancel_authorization',
 ]);
 
 export function configuredAppUrl(): URL {
@@ -189,7 +191,7 @@ export function validateDesktopAgentIntegrationRequest(
   }
   const payload = value as Record<string, unknown>;
   const keys = Object.keys(payload);
-  if (keys.some((key) => key !== 'client' && key !== 'operation')) {
+  if (keys.some((key) => key !== 'client' && key !== 'operation' && key !== 'authorization_id')) {
     throw new Error('Agent 本机操作不接受命令、路径、参数或密钥');
   }
   const client = String(payload.client || '') as DesktopAgentClient;
@@ -200,6 +202,14 @@ export function validateDesktopAgentIntegrationRequest(
   if (!DESKTOP_AGENT_OPERATIONS.has(operation)) {
     throw new Error('Agent 本机操作不在允许列表中');
   }
+  if (operation === 'authorize' || operation === 'cancel_authorization') {
+    if (typeof payload.authorization_id !== 'string'
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.authorization_id)) {
+      throw new Error('授权批次标识必须为 UUID');
+    }
+    return { client, operation, authorization_id: payload.authorization_id.toLowerCase() };
+  }
+  if (payload.authorization_id !== undefined) throw new Error('当前操作不接受授权批次标识');
   return { client, operation };
 }
 

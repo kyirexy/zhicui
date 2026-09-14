@@ -58,7 +58,7 @@ import { useIsMobile } from '@/lib/hooks/useMediaQuery';
 import type { DesktopLayoutDensity } from '@/lib/types';
 import styles from './SettingsWorkspace.module.css';
 
-const WEB_APP_VERSION = '1.1.10';
+const WEB_APP_VERSION = '1.1.11';
 
 type SettingsSectionId = 'general' | 'account' | 'appearance' | 'storage' | 'sync' | 'ai' | 'agent' | 'about';
 
@@ -445,6 +445,7 @@ function SettingsWorkspace() {
               nativeAndroid === null
                 ? <div className={styles.loading}>正在读取设备能力…</div>
                 : <AgentAccessSettingsCard
+                    key={user?.id || 'signed-out'}
                     isDesktop={isDesktop}
                     nativeAndroid={nativeAndroid}
                     nativeIOS={nativeMobile && !nativeAndroid}

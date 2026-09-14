@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Download, MessageCircle } from 'lucide-react';
-import { COMMUNITY_QR_PATH, COMMUNITY_SUPPORT_EMAIL, isCommunityInviteExpired } from '@/lib/community';
+import { COMMUNITY_QR_PATH, isCommunityInviteExpired } from '@/lib/community';
 import styles from './CommunityPanel.module.css';
 
 export default function CommunityPanel() {
@@ -44,7 +44,7 @@ export default function CommunityPanel() {
         <h3>知萃交流建议反馈群</h3>
         <p>聊聊怎么用知萃，也欢迎把问题和建议告诉我们。</p>
         {expired === true ? (
-          <p role="status">这张群二维码已过期，请联系支持邮箱获取最新邀请。</p>
+          <p role="status">这张群二维码已过期，请稍后再来查看最新邀请。</p>
         ) : (
           <>
             <p>电脑上用微信扫码；手机上保存图片，在微信扫一扫中从相册选择。</p>
@@ -53,15 +53,14 @@ export default function CommunityPanel() {
         )}
         <div className={styles.actions}>
           {expired === false && !imageFailed ? <button type="button" disabled={saving} onClick={() => void saveQr()}><Download size={17} aria-hidden="true" />{saving ? '正在准备…' : '保存群二维码'}</button> : null}
-          <a href={`mailto:${COMMUNITY_SUPPORT_EMAIL}`}>联系支持邮箱</a>
         </div>
-        <p className={styles.note}>群满或无法加入时，可通过邮箱联系。请勿在群内发送密码、验证码或 API Key。</p>
+        <p className={styles.note}>请勿在群内发送密码、验证码或 API Key。</p>
         {message ? <p role="status">{message}</p> : null}
       </div>
       <div className={styles.qr}>
         {expired === false && !imageFailed ? (
           <img src={COMMUNITY_QR_PATH} width={340} height={340} alt="微信扫码加入知萃交流建议反馈群，2026年9月21日前有效" onError={() => setImageFailed(true)} />
-        ) : <p role="status">{imageFailed ? '二维码加载失败，请刷新重试或联系支持邮箱。' : expired ? '等待更新群二维码' : '正在检查邀请有效期…'}</p>}
+        ) : <p role="status">{imageFailed ? '二维码加载失败，请刷新重试。' : expired ? '等待更新群二维码' : '正在检查邀请有效期…'}</p>}
       </div>
     </div>
   );

@@ -7,8 +7,7 @@
 .actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px; margin-top:20px; }
 .actions button { display:inline-flex; align-items:center; justify-content:center; gap:8px; min-height:44px; border:1px solid var(--card-border); border-radius:12px; padding:10px 16px; font-size:14px; font-weight:600; color:var(--accent-brand); background:var(--accent-sky-soft); cursor:pointer; }
 .actions button:disabled { opacity:.6; cursor:wait; }
-.actions a { display:inline-flex; align-items:center; min-height:44px; font-size:14px; }
-.actions button:focus-visible, .actions a:focus-visible { outline:2px solid var(--accent-brand); outline-offset:3px; }
+.actions button:focus-visible { outline:2px solid var(--accent-brand); outline-offset:3px; }
 .copy .note { font-size:12px; color:var(--foreground-muted); }
 .qr { display:flex; width:100%; aspect-ratio:1; align-items:center; justify-content:center; background:white; border-radius:12px; overflow:hidden; color:#555; text-align:center; }
 .qr img { display:block; width:100%; height:auto; object-fit:contain; }

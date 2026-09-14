@@ -36,6 +36,14 @@ const BILIBILI_LOGIN_URL = 'https://passport.bilibili.com/login';
 const XHS_LOGIN_URL = 'https://www.xiaohongshu.com/explore';
 const DOUYIN_LOGIN_URL = 'https://www.douyin.com/?showLogin=true';
 const DOUYIN_PROFILE_URL = 'https://www.douyin.com/user/self?from_tab_name=main';
+const DOUYIN_SOURCE_FIRST_PAGE_REQUIRED = 'DOUYIN_SOURCE_FIRST_PAGE_REQUIRED';
+const DOUYIN_SOURCE_ACTION_TIMEOUT_MS = 120_000;
+
+class PlatformAccountActionError extends Error {
+  constructor(message: string, readonly code: string, readonly mode: PlatformAccountSourceMode) {
+    super(message);
+  }
+}
 const DOUYIN_SOURCE_RESPONSE_PATHS: Record<PlatformAccountSourceMode, RegExp> = {
   like: /^\/aweme\/v1\/web\/aweme\/favorite\/?$/i,
   collect: /^\/aweme\/v1\/web\/aweme\/listcollection\/?$/i,
@@ -786,6 +794,8 @@ export function hasPlatformAuthCookie(
 export class PlatformAccountConnector {
   private activeContext: BrowserContext | null = null;
   private activePlatform: PlatformAccountProvider = 'bilibili';
+  private activeProfileKey = '';
+  private activeMode: PlatformAccountSourceMode | undefined;
   private cancelled = false;
   private running = false;
 
@@ -855,13 +865,18 @@ export class PlatformAccountConnector {
     request: PlatformAccountCollectRequest,
   ): Promise<PlatformAccountResult> {
     return this.runExclusive(request, async () => {
+      this.activeMode = request.mode;
       const profilePath = await this.profilePath(request);
       this.notifyStatus(request.platform, 'starting', '正在读取本机登录会话…');
       const launched = await this.launchBrowser(
         profilePath,
-        request.platform === 'douyin',
+        request.platform === 'douyin' && !request.interactive,
       );
       this.activeContext = launched.context;
+      if (request.interactive) {
+        const page = launched.context.pages()[0];
+        if (page) await page.bringToFront().catch(() => undefined);
+      }
       if (!hasPlatformAuthCookie(request.platform, await launched.context.cookies())) {
         throw new Error('账号登录已失效，请先重新登录');
       }
@@ -906,6 +921,7 @@ export class PlatformAccountConnector {
         success: true,
         connected: true,
         platform: request.platform,
+        mode: request.mode,
         ...collection,
         count: urls.length,
       };
@@ -919,6 +935,23 @@ export class PlatformAccountConnector {
     if (context) await context.close().catch(() => undefined);
     this.notifyStatus(platform, 'cancelled', '已取消平台账号操作');
     return { success: false, cancelled: true, platform };
+  }
+
+  /** 只前置当前账号的现有操作窗口；不打开新会话，也不重新发起同步。 */
+  async focus(request: PlatformAccountRequest): Promise<PlatformAccountResult> {
+    const context = this.activeContext;
+    if (!this.running || this.cancelled || !context
+      || request.platform !== this.activePlatform || request.profileKey !== this.activeProfileKey) {
+      return { success: false, platform: request.platform, code: 'LOCAL_ACTION_NOT_FOUND', error: '当前账号没有正在等待的官方窗口，请重新同步' };
+    }
+    const page = context.pages().find((candidate) => !candidate.isClosed());
+    if (!page) return { success: false, platform: request.platform, code: 'LOCAL_ACTION_NOT_FOUND', error: '官方窗口已关闭，请重新同步' };
+    try {
+      await page.bringToFront();
+      return { success: true, platform: request.platform, mode: this.activeMode };
+    } catch {
+      return { success: false, platform: request.platform, code: 'LOCAL_ACTION_NOT_FOUND', error: '官方窗口已关闭，请重新同步' };
+    }
   }
 
   async disconnect(request: PlatformAccountRequest): Promise<PlatformAccountResult> {
@@ -962,6 +995,8 @@ export class PlatformAccountConnector {
     this.running = true;
     this.cancelled = false;
     this.activePlatform = platform;
+    this.activeProfileKey = request.profileKey;
+    this.activeMode = undefined;
     try {
       return normalizeLocalPlatformResult(platform, await action());
     } catch (error) {
@@ -969,13 +1004,17 @@ export class PlatformAccountConnector {
         return { success: false, cancelled: true, platform };
       }
       const message = publicError(platform, error);
-      this.notifyStatus(platform, 'error', message);
-      return { success: false, platform, error: message };
+      const code = error instanceof PlatformAccountActionError ? error.code : undefined;
+      const mode = error instanceof PlatformAccountActionError ? error.mode : this.activeMode;
+      this.notifyStatus(platform, 'error', message, undefined, code);
+      return { success: false, platform, error: message, code, mode };
     } finally {
       const context = this.activeContext;
       this.activeContext = null;
       if (context) await context.close().catch(() => undefined);
       this.running = false;
+      this.activeProfileKey = '';
+      this.activeMode = undefined;
       await lease.release().catch(() => undefined);
     }
   }
@@ -1022,8 +1061,9 @@ export class PlatformAccountConnector {
     stage: PlatformAccountStatus['stage'],
     message: string,
     browser?: SupportedBrowser,
+    code?: string,
   ): void {
-    this.notify({ platform, stage, message, browser });
+    this.notify({ platform, stage, message, browser, code, mode: this.activeMode });
   }
 
   private async requestBilibili(
@@ -1156,6 +1196,7 @@ export class PlatformAccountConnector {
       'needs-action',
       `抖音官方页面尚未就绪；请确认已进入本人主页，如有验证请完成，随后会继续读取“${label}”`,
       browser,
+      DOUYIN_SOURCE_FIRST_PAGE_REQUIRED,
     );
     await page.bringToFront().catch(() => undefined);
     const actionDeadline = Date.now() + XHS_PROFILE_TIMEOUT_MS;
@@ -1164,7 +1205,7 @@ export class PlatformAccountConnector {
       await page.waitForTimeout(200);
     }
     if (!this.cancelled) {
-      throw new Error(`没有找到抖音“${label}”列表，请确认当前是本人主页并完成官方验证`);
+      throw new PlatformAccountActionError(`没有找到抖音“${label}”列表，请在官方窗口完成验证后重新同步；已有资料和顺序已保留`, DOUYIN_SOURCE_FIRST_PAGE_REQUIRED, mode);
     }
   }
 
@@ -1204,7 +1245,40 @@ export class PlatformAccountConnector {
       return !profileChanged;
     };
     const assertProfile = (): void => {
+      if (page.isClosed?.()) throw new Error('登录或同步窗口已关闭');
       if (!checkProfile()) throw new Error('同步期间离开了本人抖音主页或切换了账号，本次结果未保存；请重新同步');
+    };
+    const browser = context.browser()?.browserType().name() === 'chromium' ? 'chrome' : 'msedge';
+    let recoveryDeadline = 0;
+    const ensureOfficialFirstPage = async (): Promise<void> => {
+      if (this.cancelled || pages.snapshot(limit).orderReliable) return;
+      // 标签选中并不等于首屏成功。先等正常网络返回，再保留同一监听会话供用户验证。
+      const automaticDeadline = Date.now() + 10_000;
+      while (!this.cancelled && Date.now() < automaticDeadline) {
+        assertProfile();
+        if (pages.snapshot(limit).orderReliable) return;
+        await wait(200);
+      }
+      if (this.cancelled) return;
+      const label = mode === 'collect' ? '收藏' : mode === 'post' ? '作品' : '喜欢';
+      recoveryDeadline ||= Date.now() + DOUYIN_SOURCE_ACTION_TIMEOUT_MS;
+      this.notifyStatus('douyin', 'needs-action',
+        `请查看已打开的抖音窗口：如有登录或验证提示请先完成，再确认本人主页的“${label}”已显示；列表仍为空白时，刷新页面并重新点击“${label}”。读取成功后会自动继续，已有资料和顺序已保留。`,
+        browser, DOUYIN_SOURCE_FIRST_PAGE_REQUIRED);
+      await page.bringToFront().catch(() => undefined);
+      while (!this.cancelled && Date.now() < recoveryDeadline) {
+        assertProfile();
+        if (pages.snapshot(limit).orderReliable) {
+          this.notifyStatus('douyin', 'collecting', `已读取抖音“${label}”首屏，正在继续同步…`, browser);
+          return;
+        }
+        await wait(200);
+      }
+      if (!this.cancelled) {
+        throw new PlatformAccountActionError(
+          `抖音“${label}”列表还未读取成功，请按引导重新同步；已有资料和顺序已保留`,
+          DOUYIN_SOURCE_FIRST_PAGE_REQUIRED, mode);
+      }
     };
     const onFrameNavigated = (frame: Frame): void => {
       if (frame === page.mainFrame()) checkProfile(frame.url());
@@ -1254,13 +1328,11 @@ export class PlatformAccountConnector {
       await page.goto(DOUYIN_PROFILE_URL, { waitUntil: 'commit', timeout: 25_000 })
         .catch(() => undefined);
       assertProfile();
-      const browser = context.browser()?.browserType().name() === 'chromium'
-        ? 'chrome'
-        : 'msedge';
       await this.selectDouyinTab(page, 'douyin', mode, browser, assertProfile);
       // 未实际见到 /user/self，或缺少本人官方请求证据时，不能用任意 /user/id 自证身份。
       if (!ownProfileSeen || !readProfile(page.url())) profileChanged = true;
       assertProfile();
+      await ensureOfficialFirstPage();
       let sourceScrollReset = false;
       let unchangedRounds = 0;
       for (let index = 0; index < MAX_DOUYIN_SCROLLS; index += 1) {
@@ -1289,6 +1361,8 @@ export class PlatformAccountConnector {
           || (unchangedRounds >= 5 && (activeRequests.size === 0 || Date.now() - lastRequestAt > 20_000))) break;
       }
       await Promise.race([Promise.allSettled([...pending]), wait(1500)]);
+      // 滚动中官网可能重新请求首屏；不能把新首屏尚未确认的结果当成功返回。
+      await ensureOfficialFirstPage();
     } finally {
       page.off('response', onResponse);
       page.off('request', onRequest);
@@ -1299,7 +1373,7 @@ export class PlatformAccountConnector {
     assertProfile();
     const result = pages.snapshot(limit);
     if (!result.orderReliable && !this.cancelled) {
-      throw new Error('没有读取到抖音官方分类首屏；请确认本人主页和对应标签，完成官方验证后重试');
+      throw new PlatformAccountActionError('抖音列表首屏尚未确认，请按引导重新同步；已有资料和顺序已保留', DOUYIN_SOURCE_FIRST_PAGE_REQUIRED, mode);
     }
     return result;
   }

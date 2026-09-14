@@ -165,6 +165,25 @@ assert.throws(
   }),
   /不支持同步自己的作品/,
 );
+assert.equal(validatePlatformAccountCollectRequest({ platform: 'douyin', profileKey: 'user_123-safe', mode: 'like', limit: 20, interactive: true }).interactive, true);
+assert.throws(() => validatePlatformAccountCollectRequest({ platform: 'douyin', profileKey: 'user_123-safe', mode: 'like', limit: 20, interactive: 'true' }), /布尔值/);
+
+{
+  let focused = 0;
+  const connector = new PlatformAccountConnector(() => 'unused-test-profile', () => {});
+  connector.running = true;
+  connector.activePlatform = 'douyin';
+  connector.activeProfileKey = 'owner';
+  connector.activeMode = 'like';
+  connector.activeContext = { pages: () => [{ isClosed: () => false, bringToFront: async () => { focused += 1; } }] };
+  assert.equal((await connector.focus({ platform: 'douyin', profileKey: 'other' })).code, 'LOCAL_ACTION_NOT_FOUND');
+  assert.equal((await connector.focus({ platform: 'bilibili', profileKey: 'owner' })).success, false);
+  assert.equal(focused, 0, '其他账号或平台不得前置现有会话');
+  assert.equal((await connector.focus({ platform: 'douyin', profileKey: 'owner' })).success, true);
+  assert.equal(focused, 1);
+  connector.cancelled = true;
+  assert.equal((await connector.focus({ platform: 'douyin', profileKey: 'owner' })).success, false);
+}
 
 assert.throws(
   () => validatePlatformAccountCollectRequest({
@@ -667,7 +686,7 @@ for (const longList of [true, false]) {
   }
 }
 // 走 collect 外层直到返回值和 finally：失败/取消不可交付成功快照，也必须释放监听和浏览器。
-for (const scenario of ['http-error', 'html-challenge', 'bad-json', 'unobserved-request', 'hanging-body', 'hanging-request', 'failed-tail', 'cancel']) {
+for (const scenario of ['http-error', 'html-challenge', 'bad-json', 'unobserved-request', 'hanging-body', 'hanging-request', 'failed-tail', 'cancel', 'recovery-success', 'recovery-tail-only', 'recovery-cancel', 'recovery-wrong-account', 'recovery-window-closed']) {
   const originalNow = Date.now;
   const originalTimeout = globalThis.setTimeout;
   const timers = new Set();
@@ -675,6 +694,10 @@ for (const scenario of ['http-error', 'html-challenge', 'bad-json', 'unobserved-
   let scrolls = 0;
   let closed = 0;
   let released = 0;
+  let focused = 0;
+  const statuses = [];
+  let currentUrl = 'https://www.douyin.com/user/self';
+  let windowClosed = false;
   Date.now = () => time;
   globalThis.setTimeout = (callback, milliseconds, ...args) => {
     const timer = originalTimeout(() => {
@@ -689,16 +712,17 @@ for (const scenario of ['http-error', 'html-challenge', 'bad-json', 'unobserved-
     const listeners = new Map();
     const emit = (name, value) => { for (const callback of listeners.get(name) || []) callback(value); };
     const request = { url: () => douyinPageUrl(0), method: () => 'GET', postData: () => null };
-    const connector = new PlatformAccountConnector(() => 'unused-test-profile', () => {});
+    const connector = new PlatformAccountConnector(() => 'unused-test-profile', (status) => statuses.push(status));
     const page = {
       on: (name, callback) => { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(callback); },
       off: (name, callback) => listeners.get(name)?.delete(callback),
-      url: () => 'https://www.douyin.com/user/self',
+      url: () => currentUrl,
+      isClosed: () => windowClosed,
       goto: async () => {
         if (scenario !== 'unobserved-request') emit('request', request);
         if (scenario === 'hanging-request') return;
         emit('response', {
-          url: request.url, request: () => request, ok: () => scenario !== 'http-error',
+          url: request.url, request: () => request, ok: () => scenario !== 'http-error' && !scenario.startsWith('recovery-'),
           allHeaders: async () => ({ 'content-type': scenario === 'html-challenge' ? 'text/html' : 'application/json' }),
           json: async () => {
             if (scenario === 'bad-json') throw new SyntaxError('test invalid JSON');
@@ -707,6 +731,22 @@ for (const scenario of ['http-error', 'html-challenge', 'bad-json', 'unobserved-
           },
         });
         emit('requestfinished', request);
+      },
+      bringToFront: async () => {
+        focused += 1;
+        if (!scenario.startsWith('recovery-')) return;
+        assert.ok(listeners.get('request')?.size, '等待用户时必须保留真实请求监听');
+        if (scenario === 'recovery-cancel') { connector.cancelled = true; return; }
+        if (scenario === 'recovery-wrong-account') { currentUrl = 'https://www.douyin.com/user/OTHER'; return; }
+        if (scenario === 'recovery-window-closed') { windowClosed = true; return; }
+        const recoveryRequest = { url: () => douyinPageUrl(scenario === 'recovery-tail-only' ? 90 : 0), method: () => 'GET', postData: () => null };
+        emit('request', recoveryRequest);
+        emit('response', {
+          url: recoveryRequest.url, request: () => recoveryRequest, ok: () => true,
+          allHeaders: async () => ({ 'content-type': 'application/json' }),
+          json: async () => ({ aweme_list: [aweme(65001), aweme(65002), aweme(65003)], has_more: false }),
+        });
+        emit('requestfinished', recoveryRequest);
       },
       evaluate: async (_fn, input) => {
         if (input.reset) return true;
@@ -730,13 +770,32 @@ for (const scenario of ['http-error', 'html-challenge', 'bad-json', 'unobserved-
     connector.selectDouyinTab = async () => {};
     connector.actionLocks = { acquire: async () => ({ release: async () => { released += 1; } }) };
     const result = await connector.collect({ platform: 'douyin', profileKey: 'test-only', mode: 'like', limit: 3 });
-    assert.equal(result.success, scenario === 'failed-tail', `${scenario} 不可误交付成功列表`);
+    assert.equal(result.success, ['failed-tail', 'recovery-success'].includes(scenario), `${scenario} 不可误交付成功列表`);
     if (scenario === 'failed-tail') {
       assert.equal(result.coverage, 'partial');
       assert.equal(result.orderReliable, true);
       assert.deepEqual(result.items.map((item) => item.videoId), ['65000'], '后页失败只交付已确认的首屏前缀');
     }
-    if (scenario === 'cancel') assert.equal(result.cancelled, true);
+    if (scenario === 'cancel' || scenario === 'recovery-cancel') assert.equal(result.cancelled, true);
+    if (scenario.startsWith('recovery-')) {
+      assert.equal(focused, 1, '首屏缺失必须前置官方窗口');
+      assert.equal(statuses.find((status) => status.stage === 'needs-action')?.code, 'DOUYIN_SOURCE_FIRST_PAGE_REQUIRED');
+      assert.equal(statuses.find((status) => status.stage === 'needs-action')?.mode, 'like');
+    }
+    if (scenario === 'recovery-success') {
+      assert.equal(result.orderReliable, true);
+      assert.deepEqual(result.items.map((item) => item.videoId), ['65001', '65002', '65003']);
+      assert.ok(statuses.some((status) => status.stage === 'collecting' && status.message.includes('首屏')));
+    }
+    if (scenario === 'recovery-tail-only') {
+      assert.equal(result.code, 'DOUYIN_SOURCE_FIRST_PAGE_REQUIRED', '只有后页时绝不能恢复成功');
+      assert.equal(result.items, undefined);
+    }
+    if (scenario === 'recovery-wrong-account') assert.match(result.error, /离开了本人抖音主页或切换了账号/);
+    if (scenario === 'recovery-window-closed') {
+      assert.match(result.error, /窗口已关闭/);
+      assert.ok(time < 20_000, '用户关闭窗口后必须及时退出，不能继续等待两分钟');
+    }
     assert.ok(scrolls <= 36, `${scenario} 必须在滚动上限内结束`);
     assert.ok(time < 180_000, `${scenario} 不可无限等待请求/响应`);
     assert.equal(closed, 1, `${scenario} 释放浏览器`);

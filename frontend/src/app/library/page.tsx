@@ -41,6 +41,7 @@ import {
   X,
 } from 'lucide-react';
 import LibrarySyncHistory from '@/components/LibrarySyncHistory';
+import DouyinSyncRecovery from '@/components/DouyinSyncRecovery';
 import CrossPlatformLibraryRow from '@/components/CrossPlatformLibraryRow';
 import LibraryExtractionLiveProgress from '@/components/LibraryExtractionLiveProgress';
 import MarqueeSelectionOverlay from '@/components/MarqueeSelectionOverlay';
@@ -121,6 +122,7 @@ import { findNewLibraryItems } from '@/lib/librarySyncDiff';
 import { selectPlatformLibrarySource, type PlatformLibrarySourceFilter } from '@/lib/platformLibraryOrder';
 import { formatPlatformSyncSourceResults, withPlatformSyncWarning, type PlatformSyncSourceResult } from '@/lib/platformSyncFeedback';
 import { capturePlatformSyncSnapshot } from '@/lib/platformSyncSnapshot';
+import { getDouyinSyncRecoveryIssue, updateDouyinSyncRecovery, type DouyinSyncRecoveryIssue } from '@/lib/douyinSyncRecovery';
 import {
   hasReadyTranscript,
   selectAutomaticTranscriptPreparationTargets,
@@ -453,6 +455,14 @@ export default function VideoLibraryPage() {
   const [desktopVersion, setDesktopVersion] = useState('');
   const [desktopDouyinConnected, setDesktopDouyinConnected] = useState(false);
   const [desktopDouyinStage, setDesktopDouyinStage] = useState('idle');
+  const [syncRecoveryIssues, setSyncRecoveryIssues] = useState<DouyinSyncRecoveryIssue[]>([]);
+  const [syncRecoveryFocusing, setSyncRecoveryFocusing] = useState(false);
+  const [syncRecoveryActionError, setSyncRecoveryActionError] = useState('');
+  const activeDesktopSyncRef = useRef<{ userId: string; mode: DouyinSourceMode; count: number; generation: number } | null>(null);
+  const activeDesktopLoginRef = useRef<{ userId: string; generation: number } | null>(null);
+  const syncRecoveryActionRef = useRef<symbol | null>(null);
+  const syncRecoveryCancelRef = useRef<symbol | null>(null);
+  const syncRecoveryRetryRef = useRef<symbol | null>(null);
   const [desktopUpdateInstalling, setDesktopUpdateInstalling] = useState(false);
   const persistDesktopDouyinConnection = useCallback((connectedValue: boolean) => {
     setDesktopDouyinConnected(connectedValue);
@@ -696,6 +706,15 @@ export default function VideoLibraryPage() {
     setSourceManagerNotice('');
     setSourceSyncWarning('');
     setNotice('');
+    setSyncRecoveryIssues([]);
+    setSyncRecoveryActionError('');
+    setSyncRecoveryFocusing(false);
+    setScanning(false);
+    activeDesktopSyncRef.current = null;
+    activeDesktopLoginRef.current = null;
+    syncRecoveryActionRef.current = null;
+    syncRecoveryCancelRef.current = null;
+    syncRecoveryRetryRef.current = null;
     return () => {
       activeRef.current = false;
       sourceSyncGenerationRef.current += 1;
@@ -785,7 +804,23 @@ export default function VideoLibraryPage() {
     if (!desktopLocalDouyin || !window.zhicuiDesktop) return undefined;
     return window.zhicuiDesktop.onPlatformAccountStatus((nextStatus) => {
       if (nextStatus.platform !== 'douyin') return;
+      const request = activeDesktopSyncRef.current;
+      const login = activeDesktopLoginRef.current;
+      const ownedRequest = request && request.userId === currentUserIdRef.current && request.generation === sourceSyncGenerationRef.current;
+      const ownedLogin = login && login.userId === currentUserIdRef.current && login.generation === sourceSyncGenerationRef.current;
+      if (!activeRef.current || (!ownedRequest && !ownedLogin)) return;
       setDesktopDouyinStage(nextStatus.stage);
+      if (request && request.userId === currentUserIdRef.current
+        && request.generation === sourceSyncGenerationRef.current
+        && (!nextStatus.mode || nextStatus.mode === request.mode)) {
+        if (nextStatus.stage === 'needs-action') {
+          const issue = getDouyinSyncRecoveryIssue({ ...request, phase: 'waiting',
+            code: nextStatus.code, error: nextStatus.message });
+          if (issue) setSyncRecoveryIssues((current) => updateDouyinSyncRecovery(current, request.mode, issue));
+        } else if (nextStatus.stage === 'collecting') {
+          setSyncRecoveryIssues((current) => current.filter((item) => item.mode !== request.mode || item.phase !== 'waiting'));
+        }
+      }
       if (!sourceSyncNoticeOwnedRef.current) {
         setNotice(nextStatus.message);
         setSourceManagerNotice(nextStatus.message);
@@ -1869,23 +1904,39 @@ export default function VideoLibraryPage() {
       return;
     }
     if (desktopLocalDouyin && user?.id) {
+      const login = { userId: user.id, generation: sourceSyncGenerationRef.current };
+      activeDesktopLoginRef.current = login;
+      const isCurrentLogin = () => activeRef.current && currentUserIdRef.current === login.userId
+        && sourceSyncGenerationRef.current === login.generation && activeDesktopLoginRef.current === login;
       setScanning(true);
       setQrPanelOpen(false);
       setLoginStatusMessage('正在打开抖音官方登录页面…');
       setNotice('请在抖音官方页面完成扫码登录');
-      const result = await desktop.loginPlatformAccount({
-        platform: 'douyin',
-        profileKey: user.agent_profile_key || '',
-      });
-      setScanning(false);
-      if (!result.success) {
-        setDesktopDouyinStage(result.cancelled ? 'cancelled' : 'error');
-        setNotice(result.cancelled ? '已取消抖音登录' : result.error || '抖音登录失败');
-        return;
+      try {
+        const result = await desktop.loginPlatformAccount({
+          platform: 'douyin', profileKey: user.agent_profile_key || '',
+        });
+        if (!isCurrentLogin()) return;
+        if (!result.success) {
+          setDesktopDouyinStage(result.cancelled ? 'cancelled' : 'error');
+          const message = result.cancelled ? '已取消抖音登录' : result.error || '抖音登录失败';
+          setNotice(message);
+          setSyncRecoveryActionError(message);
+          return;
+        }
+        persistDesktopDouyinConnection(true);
+        setDesktopDouyinStage('success');
+        setNotice('抖音本机登录已保存；仅在你点击同步时读取');
+        setSyncRecoveryActionError('登录已完成，请点击重试当前分类');
+      } catch {
+        if (isCurrentLogin()) {
+          setNotice('抖音登录窗口未能完成，请重新登录');
+          setSyncRecoveryActionError('登录未完成，可以重新尝试；已有资料已保留');
+        }
+      } finally {
+        if (isCurrentLogin()) setScanning(false);
+        if (activeDesktopLoginRef.current === login) activeDesktopLoginRef.current = null;
       }
-      persistDesktopDouyinConnection(true);
-      setDesktopDouyinStage('success');
-      setNotice('抖音本机登录已保存；仅在你点击同步时读取');
       return;
     }
     setScanning(true);
@@ -2189,6 +2240,7 @@ export default function VideoLibraryPage() {
     requestedCount: number,
     reportNotice: (message: string) => void,
     isCurrentSync: () => boolean,
+    interactive = false,
   ): Promise<SyncCollectionModeResult> => {
     const syncUserId = user?.id;
     const ensureSyncUser = () => {
@@ -2236,15 +2288,33 @@ export default function VideoLibraryPage() {
       }
       reportNotice(`正在本机读取抖音${requestedSourceLabel}…`);
       const sourceSyncedAt = new Date().toISOString();
-      const collected = await bridge.collectPlatformAccount({
-        platform: 'douyin',
-        profileKey: user.agent_profile_key || '',
-        mode: requestedMode,
-        limit: requestedCount,
-      });
+      const activeRequest = { userId: user.id, mode: requestedMode, count: requestedCount, generation: sourceSyncGenerationRef.current };
+      activeDesktopSyncRef.current = activeRequest;
+      syncRecoveryActionRef.current = null;
+      syncRecoveryCancelRef.current = null;
+      setSyncRecoveryFocusing(false);
+      setSyncRecoveryActionError('');
+      let collected;
+      try {
+        collected = await bridge.collectPlatformAccount({
+          platform: 'douyin',
+          profileKey: user.agent_profile_key || '',
+          mode: requestedMode,
+          limit: requestedCount,
+          interactive,
+        });
+      } finally {
+        if (activeDesktopSyncRef.current === activeRequest) activeDesktopSyncRef.current = null;
+      }
       ensureSyncUser();
+      setSyncRecoveryFocusing(false);
       const snapshot = capturePlatformSyncSnapshot(collected, sourceSyncedAt);
       if (!collected.success || !collected.items?.length) {
+        const issue = getDouyinSyncRecoveryIssue({ mode: requestedMode, count: requestedCount,
+          phase: 'failed', code: collected.code, error: collected.error, cancelled: collected.cancelled });
+        setSyncRecoveryIssues((current) => issue || collected.cancelled
+          ? updateDouyinSyncRecovery(current, requestedMode, issue)
+          : current.map((entry) => entry.mode === requestedMode ? { ...entry, phase: 'failed' } : entry));
         if (collected.error?.includes('重新登录')) {
           persistDesktopDouyinConnection(false);
         }
@@ -2256,9 +2326,12 @@ export default function VideoLibraryPage() {
           finalJob: null,
           error: collected.cancelled
             ? '本机读取已取消'
-            : collected.error || `没有读取到抖音${requestedSourceLabel}`,
+            : issue
+              ? `还未确认${requestedSourceLabel}列表，请按页面引导在抖音检查后重试；已有资料已保留`
+              : collected.error || `没有读取到抖音${requestedSourceLabel}`,
         };
       }
+      setSyncRecoveryIssues((current) => updateDouyinSyncRecovery(current, requestedMode, null));
       reportNotice(
         `本机已读取 ${collected.items.length} 条${requestedSourceLabel}，正在登记公开资料…`,
       );
@@ -2473,6 +2546,7 @@ export default function VideoLibraryPage() {
     persistedModes: DouyinSourceMode[],
     countOverride?: number,
     prepareExisting = false,
+    interactive = false,
   ): Promise<{ started: boolean }> => {
     if (desktopDouyinUpdateRequired) {
       publishSourceManagerNotice(
@@ -2555,7 +2629,7 @@ export default function VideoLibraryPage() {
       });
       let result: SyncCollectionModeResult;
       try {
-        result = await collectOneSource(requestedMode, requestedCount, reportNotice, isSyncUserCurrent);
+        result = await collectOneSource(requestedMode, requestedCount, reportNotice, isSyncUserCurrent, interactive);
       } catch (error) {
         result = {
           requestedMode,
@@ -2572,6 +2646,10 @@ export default function VideoLibraryPage() {
       results.push(result);
       if (result.error) {
         failed = true;
+        if (desktopLocalDouyin) {
+          setSyncRecoveryIssues((current) => current.map((issue) => issue.mode === requestedMode
+            ? { ...issue, phase: 'failed' } : issue));
+        }
         reportNotice(
           `${SOURCE_MODES.find((mode) => mode.value === requestedMode)?.label || '该来源'}：${result.error}`,
         );
@@ -2782,6 +2860,84 @@ export default function VideoLibraryPage() {
     deletionDialogRef.current?.close();
     setDeletionTarget(null);
   };
+
+  const focusSyncRecovery = async () => {
+    const bridge = window.zhicuiDesktop;
+    const request = activeDesktopSyncRef.current;
+    if (syncRecoveryActionRef.current || !request || request.userId !== user?.id) return;
+    if (!bridge?.focusPlatformAccountAction) {
+      setSyncRecoveryActionError('请从任务栏切换到本次打开的 Chrome 或 Edge 窗口。更新客户端后可直接显示窗口。');
+      return;
+    }
+    const isCurrentFocus = () => activeRef.current && activeDesktopSyncRef.current === request
+      && request.userId === currentUserIdRef.current && request.generation === sourceSyncGenerationRef.current;
+    const action = Symbol();
+    syncRecoveryActionRef.current = action;
+    setSyncRecoveryFocusing(true);
+    setSyncRecoveryActionError('');
+    try {
+      const result = await bridge.focusPlatformAccountAction({ platform: 'douyin', profileKey: user?.agent_profile_key || '' });
+      if (isCurrentFocus() && !result.success) {
+        setSyncRecoveryActionError(result.error || '窗口暂时无法显示，请从任务栏切换到抖音窗口');
+      }
+    } catch {
+      if (isCurrentFocus()) {
+        setSyncRecoveryActionError('无法显示抖音窗口，请从任务栏切换到本次打开的 Chrome 或 Edge');
+      }
+    } finally {
+      if (syncRecoveryActionRef.current === action) syncRecoveryActionRef.current = null;
+      if (isCurrentFocus()) setSyncRecoveryFocusing(false);
+    }
+  };
+
+  const cancelSyncRecovery = async () => {
+    const request = activeDesktopSyncRef.current;
+    if (syncRecoveryCancelRef.current || !request || request.userId !== user?.id) return;
+    const action = Symbol();
+    syncRecoveryCancelRef.current = action;
+    setSyncRecoveryActionError('');
+    try {
+      await window.zhicuiDesktop?.cancelPlatformAccountAction();
+    } catch {
+      if (activeRef.current && activeDesktopSyncRef.current === request && request.userId === currentUserIdRef.current) setSyncRecoveryActionError('取消未完成，请关闭本次抖音窗口');
+    } finally {
+      if (syncRecoveryCancelRef.current === action) syncRecoveryCancelRef.current = null;
+    }
+  };
+
+  const retrySyncRecovery = async (issue: DouyinSyncRecoveryIssue) => {
+    if (syncRecoveryRetryRef.current || refreshing || scanning) return;
+    const recoveryUserId = user?.id;
+    if (!recoveryUserId) return;
+    const action = Symbol();
+    syncRecoveryRetryRef.current = action;
+    setSyncRecoveryActionError('');
+    try {
+      if (issue.reason === 'login' && !loggedIn) {
+        await beginDesktopAppHandoff();
+        return;
+      }
+      await syncCollection([issue.mode], sourceManagerModes, issue.count, false, true);
+    } catch {
+      if (activeRef.current && recoveryUserId === currentUserIdRef.current) setSyncRecoveryActionError('重试未能启动，请稍后再试');
+    } finally {
+      if (syncRecoveryRetryRef.current === action) syncRecoveryRetryRef.current = null;
+    }
+  };
+
+  const recoveryCard = desktopLocalDouyin && syncRecoveryIssues.length > 0 ? (
+    <DouyinSyncRecovery
+      issues={syncRecoveryIssues}
+      loggedIn={loggedIn}
+      busy={refreshing || scanning}
+      focusing={syncRecoveryFocusing}
+      canFocus={typeof window !== 'undefined' && Boolean(window.zhicuiDesktop?.focusPlatformAccountAction)}
+      actionError={syncRecoveryActionError}
+      onFocus={() => void focusSyncRecovery()}
+      onCancel={() => void cancelSyncRecovery()}
+      onRetry={(issue) => void retrySyncRecovery(issue)}
+    />
+  ) : null;
 
   const openSourceManager = () => {
     const dialog = sourceManagerDialogRef.current;
@@ -3429,6 +3585,8 @@ export default function VideoLibraryPage() {
           {sourceManagerView === 'douyin' && (
           <>
 
+          {sourceManagerOpen && recoveryCard}
+
           {desktopDouyinUpdateRequired && (
             <div className="library-offline-note" role="alert">
               <RefreshCw size={17} />
@@ -3561,7 +3719,7 @@ export default function VideoLibraryPage() {
                     <CheckCircle2 size={16} />
                   </span>
                   <span>
-                    <strong>连接正常</strong>
+                    <strong>{desktopLocalDouyin && syncRecoveryIssues.length > 0 ? '会话已保存，列表读取待确认' : '连接正常'}</strong>
                     <small>
                       {desktopLocalDouyin
                         ? '账号会话只保存在当前设备'
@@ -3583,10 +3741,10 @@ export default function VideoLibraryPage() {
                     <dt>会话验证</dt>
                     <dd
                       className={styles.accountTime}
-                      data-status={desktopDouyinStage === 'needs-action' ? 'attention' : 'connected'}
+                      data-status={syncRecoveryIssues.length > 0 || desktopDouyinStage === 'needs-action' ? 'attention' : 'connected'}
                     >
                       {desktopLocalDouyin
-                        ? desktopDouyinStage === 'needs-action' ? '需要官方验证' : '当前有效'
+                        ? syncRecoveryIssues.length > 0 || desktopDouyinStage === 'needs-action' ? '请检查官方页面' : '当前有效'
                         : formatAccountTime(status?.binding?.last_verified_at, '刚刚验证')}
                     </dd>
                   </div>
@@ -4215,6 +4373,7 @@ export default function VideoLibraryPage() {
             </aside>
           )}
 
+          {!sourceManagerOpen && recoveryCard}
           {(notice || (showDouyinItems && sourceSyncWarning)) && (
             <div className="library-notice" role="status">
               <Info size={14} />

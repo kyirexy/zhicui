@@ -14,7 +14,7 @@
     "test:agent-v2": "node --experimental-strip-types --test src/lib/agentTurnUi.test.ts src/lib/agentTextStream.test.ts src/lib/agentMarkdownStream.test.ts src/lib/agentScrollFollow.test.ts src/lib/agentMobileParity.test.ts",
     "test:navigation": "node --experimental-strip-types --test src/lib/productNavigation.test.ts src/lib/marketingHomepage.test.ts",
     "test:mobile-feedback": "node --experimental-strip-types --test src/lib/mobileFeedbackEntry.test.ts",
-    "test:douyin-sync": "node --experimental-strip-types --test src/lib/douyinSyncFeedback.test.ts",
+    "test:douyin-sync": "node --experimental-strip-types --test src/lib/douyinSyncFeedback.test.ts src/lib/douyinSyncRecovery.test.ts",
     "test:douyin-desktop": "node --experimental-strip-types --test src/lib/douyinDesktopSync.test.ts",
     "test:manual-sync": "node --experimental-strip-types --test src/lib/manualSyncPolicy.test.ts src/lib/libraryMultiSourceSync.test.ts",
     "test:client-update": "npm run generate:build-version && node --experimental-strip-types --test src/lib/webBuildUpdate.test.ts src/lib/clientAuthPolicy.test.ts src/lib/mobileUpdatePromptUi.test.ts",

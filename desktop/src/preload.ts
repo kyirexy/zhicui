@@ -64,6 +64,9 @@ const bridge: ZhicuiDesktopBridge = {
       request,
     ) as Promise<PlatformAccountResult>
   ),
+  focusPlatformAccountAction: (request: PlatformAccountRequest) => (
+    ipcRenderer.invoke('desktop:focus-platform-account-action', request) as Promise<PlatformAccountResult>
+  ),
   cancelPlatformAccountAction: () => (
     ipcRenderer.invoke(
       'desktop:cancel-platform-account-action',

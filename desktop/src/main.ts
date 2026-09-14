@@ -337,6 +337,10 @@ function registerIpc(): void {
     assertTrustedIpcSender(event);
     return platformAccounts.cancel();
   });
+  ipcMain.handle('desktop:focus-platform-account-action', (event, request) => {
+    assertTrustedIpcSender(event);
+    return platformAccounts.focus(validatePlatformAccountRequest(request));
+  });
   ipcMain.handle('desktop:disconnect-platform-account', (event, request) => {
     assertTrustedIpcSender(event);
     return platformAccounts.disconnect(validatePlatformAccountRequest(request));

@@ -150,7 +150,10 @@ export function validatePlatformAccountCollectRequest(
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
     throw new Error('账号同步数量必须在 1–100 条之间');
   }
-  return { ...request, mode, limit };
+  if (value.interactive !== undefined && typeof value.interactive !== 'boolean') {
+    throw new Error('同步窗口显示选项必须为布尔值');
+  }
+  return { ...request, mode, limit, ...(value.interactive === undefined ? {} : { interactive: value.interactive }) };
 }
 
 export function validateDesktopAgentIntegrationRequest(

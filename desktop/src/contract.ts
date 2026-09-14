@@ -91,6 +91,7 @@ export interface PlatformAccountRequest {
 export interface PlatformAccountCollectRequest extends PlatformAccountRequest {
   mode: PlatformAccountSourceMode;
   limit: number;
+  interactive?: boolean;
 }
 
 export interface PlatformAccountStatus {
@@ -98,6 +99,8 @@ export interface PlatformAccountStatus {
   stage: PlatformAccountStage;
   message: string;
   browser?: 'chrome' | 'msedge';
+  code?: string;
+  mode?: PlatformAccountSourceMode;
 }
 
 export interface PlatformAccountItem {
@@ -122,6 +125,7 @@ export interface PlatformAccountResult {
   success: boolean;
   platform: PlatformAccountProvider;
   code?: string;
+  mode?: PlatformAccountSourceMode;
   cancelled?: boolean;
   connected?: boolean;
   error?: string;
@@ -243,6 +247,7 @@ export interface ZhicuiDesktopBridge {
   cancelDouyinLogin(): Promise<DesktopLoginResult>;
   loginPlatformAccount(request: PlatformAccountRequest): Promise<PlatformAccountResult>;
   collectPlatformAccount(request: PlatformAccountCollectRequest): Promise<PlatformAccountResult>;
+  focusPlatformAccountAction?(request: PlatformAccountRequest): Promise<PlatformAccountResult>;
   cancelPlatformAccountAction(): Promise<PlatformAccountResult>;
   disconnectPlatformAccount(request: PlatformAccountRequest): Promise<PlatformAccountResult>;
   getUpdateState(): Promise<DesktopUpdateResult>;

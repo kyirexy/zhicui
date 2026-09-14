@@ -20,13 +20,14 @@ from urllib.parse import urljoin, urlparse
 import requests as http_requests
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.responses import RedirectResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.auth import get_current_user, get_current_user_optional, get_current_admin
 from app.core.media_reference import sanitized_source_meta
+from app.core.sync_diagnostics import normalize_capture_diagnostics
 from app.models.note import Note
 from app.models.user import (
     User as UserModel,
@@ -595,6 +596,12 @@ class LocalDouyinLibrarySyncRequest(BaseModel):
         max_length=100,
     )
     client_version: str = Field(default="", max_length=32)
+    capture_diagnostics: dict[str, Any] | None = None
+
+    @field_validator("capture_diagnostics", mode="before")
+    @classmethod
+    def safe_capture_diagnostics(cls, value: object, info: ValidationInfo) -> dict[str, Any] | None:
+        return normalize_capture_diagnostics(value, platform="douyin", source_mode=info.data.get("source_mode"))
 
 
 class CreatorSourceRequest(BaseModel):
@@ -2613,7 +2620,18 @@ def ingest_local_douyin_library(
             source_order_reliable=body.source_order_reliable,
             source_coverage=body.source_coverage,
         )
-    except HTTPException:
+    except HTTPException as exc:
+        activity_service.log_activity_safely(
+            user_id=current_user.id, action="douyin_local_sync_failed", method="POST",
+            path="/api/library/douyin/local-sync", status_code=exc.status_code,
+            ip=request.client.host if request.client else None,
+            detail={
+                "outcome": "rejected", "source_mode": body.source_mode,
+                "requested_count": len(body.items), "client_version": body.client_version,
+                "sync_run_id": run.id if run is not None else None,
+                "capture_diagnostics": body.capture_diagnostics,
+            },
+        )
         raise
     except ValueError as exc:
         db.rollback()
@@ -2631,6 +2649,8 @@ def ingest_local_douyin_library(
                 "source_mode": body.source_mode,
                 "requested_count": len(body.items),
                 "client_version": body.client_version,
+                "sync_run_id": run.id if run is not None else None,
+                "capture_diagnostics": body.capture_diagnostics,
             },
         )
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -2638,6 +2658,17 @@ def ingest_local_douyin_library(
         db.rollback()
         if run is not None:
             library_sync_service.finish_run(db, run, {}, status="failed", error_code="sync_failed")
+        activity_service.log_activity_safely(
+            user_id=current_user.id, action="douyin_local_sync_failed", method="POST",
+            path="/api/library/douyin/local-sync", status_code=500,
+            ip=request.client.host if request.client else None,
+            detail={
+                "outcome": "failed", "source_mode": body.source_mode,
+                "requested_count": len(body.items), "client_version": body.client_version,
+                "sync_run_id": run.id if run is not None else None,
+                "capture_diagnostics": body.capture_diagnostics,
+            },
+        )
         raise
     library_sync_service.finish_run(db, run, result)
     result["sync_run_id"] = run.id
@@ -2658,6 +2689,8 @@ def ingest_local_douyin_library(
             "quarantined": result["quarantined"],
             "client_version": body.client_version,
             "channel": "desktop-local",
+            "sync_run_id": run.id,
+            "capture_diagnostics": body.capture_diagnostics,
         },
     )
     return _ok(result)

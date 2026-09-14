@@ -190,20 +190,28 @@ def clear_temporary_hidden(
     db: Session,
     user_id: str,
     completed_at: datetime,
+    *,
+    aweme_ids: list[str] | None = None,
+    commit: bool = True,
 ) -> int:
     """Restore temporary removals created no later than this successful sync."""
     if completed_at.tzinfo is None:
         completed_at = completed_at.replace(tzinfo=timezone.utc)
-    deleted = (
+    query = (
         db.query(LibraryHiddenItem)
         .filter(
             LibraryHiddenItem.user_id == user_id,
             LibraryHiddenItem.hide_mode == "temporary",
             LibraryHiddenItem.created_at <= completed_at,
         )
-        .delete(synchronize_session=False)
     )
-    if deleted:
+    if aweme_ids is not None:
+        candidates = _normalize_aweme_ids(aweme_ids)
+        if not candidates:
+            return 0
+        query = query.filter(LibraryHiddenItem.aweme_id.in_(candidates))
+    deleted = query.delete(synchronize_session=False)
+    if deleted and commit:
         db.commit()
     return int(deleted or 0)
 

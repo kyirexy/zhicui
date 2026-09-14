@@ -12,6 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
+from app.core.sync_diagnostics import normalize_capture_diagnostics
 from app.models.library_sync import LibrarySyncRun
 from app.models.user import User
 from app.services import library_sync_service as sync
@@ -103,6 +104,65 @@ class LibrarySyncPersistenceTests(unittest.TestCase):
         self.assertNotIn("fingerprint", json.dumps(public))
         self.assertNotIn("private", json.dumps(public))
         self.assertIn("source_rank_offset", public)
+
+    @staticmethod
+    def capture_diagnostics(**updates):
+        result = {
+            "version": 1, "platform": "douyin", "mode": "collect",
+            "capture_started_at": "2026-09-14T12:00:00+08:00",
+            "capture_finished_at": "2026-09-14T04:00:03Z",
+            "fresh_document_committed": True, "document_commit_count": 2,
+            "http_cache_bypassed": True, "service_worker_bypassed": True,
+            "endpoint_path": "/aweme/v1/web/aweme/listcollection/",
+            "request_methods": ["POST"], "first_page_cursor": "0", "page_count": 2,
+            "first_video_ids": ["7672579366093622500", "7672579366093622501", "7672579366093622502"],
+        }
+        result.update(updates)
+        return result
+
+    def test_capture_diagnostics_keeps_only_fixed_bounded_fields(self):
+        raw = self.capture_diagnostics(
+            token="private-token", headers={"cookie": "private-cookie"},
+            full_url="https://example.invalid?private-query", owner_id="another-user",
+            source_synced_at="2099-01-01T00:00:00Z", order_reliable=True,
+        )
+        result = normalize_capture_diagnostics(raw, platform="douyin", source_mode="collect")
+        self.assertEqual(result, {
+            **self.capture_diagnostics(), "capture_started_at": "2026-09-14T04:00:00Z",
+        })
+        self.assertNotIn("private", json.dumps(result))
+        self.assertNotIn("another-user", json.dumps(result))
+
+    def test_capture_diagnostics_drops_invalid_nested_values_without_string_coercion(self):
+        raw = self.capture_diagnostics(
+            capture_started_at="2026-09-14T04:00:00Z Bearer private",
+            capture_finished_at={"token": "private"},
+            fresh_document_committed="true", document_commit_count=True,
+            http_cache_bypassed={"cookie": "private"}, service_worker_bypassed=1,
+            endpoint_path="https://www.douyin.com/aweme/v1/web/aweme/listcollection/?token=private",
+            request_methods=["POST private-header", {"token": "private"}],
+            first_page_cursor="0&token=private", page_count=1001,
+            first_video_ids=[7672579366093622500, "https://private.invalid", {"token": "private"}],
+        )
+        self.assertEqual(normalize_capture_diagnostics(raw, platform="douyin", source_mode="collect"), {
+            "version": 1, "platform": "douyin", "mode": "collect", "request_methods": [], "first_video_ids": [],
+        })
+        for changes in ({"version": True}, {"version": 2}, {"mode": "like"}, {"platform": "bilibili"}):
+            with self.subTest(changes=changes):
+                self.assertIsNone(normalize_capture_diagnostics(self.capture_diagnostics(**changes),
+                                                               platform="douyin", source_mode="collect"))
+        self.assertIsNone(normalize_capture_diagnostics(None, platform="douyin", source_mode="collect"))
+
+    def test_capture_diagnostics_bounds_arrays_and_requires_matching_endpoint(self):
+        raw = self.capture_diagnostics(request_methods=["GET", "GET", "POST"] * 100,
+                                       first_video_ids=["12345", "12345", "23456", "34567"] * 100,
+                                       first_page_cursor=None,
+                                       endpoint_path="/aweme/v1/web/aweme/favorite/")
+        result = normalize_capture_diagnostics(raw, platform="douyin", source_mode="collect")
+        self.assertEqual(result["request_methods"], ["GET"])
+        self.assertEqual(result["first_video_ids"], ["12345", "23456"])
+        self.assertIsNone(result["first_page_cursor"])
+        self.assertNotIn("endpoint_path", result)
 
     def test_partial_coverage_and_skips_do_not_mean_processing_failed(self):
         run = self.start(coverage="partial")

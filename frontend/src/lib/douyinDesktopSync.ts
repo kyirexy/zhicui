@@ -1,8 +1,8 @@
 import type { PlatformAccountItem } from '@/lib/desktopRuntime';
 import type { DouyinLocalSyncItem } from '@/lib/types';
 
-// 1.1.4 同时校验采集身份上下文和收藏 POST 游标，旧版不能继续写入可信来源排名。
-export const MIN_LOCAL_DOUYIN_DESKTOP_VERSION = '1.1.4';
+// 1.1.9 隔离每轮主文档并重新读取网络列表，旧窗口和缓存不能继续写入可信排名。
+export const MIN_LOCAL_DOUYIN_DESKTOP_VERSION = '1.1.9';
 
 const EPHEMERAL_MEDIA_TTL_MS = 15 * 60 * 1000;
 const TRUSTED_DOUYIN_MEDIA_DOMAINS = [

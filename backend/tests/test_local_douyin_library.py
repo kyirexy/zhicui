@@ -14,6 +14,7 @@ from app.models.douyin_local_library_item import DouyinLocalLibraryItem
 from app.models.douyin_account_binding import DouyinAccountBinding
 from app.models.douyin_legacy_catalog import DouyinLegacyCatalog
 from app.models.library_sync import LibrarySyncRun
+from app.models.library_hidden_item import LibraryHiddenItem
 from app.models.note import Note
 from app.models.plan import Plan
 from app.models.user import User
@@ -43,6 +44,7 @@ class LocalDouyinLibraryTests(unittest.TestCase):
                 DouyinLegacyCatalog.__table__,
                 VideoSourceLedger.__table__,
                 LibrarySyncRun.__table__,
+                LibraryHiddenItem.__table__,
             ],
         )
         self.Session = sessionmaker(bind=self.engine, expire_on_commit=False)

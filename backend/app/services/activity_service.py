@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -12,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
+from app.core.sync_diagnostics import normalize_capture_diagnostics
 from app.models.user import User
 from app.models.user_activity_log import UserActivityLog
 
@@ -94,6 +96,8 @@ _DETAIL_KEYS = {
     "channel",
     "session_id",
     "status",
+    "sync_run_id",
+    "capture_diagnostics",
 }
 _DETAIL_INTEGER_KEYS = {
     "requested_count",
@@ -203,6 +207,15 @@ def sanitize_detail(detail: dict[str, Any] | None) -> dict[str, Any]:
     for key in _DETAIL_KEYS:
         value = detail.get(key)
         if value is None:
+            continue
+        if key == "capture_diagnostics":
+            capture = normalize_capture_diagnostics(value, platform="douyin", source_mode=detail.get("source_mode"))
+            if capture is not None:
+                sanitized[key] = capture
+            continue
+        if key == "sync_run_id":
+            if isinstance(value, str) and re.fullmatch(r"sync-[a-f0-9]{32}", value):
+                sanitized[key] = value
             continue
         if key in _DETAIL_INTEGER_KEYS:
             if isinstance(value, bool):

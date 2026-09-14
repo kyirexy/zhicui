@@ -215,7 +215,6 @@ type LibraryLayoutMode = 'list' | 'grid';
 
 const MAX_SELECTION = 50;
 const MAX_SYNC_COUNT = QUICK_SYNC_MAX_COUNT;
-const MAX_TRANSCRIPT_PREPARATION = 100;
 const DEFAULT_SOURCE_SORTS: Record<'like' | 'collect', DouyinLibrarySort> = {
   like: 'collection',
   collect: 'collection',
@@ -939,7 +938,7 @@ export default function VideoLibraryPage() {
   const pendingTranscriptItems = useMemo(
     () => selectTranscriptPreparationTargets(
       [items],
-      MAX_TRANSCRIPT_PREPARATION,
+      Number.MAX_SAFE_INTEGER,
     ),
     [items],
   );
@@ -2772,27 +2771,24 @@ export default function VideoLibraryPage() {
   syncCollectionRef.current = syncCollection;
 
   const preparePendingTranscripts = async () => {
-    if (pendingTranscriptItems.length === 0 || batchExtractingRef.current) return;
-    if (desktopLocalDouyin) {
-      // 本机播放地址只在内存中短期有效；先由用户明确触发当前来源重读，
-      // 同步完成后会立即把范围内的历史欠账送入文案任务。
-      setNotice(`正在重新读取${sourceLabel}并补齐待整理文案`);
-      const savedPreferences = readLibraryQuickSyncPreferences();
-      await syncCollectionRef.current(
-        [sourceMode],
-        savedPreferences.modes,
-        Math.min(pendingTranscriptTotal, MAX_SYNC_COUNT),
-        true,
-      );
-      return;
-    }
+    if (pendingTranscriptItems.length === 0 || batchExtractingRef.current || refreshing || sourceSyncRunRef.current) return;
+    const requestedUserId = user?.id;
+    const requestedMode = sourceMode;
+    const requestedEpoch = extractionUserEpochRef.current;
+    const isCurrentPreparation = () => activeRef.current && requestedUserId === currentUserIdRef.current
+      && requestedMode === sourceModeRef.current && requestedEpoch === extractionUserEpochRef.current;
+    // 按资料 ID 准备整个分类的欠账，不把待处理数量误当成最新列表的读取深度。
+    // API 自动附带仍有效的临时播放地址；缺失时由后端使用已绑定连接器按 ID 读取。
     const snapshot = [...pendingTranscriptItems];
     setNotice(`正在准备 ${snapshot.length} 条待整理视频的完整文案`);
     const result = await extractItems(snapshot, 'transcript');
+    if (!isCurrentPreparation() || result.status === 'skipped' || batchExtractingRef.current) return;
     if (result.status === 'success') {
       setNotice(`${result.success} 条视频文案已就绪`);
-    } else if (result.status === 'partial') {
-      setNotice(`已完成 ${result.success}/${snapshot.length} 条；失败项可再次重试`);
+    } else if (result.status === 'partial' || result.status === 'failed') {
+      setNotice(`已完成 ${result.success}/${snapshot.length} 条；未完成项可再次准备。若仍无法读取，请重新同步${sourceLabel}，或用单条解析重试`);
+    } else if (result.status === 'running') {
+      setNotice(`文案仍在后台准备，已完成 ${result.success}/${snapshot.length} 条，稍后回来查看`);
     }
   };
 

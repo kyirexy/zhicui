@@ -127,6 +127,25 @@ export interface PlatformAccountItem {
   ephemeralMediaUrl?: string;
 }
 
+/** 仅供故障追溯；不能作为账号身份、可靠顺序或服务端授权的证明。 */
+export interface PlatformAccountCaptureDiagnostics {
+  version: 1;
+  platform: 'douyin';
+  mode: PlatformAccountSourceMode;
+  capture_started_at: string;
+  capture_finished_at: string;
+  fresh_document_committed: boolean;
+  document_commit_count: number;
+  http_cache_bypassed: boolean;
+  service_worker_bypassed: boolean;
+  endpoint_path: '/aweme/v1/web/aweme/favorite/' | '/aweme/v1/web/aweme/listcollection/' | '/aweme/v1/web/aweme/post/';
+  request_methods: Array<'GET' | 'POST'>;
+  first_page_cursor: '0' | null;
+  /** 当前文档最新首屏代中已确认的不同游标页数，不表示全量完整。 */
+  page_count: number;
+  first_video_ids: string[];
+}
+
 export interface PlatformAccountResult {
   success: boolean;
   platform: PlatformAccountProvider;
@@ -142,6 +161,7 @@ export interface PlatformAccountResult {
   coverage?: 'complete' | 'limited' | 'partial';
   orderReliable?: boolean;
   warning?: string;
+  diagnostics?: PlatformAccountCaptureDiagnostics;
 }
 
 export interface DesktopUpdateResult {

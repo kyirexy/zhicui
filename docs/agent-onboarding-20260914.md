@@ -32,4 +32,13 @@
 - 发行源码提交：`e501b4bfd4a207f015980d6878711be3c286e369`。
 - `Zhicui-Setup-1.1.8-x64.exe` 已经由既有 Beta 脚本构建、验证并上传，大小 93,599,366 字节。
 - SHA-256：`972021469f07b602150afa8ea1a20c98361409f6df99f086cfef71715f1499e9`。
-- 版本化安装包、blockmap、beta.yml 与发布清单已更新；公网完整回读和网页/后端 Jenkins 结果完成后记录。
+- 版本化安装包、blockmap、beta.yml 与发布清单已更新；公网安装包 12 段完整回读与 blockmap、feed、manifest 校验全部通过，摘要与发行 provenance 一致。未执行安装程序。
+
+## 生产回读
+
+- 发布提交：`14b10aa199ffb2247b50a94e5fa56fe193c7bf3c`，GitHub / Gitee master 均已推送。
+- Jenkins #238 为 SUCCESS，19 项发布门禁通过，无需回滚；实际运行目录 `/opt/zhicui-runtime/releases/jenkins-zhicui-deploy-238` 的 SHA 与发布提交一致。
+- 前端、后端、抖音 sidecar 均 active；本机与公网 health=ok、readiness=ready。Agent 总开关保持 dark，公网 capabilities 为 `503 / INTERFACE_DISABLED`，尚未声称真实 Agent 调用可用。
+- 公网 build `14b10aa199ff-20260914084342`，网页版本 1.1.11。`/agent/authorize` 与 `/settings?section=agent` 返回 200，所引用的生产 JS 已逐项确认包含新授权与快捷接入组件。
+- 生产验证记录：`D:/6month/.codex-artifacts/agent-onboarding-20260914/production-verification.json`，`verified=true`。
+- Windows 完整回读记录：`D:/6month/.codex-artifacts/douyin-sync-flow-20260914/public-beta-1.1.8-20260914T083822Z-191e1c87/verification.json`，`verified=true`。

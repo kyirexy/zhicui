@@ -6,6 +6,8 @@ import ts from 'typescript';
 import { mergeSyncedItems } from './libraryIncrementalSync.ts';
 import { findNewLibraryItems } from './librarySyncDiff.ts';
 import { capturePlatformSyncSnapshot } from './platformSyncSnapshot.ts';
+import { getDouyinSyncRecoveryIssue, updateDouyinSyncRecovery } from './douyinSyncRecovery.ts';
+import type { DouyinSyncRecoveryIssue } from './douyinSyncRecovery.ts';
 
 type Item = { aweme_id: string; title: string };
 type Result = { refreshed: Item[] | null; overview: { items: Item[]; total: number } | null; newlyVisible: Item[]; error: string };
@@ -21,6 +23,7 @@ function harness(desktop: boolean, refreshed: Item[], refreshSucceeds = true) {
   const previous = Array.from({ length: 100 }, (_, index) => ({ aweme_id: `saved-${index}`, title: `旧资料 ${index}` }));
   let reads = 0;
   let ingests = 0;
+  let recoveryIssues: DouyinSyncRecoveryIssue[] = [];
   const job = { job_id: 'sync', status: 'success', success: 1, total: 1 };
   const noOp = () => {};
   const context = {
@@ -28,7 +31,14 @@ function harness(desktop: boolean, refreshed: Item[], refreshSucceeds = true) {
     user: { id: 'user-a', agent_profile_key: 'profile-a' }, currentUserIdRef: { current: 'user-a' },
     SOURCE_MODES: [{ value: 'collect', label: '收藏' }, { value: 'like', label: '喜欢' }, { value: 'post', label: '作品' }],
     sourceSorts: { collect: 'collection', like: 'collection' }, batchExtractingRef: { current: false },
-    desktopLocalDouyin: desktop, desktopVersion: '1.1.4', ALL_LIBRARY_ITEMS: 0,
+    desktopLocalDouyin: desktop, desktopVersion: '1.1.9', ALL_LIBRARY_ITEMS: 0,
+    sourceSyncGenerationRef: { current: 1 }, activeDesktopSyncRef: { current: null },
+    syncRecoveryActionRef: { current: null }, syncRecoveryCancelRef: { current: null },
+    setSyncRecoveryFocusing: noOp, setSyncRecoveryActionError: noOp,
+    getDouyinSyncRecoveryIssue, updateDouyinSyncRecovery,
+    setSyncRecoveryIssues: (update: (current: DouyinSyncRecoveryIssue[]) => DouyinSyncRecoveryIssue[]) => {
+      recoveryIssues = update(recoveryIssues);
+    },
     setCollectionJob: noOp, setSourceReadability: noOp, persistDesktopDouyinConnection: noOp,
     mergeSyncedItems, findNewLibraryItems, capturePlatformSyncSnapshot,
     toLocalDouyinSyncItems: (items: unknown[]) => items,

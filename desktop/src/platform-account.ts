@@ -9,6 +9,7 @@ import {
   type Response,
 } from 'playwright-core';
 import type {
+  PlatformAccountCaptureDiagnostics,
   PlatformAccountCollectRequest,
   PlatformAccountItem,
   PlatformAccountProvider,
@@ -63,6 +64,11 @@ const DOUYIN_SOURCE_RESPONSE_PATHS: Record<PlatformAccountSourceMode, RegExp> = 
 const DOUYIN_SOURCE_TAB_IDS: Record<PlatformAccountSourceMode, string> = {
   like: 'semiTablike', collect: 'semiTabfavorite_collection', post: 'semiTabpost',
 };
+const DOUYIN_SOURCE_ENDPOINT_PATHS: Record<PlatformAccountSourceMode, PlatformAccountCaptureDiagnostics['endpoint_path']> = {
+  like: '/aweme/v1/web/aweme/favorite/',
+  collect: '/aweme/v1/web/aweme/listcollection/',
+  post: '/aweme/v1/web/aweme/post/',
+};
 
 type SupportedBrowser = 'chrome' | 'msedge';
 type StatusListener = (status: PlatformAccountStatus) => void;
@@ -79,6 +85,7 @@ export interface PlatformSourceCollection {
   coverage: 'complete' | 'limited' | 'partial';
   orderReliable: boolean;
   warning?: string;
+  diagnostics?: PlatformAccountCaptureDiagnostics;
 }
 
 function wait(milliseconds: number): Promise<void> {
@@ -115,6 +122,46 @@ export async function showPlatformAccountPage(page: Page): Promise<void> {
       if (session) await session.detach().catch(() => undefined);
     }
   })());
+}
+
+/** 本轮列表从官网重新读取；持久登录资料保留，HTTP/Service Worker 缓存不作为新首屏。 */
+export async function prepareDouyinSourcePage(
+  context: BrowserContext,
+  page: Page,
+  onDocumentCommitted?: (url: string) => void,
+): Promise<() => Promise<void>> {
+  const session = await context.newCDPSession(page);
+  let removeDocumentListener = (): void => {};
+  try {
+    await session.send('Network.enable');
+    await session.send('Network.setCacheDisabled', { cacheDisabled: true });
+    await session.send('Network.setBypassServiceWorker', { bypass: true });
+    if (onDocumentCommitted) {
+      await session.send('Page.enable');
+      const initial = (await session.send('Page.getFrameTree')).frameTree.frame;
+      let loaderId = initial.loaderId;
+      const onFrame = ({ frame, type }: { frame: { id: string; parentId?: string; loaderId: string; url: string; unreachableUrl?: string }; type?: string }): void => {
+        if (type === 'BackForwardCacheRestore' || frame.unreachableUrl || frame.parentId
+          || frame.id !== initial.id || !frame.loaderId || frame.loaderId === loaderId) return;
+        loaderId = frame.loaderId;
+        onDocumentCommitted(frame.url);
+      };
+      // PW framenavigated 也包含 hash/history 同文档导航；只有新 loader 的 CDP 事件证明新主文档。
+      session.on('Page.frameNavigated', onFrame);
+      removeDocumentListener = () => { session.off('Page.frameNavigated', onFrame); };
+    }
+  } catch (error) {
+    removeDocumentListener();
+    await session.detach().catch(() => undefined);
+    throw error;
+  }
+  let released = false;
+  return async () => {
+    if (released) return;
+    released = true;
+    removeDocumentListener();
+    await session.detach().catch(() => undefined);
+  };
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -349,6 +396,13 @@ export class DouyinSourcePages {
     const previous = pages.get(requestCursor);
     if (!previous || previous.sequence <= sequence) pages.set(requestCursor, { sequence, page });
     return !previousGeneration;
+  }
+
+  diagnosticSummary(): Pick<PlatformAccountCaptureDiagnostics, 'first_page_cursor' | 'page_count'> {
+    return {
+      first_page_cursor: this.pages.get('0')?.page ? '0' : null,
+      page_count: Math.min(1000, [...this.pages.values()].filter((entry) => entry.page !== null).length),
+    };
   }
 
   snapshot(limit: number): PlatformSourceCollection {
@@ -1087,7 +1141,8 @@ export class PlatformAccountConnector {
       }
       if (error instanceof LocalActionBusyError) return { success: false, platform, code: error.code, error: error.message };
       const message = publicError(platform, error);
-      const code = error instanceof PlatformAccountActionError ? error.code : undefined;
+      const code = error instanceof PlatformAccountActionError ? error.code
+        : platform === 'douyin' && this.activeMode ? 'DOUYIN_SOURCE_CAPTURE_FAILED' : undefined;
       const mode = error instanceof PlatformAccountActionError ? error.mode : this.activeMode;
       this.notifyStatus(platform, 'error', message, undefined, code);
       return { success: false, platform, error: message, code, mode };
@@ -1336,10 +1391,12 @@ export class PlatformAccountConnector {
     mode: PlatformAccountSourceMode,
     limit: number,
   ): Promise<PlatformSourceCollection> {
+    const captureStartedAt = new Date().toISOString();
     const page = context.pages()[0] || await context.newPage();
-    const pages = new DouyinSourcePages();
+    let releaseFreshness = async (): Promise<void> => {};
+    let pages = new DouyinSourcePages();
     const pending = new Set<Promise<void>>();
-    const requestSequences = new WeakMap<Request, { sequence: number; source: DouyinSourceRequest }>();
+    const requestSequences = new WeakMap<Request, { sequence: number; source: DouyinSourceRequest; documentEpoch: number }>();
     const activeRequests = new Set<Request>();
     let nextRequestSequence = 0;
     let lastRequestAt = Date.now();
@@ -1347,6 +1404,9 @@ export class PlatformAccountConnector {
     let ownProfileSeen = false;
     let ownAccount: string | null = null;
     let profileChanged = false;
+    let documentEpoch = 0;
+    let documentNavigationPending = true;
+    const observedMethods = new Set<'GET' | 'POST'>();
     const readProfile = (value: string): string | null => {
       try {
         const url = new URL(value);
@@ -1355,6 +1415,8 @@ export class PlatformAccountConnector {
       } catch { return null; }
     };
     const checkProfile = (value = page.url()): boolean => {
+      // 复用窗口的旧 /user/self 不能证明本轮已加载；只在实际主文档提交后绑定。
+      if (documentEpoch === 0) return !profileChanged;
       const profile = readProfile(value);
       // 从首次实际进入本人主页起保护，不留“等标签选完才绑定”的导航窗口。
       if (!ownProfileSeen) {
@@ -1402,10 +1464,28 @@ export class PlatformAccountConnector {
           DOUYIN_SOURCE_FIRST_PAGE_REQUIRED, mode);
       }
     };
+    const onDocumentCommitted = (url: string): void => {
+      documentEpoch += 1;
+      documentNavigationPending = false;
+      // 刷新后的首屏必须重新确认，旧文档中在途的响应不能补进新页链。
+      pages = new DouyinSourcePages();
+      activeRequests.clear();
+      pending.clear();
+      observedMethods.clear();
+      checkProfile(url);
+    };
     const onFrameNavigated = (frame: Frame): void => {
       if (frame === page.mainFrame()) checkProfile(frame.url());
     };
     const onRequest = (request: Request): void => {
+      if (request.isNavigationRequest?.() && request.frame() === page.mainFrame()) {
+        documentNavigationPending = true;
+        pages = new DouyinSourcePages();
+        activeRequests.clear();
+        pending.clear();
+        return;
+      }
+      if (documentNavigationPending || documentEpoch === 0) return;
       if (!checkProfile() || !ownProfileSeen) return;
       // 收藏 POST 没有账号字段。只从本人主页实际发出的作品/喜欢请求绑定身份，不能从作品作者推断。
       if (isDouyinSourceResponseUrl(request.url(), 'post') || isDouyinSourceResponseUrl(request.url(), 'like')) {
@@ -1419,22 +1499,26 @@ export class PlatformAccountConnector {
       if (!isDouyinSourceResponseUrl(request.url(), mode)) return;
       const sequence = nextRequestSequence++;
       const source = { url: request.url(), method: request.method(), postData: request.postData() };
-      requestSequences.set(request, { sequence, source });
+      requestSequences.set(request, { sequence, source, documentEpoch });
       pages.begin(source, sequence);
       activeRequests.add(request);
       lastRequestAt = Date.now();
     };
     const onRequestSettled = (request: Request): void => { activeRequests.delete(request); };
     const onResponse = (response: Response): void => {
+      if (documentNavigationPending) return;
       if (!checkProfile()) return;
       if (!isDouyinSourceResponseUrl(response.url(), mode)) return;
       const captured = requestSequences.get(response.request());
       // 导航前已在途、未观察到请求起点的响应不能假装属于本轮首页。
-      if (!captured || !response.ok()) return;
+      if (!captured || captured.documentEpoch !== documentEpoch || !response.ok()) return;
       const work = readDouyinMetadataPayload(response, mode)
         .then((payload) => {
-          if (payload === null || !checkProfile()) return;
+          if (payload === null || documentNavigationPending
+            || captured.documentEpoch !== documentEpoch || !checkProfile()) return;
           if (pages.add(captured.source, payload, captured.sequence)) {
+            const method = captured.source.method;
+            if (method === 'GET' || method === 'POST') observedMethods.add(method);
             responseRevision += 1;
           }
         })
@@ -1443,14 +1527,25 @@ export class PlatformAccountConnector {
       void work.finally(() => pending.delete(work));
     };
     try {
+      releaseFreshness = await prepareDouyinSourcePage(context, page, onDocumentCommitted).catch(() => {
+        throw new PlatformAccountActionError('暂时无法确认抖音最新列表，请重新同步；已有资料和顺序已保留', DOUYIN_SOURCE_FIRST_PAGE_REQUIRED, mode);
+      });
       // 在导航前注册以捕获首屏；只接受目标分类的官方列表接口。
       page.on('request', onRequest);
       page.on('requestfinished', onRequestSettled);
       page.on('requestfailed', onRequestSettled);
       page.on('response', onResponse);
       page.on('framenavigated', onFrameNavigated);
+      const navigationEpoch = documentEpoch;
+      documentNavigationPending = true;
+      pages = new DouyinSourcePages();
       await page.goto(DOUYIN_PROFILE_URL, { waitUntil: 'commit', timeout: 25_000 })
         .catch(() => undefined);
+      const documentDeadline = Date.now() + 2000;
+      while (!this.cancelled && documentEpoch === navigationEpoch && Date.now() < documentDeadline) await wait(50);
+      if (documentEpoch === navigationEpoch) {
+        throw new PlatformAccountActionError('抖音本人主页未重新加载，请重新同步；已有资料和顺序已保留', DOUYIN_SOURCE_FIRST_PAGE_REQUIRED, mode);
+      }
       assertProfile();
       await this.selectDouyinTab(page, 'douyin', mode, browser, assertProfile);
       // 未实际见到 /user/self，或缺少本人官方请求证据时，不能用任意 /user/id 自证身份。
@@ -1493,12 +1588,29 @@ export class PlatformAccountConnector {
       page.off('requestfinished', onRequestSettled);
       page.off('requestfailed', onRequestSettled);
       page.off('framenavigated', onFrameNavigated);
+      await releaseFreshness();
     }
     assertProfile();
     const result = pages.snapshot(limit);
     if (!result.orderReliable && !this.cancelled) {
       throw new PlatformAccountActionError('抖音列表首屏尚未确认，请按引导重新同步；已有资料和顺序已保留', DOUYIN_SOURCE_FIRST_PAGE_REQUIRED, mode);
     }
+    // 只输出固定白名单。请求 URL/query/body、账号 ID、Cookie 和响应头都不能进入诊断。
+    result.diagnostics = {
+      version: 1,
+      platform: 'douyin',
+      mode,
+      capture_started_at: captureStartedAt,
+      capture_finished_at: new Date().toISOString(),
+      fresh_document_committed: documentEpoch > 0 && !documentNavigationPending,
+      document_commit_count: Math.min(1000, documentEpoch),
+      http_cache_bypassed: true,
+      service_worker_bypassed: true,
+      endpoint_path: DOUYIN_SOURCE_ENDPOINT_PATHS[mode],
+      request_methods: [...observedMethods].sort(),
+      ...pages.diagnosticSummary(),
+      first_video_ids: (result.items || []).map((item) => item.videoId).filter((id) => /^\d{5,32}$/.test(id)).slice(0, 3),
+    };
     return result;
   }
 

@@ -122,6 +122,23 @@ export interface PlatformAccountItem {
   ephemeralMediaUrl?: string;
 }
 
+export interface PlatformAccountCaptureDiagnostics {
+  version: 1;
+  platform: 'douyin';
+  mode: PlatformAccountSourceMode;
+  capture_started_at: string;
+  capture_finished_at: string;
+  fresh_document_committed: boolean;
+  document_commit_count: number;
+  http_cache_bypassed: boolean;
+  service_worker_bypassed: boolean;
+  endpoint_path: '/aweme/v1/web/aweme/favorite/' | '/aweme/v1/web/aweme/listcollection/' | '/aweme/v1/web/aweme/post/';
+  request_methods: Array<'GET' | 'POST'>;
+  first_page_cursor: '0' | null;
+  page_count: number;
+  first_video_ids: string[];
+}
+
 export interface PlatformAccountResult {
   success: boolean;
   platform: PlatformAccountProvider;
@@ -135,6 +152,7 @@ export interface PlatformAccountResult {
   count?: number;
   coverage?: 'complete' | 'limited' | 'partial';
   orderReliable?: boolean;
+  diagnostics?: PlatformAccountCaptureDiagnostics;
   warning?: string;
 }
 

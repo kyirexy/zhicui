@@ -82,21 +82,14 @@ test('同步弹窗使用多选语义且逐项等待每个来源完成', () => {
   assert.doesNotMatch(sequentialSync, /Promise\.all/);
 });
 
-test('补齐待整理文案不会覆盖用户的多选偏好', () => {
+test('准备文案直接按 ID 提交，不触发来源同步或改变多选偏好', () => {
   const page = readFileSync(resolve(srcRoot, 'app', 'library', 'page.tsx'), 'utf8');
   const pendingTranscriptFlow = page.slice(
     page.indexOf('const preparePendingTranscripts = async'),
     page.indexOf('const deleteExtraction = async'),
   );
-  assert.match(pendingTranscriptFlow, /const savedPreferences = readLibraryQuickSyncPreferences\(\);/);
-  assert.match(
-    pendingTranscriptFlow,
-    /syncCollectionRef\.current\([\s\S]*?\[sourceMode\],[\s\S]*?savedPreferences\.modes/,
-  );
-  assert.doesNotMatch(
-    pendingTranscriptFlow,
-    /syncCollectionRef\.current\([\s\S]*?\[sourceMode\],[\s\S]*?\[sourceMode\]/,
-  );
+  assert.match(pendingTranscriptFlow, /await extractItems\(snapshot, 'transcript'\)/);
+  assert.doesNotMatch(pendingTranscriptFlow, /syncCollectionRef|collectPlatformAccount|readLibraryQuickSyncPreferences|saveLibraryQuickSyncPreferences/);
 });
 
 // 执行页面真实循环，覆盖来源间等待、批次窗口参数和恢复中断，而非仅校验函数文本。

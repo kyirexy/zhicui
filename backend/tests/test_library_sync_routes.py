@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,6 +23,7 @@ from app.models.library_sync import LibrarySyncRun
 from app.models.library_hidden_item import LibraryHiddenItem
 from app.models.note import Note
 from app.models.video_source_ledger import VideoSourceLedger
+from app.models.user_activity_log import UserActivityLog
 
 
 class LibrarySyncRoutesTests(unittest.TestCase):
@@ -129,12 +131,12 @@ class LibrarySyncRoutesTests(unittest.TestCase):
         with patch.object(routes.activity_service, "log_activity_safely"):
             first = self.client.post("/api/library/douyin/local-sync", json={
                 "source_mode": "collect", "source_synced_at": "2026-09-08T01:00:00Z",
-                "client_version": "1.1.4",
+                "client_version": "1.1.9",
                 "source_order_reliable": True, "items": [item(first_id), item(second_id)],
             })
             second = self.client.post("/api/library/douyin/local-sync", json={
                 "source_mode": "collect", "source_synced_at": "2026-09-09T01:00:00Z",
-                "client_version": "1.1.4",
+                "client_version": "1.1.9",
                 "source_order_reliable": True, "source_coverage": "complete", "items": [item(second_id)],
             })
         self.assertEqual(first.status_code, 200, first.text)
@@ -146,11 +148,156 @@ class LibrarySyncRoutesTests(unittest.TestCase):
         items = routes.local_douyin_library_service.list_items(self.db, user_id=self.user.id, source_mode="collect")
         self.assertEqual([entry["aweme_id"] for entry in items], [second_id, first_id])
 
+    def test_local_sync_reused_29_restores_only_confirmed_temporary_members(self) -> None:
+        self.login()
+        ids = [str(7672579366093622500 + index) for index in range(29)]
+        with patch.object(routes.activity_service, "log_activity_safely"):
+            initial = self.client.post("/api/library/douyin/local-sync", json=self.local_payload(
+                list(reversed(ids)), source_synced_at="2026-08-01T00:00:00Z",
+            ))
+        self.assertEqual(initial.status_code, 200, initial.text)
+        prior = datetime(2026, 8, 2, tzinfo=timezone.utc)
+        future = datetime(2026, 9, 9, tzinfo=timezone.utc)
+        absent_id = "7672579366093622599"
+        self.db.add_all([
+            LibraryHiddenItem(user_id=self.user.id, aweme_id=ids[0], hide_mode="temporary", created_at=prior),
+            LibraryHiddenItem(user_id=self.user.id, aweme_id=ids[1], hide_mode="permanent", created_at=prior),
+            LibraryHiddenItem(user_id=self.user.id, aweme_id=ids[2], hide_mode="temporary", created_at=future),
+            LibraryHiddenItem(user_id=self.user.id, aweme_id=absent_id, hide_mode="temporary", created_at=prior),
+            LibraryHiddenItem(user_id=self.other.id, aweme_id=ids[0], hide_mode="temporary", created_at=prior),
+        ])
+        self.db.commit()
+        with patch.object(routes.activity_service, "log_activity_safely"):
+            result = self.client.post("/api/library/douyin/local-sync", json=self.local_payload(ids))
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual((result.json()["data"]["created"], result.json()["data"]["reused"]), (0, 29))
+        with patch.object(routes.douyin_legacy_catalog_service, "claim_recovery", return_value=False):
+            listed = self.client.get("/api/library/douyin/items?mode=collect&local_only=true")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual(listed.json()["data"]["items"][0]["aweme_id"], ids[0])
+        self.assertEqual({row.aweme_id for row in self.db.query(LibraryHiddenItem).filter_by(user_id=self.user.id)},
+                         {ids[1], ids[2], absent_id})
+        self.assertEqual(self.db.query(LibraryHiddenItem).filter_by(user_id=self.other.id).count(), 1)
+
+    def test_latest_collection_can_reuse_like_video_while_new_exact_id_is_created(self) -> None:
+        self.login()
+        prior_ids = [str(7672579366093622500 + index) for index in range(29)]
+        prior_like, unseen = "7000000000000000001", "7000000000000000002"
+        with patch.object(routes.activity_service, "log_activity_safely"):
+            initial = self.client.post("/api/library/douyin/local-sync", json=self.local_payload(
+                prior_ids, source_synced_at="2026-08-01T00:00:00Z",
+            ))
+            liked = self.client.post("/api/library/douyin/local-sync", json=self.local_payload(
+                [prior_like], source_mode="like", source_synced_at="2026-09-09T00:00:00Z",
+            ))
+            collected = self.client.post("/api/library/douyin/local-sync", json=self.local_payload(
+                [prior_like, unseen, *prior_ids[:27]], source_synced_at="2026-09-08T00:00:00Z",
+            ))
+        for response in (initial, liked, collected):
+            self.assertEqual(response.status_code, 200, response.text)
+        data = collected.json()["data"]
+        self.assertEqual((data["created"], data["reused"]), (1, 28))
+        self.assertEqual(data["created_video_ids"], [unseen])
+        self.assertEqual(data["video_ids"][:3], [prior_like, unseen, prior_ids[0]])
+        with patch.object(routes.douyin_legacy_catalog_service, "claim_recovery", return_value=False):
+            head = self.client.get("/api/library/douyin/items?mode=collect&limit=3&local_only=true")
+            likes = self.client.get("/api/library/douyin/items?mode=like&local_only=true")
+        self.assertEqual([item["aweme_id"] for item in head.json()["data"]["items"]],
+                         [prior_like, unseen, prior_ids[0]])
+        self.assertEqual(head.json()["data"]["source_total"], 31)
+        self.assertEqual([item["aweme_id"] for item in likes.json()["data"]["items"]], [prior_like])
+
+    def test_restore_visibility_failure_rolls_back_metadata_and_keeps_sync_retryable(self) -> None:
+        self.login()
+        old_id, new_id = "7672579366093622500", "7672579366093622501"
+        self.db.add(LibraryHiddenItem(user_id=self.user.id, aweme_id=old_id, hide_mode="temporary",
+                                     created_at=datetime(2026, 8, 1, tzinfo=timezone.utc)))
+        self.db.commit()
+        before = self.local_state(include_runs=False)
+        original = routes.library_hidden_service.clear_temporary_hidden
+
+        def fail_after_restoring(*args, **kwargs):
+            self.assertEqual(original(*args, **kwargs), 1)
+            raise RuntimeError("模拟恢复展示后提交前失败")
+
+        payload = self.local_payload([old_id, new_id])
+        with patch.object(routes.activity_service, "log_activity_safely"):
+            with patch.object(routes.library_hidden_service, "clear_temporary_hidden", side_effect=fail_after_restoring):
+                failed = self.client.post("/api/library/douyin/local-sync", json=payload)
+            self.assertEqual(failed.status_code, 500, failed.text)
+            self.assertEqual(self.local_state(include_runs=False), before)
+            retried = self.client.post("/api/library/douyin/local-sync", json=payload)
+        self.assertEqual(retried.status_code, 200, retried.text)
+        self.assertEqual(retried.json()["data"]["created_video_ids"], [old_id, new_id])
+        self.assertEqual(retried.json()["data"]["restored"], 1)
+
+    def test_capture_diagnostics_persist_to_existing_activity_json_with_owned_sync_run(self) -> None:
+        self.login()
+        captured_id = "7672579366093622500"
+        diagnostics = {
+            "version": 1, "platform": "douyin", "mode": "collect",
+            "capture_started_at": "2026-09-14T00:00:00Z", "capture_finished_at": "2026-09-14T00:00:03Z",
+            "fresh_document_committed": True, "document_commit_count": 2,
+            "http_cache_bypassed": True, "service_worker_bypassed": True,
+            "endpoint_path": "/aweme/v1/web/aweme/listcollection/", "request_methods": ["POST"],
+            "first_page_cursor": "0", "page_count": 1, "first_video_ids": [captured_id],
+            "cookie": "must-not-store", "headers": {"authorization": "must-not-store"},
+            "user_id": self.other.id, "url": "https://www.douyin.com/?token=must-not-store",
+        }
+        payload = self.local_payload([captured_id], capture_diagnostics=diagnostics)
+        with patch.object(routes.activity_service, "SessionLocal", sessionmaker(bind=self.engine)):
+            result = self.client.post("/api/library/douyin/local-sync", json=payload)
+            self.assertEqual(result.status_code, 200, result.text)
+            # 同一目录快照的诊断变化不改变同步请求身份，也不能充当另一轮可信顺序。
+            replay = self.client.post("/api/library/douyin/local-sync", json={
+                **payload, "capture_diagnostics": {**diagnostics, "http_cache_bypassed": False},
+            })
+        self.assertEqual(replay.status_code, 200, replay.text)
+        run_id = result.json()["data"]["sync_run_id"]
+        self.assertEqual(replay.json()["data"]["sync_run_id"], run_id)
+        logs = self.db.query(UserActivityLog).order_by(UserActivityLog.id).all()
+        self.assertEqual(len(logs), 2)
+        for log in logs:
+            self.assertEqual(log.user_id, self.user.id)
+            self.assertEqual(log.action, "douyin_local_sync")
+            detail = json.loads(log.detail_json)
+            self.assertEqual(detail["sync_run_id"], run_id)
+            self.assertEqual(detail["capture_diagnostics"]["first_video_ids"], [captured_id])
+            self.assertNotIn("must-not-store", log.detail_json)
+            self.assertNotIn(self.other.id, log.detail_json)
+        self.assertFalse(json.loads(logs[-1].detail_json)["capture_diagnostics"]["http_cache_bypassed"])
+        run = self.db.get(LibrarySyncRun, run_id)
+        self.assertEqual(json.loads(run.video_ids_json), [captured_id])
+        self.assertEqual(run.source_synced_at.replace(tzinfo=timezone.utc), datetime(2026, 9, 8, 1, tzinfo=timezone.utc))
+
+    def test_failed_sync_keeps_safe_diagnostics_and_invalid_diagnostics_remain_optional(self) -> None:
+        self.login()
+        video_id = "7672579366093622500"
+        capture = {"version": 1, "platform": "douyin", "mode": "collect", "page_count": 1,
+                   "first_video_ids": [video_id], "first_page_cursor": "0", "token": "do-not-store"}
+        with patch.object(routes.activity_service, "SessionLocal", sessionmaker(bind=self.engine)):
+            with patch.object(routes.local_douyin_library_service, "ingest_items", side_effect=RuntimeError("do-not-store")):
+                failed = self.client.post("/api/library/douyin/local-sync", json=self.local_payload([video_id], capture_diagnostics=capture))
+            self.assertEqual(failed.status_code, 500)
+            log = self.db.query(UserActivityLog).one()
+            self.assertEqual(log.action, "douyin_local_sync_failed")
+            detail = json.loads(log.detail_json)
+            run = self.db.get(LibrarySyncRun, detail["sync_run_id"])
+            self.assertEqual((run.user_id, run.status), (self.user.id, "failed"))
+            self.assertEqual(detail["capture_diagnostics"]["page_count"], 1)
+            self.assertNotIn("do-not-store", log.detail_json)
+            for invalid in (None, "Bearer do-not-store", {**capture, "mode": "like"}, {**capture, "version": 99}):
+                result = self.client.post("/api/library/douyin/local-sync", json=self.local_payload([video_id], capture_diagnostics=invalid))
+                self.assertEqual(result.status_code, 200, result.text)
+        for log in self.db.query(UserActivityLog).filter_by(action="douyin_local_sync"):
+            self.assertNotIn("capture_diagnostics", json.loads(log.detail_json))
+            self.assertNotIn("do-not-store", log.detail_json)
+
     @staticmethod
     def local_payload(ids: list[str], **updates) -> dict:
         value = {
             "source_mode": "collect", "source_synced_at": "2026-09-08T01:00:00Z",
-            "client_version": "1.1.4", "source_order_reliable": True,
+            "client_version": "1.1.9", "source_order_reliable": True,
             "source_coverage": "limited",
             "items": [{
                 "video_id": video_id, "source_url": f"https://www.douyin.com/video/{video_id}",
@@ -186,7 +333,7 @@ class LibrarySyncRoutesTests(unittest.TestCase):
                 self.assertEqual(baseline.status_code, 200, baseline.text)
                 before = self.local_state()
                 # 旧窗口仍可能使用缓存网页；新请求时间不能让 1.1.2 的错误排名覆盖已校准数据。
-                for version in ("1.1.2", "1.1.3"):
+                for version in ("1.1.2", "1.1.3", "1.1.4", "1.1.5", "1.1.6", "1.1.7", "1.1.8"):
                     stale_client = self.client.post("/api/library/douyin/local-sync", json=self.local_payload(
                         [second_id, first_id], source_mode=mode, client_version=version,
                         source_synced_at="2026-09-09T01:00:00Z",
@@ -215,7 +362,7 @@ class LibrarySyncRoutesTests(unittest.TestCase):
         self.login()
         ids = ["7672579366093622501", "7672579366093622502"]
         with patch.object(routes.activity_service, "log_activity_safely"):
-            for day, version in enumerate(("1.1.4", "1.1.10", "1.2.0", "2.0.0"), start=1):
+            for day, version in enumerate(("1.1.9", "1.1.10", "1.2.0", "2.0.0"), start=1):
                 expected = ids if day % 2 else list(reversed(ids))
                 result = self.client.post("/api/library/douyin/local-sync", json=self.local_payload(
                     expected, client_version=version, source_synced_at=f"2026-09-0{day}T01:00:00Z",
@@ -232,7 +379,7 @@ class LibrarySyncRoutesTests(unittest.TestCase):
             self.assertEqual(self.client.post("/api/library/douyin/local-sync", json=self.local_payload(
                 [first_id, second_id],
             )).status_code, 200)
-            for version in ("1.1.2", ""):
+            for version in ("1.1.2", "1.1.4", "1.1.5", "1.1.6", "1.1.7", "1.1.8", ""):
                 result = self.client.post("/api/library/douyin/local-sync", json=self.local_payload(
                     [extra_id, second_id, first_id], client_version=version, source_order_reliable=False,
                     source_synced_at="2026-09-09T01:00:00Z",

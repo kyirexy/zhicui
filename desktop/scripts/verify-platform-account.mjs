@@ -8,6 +8,7 @@ import {
   isDouyinSourceResponseUrl,
   mergeDouyinItem,
   normalizeDouyinRecord,
+  prepareDouyinSourcePage,
   readDouyinMetadataPayload,
   readDouyinSourceRecords,
   requestBilibiliJson,
@@ -274,6 +275,76 @@ assert.deepEqual(
 // 抖音后页先完成、重复 ID、内嵌相关作品、缺页和重复游标均不能改变来源顺序。
 const aweme = (id, created = 1) => ({ aweme_id: String(id), desc: `作品${id}`, create_time: created });
 const douyinPageUrl = (cursor) => `https://www.douyin.com/aweme/v1/web/aweme/favorite/?max_cursor=${cursor}`;
+const fixtureMainFrames = new WeakMap();
+const fixtureSourceCdp = async (page) => {
+  const listeners = new Map();
+  const session = {
+    send: async (method) => method === 'Page.getFrameTree' ? { frameTree: { frame: { id: 'fixture-main', loaderId: `fixture-loader-${page.fixtureDocumentNumber || 0}` } } } : {},
+    on: (event, callback) => { listeners.set(event, callback); },
+    off: (event, callback) => { if (listeners.get(event) === callback) listeners.delete(event); },
+    emit: (event, value) => listeners.get(event)?.(value),
+    detach: async () => { page.fixtureDocumentSessions?.delete(session); },
+  };
+  page.fixtureDocumentSessions ||= new Set();
+  page.fixtureDocumentSessions.add(session);
+  return session;
+};
+function fixtureMainFrame(page) {
+  if (!fixtureMainFrames.has(page)) fixtureMainFrames.set(page, { url: () => page.url() });
+  return fixtureMainFrames.get(page);
+}
+function commitFixtureDocument(page, emit) {
+  emit('request', { url: page.url, isNavigationRequest: () => true, frame: () => page.mainFrame() });
+  commitFixtureCdpDocument(page);
+  emit('framenavigated', page.mainFrame());
+}
+function commitFixtureCdpDocument(page) {
+  page.fixtureDocumentNumber = (page.fixtureDocumentNumber || 0) + 1;
+  for (const session of page.fixtureDocumentSessions || []) session.emit('Page.frameNavigated', {
+    frame: { id: 'fixture-main', loaderId: `fixture-loader-${page.fixtureDocumentNumber}`, url: page.url() },
+  });
+}
+
+for (const failedCommand of [null, 'Network.enable', 'Network.setCacheDisabled', 'Network.setBypassServiceWorker']) {
+  const calls = [];
+  let detached = 0;
+  const context = { newCDPSession: async () => ({
+    send: async (command, input) => { calls.push([command, input]); if (command === failedCommand) throw new Error('fixture: CDP unavailable'); },
+    detach: async () => { detached += 1; },
+  }) };
+  if (failedCommand) {
+    await assert.rejects(prepareDouyinSourcePage(context, {}), /CDP unavailable/);
+  } else {
+    const release = await prepareDouyinSourcePage(context, {});
+    assert.deepEqual(calls, [['Network.enable', undefined], ['Network.setCacheDisabled', { cacheDisabled: true }], ['Network.setBypassServiceWorker', { bypass: true }]]);
+    assert.equal(detached, 0, '采集结束前不能释放禁用缓存的会话');
+    await release();
+    await release();
+  }
+  assert.equal(detached, 1, '成功收尾和设置失败都恰好释放一次 CDP 会话');
+}
+{
+  const listeners = new Map();
+  const commits = [];
+  const session = {
+    send: async (method) => method === 'Page.getFrameTree' ? { frameTree: { frame: { id: 'main', loaderId: 'old' } } } : {},
+    on: (event, callback) => listeners.set(event, callback),
+    off: (event) => listeners.delete(event), detach: async () => {},
+  };
+  const release = await prepareDouyinSourcePage({ newCDPSession: async () => session }, {}, (url) => commits.push(url));
+  const emit = (frame, type = 'Navigation') => listeners.get('Page.frameNavigated')?.({ frame: { id: 'main', loaderId: 'new', url: 'https://www.douyin.com/user/self', ...frame }, type });
+  emit({ id: 'child', parentId: 'main' });
+  emit({ loaderId: 'old', url: 'https://www.douyin.com/user/self#old-document' });
+  emit({ unreachableUrl: 'https://www.douyin.com/user/self' });
+  emit({}, 'BackForwardCacheRestore');
+  assert.deepEqual(commits, [], '子frame、同loader、错误页和BFCache恢复都不能伪装成新主文档');
+  emit({});
+  emit({});
+  emit({ loaderId: 'newer' });
+  assert.equal(commits.length, 2, '每个新的主文档loader只确认一次');
+  await release();
+  assert.equal(listeners.size, 0);
+}
 
 for (const initialState of ['minimized', 'maximized']) {
   const calls = [];
@@ -313,9 +384,10 @@ for (const scenario of ['same-batch', 'other-profile', 'other-batch', 'cancel-re
     const emit = (event, value) => { for (const listener of listeners.get(event) || []) listener(value); };
     const page = {
       url: () => 'https://www.douyin.com/user/self', isClosed: () => isClosed,
+      mainFrame() { return fixtureMainFrame(this); },
       on: (event, callback) => { if (!listeners.has(event)) listeners.set(event, new Set()); listeners.get(event).add(callback); },
       off: (event, callback) => listeners.get(event)?.delete(callback),
-      goto: async () => { navigated += 1; emit('request', { url: () => 'https://www.douyin.com/aweme/v1/web/aweme/post/?sec_user_id=SELF_TEST&max_cursor=0' }); },
+      goto: async () => { navigated += 1; commitFixtureDocument(page, emit); emit('request', { url: () => 'https://www.douyin.com/aweme/v1/web/aweme/post/?sec_user_id=SELF_TEST&max_cursor=0' }); },
       evaluate: async () => true, bringToFront: async () => {},
       respond: async (mode) => {
         const request = { url: () => mode === 'like' ? douyinPageUrl(0)
@@ -329,7 +401,7 @@ for (const scenario of ['same-batch', 'other-profile', 'other-batch', 'cancel-re
         for (let index = 0; index < 12; index += 1) await Promise.resolve();
       },
     };
-    const context = { pages: () => [page], browser: () => null,
+    const context = { pages: () => [page], browser: () => null, newCDPSession: fixtureSourceCdp,
       cookies: async () => [{ name: 'sessionid', value: 'fixture-only', domain: '.douyin.com' }],
       once: (_event, callback) => closeListeners.push(callback),
       close: async () => { if (isClosed) return; isClosed = true; closed += 1; for (const callback of closeListeners) callback(); },
@@ -977,7 +1049,8 @@ for (const longList of [true, false]) {
     const page = {
       on: (name, callback) => { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(callback); },
       off: (name, callback) => listeners.get(name)?.delete(callback),
-      goto: async () => { respond(0, { aweme_list: [aweme(50000), aweme(50001)], max_cursor: 90, has_more: true }); },
+      mainFrame() { return fixtureMainFrame(this); },
+      goto: async () => { commitFixtureDocument(page, emit); respond(0, { aweme_list: [aweme(50000), aweme(50001)], max_cursor: 90, has_more: true }); },
       url: () => 'https://www.douyin.com/user/self',
       evaluate: async (_fn, input) => {
         if (input.reset) { resets += 1; return true; }
@@ -993,7 +1066,7 @@ for (const longList of [true, false]) {
     };
     const connector = new PlatformAccountConnector(() => 'unused-test-profile', () => {});
     connector.selectDouyinTab = async () => {};
-    const result = await connector.collectDouyin({ pages: () => [page], browser: () => null }, 'like', 3);
+    const result = await connector.collectDouyin({ pages: () => [page], browser: () => null, newCDPSession: fixtureSourceCdp }, 'like', 3);
     assert.equal(resets, 1, '初始化成功后不能反复复位滚动');
     assert.equal(scrolls, longList ? 6 : 5);
     assert.equal(result.coverage, longList ? 'limited' : 'partial');
@@ -1005,7 +1078,7 @@ for (const longList of [true, false]) {
   }
 }
 // 走 collect 外层直到返回值和 finally：失败/取消不可交付成功快照，也必须释放监听和浏览器。
-for (const scenario of ['http-error', 'html-challenge', 'bad-json', 'unobserved-request', 'hanging-body', 'hanging-request', 'failed-tail', 'cancel', 'recovery-success', 'recovery-tail-only', 'recovery-cancel', 'recovery-wrong-account', 'recovery-window-closed']) {
+for (const scenario of ['freshness-unavailable', 'http-error', 'html-challenge', 'bad-json', 'unobserved-request', 'hanging-body', 'hanging-request', 'failed-tail', 'cancel', 'recovery-success', 'recovery-tail-only', 'recovery-cancel', 'recovery-wrong-account', 'recovery-window-closed', 'navigation-failed-old-head', 'old-document-head-before-commit', 'navigation-hash-old-head']) {
   const originalNow = Date.now;
   const originalTimeout = globalThis.setTimeout;
   const timers = new Set();
@@ -1033,11 +1106,19 @@ for (const scenario of ['http-error', 'html-challenge', 'bad-json', 'unobserved-
     const request = { url: () => douyinPageUrl(0), method: () => 'GET', postData: () => null };
     const connector = new PlatformAccountConnector(() => 'unused-test-profile', (status) => statuses.push(status));
     const page = {
+      mainFrame() { return fixtureMainFrame(this); },
       on: (name, callback) => { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(callback); },
       off: (name, callback) => listeners.get(name)?.delete(callback),
       url: () => currentUrl,
       isClosed: () => windowClosed,
       goto: async () => {
+        const oldDocument = ['navigation-failed-old-head', 'old-document-head-before-commit', 'navigation-hash-old-head'].includes(scenario);
+        if (!oldDocument) commitFixtureDocument(page, emit);
+        if (scenario === 'navigation-hash-old-head') {
+          emit('request', { url: page.url, isNavigationRequest: () => true, frame: () => page.mainFrame() });
+          currentUrl += '#old-document';
+          emit('framenavigated', page.mainFrame()); // 只有 PW 同文档事件，没有新 CDP loader。
+        }
         if (scenario !== 'unobserved-request') emit('request', request);
         if (scenario === 'hanging-request') return;
         emit('response', {
@@ -1046,10 +1127,12 @@ for (const scenario of ['http-error', 'html-challenge', 'bad-json', 'unobserved-
           json: async () => {
             if (scenario === 'bad-json') throw new SyntaxError('test invalid JSON');
             if (scenario === 'hanging-body') return new Promise(() => {});
-            return { aweme_list: [aweme(65000)], max_cursor: 90, has_more: true };
+            return { aweme_list: [aweme(65000)], max_cursor: 90, has_more: !oldDocument };
           },
         });
         emit('requestfinished', request);
+        if (['navigation-failed-old-head', 'navigation-hash-old-head'].includes(scenario)) throw new Error('fixture navigation failed, old document remains');
+        if (scenario === 'old-document-head-before-commit') commitFixtureDocument(page, emit);
       },
       bringToFront: async () => {
         focused += 1;
@@ -1081,6 +1164,7 @@ for (const scenario of ['http-error', 'html-challenge', 'bad-json', 'unobserved-
     };
     const context = {
       pages: () => [page], browser: () => null,
+      newCDPSession: scenario === 'freshness-unavailable' ? async () => { throw new Error('fixture: no freshness confirmation'); } : fixtureSourceCdp,
       cookies: async () => [{ name: 'sessionid', value: 'test-only', domain: '.douyin.com' }],
       close: async () => { closed += 1; },
     };
@@ -1129,6 +1213,74 @@ for (const scenario of ['http-error', 'html-challenge', 'bad-json', 'unobserved-
     globalThis.setTimeout = originalTimeout;
   }
 }
+// 官网刷新同一 /user/self 后，旧文档已确认的首屏和迟到 body 都不能作为新文档的来源证据。
+for (const scenario of ['confirmed-old-head', 'delayed-old-body', 'fresh-head-after-refresh', 'navigation-started-old-head']) {
+  const originalNow = Date.now;
+  const originalTimeout = globalThis.setTimeout;
+  const timers = new Set();
+  let time = 1_000;
+  Date.now = () => time;
+  globalThis.setTimeout = (callback, milliseconds, ...args) => {
+    const timer = originalTimeout(() => { timers.delete(timer); time += Number(milliseconds) || 0; callback(...args); }, 0);
+    timers.add(timer);
+    return timer;
+  };
+  try {
+    const listeners = new Map();
+    const emit = (event, value) => { for (const callback of listeners.get(event) || []) callback(value); };
+    let releaseOldBody;
+    const respond = (body) => {
+      const request = { url: () => 'https://www.douyin.com/aweme/v1/web/aweme/listcollection/?X-Bogus=PRIVATE_QUERY&sec_user_id=PRIVATE_ACCOUNT',
+        method: () => 'POST', postData: () => 'cursor=0&count=30&token=PRIVATE_BODY' };
+      emit('request', request);
+      emit('response', { url: request.url, request: () => request, ok: () => true,
+        allHeaders: async () => ({ 'content-type': 'application/json' }), json: async () => body });
+      emit('requestfinished', request);
+    };
+    const page = {
+      url: () => 'https://www.douyin.com/user/self', mainFrame() { return fixtureMainFrame(this); },
+      on: (event, callback) => { if (!listeners.has(event)) listeners.set(event, new Set()); listeners.get(event).add(callback); },
+      off: (event, callback) => listeners.get(event)?.delete(callback),
+      goto: async () => {
+        commitFixtureDocument(page, emit);
+        const old = { aweme_list: [aweme(66500)], cursor: 0, has_more: false };
+        respond(['confirmed-old-head', 'navigation-started-old-head'].includes(scenario) ? old : new Promise((resolve) => { releaseOldBody = () => resolve(old); }));
+        for (let index = 0; index < 12; index += 1) await Promise.resolve();
+        if (scenario === 'navigation-started-old-head') {
+          emit('request', { url: page.url, isNavigationRequest: () => true, frame: () => page.mainFrame() });
+          return; // 新导航挂起或失败时，不能把刷新前的完整结果当本轮最新结果。
+        }
+        commitFixtureDocument(page, emit);
+        if (scenario === 'fresh-head-after-refresh') respond({ aweme_list: [aweme(66501), aweme(66500)], cursor: 0, has_more: false });
+        releaseOldBody?.();
+      },
+      bringToFront: async () => {}, evaluate: async () => false,
+    };
+    const connector = new PlatformAccountConnector(() => 'unused-test-profile', () => {});
+    connector.selectDouyinTab = async () => {};
+    const run = connector.collectDouyin({ pages: () => [page], browser: () => null, newCDPSession: fixtureSourceCdp }, 'collect', 30);
+    if (scenario === 'fresh-head-after-refresh') {
+      const result = await run;
+      assert.equal(result.coverage, 'complete');
+      assert.deepEqual(result.items.map((item) => item.videoId), ['66501', '66500']);
+      const { capture_started_at, capture_finished_at, ...diagnostics } = result.diagnostics;
+      assert.ok(Number.isFinite(Date.parse(capture_started_at)) && Date.parse(capture_finished_at) >= Date.parse(capture_started_at));
+      assert.deepEqual(diagnostics, { version: 1, platform: 'douyin', mode: 'collect', fresh_document_committed: true,
+        document_commit_count: 2, http_cache_bypassed: true, service_worker_bypassed: true,
+        endpoint_path: '/aweme/v1/web/aweme/listcollection/', request_methods: ['POST'], first_page_cursor: '0',
+        page_count: 1, first_video_ids: ['66501', '66500'] });
+      assert.doesNotMatch(JSON.stringify(result.diagnostics), /PRIVATE_|X-Bogus|sec_user_id|https?:|cookie|headers|token/i);
+    } else {
+      await assert.rejects(run, (error) => error.code === 'DOUYIN_SOURCE_FIRST_PAGE_REQUIRED', scenario);
+    }
+    assert.equal([...listeners.values()].reduce((count, callbacks) => count + callbacks.size, 0), 0);
+  } finally {
+    for (const timer of timers) clearTimeout(timer);
+    Date.now = originalNow;
+    globalThis.setTimeout = originalTimeout;
+  }
+}
+
 // 导航和账号身份守卫：只接受当前本人上下文，离开后返回也不能恢复已作废的一轮。
 for (const scenario of ['other-profile', 'leave-origin', 'leave-return', 'foreign-api-account', 'unproven-canonical',
   'canonical-like', 'canonical-collect', 'canonical-before-selection', 'canonical-to-self', 'query-only', 'iframe-only',
@@ -1181,10 +1333,13 @@ for (const scenario of ['other-profile', 'leave-origin', 'leave-return', 'foreig
       on: (event, callback) => { if (!listeners.has(event)) listeners.set(event, new Set()); listeners.get(event).add(callback); },
       off: (event, callback) => listeners.get(event)?.delete(callback),
       goto: async () => {
+        emit('request', { url: () => 'https://www.douyin.com/user/self', isNavigationRequest: () => true, frame: () => mainFrame });
         if (actualSelection) {
           emit('framenavigated', mainFrame); // 初始 about:blank 不是离开已确认的本人主页。
-          navigate(scenario === 'initial-other-profile' ? 'https://www.douyin.com/user/OTHER_TEST' : 'https://www.douyin.com/user/self');
-        }
+          currentUrl = scenario === 'initial-other-profile' ? 'https://www.douyin.com/user/OTHER_TEST' : 'https://www.douyin.com/user/self';
+          commitFixtureCdpDocument(page);
+          emit('framenavigated', mainFrame);
+        } else { commitFixtureCdpDocument(page); emit('framenavigated', mainFrame); }
         if (mode === 'collect') {
           // 实采中收藏请求没有 sec_user_id；从同一本人主页加载时的作品请求确认账号。
           const request = { url: () => 'https://www.douyin.com/aweme/v1/web/aweme/post/?sec_user_id=SELF_TEST&max_cursor=0' };
@@ -1207,7 +1362,7 @@ for (const scenario of ['other-profile', 'leave-origin', 'leave-return', 'foreig
       },
     };
     const connector = new PlatformAccountConnector(() => 'unused-test-profile', () => {});
-    const context = { pages: () => [page], browser: () => null,
+    const context = { pages: () => [page], browser: () => null, newCDPSession: fixtureSourceCdp,
       cookies: async () => [{ name: 'sessionid', value: 'test-only', domain: '.douyin.com' }], close: async () => { closed += 1; } };
     connector.profilePath = async () => 'unused-test-profile';
     connector.launchBrowser = async () => ({ context, browser: 'chrome' });

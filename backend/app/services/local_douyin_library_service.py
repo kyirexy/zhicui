@@ -20,7 +20,7 @@ from app.models.video_source_ledger import VideoSourceLedger
 from app.services import library_sync_service, note_service, video_source_ledger_service
 
 MAX_LOCAL_SYNC_ITEMS = 100
-MIN_LOCAL_DOUYIN_DESKTOP_VERSION = "1.1.4"
+MIN_LOCAL_DOUYIN_DESKTOP_VERSION = "1.1.9"
 _RELEASE_VERSION_PATTERN = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 _VIDEO_ID_PATTERN = re.compile(r"^[0-9]{5,32}$")
 _CANONICAL_PATH_PATTERN = re.compile(r"^/video/([0-9]{5,32})/?$")
@@ -333,6 +333,7 @@ def ingest_items(
     created = 0
     created_video_ids: list[str] = []
     ready = 0
+    restored_candidates: list[str] = []
     try:
         for item in normalized:
             order_reliable = source_order_reliable or _has_reliable_order(
@@ -384,6 +385,7 @@ def ingest_items(
                 row.available = _is_catalog_snapshot(row, order_reliable=order_reliable)
             if _is_catalog_snapshot(row, order_reliable=order_reliable):
                 ready += 1
+                restored_candidates.append(item["video_id"])
             row.last_seen_at = now
             row.updated_at = now
             note = note_map.get(item["video_id"])
@@ -399,6 +401,13 @@ def ingest_items(
                 source_synced_at=synced_at,
                 commit=False,
             )
+        # “临时移除”在下次确认采集到该作品时恢复；不恢复未读到的历史条目，
+        # 也不能撤销用户在采集开始后作出的移除。与目录和台账同事务提交。
+        from app.services import library_hidden_service
+
+        restored = library_hidden_service.clear_temporary_hidden(
+            db, user_id, synced_at, aweme_ids=restored_candidates, commit=False,
+        )
         # 同步只增量登记和校准位置；完整列表也不能代替用户删除历史资料或来源。
         db.commit()
     except Exception:
@@ -410,6 +419,7 @@ def ingest_items(
         "reused": len(normalized) - created,
         "ready": ready,
         "quarantined": len(normalized) - ready,
+        "restored": restored,
         "source_mode": mode,
         "source_synced_at": synced_at.isoformat().replace("+00:00", "Z"),
         "source_order_reliable": source_order_reliable,

@@ -964,6 +964,7 @@ export async function ingestLocalDouyinLibrary(
       source_mode: sourceMode,
       items: items.slice(0, 100),
       client_version: clientVersion,
+      ...(snapshot?.diagnostics ? { capture_diagnostics: snapshot.diagnostics } : {}),
       ...(snapshot?.sourceSyncedAt ? { source_synced_at: snapshot.sourceSyncedAt } : {}),
       ...(snapshot?.coverage ? { source_coverage: snapshot.coverage } : {}),
       ...(typeof snapshot?.orderReliable === 'boolean' ? { source_order_reliable: snapshot.orderReliable } : {}),

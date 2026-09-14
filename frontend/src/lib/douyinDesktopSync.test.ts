@@ -30,7 +30,7 @@ test('desktop media capability accepts current Douyin CDNs only', () => {
 });
 
 test('local Douyin connector is gated to the compatible desktop version', () => {
-  assert.equal(MIN_LOCAL_DOUYIN_DESKTOP_VERSION, '1.1.4');
+  assert.equal(MIN_LOCAL_DOUYIN_DESKTOP_VERSION, '1.1.9');
   assert.equal(supportsLocalDouyinRuntime('1.0.6'), false);
   assert.equal(supportsLocalDouyinRuntime('1.0.7'), false);
   assert.equal(supportsLocalDouyinRuntime('1.0.8'), false);
@@ -40,7 +40,11 @@ test('local Douyin connector is gated to the compatible desktop version', () => 
   assert.equal(supportsLocalDouyinRuntime('1.1.1'), false);
   assert.equal(supportsLocalDouyinRuntime('1.1.2'), false);
   assert.equal(supportsLocalDouyinRuntime('1.1.3'), false);
-  assert.equal(supportsLocalDouyinRuntime('1.1.4'), true);
+  for (const version of ['1.1.4', '1.1.5', '1.1.6', '1.1.7', '1.1.8']) {
+    assert.equal(supportsLocalDouyinRuntime(version), false);
+    assert.equal(requiresLocalDouyinDesktopUpdate(version), true);
+  }
+  assert.equal(supportsLocalDouyinRuntime('1.1.9'), true);
   assert.equal(supportsLocalDouyinRuntime('1.1.10'), true);
   assert.equal(supportsLocalDouyinRuntime('1.2.0'), true);
   assert.equal(supportsLocalDouyinRuntime('2.0.0'), true);
@@ -51,7 +55,7 @@ test('local Douyin connector is gated to the compatible desktop version', () => 
   assert.equal(requiresLocalDouyinDesktopUpdate('1.0.9'), true);
   assert.equal(requiresLocalDouyinDesktopUpdate('1.1.2'), true);
   assert.equal(requiresLocalDouyinDesktopUpdate('1.1.3'), true);
-  assert.equal(requiresLocalDouyinDesktopUpdate('1.1.4'), false);
+  assert.equal(requiresLocalDouyinDesktopUpdate('1.1.9'), false);
 });
 
 test('desktop result is reduced to the public server metadata contract', () => {

@@ -1,10 +1,13 @@
 'use client';
 
-import { RefreshCw, Sparkles, X } from 'lucide-react';
-import { useEffect, useRef, useState, type MouseEvent } from 'react';
+import { RefreshCw, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { useDesktopApp } from '@/components/DesktopAppFrame';
 import { useAuth } from '@/lib/hooks/AuthContext';
+import { useDesktopUpdate } from '@/lib/hooks/useDesktopUpdate';
+import { desktopUpdatePresentation } from '@/lib/desktopUpdate';
+import styles from './WebBuildUpdatePrompt.module.css';
 import {
   currentWebBuild,
   fetchLatestWebBuild,
@@ -21,12 +24,20 @@ export default function WebBuildUpdatePrompt() {
   const pathname = usePathname();
   const { user, loading: authLoading } = useAuth();
   const { isDesktop, resolved } = useDesktopApp();
-  const dialogRef = useRef<HTMLDialogElement>(null);
+  const nativeUpdate = useDesktopUpdate();
   const inFlightRef = useRef<Promise<void> | null>(null);
   const lastCheckAtRef = useRef(0);
   const [available, setAvailable] = useState<WebBuildManifest | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshingRef = useRef(false);
 
   useEffect(() => {
+    if (process.env.NODE_ENV === 'development'
+      && new URLSearchParams(window.location.search).get('previewWebUpdate') === '1'
+      && resolved && isDesktop && user) {
+      setAvailable({ ...currentWebBuild(), build_id: 'development-preview-only' });
+      return undefined;
+    }
     if (
       process.env.NODE_ENV === 'development'
       || !resolved
@@ -82,65 +93,34 @@ export default function WebBuildUpdatePrompt() {
     };
   }, [authLoading, isDesktop, pathname, resolved, user]);
 
-  useEffect(() => {
-    if (available && !dialogRef.current?.open) dialogRef.current?.showModal();
-  }, [available]);
-
   const dismiss = () => {
-    if (available) sessionStorage.setItem(DISMISSED_BUILD_KEY, available.build_id);
-    dialogRef.current?.close();
+    try { if (available) sessionStorage.setItem(DISMISSED_BUILD_KEY, available.build_id); } catch { /* 存储不可用也允许稍后更新。 */ }
     setAvailable(null);
   };
 
   const refresh = () => {
-    dialogRef.current?.close();
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    setRefreshing(true);
     window.location.reload();
   };
 
-  const handleBackdrop = (event: MouseEvent<HTMLDialogElement>) => {
-    if (event.target === event.currentTarget) dismiss();
-  };
+  // 程序重启会一并载入新页面，避免两种更新同时争抢注意力。
+  const nativeView = desktopUpdatePresentation(nativeUpdate);
+  if (!available || !isDesktop || !user || nativeView.version || nativeView.downloading || nativeView.installing) return null;
 
   return (
-    <dialog
-      ref={dialogRef}
-      className="app-update-dialog"
+    <aside
+      className={styles.notice}
+      role="status"
       aria-labelledby="web-build-update-title"
-      aria-describedby="web-build-update-description"
-      onClick={handleBackdrop}
-      onCancel={(event) => {
-        event.preventDefault();
-        dismiss();
-      }}
     >
-      {available && (
-        <div className="app-update-card">
-          <header className="app-update-header">
-            <div className="app-update-icon" aria-hidden="true">
-              <Sparkles size={22} />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="app-update-eyebrow">网页功能已更新</p>
-              <h2 id="web-build-update-title" className="text-balance">
-                刷新即可使用最新版知萃
-              </h2>
-            </div>
-            <button type="button" className="app-update-close" aria-label="稍后刷新" onClick={dismiss}>
-              <X size={19} aria-hidden="true" />
-            </button>
-          </header>
-          <p id="web-build-update-description" className="app-update-description text-pretty">
-            当前输入和生成任务不会被自动打断。请在方便时刷新，桌面程序无需重新安装。
-          </p>
-          <footer className="app-update-actions">
-            <button type="button" className="app-update-later" onClick={dismiss}>稍后</button>
-            <button type="button" className="app-update-primary" onClick={refresh}>
-              <RefreshCw size={18} aria-hidden="true" />
-              刷新到最新版
-            </button>
-          </footer>
-        </div>
-      )}
-    </dialog>
+      <button type="button" className={styles.close} aria-label="稍后刷新" onClick={dismiss}><X size={18} aria-hidden="true" /></button>
+      <h2 id="web-build-update-title">页面有新功能</h2>
+      <p>保存当前输入后刷新即可，无需下载安装。</p>
+      <button type="button" className={styles.refresh} disabled={refreshing} onClick={refresh}>
+        <RefreshCw size={16} aria-hidden="true" />{refreshing ? '正在刷新…' : '刷新更新'}
+      </button>
+    </aside>
   );
 }

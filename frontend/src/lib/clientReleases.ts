@@ -4,10 +4,11 @@ export type ClientReleaseChannel = 'beta' | 'stable';
 export interface ClientRelease {
   platform: ClientPlatform;
   channel: ClientReleaseChannel;
-  version: string;
+  // 未取得可信清单时保留下载入口，不编造“最新版本”或文件大小。
+  version: string | null;
   downloadUrl: string;
-  sizeBytes: number;
-  publishedAt: string;
+  sizeBytes: number | null;
+  publishedAt: string | null;
   architecture?: string;
   build?: number;
   codeSigned?: boolean;
@@ -19,130 +20,73 @@ export interface ClientReleaseCatalog {
   windows: ClientRelease;
 }
 
+const OFFICIAL_ORIGIN = 'https://luxai.cn';
+const CHANNEL_MANIFEST_ROOT = '/download/releases';
+const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/;
+
 export function countedClientDownloadUrl(platform: ClientPlatform): string {
   return `/api/client-downloads/${platform}`;
 }
 
-const CHANNEL_MANIFEST_ROOT = '/download/releases';
-const LEGACY_ANDROID_MANIFEST_URL = '/download/latest.json';
-const LEGACY_WINDOWS_MANIFEST_URL = '/download/desktop-latest.json';
+function unknownRelease(platform: ClientPlatform): ClientRelease {
+  return { platform, channel: 'beta', version: null, sizeBytes: null, publishedAt: null,
+    downloadUrl: OFFICIAL_ORIGIN + countedClientDownloadUrl(platform) };
+}
 
 export const CLIENT_RELEASE_FALLBACKS: ClientReleaseCatalog = {
-  android: {
-    platform: 'android',
-    channel: 'beta',
-    version: '1.2.7',
-    build: 19,
-    downloadUrl: 'https://luxai.cn/download/zhicui.apk',
-    sizeBytes: 9_878_245,
-    publishedAt: '2026-08-28T04:32:18.9888176Z',
-    releaseStatus: 'beta_download',
-  },
-  windows: {
-    platform: 'windows',
-    channel: 'beta',
-    version: '1.0.9',
-    architecture: 'x64',
-    downloadUrl: 'https://luxai.cn/download/windows/Zhicui-Setup-1.0.9-x64.exe',
-    sizeBytes: 93_530_247,
-    publishedAt: '2026-08-28T02:37:35.3912274Z',
-    codeSigned: false,
-    releaseStatus: 'beta_download',
-  },
+  android: unknownRelease('android'),
+  windows: unknownRelease('windows'),
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function readRequiredString(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const normalized = value.trim();
-  return normalized.length > 0 && normalized.length <= 180 ? normalized : null;
-}
+// 清单、渠道和不可变产物名必须完全对应；不能用旧安装包补一个看似有效的新版本。
+export function parseClientRelease(
+  value: unknown, platform: ClientPlatform, channel: ClientReleaseChannel,
+): ClientRelease | null {
+  if (!isRecord(value) || value.schema_version !== 2 || value.platform !== platform
+    || value.channel !== channel || value.availability !== 'available') return null;
+  const version = typeof value.version === 'string' ? value.version : '';
+  if (version.length > 80 || !VERSION.test(version)
+    || !Number.isSafeInteger(value.size_bytes) || Number(value.size_bytes) <= 0
+    || typeof value.published_at !== 'string' || value.published_at.length > 80
+    || !Number.isFinite(Date.parse(value.published_at))
+    || typeof value.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(value.sha256)
+    || typeof value.download_url !== 'string' || value.download_url.length > 260) return null;
 
-function readPositiveNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? value
-    : null;
-}
-
-function safeDownloadUrl(value: unknown, fallback: string): string {
-  const candidate = readRequiredString(value);
-  if (!candidate) return fallback;
-
-  if (candidate.startsWith('/') && !candidate.startsWith('//')) {
-    return candidate;
+  let expectedPath: string;
+  if (platform === 'windows') {
+    if (value.architecture !== 'x64' || typeof value.code_signed !== 'boolean'
+      || (channel === 'stable' && !value.code_signed)) return null;
+    expectedPath = `/download/windows/Zhicui-Setup-${version}-x64.exe`;
+  } else {
+    if (!Number.isSafeInteger(value.build) || Number(value.build) <= 0) return null;
+    if (channel === 'stable' && (value.artifact_kind !== 'release'
+      || value.debuggable !== false || !isRecord(value.signing) || value.signing.verified !== true)) return null;
+    expectedPath = `/download/android/Zhicui-${version}-${value.build}.apk`;
   }
-
   try {
-    const parsed = new URL(candidate);
-    return parsed.protocol === 'https:' ? parsed.toString() : fallback;
-  } catch {
-    return fallback;
-  }
-}
+    const url = new URL(value.download_url);
+    if (url.origin !== OFFICIAL_ORIGIN || url.username || url.password || url.search || url.hash
+      || url.pathname !== expectedPath || value.download_url !== OFFICIAL_ORIGIN + expectedPath) return null;
+  } catch { return null; }
 
-function parseAndroidRelease(value: unknown): ClientRelease {
-  const fallback = CLIENT_RELEASE_FALLBACKS.android;
-  if (!isRecord(value)) return { ...fallback };
-
-  const version = readRequiredString(value.version);
-  const sizeBytes = readPositiveNumber(value.size_bytes);
-  const publishedAt = readRequiredString(value.published_at);
-  if (!version || !sizeBytes || !publishedAt) return { ...fallback };
-
-  const build = readPositiveNumber(value.build);
-  return {
-    platform: 'android',
-    channel: value.channel === 'stable' ? 'stable' : 'beta',
-    version,
-    build: build ? Math.trunc(build) : fallback.build,
-    downloadUrl: safeDownloadUrl(value.download_url, fallback.downloadUrl),
-    sizeBytes,
-    publishedAt,
-    releaseStatus: value.channel === 'stable' ? 'stable_download' : 'beta_download',
-  };
-}
-
-function parseWindowsRelease(value: unknown): ClientRelease {
-  const fallback = CLIENT_RELEASE_FALLBACKS.windows;
-  if (!isRecord(value)) return { ...fallback };
-
-  const version = readRequiredString(value.version);
-  const sizeBytes = readPositiveNumber(value.size_bytes);
-  const publishedAt = readRequiredString(value.published_at);
-  if (!version || !sizeBytes || !publishedAt) return { ...fallback };
-
-  const channel: ClientReleaseChannel = value.channel === 'stable' ? 'stable' : 'beta';
-  return {
-    platform: 'windows',
-    channel,
-    version,
-    architecture: readRequiredString(value.architecture) || fallback.architecture,
-    downloadUrl: safeDownloadUrl(
-      value.download_url ?? value.url,
-      fallback.downloadUrl,
-    ),
-    sizeBytes,
-    publishedAt,
-    codeSigned: typeof value.code_signed === 'boolean'
-      ? value.code_signed
-      : fallback.codeSigned,
-    releaseStatus: readRequiredString(value.release_status)
-      || (channel === 'stable' ? 'stable_download' : 'beta_download'),
-  };
+  return { platform, channel, version, sizeBytes: Number(value.size_bytes), publishedAt: value.published_at,
+    downloadUrl: value.download_url,
+    ...(platform === 'windows' ? { architecture: 'x64', codeSigned: value.code_signed as boolean }
+      : { build: Number(value.build) }),
+    releaseStatus: channel === 'stable' ? 'stable_download' : 'beta_download' };
 }
 
 async function fetchManifest(path: string, signal?: AbortSignal): Promise<unknown> {
-  const separator = path.includes('?') ? '&' : '?';
-  const response = await fetch(`${path}${separator}ts=${Date.now()}`, {
-    cache: 'no-store',
-    signal,
+  const timeout = AbortSignal.timeout(12_000);
+  const response = await fetch(`${path}?ts=${Date.now()}`, {
+    cache: 'no-store', credentials: 'omit', headers: { Accept: 'application/json' },
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   });
-  if (!response.ok) {
-    throw new Error(`Release manifest request failed: ${response.status}`);
-  }
+  if (!response.ok) throw new Error('暂时无法确认客户端版本');
   return response.json() as Promise<unknown>;
 }
 
@@ -150,38 +94,22 @@ export async function loadClientReleaseCatalog(
   signal?: AbortSignal,
   channel: ClientReleaseChannel = 'beta',
 ): Promise<ClientReleaseCatalog> {
-  const loadChannel = async (platform: ClientPlatform, legacyPath: string) => {
-    try {
-      const value = await fetchManifest(
-        `${CHANNEL_MANIFEST_ROOT}/${platform}/${channel}.json`,
-        signal,
-      );
-      if (isRecord(value) && value.availability === 'available') return value;
-      throw new Error(`${platform} ${channel} channel unavailable`);
-    } catch (error) {
-      if (channel !== 'beta') throw error;
-      return fetchManifest(legacyPath, signal);
-    }
+  const loadChannel = async (platform: ClientPlatform) => {
+    const value = await fetchManifest(`${CHANNEL_MANIFEST_ROOT}/${platform}/${channel}.json`, signal);
+    const release = parseClientRelease(value, platform, channel);
+    if (!release) throw new Error('客户端发行清单暂不可用');
+    return release;
   };
   const [androidResult, windowsResult] = await Promise.allSettled([
-    loadChannel('android', LEGACY_ANDROID_MANIFEST_URL),
-    loadChannel('windows', LEGACY_WINDOWS_MANIFEST_URL),
+    loadChannel('android'), loadChannel('windows'),
   ]);
-
-  if (
-    channel === 'stable'
-    && (androidResult.status === 'rejected' || windowsResult.status === 'rejected')
-  ) {
+  if (channel === 'stable' && (androidResult.status === 'rejected' || windowsResult.status === 'rejected')) {
     throw new Error('正式版发行尚未开放，拒绝回退到公测安装包');
   }
-
+  // 不读取可能陈旧的 legacy 清单；失败时仅保留服务器实时解析的官方计数入口。
   return {
-    android: androidResult.status === 'fulfilled'
-      ? parseAndroidRelease(androidResult.value)
-      : { ...CLIENT_RELEASE_FALLBACKS.android },
-    windows: windowsResult.status === 'fulfilled'
-      ? parseWindowsRelease(windowsResult.value)
-      : { ...CLIENT_RELEASE_FALLBACKS.windows },
+    android: androidResult.status === 'fulfilled' ? androidResult.value : unknownRelease('android'),
+    windows: windowsResult.status === 'fulfilled' ? windowsResult.value : unknownRelease('windows'),
   };
 }
 
@@ -191,28 +119,24 @@ export function detectPreferredClient(
 ): ClientPlatform | null {
   const fingerprint = `${userAgent} ${platform}`.toLowerCase();
   if (fingerprint.includes('android')) return 'android';
-  if (
-    fingerprint.includes('windows')
-    || fingerprint.includes('win32')
-    || fingerprint.includes('win64')
-  ) {
-    return 'windows';
-  }
+  if (fingerprint.includes('windows') || fingerprint.includes('win32') || fingerprint.includes('win64')) return 'windows';
   return null;
 }
 
-export function formatReleaseSize(sizeBytes: number): string {
+export function formatReleaseSize(sizeBytes: number | null): string {
+  if (sizeBytes === null || !Number.isFinite(sizeBytes) || sizeBytes <= 0) return '';
   const megabytes = sizeBytes / (1024 * 1024);
   return `${new Intl.NumberFormat('zh-CN', {
-    maximumFractionDigits: 1,
-    minimumFractionDigits: megabytes < 10 ? 1 : 0,
+    maximumFractionDigits: 1, minimumFractionDigits: megabytes < 10 ? 1 : 0,
   }).format(megabytes)} MB`;
 }
 
-export function toAbsoluteDownloadUrl(url: string, origin: string): string {
+export function toAbsoluteDownloadUrl(url: string, _origin?: string): string {
+  // 二维码只指向官方计数入口，预览环境、外部 origin 和无效地址都不能成为安装来源。
   try {
-    return new URL(url, origin).toString();
-  } catch {
-    return CLIENT_RELEASE_FALLBACKS.android.downloadUrl;
-  }
+    const parsed = new URL(url, OFFICIAL_ORIGIN);
+    if (parsed.origin === OFFICIAL_ORIGIN && !parsed.username && !parsed.password && !parsed.search && !parsed.hash
+      && /^\/api\/client-downloads\/(android|windows)$/.test(parsed.pathname)) return parsed.href;
+  } catch { /* 退回官方入口，由服务器选择最新产物。 */ }
+  return OFFICIAL_ORIGIN + countedClientDownloadUrl('android');
 }

@@ -572,9 +572,10 @@ export class DesktopAgentActionBridge {
       }
       if (!await this.confirm(
         '安装知萃客户端更新？',
-        '客户端会关闭并安装已经下载的更新，未发送的内容请先保存。正式发布前仍需通过代码签名验收。',
+        '请先保存未发送的内容。更新后会重新打开知萃，账号和资料会保留。',
       )) return { status: 'canceled', data: { canceled: true } };
-      return { status: 'succeeded', data: installDesktopUpdate() };
+      const update = await installDesktopUpdate();
+      return { status: update.status === 'installing' ? 'succeeded' : 'failed', data: update };
     }
     const error = new Error('该本机 Action 尚未实现') as Error & { code: string };
     error.code = 'ACTION_NOT_AVAILABLE';

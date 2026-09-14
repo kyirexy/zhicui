@@ -246,7 +246,7 @@ def client_download(
             path=f"/api/client-downloads/{platform}",
         )
     return RedirectResponse(
-        url=client_download_service.DOWNLOAD_TARGETS[platform],
+        url=client_download_service.download_target(platform),
         status_code=307,
         headers={"Cache-Control": "no-store"},
     )

@@ -197,8 +197,8 @@ export default function WebLandingPage() {
             <h3>Windows 桌面端</h3>
             <p>批量同步视频、整理完整文案并进行深度提问。</p>
             <div className={styles.releaseMeta} aria-label="Windows 版本信息">
-              <span>v{releases.windows.version} · beta 公测</span>
-              <span>{windowsSize}</span>
+              <span>{releases.windows.version ? `v${releases.windows.version} · beta 公测` : '版本暂未确认'}</span>
+              <span>{windowsSize || '下载时获取最新安装包'}</span>
               <span>Windows 10/11 {releases.windows.architecture || 'x64'}</span>
             </div>
             <div className={styles.platformFooter}>
@@ -227,8 +227,8 @@ export default function WebLandingPage() {
             <h3>Android 移动端</h3>
             <p>粘贴分享链接、阅读完整文案、向视频提问并执行每日计划；账号采集需 Windows。</p>
             <div className={styles.releaseMeta} aria-label="Android 版本信息">
-              <span>v{releases.android.version} · beta 公测</span>
-              <span>{androidSize}</span>
+              <span>{releases.android.version ? `v${releases.android.version} · beta 公测` : '版本暂未确认'}</span>
+              <span>{androidSize || '下载时获取最新安装包'}</span>
               <span>APK</span>
             </div>
             <div className={`${styles.platformFooter} ${styles.androidFooter}`}>

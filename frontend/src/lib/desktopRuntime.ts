@@ -164,6 +164,7 @@ export interface DesktopUpdateResult {
     | 'available'
     | 'downloading'
     | 'downloaded'
+    | 'installing'
     | 'current'
     | 'error';
   installedVersion: string;
@@ -173,6 +174,10 @@ export interface DesktopUpdateResult {
   total?: number;
   bytesPerSecond?: number;
   error?: string;
+  code?: string;
+  manualRequired?: boolean;
+  canInstall?: boolean;
+  downloadedVersion?: string;
 }
 
 export type DesktopAgentClient = 'codex' | 'claude';

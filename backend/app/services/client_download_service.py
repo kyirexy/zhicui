@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+import json
+from pathlib import Path
+import re
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, update
@@ -18,6 +21,57 @@ DOWNLOAD_TARGETS = {
     "windows": "/download/windows/Zhicui-Setup-latest-x64.exe",
 }
 _LOCAL_TIMEZONE = ZoneInfo("Asia/Shanghai")
+_WINDOWS_MANIFEST_PATHS = (
+    Path("/var/lib/zhicui-downloads/releases/windows/beta.json"),
+    Path(__file__).resolve().parents[3] / "frontend/public/download/releases/windows/beta.json",
+)
+
+
+def download_target(platform: str) -> str:
+    """一次下载绑定一个版本，避免可变 latest 文件在断点续传时切到另一版。"""
+    if platform not in PLATFORMS:
+        raise ValueError("unsupported client platform")
+    fallback = DOWNLOAD_TARGETS[platform]
+    if platform != "windows":
+        return fallback
+    for path in _WINDOWS_MANIFEST_PATHS:
+        try:
+            with path.open("rb") as stream:
+                raw = stream.read(65537)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return fallback
+        # 首选持久清单存在但不完整时，不退回 runtime 中可能过时的版本。
+        try:
+            if len(raw) > 65536:
+                return fallback
+            manifest = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            return fallback
+        if not isinstance(manifest, dict):
+            return fallback
+        version = manifest.get("version")
+        size = manifest.get("size_bytes")
+        if (
+            manifest.get("schema_version") != 2
+            or manifest.get("platform") != "windows"
+            or manifest.get("channel") != "beta"
+            or manifest.get("architecture") != "x64"
+            or manifest.get("availability") != "available"
+            or manifest.get("release_status") != "beta_download"
+            or not isinstance(version, str)
+            or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version)
+            or not isinstance(size, int) or isinstance(size, bool) or size <= 0
+            or not re.fullmatch(r"[0-9a-f]{64}", str(manifest.get("sha256", "")))
+            or not re.fullmatch(r"[0-9a-f]{40}", str(manifest.get("source_commit", "")))
+        ):
+            return fallback
+        target = f"/download/windows/Zhicui-Setup-{version}-x64.exe"
+        if manifest.get("download_url") != "https://luxai.cn" + target:
+            return fallback
+        return target
+    return fallback
 
 
 def local_today() -> date:

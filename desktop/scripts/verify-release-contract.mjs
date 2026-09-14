@@ -17,6 +17,8 @@ assert.equal(
 );
 assert.equal(nsis?.createStartMenuShortcut, true, 'NSIS 必须创建开始菜单快捷方式');
 assert.equal(nsis?.shortcutName, '知萃', '正式快捷方式名称必须稳定为“知萃”');
+assert.equal(nsis?.include, 'installer/zhicui.nsh', '真实安装器必须包含知萃安装界面');
+assert.equal(nsis?.deleteAppDataOnUninstall, false, '覆盖安装不能删除用户资料');
 assert.equal(packageJson.build?.productName, '知萃', '正式产品名必须稳定为“知萃”');
 
 const development = identityModule.desktopBuildIdentity(false);

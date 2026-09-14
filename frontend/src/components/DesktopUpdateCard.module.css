@@ -1,0 +1,62 @@
+.card {
+  position: relative;
+  padding: 28px;
+  border: 1px solid var(--card-border);
+  border-radius: 14px;
+  background: var(--card-bg);
+  color: var(--foreground);
+}
+.header { display: flex; align-items: flex-start; gap: 16px; padding-right: 16px; }
+.logo { flex: 0 0 56px; width: 56px; height: 56px; object-fit: contain; }
+.header h2 { margin: 0; font-size: 22px; line-height: 1.4; font-weight: 650; letter-spacing: -0.02em; text-wrap: balance; }
+.header p { margin: 8px 0 0; color: var(--foreground-secondary); font-size: 14px; line-height: 1.7; text-wrap: pretty; }
+.close { position: absolute; right: 6px; top: 6px; display: grid; width: 44px; height: 44px; place-items: center; border-radius: 8px; color: var(--foreground-secondary); }
+.close:hover { background: var(--background-secondary); }
+.version { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 22px 0; font-size: 12px; color: var(--foreground-secondary); }
+.version strong { margin-left: 6px; color: var(--foreground); font-size: 14px; font-weight: 550; font-variant-numeric: tabular-nums; }
+.current { color: var(--accent-brand); }
+.notes { border-top: 1px solid var(--card-border); padding-top: 18px; }
+.notes h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.notes ul { display: grid; gap: 8px; padding-left: 18px; margin: 12px 0 0; color: var(--foreground-secondary); font-size: 13px; line-height: 1.7; list-style: disc; }
+.notes li::marker { color: var(--foreground-secondary); }
+.download { padding: 0 0 22px; }
+.progressLabel { display: flex; justify-content: space-between; margin-bottom: 10px; color: var(--foreground-secondary); font-size: 13px; }
+.progressLabel strong { color: var(--foreground); font-variant-numeric: tabular-nums; }
+.progress { height: 6px; overflow: hidden; border-radius: 3px; background: var(--background-secondary); }
+.progress span { display: block; width: 100%; height: 100%; background: var(--accent-brand); transform-origin: left; transition: transform 160ms ease-out; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+.primary, .secondary { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: 8px; padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; transition: background 160ms ease-out, opacity 160ms ease-out; }
+.primary { flex: 1; background: #335bea; color: #fff; }
+.primary:hover:not(:disabled) { background: #274aca; }
+.secondary { color: var(--foreground-secondary); background: var(--background-secondary); }
+.secondary:hover { background: var(--card-border); }
+.primary:disabled, .secondary:disabled, .textButton:disabled { cursor: default; opacity: 0.65; }
+.textButton { display: block; min-height: 44px; padding: 10px 0; color: var(--accent-brand); font-size: 12px; line-height: 1.7; text-align: left; text-decoration: underline; text-underline-offset: 4px; }
+.footnote { margin: 14px 0 0; color: var(--foreground-secondary); font-size: 12px; line-height: 1.6; }
+.error { color: var(--ui-danger); font-size: 13px; line-height: 1.7; margin: 16px 0 0; }
+.card button:focus-visible, .card a:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 3px; }
+.spinning { animation: spin 1000ms linear infinite; }
+.dialog { width: min(480px, calc(100vw - 32px)); max-height: min(88dvh, 740px); padding: 0; margin: auto; overflow: auto; border: 0; border-radius: 14px; background: var(--card-bg); color: var(--foreground); box-shadow: 0 20px 60px rgb(0 0 0 / 20%); }
+.dialog::backdrop { background: rgb(12 16 23 / 42%); }
+.dialog .card { border: 0; }
+.sidebar { margin: 8px 14px; padding: 10px 12px; border: 1px solid var(--card-border); border-radius: 10px; background: var(--card-bg); color: var(--foreground); }
+.sidebarButton { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; text-align: left; }
+.sidebarButton > span { flex: 1; min-width: 0; }
+.sidebarButton strong, .sidebarButton small { display: block; }
+.sidebarButton strong { font-size: 13px; line-height: 1.5; font-weight: 600; }
+.sidebarButton small { margin-top: 3px; font-size: 12px; line-height: 1.5; color: var(--foreground-secondary); }
+.sidebarButton:hover strong { color: var(--accent-brand); }
+.sidebarButton:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 3px; border-radius: 6px; }
+.sidebarReady { background: var(--accent-brand-soft); border-color: color-mix(in srgb, var(--accent-brand) 22%, var(--card-border)); }
+.sidebarReady > button > svg:first-child { color: var(--accent-brand); }
+.sidebar .progress { margin-top: 8px; height: 3px; }
+@media (max-width: 640px) {
+  .card { padding: 22px 18px max(22px, env(safe-area-inset-bottom, 0px)); }
+  .header { gap: 12px; }
+  .header h2 { font-size: 20px; }
+  .logo { flex-basis: 44px; width: 44px; height: 44px; }
+  .version { gap: 10px; }
+  .actions { flex-direction: column; }
+}
+@media (prefers-reduced-motion: reduce) { .spinning { animation: none; } .progress span, .primary, .secondary { transition: none; } }
+@keyframes spin { to { transform: rotate(360deg); } }

@@ -1,6 +1,6 @@
 {
   "name": "zhicui-desktop",
-  "version": "1.1.9",
+  "version": "1.1.10",
   "releaseChannel": "beta",
   "description": "知萃 Windows 与 macOS 桌面应用",
   "main": "dist/main.js",
@@ -18,7 +18,7 @@
     "verify:mac": "npm run build && node scripts/verify-macos.mjs",
     "verify:platform-account": "npm run build && node scripts/verify-platform-account.mjs",
     "verify:agent-integration": "npm run build && node scripts/verify-agent-integration.mjs",
-    "verify:update-policy": "npm run build && node scripts/verify-update-policy.mjs",
+    "verify:update-policy": "npm run build && node scripts/verify-update-policy.mjs && node scripts/verify-updater-runtime.mjs",
     "verify:release-contract": "npm run build && node scripts/verify-release-contract.mjs",
     "pack": "npm run prepare:cli && npm run build && npm run patch:builder && electron-builder --dir --win --x64",
     "dist:win": "npm run prepare:cli && npm run build && npm run patch:builder && electron-builder --win nsis --x64",
@@ -121,6 +121,8 @@
       "icon": "../frontend/public/icons/desktop-icon.ico"
     },
     "nsis": {
+      "include": "installer/zhicui.nsh",
+      "installerLanguages": ["zh_CN"],
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": "always",

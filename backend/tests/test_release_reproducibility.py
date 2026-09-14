@@ -137,6 +137,7 @@ class ReleaseReproducibilityContractTests(unittest.TestCase):
             "ArtifactCacheRoot 必须位于 Git checkout/worktree 之外",
             "Invoke-Checked 'npm.cmd' @('run', 'prepare:cli')",
             "Invoke-Checked 'npm.cmd' @('run', 'verify:agent-integration')",
+            "Invoke-Checked 'npm.cmd' @('run', 'verify:update-policy')",
             'https://luxai.cn/download/releases/windows/$remoteChannel.json',
             "无法读取线上 Windows $remoteChannel 发行账本",
             "版本 $Version 必须高于全部已发布 Windows 版本",
@@ -154,6 +155,20 @@ class ReleaseReproducibilityContractTests(unittest.TestCase):
             "if [[ \"$CHANNEL\" != \"stable\" || \"$SKIP_BUILD\" == \"1\" ]]",
         ):
             self.assertIn(marker, script)
+
+    def test_windows_native_updates_are_enabled_only_for_verified_stable_builds(self) -> None:
+        script = (ROOT / "scripts" / "release-desktop.ps1").read_text(encoding="utf-8")
+        # Beta 未签名时必须保留手动安装；Stable 仍须经过现有发布者和签名验收。
+        self.assertIn("$channelName = $Channel.ToLowerInvariant()", script)
+        self.assertIn("$isStable = $channelName -eq 'stable'", script)
+        self.assertRegex(
+            script,
+            r"(?s)Add-Member -NotePropertyName extraMetadata -NotePropertyValue\s*\(\s*"
+            r"\[pscustomobject\]@\{\s*releaseChannel = \$channelName;\s*nativeUpdatesEnabled = \$isStable\s*\}",
+        )
+        self.assertIn("$buildConfig.win.signtoolOptions", script)
+        self.assertIn("publisherName -NotePropertyValue $publisher", script)
+        self.assertIn("Get-AuthenticodeSignature", script)
 
     def test_agent_stable_smoke_pins_the_reviewed_capability_contract(self) -> None:
         script = (ROOT / "scripts" / "smoke-agent-interface.sh").read_text(

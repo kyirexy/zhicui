@@ -52,6 +52,9 @@ export type AndroidUpdateCheck =
 type UnknownRecord = Record<string, unknown>;
 
 const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
+class AndroidReleaseUnavailable extends Error {}
+let checkInFlight: Promise<AndroidUpdateCheck> | null = null;
+let downloadInFlight: Promise<void> | null = null;
 
 function isRecord(value: unknown): value is UnknownRecord {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -97,6 +100,7 @@ export function parseAndroidReleaseManifest(
 
   const valid = (
     (value.schema_version === 1 || value.schema_version === 2)
+    && (value.channel === undefined || value.channel === CLIENT_RELEASE_CHANNEL)
     && (value.availability === undefined || value.availability === 'available')
     && value.platform === 'android'
     && typeof version === 'string'
@@ -182,20 +186,24 @@ export async function fetchLatestAndroidRelease(): Promise<AndroidReleaseManifes
       cache: 'no-store',
       credentials: 'omit',
       headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(12_000),
     },
   );
   if (!response.ok) {
-    throw new Error(`检查更新失败（${response.status}）`);
+    throw new Error('暂时无法检查更新，请稍后重试');
   }
 
   const payload: unknown = await response.json();
   const manifest = isRecord(payload) && payload.success === true
     ? payload.data
     : payload;
+  if (isRecord(manifest) && manifest.availability === 'unavailable') {
+    throw new AndroidReleaseUnavailable('暂未发现可用更新');
+  }
   return parseAndroidReleaseManifest(manifest);
 }
 
-export async function checkAndroidAppUpdate(): Promise<AndroidUpdateCheck> {
+async function performAndroidUpdateCheck(): Promise<AndroidUpdateCheck> {
   const installed = await getRuntimeAppInfo();
   if (!installed.nativeAndroid) {
     return { status: 'unsupported', installed, release: null };
@@ -204,23 +212,13 @@ export async function checkAndroidAppUpdate(): Promise<AndroidUpdateCheck> {
   try {
     release = await fetchLatestAndroidRelease();
   } catch (error) {
-    const response = await fetch(`${releaseEndpoint()}?availability=${Date.now()}`, {
-      cache: 'no-store',
-      credentials: 'omit',
-      headers: { Accept: 'application/json' },
-    }).catch(() => null);
-    const payload = response?.ok ? await response.json().catch(() => null) : null;
-    if (
-      isRecord(payload)
-      && payload.availability === 'unavailable'
-      && typeof payload.reason === 'string'
-    ) {
+    if (error instanceof AndroidReleaseUnavailable) {
       return {
         status: 'release-unavailable',
         installed,
         release: null,
         channel: CLIENT_RELEASE_CHANNEL,
-        reason: payload.reason,
+        reason: '暂未发现可用更新',
       };
     }
     throw error;
@@ -234,6 +232,13 @@ export async function checkAndroidAppUpdate(): Promise<AndroidUpdateCheck> {
   };
 }
 
+export function checkAndroidAppUpdate(): Promise<AndroidUpdateCheck> {
+  if (!checkInFlight) {
+    checkInFlight = performAndroidUpdateCheck().finally(() => { checkInFlight = null; });
+  }
+  return checkInFlight;
+}
+
 export async function openAndroidReleaseDownload(url: string): Promise<void> {
   if (!isTrustedApkUrl(url)) {
     throw new Error('下载地址未通过安全校验');
@@ -245,7 +250,10 @@ export async function openAndroidReleaseDownload(url: string): Promise<void> {
   ) {
     throw new Error('请在知萃 Android App 中下载更新');
   }
-  await Browser.open({ url });
+  if (!downloadInFlight) {
+    downloadInFlight = Browser.open({ url }).finally(() => { downloadInFlight = null; });
+  }
+  await downloadInFlight;
 }
 
 export function formatReleaseSize(sizeBytes: number): string {

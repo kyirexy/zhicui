@@ -405,6 +405,7 @@ try {
     $electronRuntime = Resolve-ElectronReleaseZip -ZipPath $ElectronZipPath -DesktopDirectory $desktopDir
     Invoke-Checked 'npm.cmd' @('run', 'prepare:cli')
     Invoke-Checked 'npm.cmd' @('run', 'verify:agent-integration')
+    Invoke-Checked 'npm.cmd' @('run', 'verify:update-policy')
     Invoke-Checked 'npm.cmd' @('run', 'verify:release-contract')
 } finally {
     Pop-Location
@@ -457,7 +458,7 @@ if ($SkipBuild) {
     $publishers[0].channel = $channelName
     $buildConfig.publish = @($publishers)
     $buildConfig | Add-Member -NotePropertyName extraMetadata -NotePropertyValue (
-        [pscustomobject]@{ releaseChannel = $channelName }
+        [pscustomobject]@{ releaseChannel = $channelName; nativeUpdatesEnabled = $isStable }
     ) -Force
     if ($isStable) {
         $buildConfig.win.signtoolOptions | Add-Member -NotePropertyName publisherName -NotePropertyValue $publisher -Force
@@ -794,6 +795,9 @@ set -eu
 staging='$remoteStagingDir'
 case "`$staging" in /tmp/zhicui-desktop-*) ;; *) exit 90 ;; esac
 sudo rm -f -- \
+  '$remoteFeedDir/.$exeName.tmp-$releaseNonce' \
+  '$remoteFeedDir/.$blockmapName.tmp-$releaseNonce'
+sudo rm -f -- \
   "`$staging/rollback/feed.previous" "`$staging/rollback/feed.sha256" "`$staging/rollback/feed.state" \
   "`$staging/rollback/manifest.previous" "`$staging/rollback/manifest.sha256" "`$staging/rollback/manifest.state"
 rmdir "`$staging/rollback" 2>/dev/null || true
@@ -964,8 +968,24 @@ test "`$(sha256sum "`$staging/$blockmapName" | awk '{print tolower(`$1)}')" = '$
 test "`$(sha256sum "`$staging/$generatedFeedName" | awk '{print tolower(`$1)}')" = '$feedSha256'
 test "`$(sha256sum "`$staging/$channelManifestName" | awk '{print tolower(`$1)}')" = '$manifestSha256'
 sudo mkdir -p "`$feed" "`$manifests"
-sudo install -m 0644 "`$staging/$exeName" "`$feed/$exeName"
-sudo install -m 0644 "`$staging/$blockmapName" "`$feed/$blockmapName"
+if sudo test -e "`$feed/$exeName"; then
+  test "`$(sudo sha256sum "`$feed/$exeName" | awk '{print tolower(`$1)}')" = '$sha256'
+else
+  sudo install -m 0644 "`$staging/$exeName" "`$feed/.$exeName.tmp-$releaseNonce"
+  test "`$(sudo sha256sum "`$feed/.$exeName.tmp-$releaseNonce" | awk '{print tolower(`$1)}')" = '$sha256'
+  sudo mv -Tn "`$feed/.$exeName.tmp-$releaseNonce" "`$feed/$exeName"
+  test "`$(sudo sha256sum "`$feed/$exeName" | awk '{print tolower(`$1)}')" = '$sha256'
+  sudo rm -f -- "`$feed/.$exeName.tmp-$releaseNonce"
+fi
+if sudo test -e "`$feed/$blockmapName"; then
+  test "`$(sudo sha256sum "`$feed/$blockmapName" | awk '{print tolower(`$1)}')" = '$blockmapSha256'
+else
+  sudo install -m 0644 "`$staging/$blockmapName" "`$feed/.$blockmapName.tmp-$releaseNonce"
+  test "`$(sudo sha256sum "`$feed/.$blockmapName.tmp-$releaseNonce" | awk '{print tolower(`$1)}')" = '$blockmapSha256'
+  sudo mv -Tn "`$feed/.$blockmapName.tmp-$releaseNonce" "`$feed/$blockmapName"
+  test "`$(sudo sha256sum "`$feed/$blockmapName" | awk '{print tolower(`$1)}')" = '$blockmapSha256'
+  sudo rm -f -- "`$feed/.$blockmapName.tmp-$releaseNonce"
+fi
 sudo install -m 0644 "`$staging/$channelManifestName" "`$manifests/.$channelName.json.tmp-$releaseNonce"
 sudo mv -Tf "`$manifests/.$channelName.json.tmp-$releaseNonce" "`$manifests/$channelName.json"
 sudo install -m 0644 "`$staging/$generatedFeedName" "`$feed/.$feedFileName.tmp-$releaseNonce"

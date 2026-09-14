@@ -24,7 +24,6 @@ import {
   type RuntimeAppInfo,
 } from '@/lib/appUpdate';
 import { useAuth } from '@/lib/hooks/AuthContext';
-import { releaseChannelLabel } from '@/lib/releaseChannel';
 import styles from './AppUpdatePrompt.module.css';
 
 const DISMISSED_BUILD_KEY = 'zhicui_update_dismissed_build';
@@ -65,6 +64,7 @@ export default function AppUpdatePrompt() {
   const { user, loading: authLoading } = useAuth();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const primaryActionRef = useRef<HTMLButtonElement>(null);
+  const openingRef = useRef(false);
   const [available, setAvailable] = useState<AvailableUpdate | null>(null);
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState('');
@@ -191,19 +191,19 @@ export default function AppUpdatePrompt() {
   };
 
   const updateNow = async () => {
-    if (!available || opening) return;
+    if (!available || openingRef.current) return;
+    openingRef.current = true;
     setOpening(true);
     setError('');
     try {
-      await openAndroidReleaseDownload(available.release.download_url);
+      const fresh = await checkAndroidAppUpdate();
+      if (fresh.status !== 'update-available') { dismiss(); return; }
+      await openAndroidReleaseDownload(fresh.release.download_url);
       dismiss();
-    } catch (downloadError) {
-      setError(
-        downloadError instanceof Error
-          ? downloadError.message
-          : '暂时无法打开下载页面，请稍后重试',
-      );
+    } catch {
+      setError('暂时无法打开安装包，请检查网络后重试。');
     } finally {
+      openingRef.current = false;
       setOpening(false);
     }
   };
@@ -229,12 +229,8 @@ export default function AppUpdatePrompt() {
               <img src="/icons/icon-192.png" alt="" width="54" height="54" />
             </div>
             <div className={styles.heading}>
-              <span className={styles.channelBadge}>
-                {releaseChannelLabel(available.release.channel)}
-                {available.release.mandatory ? ' · 必须更新' : ''}
-              </span>
               <h2 id="app-update-title">
-                知萃 {available.release.version} 已就绪
+                发现知萃新版本
               </h2>
               <p id="app-update-description">
                 {available.release.mandatory
@@ -260,7 +256,6 @@ export default function AppUpdatePrompt() {
                 <span>当前版本</span>
                 <strong className="tabular-nums">
                   {available.installed.version}
-                  <small>({available.installed.build})</small>
                 </strong>
               </div>
               <ArrowRight className={styles.versionArrow} size={19} aria-hidden="true" />
@@ -268,7 +263,6 @@ export default function AppUpdatePrompt() {
                 <span>最新版本</span>
                 <strong className="tabular-nums">
                   {available.release.version}
-                  <small>({available.release.build})</small>
                 </strong>
               </div>
               <p className={styles.releaseMeta}>
@@ -326,7 +320,7 @@ export default function AppUpdatePrompt() {
               ) : (
                 <Download size={19} aria-hidden="true" />
               )}
-              {opening ? '正在打开…' : '下载并更新'}
+              {opening ? '正在确认版本…' : '下载并安装'}
             </button>
           </footer>
         </div>

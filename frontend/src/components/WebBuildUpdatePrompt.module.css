@@ -1,0 +1,11 @@
+.notice { position: fixed; z-index: 45; right: 24px; bottom: calc(84px + env(safe-area-inset-bottom, 0px)); width: min(340px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--card-border); border-radius: 12px; background: var(--card-bg); color: var(--foreground); box-shadow: 0 8px 28px rgb(0 0 0 / 12%); }
+.notice h2 { margin: 0; padding-right: 28px; font-size: 15px; font-weight: 600; line-height: 1.5; }
+.notice p { margin: 8px 0 12px; color: var(--foreground-secondary); font-size: 13px; line-height: 1.7; text-wrap: pretty; }
+.close { position: absolute; display: grid; top: 5px; right: 5px; width: 44px; height: 44px; place-items: center; color: var(--foreground-secondary); border-radius: 8px; }
+.refresh { display: inline-flex; min-height: 44px; padding: 8px 14px; align-items: center; gap: 8px; border-radius: 8px; background: var(--background-secondary); color: var(--foreground); font-size: 13px; font-weight: 600; }
+.close:hover, .refresh:hover:not(:disabled) { background: var(--card-border); }
+.refresh:disabled { opacity: 0.65; cursor: default; }
+.notice button { transition: background 160ms ease-out; }
+.notice button:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 3px; }
+@media (max-width: 640px) { .notice { right: 16px; } }
+@media (prefers-reduced-motion: reduce) { .notice button { transition: none; } }

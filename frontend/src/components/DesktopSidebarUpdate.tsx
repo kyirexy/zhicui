@@ -1,102 +1,48 @@
 'use client';
 
-import {
-  Check,
-  CircleAlert,
-  Download,
-  LoaderCircle,
-  RefreshCw,
-} from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
-import type { DesktopUpdateResult } from '@/lib/desktopRuntime';
-
-const INITIAL_STATE: DesktopUpdateResult = {
-  status: 'idle',
-  installedVersion: '',
-};
+import { Check, ChevronRight, CircleAlert, Download, LoaderCircle } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { usePathname } from 'next/navigation';
+import { desktopUpdatePresentation } from '@/lib/desktopUpdate';
+import { useDesktopUpdate } from '@/lib/hooks/useDesktopUpdate';
+import DesktopUpdateCard from './DesktopUpdateCard';
+import styles from './DesktopUpdateCard.module.css';
 
 export default function DesktopSidebarUpdate() {
-  const [update, setUpdate] = useState<DesktopUpdateResult>(INITIAL_STATE);
-  const [working, setWorking] = useState(false);
+  const state = useDesktopUpdate();
+  const view = desktopUpdatePresentation(state);
+  const [open, setOpen] = useState(false);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const pathname = usePathname();
 
+  useEffect(() => { setOpen(false); }, [pathname]);
   useEffect(() => {
-    const bridge = window.zhicuiDesktop;
-    if (!bridge) return undefined;
-    let active = true;
-    const accept = (state: DesktopUpdateResult) => {
-      if (active) setUpdate(state);
-    };
-    const unsubscribe = bridge.onUpdateStatus(accept);
-    void bridge.getUpdateState().then(accept).catch(() => {});
-    return () => {
-      active = false;
-      unsubscribe();
-    };
-  }, []);
+    const dialog = dialogRef.current;
+    if (open && dialog && !dialog.open) dialog.showModal();
+    if (!open && dialog?.open) dialog.close();
+  }, [open]);
 
-  const presentation = useMemo(() => {
-    if (update.status === 'available') {
-      return { label: '发现新版本', detail: `知萃 ${update.version || ''}`, icon: Download };
-    }
-    if (update.status === 'downloading') {
-      const percent = Math.max(0, Math.min(100, Math.round(update.percent || 0)));
-      return { label: `更新中 ${percent}%`, detail: '可以继续使用', icon: LoaderCircle, percent };
-    }
-    if (update.status === 'downloaded') {
-      return {
-        label: '重启并安装',
-        detail: `知萃 ${update.version || ''} 已下载`,
-        icon: Check,
-      };
-    }
-    if (update.status === 'error') {
-      return { label: '重试更新', detail: '更新服务暂时不可用', icon: CircleAlert };
-    }
-    return null;
-  }, [update]);
-
-  if (!presentation) return null;
-  const Icon = presentation.icon;
-  const actionable = update.status === 'downloaded' || update.status === 'error';
-
-  const handleClick = async () => {
-    const bridge = window.zhicuiDesktop;
-    if (!bridge || !actionable || working) return;
-    setWorking(true);
-    try {
-      const result = update.status === 'downloaded'
-        ? await bridge.installUpdate()
-        : await bridge.checkForUpdates();
-      setUpdate(result);
-      if (result.status !== 'downloaded') setWorking(false);
-    } catch {
-      setWorking(false);
-    }
-  };
-
+  const label = view.canInstall ? '重启更新' : view.downloading ? `下载更新 ${view.progress}%`
+    : view.installing ? '正在重启…' : state.update.status === 'error' ? '更新暂未完成' : '发现新版本';
+  const Icon = view.canInstall ? Check : view.downloading || view.installing ? LoaderCircle
+    : state.update.status === 'error' ? CircleAlert : Download;
   return (
-    <div className="desktop-sidebar__update-shell" role="status" aria-live="polite">
-      <button
-        type="button"
-        className={`desktop-sidebar__update ${update.status === 'downloaded' ? 'is-ready' : ''}`}
-        disabled={!actionable || working}
-        onClick={() => void handleClick()}
-        title={presentation.detail}
-      >
-        <span className="desktop-sidebar__update-icon" aria-hidden="true">
-          <Icon className={update.status === 'downloading' ? 'is-spinning' : ''} size={17} />
-        </span>
-        <span className="desktop-sidebar__update-copy">
-          <strong>{working ? '正在重启…' : presentation.label}</strong>
-          <small>{presentation.detail}</small>
-        </span>
-        {update.status === 'error' && <RefreshCw size={15} aria-hidden="true" />}
-      </button>
-      {'percent' in presentation && (
-        <span className="desktop-sidebar__update-progress" aria-hidden="true">
-          <span style={{ width: `${presentation.percent}%` }} />
-        </span>
+    <>
+      {view.attention && (
+        <div className={`${styles.sidebar} ${view.canInstall ? styles.sidebarReady : ''}`}>
+          <button type="button" className={styles.sidebarButton} onClick={() => setOpen(true)} aria-haspopup="dialog" aria-expanded={open}>
+            <Icon size={18} aria-hidden="true" />
+            <span><strong>{label}</strong><small>{view.version ? `知萃 ${view.version}` : '点击查看更新'}</small></span>
+            <ChevronRight size={15} aria-hidden="true" />
+          </button>
+          {view.downloading && <div className={styles.progress} aria-hidden="true"><span style={{ transform: `scaleX(${view.progress / 100})` }} /></div>}
+        </div>
       )}
-    </div>
+      <dialog ref={dialogRef} className={styles.dialog} aria-labelledby="desktop-sidebar-update-title"
+        onCancel={(event) => { event.preventDefault(); setOpen(false); }}
+        onClick={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
+        <DesktopUpdateCard titleId="desktop-sidebar-update-title" onClose={() => setOpen(false)} />
+      </dialog>
+    </>
   );
 }

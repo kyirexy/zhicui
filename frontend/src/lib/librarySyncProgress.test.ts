@@ -7,6 +7,8 @@ import { createSyncNoticeReporter, formatTranscriptPreparationProgress } from '.
 import { hasReadyTranscript } from './libraryTranscriptPreparation.ts';
 import { LibraryExtractionBatchTracker, runReservedExtractionBatches } from './libraryExtractionQueue.ts';
 import { MIN_LOCAL_DOUYIN_DESKTOP_VERSION, requiresLocalDouyinDesktopUpdate } from './douyinDesktopSync.ts';
+import { capturePlatformSyncSnapshot } from './platformSyncSnapshot.ts';
+import { getDouyinSyncRecoveryIssue, updateDouyinSyncRecovery } from './douyinSyncRecovery.ts';
 
 // 执行页面实际任务函数，覆盖弹窗回调接线和迟到响应，而非重写一份模拟实现。
 const page = readFileSync(new URL('../app/library/page.tsx', import.meta.url), 'utf8');
@@ -189,4 +191,39 @@ test('Agent同步弹窗账号往返后，旧采集结果不清除新任务标记
   assert.deepEqual(pendingFlags, [true]);
   assert.equal(context.runningRef.current, true);
   assert.deepEqual(completed, []);
+});
+
+test('真实采集函数识别本机忙碌，不写资料并要求多来源循环停止', async () => {
+  const source = page.slice(page.indexOf('  const collectOneSource = async'), page.indexOf('  const syncCollection = async'));
+  const collectCode = ts.transpileModule(`${source}\nexports.run = collectOneSource;`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+  }).outputText;
+  const calls: unknown[] = [];
+  const noOp = () => {};
+  const context = {
+    exports: {} as { run: (...args: unknown[]) => Promise<{ queueMayStillBeRunning: boolean; needsAction: boolean; error: string }> },
+    user: { id: 'owner', agent_profile_key: 'profile-owner' }, currentUserIdRef: { current: 'owner' },
+    SOURCE_MODES: [{ value: 'like', label: '喜欢' }], sourceSorts: { like: 'collection' },
+    batchExtractingRef: { current: false }, ALL_LIBRARY_ITEMS: 0, desktopLocalDouyin: true,
+    sourceSyncGenerationRef: { current: 1 }, activeDesktopSyncRef: { current: null },
+    syncRecoveryActionRef: { current: null }, syncRecoveryCancelRef: { current: null },
+    setCollectionJob: noOp, setSyncRecoveryFocusing: noOp, setSyncRecoveryActionError: noOp,
+    setSyncRecoveryIssues: noOp, capturePlatformSyncSnapshot, getDouyinSyncRecoveryIssue, updateDouyinSyncRecovery,
+    listDouyinLibraryItems: async () => ({ success: true, data: { items: [] } }),
+    ingestLocalDouyinLibrary: () => assert.fail('本机未开始采集时不得写入资料'),
+    window: { zhicuiDesktop: { collectPlatformAccount: async (request: unknown) => {
+      calls.push(request);
+      return { success: false, code: 'LOCAL_ACTION_BUSY', error: '另一个平台操作仍在进行' };
+    } } },
+  };
+  vm.runInNewContext(collectCode, context);
+  const result = await context.exports.run('like', 50, noOp, () => true, false, 'this-sync-session', true);
+  assert.equal(result.queueMayStillBeRunning, true, '本机忙碌必须阻止继续打开下一个分类');
+  assert.equal(result.needsAction, false, '忙碌不应误导用户去官方页面验证');
+  assert.match(result.error, /等待完成/);
+  assert.equal(context.activeDesktopSyncRef.current, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [{
+    platform: 'douyin', profileKey: 'profile-owner', mode: 'like', limit: 50,
+    interactive: false, sessionKey: 'this-sync-session', keepSessionOpen: true,
+  }]);
 });

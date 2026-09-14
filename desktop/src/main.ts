@@ -41,6 +41,7 @@ import {
   validateMediaSaveRequest,
   validatePlatformAccountCollectRequest,
   validatePlatformAccountRequest,
+  validatePlatformAccountSyncCancelRequest,
 } from './security';
 import {
   checkForDesktopUpdates,
@@ -336,6 +337,10 @@ function registerIpc(): void {
   ipcMain.handle('desktop:cancel-platform-account-action', (event) => {
     assertTrustedIpcSender(event);
     return platformAccounts.cancel();
+  });
+  ipcMain.handle('desktop:cancel-platform-account-sync', (event, request) => {
+    assertTrustedIpcSender(event);
+    return platformAccounts.cancel(validatePlatformAccountSyncCancelRequest(request));
   });
   ipcMain.handle('desktop:focus-platform-account-action', (event, request) => {
     assertTrustedIpcSender(event);

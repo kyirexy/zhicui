@@ -16,6 +16,7 @@ import type {
   PlatformAccountResult,
   PlatformAccountSourceMode,
   PlatformAccountStatus,
+  PlatformAccountSyncCancelRequest,
 } from './contract';
 import {
   CrossProcessActionLock,
@@ -837,6 +838,8 @@ export class PlatformAccountConnector {
   private activeContext: BrowserContext | null = null;
   private activePlatform: PlatformAccountProvider = 'bilibili';
   private activeProfileKey = '';
+  private activeSessionKey: string | undefined;
+  private activeOperation: symbol | undefined;
   private activeMode: PlatformAccountSourceMode | undefined;
   private activeFocus: Promise<void> | null = null;
   private activeBrowser: SupportedBrowser = 'chrome';
@@ -979,13 +982,28 @@ export class PlatformAccountConnector {
     }, { sessionKey: request.sessionKey, keepSessionOpen: request.keepSessionOpen });
   }
 
-  async cancel(): Promise<PlatformAccountResult> {
-    this.cancelled = true;
-    const platform = this.activePlatform;
-    const context = this.activeContext;
+  async cancel(request?: PlatformAccountSyncCancelRequest): Promise<PlatformAccountResult> {
+    const sessionKey = request?.sessionKey;
+    const scoped = request !== undefined;
+    const activeMatches = this.running && (!scoped || (Boolean(sessionKey) && this.activeSessionKey === sessionKey));
+    const retained = this.retainedSession;
+    const retainedMatches = retained && (!scoped || (Boolean(sessionKey) && retained.sessionKey === sessionKey));
+    if (scoped && !activeMatches && !retainedMatches) {
+      return { success: false, platform: 'douyin', code: 'LOCAL_ACTION_NOT_FOUND', error: '本轮同步已经结束' };
+    }
+    const operation = this.activeOperation;
+    const platform = activeMatches ? this.activePlatform : retainedMatches ? 'douyin' : this.activePlatform;
+    const context = activeMatches ? this.activeContext : null;
+    // 保留窗口可能属于上一批次；取消它时不能修改正在启动的新批次的取消状态。
+    if (!scoped || activeMatches) this.cancelled = true;
+    // 在第一个 await 前锁定并移出旧保留会话；后续清理绝不能读取新批次的会话。
+    const closingRetained = retainedMatches ? this.closeRetainedSession(retained) : Promise.resolve();
     if (context) await context.close().catch(() => undefined);
-    await this.closeRetainedSession();
-    this.notifyStatus(platform, 'cancelled', '已取消平台账号操作');
+    await closingRetained;
+    // 关闭旧窗口期间可能开始了另一批次，旧取消事件不能污染其状态。
+    if (this.activeOperation === operation && (!this.running || activeMatches)) {
+      this.notifyStatus(platform, 'cancelled', '已取消平台账号操作');
+    }
     return { success: false, cancelled: true, platform };
   }
 
@@ -1038,6 +1056,8 @@ export class PlatformAccountConnector {
     this.cancelled = false;
     this.activePlatform = platform;
     this.activeProfileKey = request.profileKey;
+    this.activeSessionKey = batch.sessionKey;
+    this.activeOperation = Symbol();
     this.activeMode = undefined;
     let lease: DesktopActionLease | null = null;
     let result: PlatformAccountResult | null = null;
@@ -1088,6 +1108,7 @@ export class PlatformAccountConnector {
       if (lease) await lease.release().catch(() => undefined);
       this.running = false;
       this.activeProfileKey = '';
+      this.activeSessionKey = undefined;
       this.activeMode = undefined;
       this.restoredBrowser = null;
     }

@@ -18,6 +18,7 @@ import type {
   PlatformAccountRequest,
   PlatformAccountResult,
   PlatformAccountStatus,
+  PlatformAccountSyncCancelRequest,
   ZhicuiDesktopBridge,
 } from './contract';
 
@@ -71,6 +72,9 @@ const bridge: ZhicuiDesktopBridge = {
     ipcRenderer.invoke(
       'desktop:cancel-platform-account-action',
     ) as Promise<PlatformAccountResult>
+  ),
+  cancelPlatformAccountSync: (request: PlatformAccountSyncCancelRequest) => (
+    ipcRenderer.invoke('desktop:cancel-platform-account-sync', request) as Promise<PlatformAccountResult>
   ),
   disconnectPlatformAccount: (request: PlatformAccountRequest) => (
     ipcRenderer.invoke(

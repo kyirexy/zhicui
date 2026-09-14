@@ -96,6 +96,10 @@ export interface PlatformAccountCollectRequest extends PlatformAccountRequest {
   keepSessionOpen?: boolean;
 }
 
+export interface PlatformAccountSyncCancelRequest {
+  sessionKey: string;
+}
+
 export interface PlatformAccountStatus {
   platform: PlatformAccountProvider;
   stage: PlatformAccountStage;
@@ -245,6 +249,7 @@ export interface ZhicuiDesktopBridge {
   collectPlatformAccount(request: PlatformAccountCollectRequest): Promise<PlatformAccountResult>;
   focusPlatformAccountAction?(request: PlatformAccountRequest): Promise<PlatformAccountResult>;
   cancelPlatformAccountAction(): Promise<PlatformAccountResult>;
+  cancelPlatformAccountSync?(request: PlatformAccountSyncCancelRequest): Promise<PlatformAccountResult>;
   disconnectPlatformAccount(request: PlatformAccountRequest): Promise<PlatformAccountResult>;
   getUpdateState(): Promise<DesktopUpdateResult>;
   checkForUpdates(): Promise<DesktopUpdateResult>;

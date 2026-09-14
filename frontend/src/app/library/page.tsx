@@ -463,7 +463,7 @@ export default function VideoLibraryPage() {
   const [syncRecoveryIssues, setSyncRecoveryIssues] = useState<DouyinSyncRecoveryIssue[]>([]);
   const [syncRecoveryFocusing, setSyncRecoveryFocusing] = useState(false);
   const [syncRecoveryActionError, setSyncRecoveryActionError] = useState('');
-  const activeDesktopSyncRef = useRef<{ userId: string; mode: DouyinSourceMode; count: number; generation: number } | null>(null);
+  const activeDesktopSyncRef = useRef<{ userId: string; mode: DouyinSourceMode; count: number; generation: number; sessionKey?: string } | null>(null);
   const sourceSyncRunRef = useRef<{ cancelled: boolean; userId?: string; sessionKey: string } | null>(null);
   const activeDesktopLoginRef = useRef<{ userId: string; generation: number } | null>(null);
   const syncRecoveryActionRef = useRef<symbol | null>(null);
@@ -735,7 +735,7 @@ export default function VideoLibraryPage() {
       if (running && running.userId === user?.id) {
         running.cancelled = true;
         sourceSyncRunRef.current = null;
-        void window.zhicuiDesktop?.cancelPlatformAccountAction().catch(() => undefined);
+        void window.zhicuiDesktop?.cancelPlatformAccountSync?.({ sessionKey: running.sessionKey }).catch(() => undefined);
       }
       sourceSyncGenerationRef.current += 1;
       libraryRequestRef.current += 1;
@@ -2266,7 +2266,7 @@ export default function VideoLibraryPage() {
       }
       reportNotice(`正在同步抖音${requestedSourceLabel}…`);
       const sourceSyncedAt = new Date().toISOString();
-      const activeRequest = { userId: user.id, mode: requestedMode, count: requestedCount, generation: sourceSyncGenerationRef.current };
+      const activeRequest = { userId: user.id, mode: requestedMode, count: requestedCount, generation: sourceSyncGenerationRef.current, sessionKey };
       activeDesktopSyncRef.current = activeRequest;
       syncRecoveryActionRef.current = null;
       syncRecoveryCancelRef.current = null;
@@ -2306,8 +2306,11 @@ export default function VideoLibraryPage() {
           finalJob: null,
           needsAction: Boolean(issue),
           cancelled: Boolean(collected.cancelled),
+          queueMayStillBeRunning: collected.code === 'LOCAL_ACTION_BUSY',
           error: collected.cancelled
             ? '同步已取消'
+            : collected.code === 'LOCAL_ACTION_BUSY'
+              ? '已有其他平台操作正在进行，请等待完成后再同步'
             : issue
               ? `请在抖音完成操作后继续同步${requestedSourceLabel}`
               : `暂时无法同步${requestedSourceLabel}，请稍后重试`,
@@ -2682,8 +2685,8 @@ export default function VideoLibraryPage() {
 
     if (sourceSyncRunRef.current === syncRun) {
       // 仅清理本轮租用的窗口；中断后不自动启动另一个来源。
-      if (desktopLocalDouyin) await window.zhicuiDesktop?.cancelPlatformAccountAction().catch(() => undefined);
-      sourceSyncRunRef.current = null;
+      if (desktopLocalDouyin) await window.zhicuiDesktop?.cancelPlatformAccountSync?.({ sessionKey: syncRun.sessionKey }).catch(() => undefined);
+      if (sourceSyncRunRef.current === syncRun) sourceSyncRunRef.current = null;
     }
     if (!isSyncUserCurrent()) return { started: true };
     setRefreshing(false);
@@ -2886,12 +2889,20 @@ export default function VideoLibraryPage() {
   const cancelSyncRecovery = async () => {
     const request = activeDesktopSyncRef.current;
     if (syncRecoveryCancelRef.current || !request || request.userId !== user?.id) return;
+    const running = sourceSyncRunRef.current;
+    if (!running || running.sessionKey !== request.sessionKey || running.userId !== request.userId) return;
     const action = Symbol();
     syncRecoveryCancelRef.current = action;
-    if (sourceSyncRunRef.current?.userId === user?.id) sourceSyncRunRef.current.cancelled = true;
+    running.cancelled = true;
     setSyncRecoveryActionError('');
     try {
-      await window.zhicuiDesktop?.cancelPlatformAccountAction();
+      const bridge = window.zhicuiDesktop;
+      if (bridge?.cancelPlatformAccountSync) {
+        await bridge.cancelPlatformAccountSync({ sessionKey: running.sessionKey });
+      } else if (activeDesktopSyncRef.current === request && sourceSyncRunRef.current === running) {
+        // 旧客户端只保留用户明确点击取消、且本页仍在等待本轮采集的兼容入口。
+        await bridge?.cancelPlatformAccountAction();
+      }
     } catch {
       if (activeRef.current && activeDesktopSyncRef.current === request && request.userId === currentUserIdRef.current) setSyncRecoveryActionError('取消未完成，请关闭本次抖音窗口');
     } finally {

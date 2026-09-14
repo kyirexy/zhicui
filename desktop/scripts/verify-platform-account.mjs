@@ -17,6 +17,7 @@ import {
 import {
   validatePlatformAccountCollectRequest,
   validatePlatformAccountRequest,
+  validatePlatformAccountSyncCancelRequest,
 } from '../dist/security.js';
 
 assert.deepEqual(
@@ -171,6 +172,10 @@ assert.throws(() => validatePlatformAccountCollectRequest({ platform: 'douyin', 
 assert.throws(() => validatePlatformAccountCollectRequest({ platform: 'douyin', profileKey: 'user_123-safe', mode: 'like', limit: 20, keepSessionOpen: true }), /批次标识/);
 assert.throws(() => validatePlatformAccountCollectRequest({ platform: 'douyin', profileKey: 'user_123-safe', mode: 'like', limit: 20, sessionKey: '../escape' }), /批次标识无效/);
 assert.throws(() => validatePlatformAccountCollectRequest({ platform: 'bilibili', profileKey: 'user_123-safe', mode: 'like', limit: 20, sessionKey: 'test-session-0000001' }), /批次标识无效/);
+assert.deepEqual(validatePlatformAccountSyncCancelRequest({ sessionKey: 'test-session-0000001' }), { sessionKey: 'test-session-0000001' });
+for (const value of [undefined, null, {}, [], { sessionKey: '' }, { sessionKey: '../escape' }, { sessionKey: 123 }, { sessionKey: 'test-session-0000001', global: true }]) {
+  assert.throws(() => validatePlatformAccountSyncCancelRequest(value), /批次/);
+}
 
 {
   let focused = 0;
@@ -460,6 +465,114 @@ for (const scenario of ['same-batch', 'other-profile', 'other-batch', 'cancel-re
   assert.equal(acquired, 1);
   assert.equal(actions, 1);
 }
+// 真实 collect/runExclusive 的批次归属竞争；只替换浏览器和官方响应，取消/保留/锁流程均走产品代码。
+function cancellationFixture() {
+  const contexts = [];
+  const events = [];
+  let released = 0;
+  const connector = new PlatformAccountConnector(() => 'unused-test-profile', (event) => events.push(event));
+  connector.profilePath = async () => 'unused-test-profile';
+  connector.actionLocks = { acquire: async () => ({ release: async () => { released += 1; } }) };
+  connector.launchBrowser = async () => {
+    const context = { closed: false, closeCalls: 0, closeHook: null,
+      pages: () => [{ isClosed: () => context.closed }],
+      cookies: async () => [{ name: 'sessionid', value: 'fixture', domain: '.douyin.com' }],
+      close: async () => { context.closeCalls += 1; await context.closeHook?.(context.closeCalls); context.closed = true; },
+    };
+    contexts.push(context);
+    return { context, browser: 'chrome' };
+  };
+  const trusted = () => ({ urls: ['https://www.douyin.com/video/69001'], coverage: 'complete', orderReliable: true });
+  connector.collectDouyin = async () => trusted();
+  return { connector, contexts, events, trusted, released: () => released };
+}
+function deferredControl() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+const ownedBatch = (sessionKey, keepSessionOpen = false) => ({ platform: 'douyin', profileKey: 'same-owner', mode: 'like', limit: 1, sessionKey, keepSessionOpen });
+
+// 同账号另一个入口已占有连接器：本轮 busy 后的 scoped 收尾不能取消占用者。
+{
+  const fixture = cancellationFixture();
+  const started = deferredControl();
+  const finish = deferredControl();
+  fixture.connector.collectDouyin = async () => { started.resolve(); await finish.promise; return fixture.trusted(); };
+  const running = fixture.connector.collect(ownedBatch('test-session-owner-B'));
+  await started.promise;
+  assert.equal((await fixture.connector.collect(ownedBatch('test-session-owner-A'))).code, 'LOCAL_ACTION_BUSY');
+  assert.equal((await fixture.connector.cancel({ sessionKey: 'test-session-owner-A' })).code, 'LOCAL_ACTION_NOT_FOUND');
+  assert.equal(fixture.connector.cancelled, false);
+  assert.equal(fixture.contexts[0].closeCalls, 0);
+  assert.equal(fixture.events.filter((event) => event.stage === 'cancelled').length, 0);
+  finish.resolve();
+  assert.equal((await running).success, true);
+  assert.equal(fixture.released(), 1);
+}
+
+// 真实保留超时回调释放旧窗口后，新批次运行时收到旧批次的迟到取消，必须无副作用。
+{
+  const fixture = cancellationFixture();
+  const originalSetTimeout = globalThis.setTimeout;
+  let expire;
+  try {
+    globalThis.setTimeout = (callback, delay, ...args) => {
+      if (delay === 30_000) { expire = callback; return { unref() {} }; }
+      return originalSetTimeout(callback, delay, ...args);
+    };
+    assert.equal((await fixture.connector.collect(ownedBatch('test-session-owner-A', true))).success, true);
+  } finally { globalThis.setTimeout = originalSetTimeout; }
+  assert.equal(typeof expire, 'function');
+  expire();
+  if (fixture.connector.closingSession) await fixture.connector.closingSession;
+  assert.equal(fixture.released(), 1);
+  const started = deferredControl();
+  const finish = deferredControl();
+  fixture.connector.collectDouyin = async () => { started.resolve(); await finish.promise; return fixture.trusted(); };
+  const running = fixture.connector.collect(ownedBatch('test-session-owner-B'));
+  await started.promise;
+  assert.equal((await fixture.connector.cancel({ sessionKey: 'test-session-owner-A' })).code, 'LOCAL_ACTION_NOT_FOUND');
+  assert.equal(fixture.connector.cancelled, false);
+  assert.equal(fixture.contexts[1].closeCalls, 0);
+  finish.resolve();
+  assert.equal((await running).success, true);
+  assert.equal(fixture.released(), 2);
+}
+
+// cancel 的旧 close 尚未返回，旧采集 finally 已完成且新批次已保留：不能再关闭新 retained。
+{
+  const fixture = cancellationFixture();
+  const started = deferredControl();
+  const finish = deferredControl();
+  const finishOldClose = deferredControl();
+  const oldCloseStarted = deferredControl();
+  fixture.connector.collectDouyin = async () => { started.resolve(); await finish.promise; return fixture.trusted(); };
+  const oldTask = fixture.connector.collect(ownedBatch('test-session-owner-A', true));
+  await started.promise;
+  fixture.contexts[0].closeHook = async (calls) => {
+    if (calls === 1) { oldCloseStarted.resolve(); await finishOldClose.promise; }
+  };
+  const lateCancel = fixture.connector.cancel({ sessionKey: 'test-session-owner-A' });
+  await oldCloseStarted.promise;
+  finish.resolve();
+  assert.equal((await oldTask).cancelled, true);
+  fixture.connector.collectDouyin = async () => fixture.trusted();
+  assert.equal((await fixture.connector.collect(ownedBatch('test-session-owner-B', true))).success, true);
+  const retainedB = fixture.connector.retainedSession;
+  const eventsBeforeOldCancelReturns = fixture.events.length;
+  finishOldClose.resolve();
+  assert.equal((await lateCancel).cancelled, true);
+  assert.equal(fixture.connector.retainedSession, retainedB);
+  assert.equal(fixture.contexts[1].closeCalls, 0);
+  assert.equal(fixture.connector.cancelled, false);
+  assert.equal(fixture.events.length, eventsBeforeOldCancelReturns, '旧取消不能向新批次发送 cancelled');
+  assert.equal((await fixture.connector.cancel({ sessionKey: 'test-session-owner-B' })).cancelled, true);
+  assert.equal(fixture.connector.retainedSession, null);
+  assert.equal(fixture.contexts[1].closeCalls, 1);
+  assert.equal(fixture.released(), 2, '每个批次租约恰好释放一次');
+}
+
 const sourcePages = new DouyinSourcePages();
 sourcePages.add(douyinPageUrl(90), {
   aweme_list: [aweme(10002, 999), aweme(10003, 500)], has_more: 0, max_cursor: 0,

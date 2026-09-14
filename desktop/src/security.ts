@@ -9,6 +9,7 @@ import type {
   PlatformAccountProvider,
   PlatformAccountRequest,
   PlatformAccountSourceMode,
+  PlatformAccountSyncCancelRequest,
 } from './contract';
 
 const PRODUCTION_ORIGIN = 'https://luxai.cn';
@@ -166,6 +167,18 @@ export function validatePlatformAccountCollectRequest(
     ...(value.sessionKey === undefined ? {} : { sessionKey: value.sessionKey }),
     ...(value.keepSessionOpen === undefined ? {} : { keepSessionOpen: value.keepSessionOpen }),
   };
+}
+
+export function validatePlatformAccountSyncCancelRequest(value: unknown): PlatformAccountSyncCancelRequest {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || Object.keys(value).some((key) => key !== 'sessionKey')) {
+    throw new Error('取消同步请求必须指定本轮批次');
+  }
+  const sessionKey = (value as Record<string, unknown>).sessionKey;
+  if (typeof sessionKey !== 'string' || !/^[A-Za-z0-9_-]{16,80}$/.test(sessionKey)) {
+    throw new Error('抖音同步批次标识无效');
+  }
+  return { sessionKey };
 }
 
 export function validateDesktopAgentIntegrationRequest(

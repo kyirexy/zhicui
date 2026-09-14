@@ -88,6 +88,10 @@ export interface PlatformAccountRequest {
   profileKey: string;
 }
 
+export interface PlatformAccountSyncCancelRequest {
+  sessionKey: string;
+}
+
 export interface PlatformAccountCollectRequest extends PlatformAccountRequest {
   mode: PlatformAccountSourceMode;
   limit: number;
@@ -251,6 +255,7 @@ export interface ZhicuiDesktopBridge {
   collectPlatformAccount(request: PlatformAccountCollectRequest): Promise<PlatformAccountResult>;
   focusPlatformAccountAction?(request: PlatformAccountRequest): Promise<PlatformAccountResult>;
   cancelPlatformAccountAction(): Promise<PlatformAccountResult>;
+  cancelPlatformAccountSync?(request: PlatformAccountSyncCancelRequest): Promise<PlatformAccountResult>;
   disconnectPlatformAccount(request: PlatformAccountRequest): Promise<PlatformAccountResult>;
   getUpdateState(): Promise<DesktopUpdateResult>;
   checkForUpdates(): Promise<DesktopUpdateResult>;

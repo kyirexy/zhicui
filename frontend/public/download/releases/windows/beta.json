@@ -5,28 +5,28 @@
   "platform": "windows",
   "architecture": "x64",
   "artifact_kind": "unsigned",
-  "version": "1.1.4",
-  "source_commit": "998f1390f495337f6723dffad6bf32e0ba655558",
-  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.4-x64.exe",
-  "size_bytes": 93668792,
-  "sha256": "f232a963e2468f180c53fbcb52596567ba3c11d4e92a93b8a86175d68ce5e0ed",
+  "version": "1.1.5",
+  "source_commit": "d09546c090f4f1028aa37e115047d811fa696247",
+  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.5-x64.exe",
+  "size_bytes": 93673791,
+  "sha256": "a67fcbab03782e762468af621cfa3a5cea5e7f54ab4fb73396571e0f6977787b",
   "blockmap": {
-    "name": "Zhicui-Setup-1.1.4-x64.exe.blockmap",
-    "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.4-x64.exe.blockmap",
-    "size_bytes": 99200,
-    "sha256": "e08aa5118153b002a36ec1fcc88c56f9e510255d8692969757ef973288e19cc0"
+    "name": "Zhicui-Setup-1.1.5-x64.exe.blockmap",
+    "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.5-x64.exe.blockmap",
+    "size_bytes": 99031,
+    "sha256": "c562e4dd2e7cfa8630ab16fc5fda418e49f376e93c85360e27b965386841ff9a"
   },
   "update_feed": {
     "name": "beta.yml",
     "download_url": "https://luxai.cn/download/windows/beta.yml",
     "size_bytes": 348,
-    "sha256": "ee2424f5b420b9e0de8a5828efa717bd5bebbef0d8ae56278cef08c8ce5adf31"
+    "sha256": "e33897887757915b70980d6522f2b9c1b950ce28d4ab917bf6e15e6c49d8905a"
   },
-  "published_at": "2026-09-09T13:20:43.8805857Z",
+  "published_at": "2026-09-14T02:08:03.3542073Z",
   "release_notes": [
-    "同步固定本人官方主页，切换账号或离开页面时停止本轮，避免混入其他账号资料。",
-    "服务端同步校验版本，旧客户端不能覆盖已经确认的来源顺序。",
-    "修复长同步期间已隐藏作品被旧列表重新带回界面的问题。"
+    "抖音列表读取未完成时，主动显示官方窗口并等待操作，确认列表后自动继续。",
+    "新增清晰的三步恢复引导，可显示窗口、取消或重试当前分类。",
+    "保留已有资料与严格来源顺序，修复登录中断和切换账号后的提示状态。"
   ],
   "code_signed": false,
   "release_status": "beta_download",

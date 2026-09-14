@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { importPlatformBatches, platformImportBatchBody } from './platformImportBatch.ts';
+import { importPlatformBatches, platformImportBatchBody, platformImportNotice, platformImportResultLabel, platformFromImportInput } from './platformImportBatch.ts';
 import { platformSyncWarning, withPlatformSyncWarning } from './platformSyncFeedback.ts';
 import { capturePlatformSyncSnapshot } from './platformSyncSnapshot.ts';
 import { readFileSync } from 'node:fs';
@@ -25,7 +25,7 @@ test('50/100条同步按10条分批全部上传，rank偏移连续而不是静�
   }
 });
 
-test('中途断线保留已成功项，其余明确标记可重试，不假报全部同步', async () => {
+test('中途断线保留已成功项，已提交待确认与未发送分别计数，不自动重试', async () => {
   let requests = 0;
   const result = await importPlatformBatches(urls(25), async (batch) => {
     requests += 1;
@@ -38,9 +38,62 @@ test('中途断线保留已成功项，其余明确标记可重试，不假报�
   assert.equal(requests, 2);
   assert.equal(result.data?.success, 10);
   assert.equal(result.data?.failed, 0);
-  assert.equal(result.data?.pending, 15);
-  assert.equal(result.data?.items.filter((item) => item.status === 'pending').length, 15);
+  assert.equal(result.data?.pending, 10);
+  assert.equal(result.data?.not_submitted, 5);
+  assert.equal(result.data?.interrupted, true);
   assert.deepEqual(result.data?.items.map((item) => item.input), urls(25));
+});
+
+test('首批502只记10条待确认，后10条未提交，B站标识保留且提示不泄漏代理错误', async () => {
+  let sent = 0;
+  const result = await importPlatformBatches(urls(20), async () => {
+    sent += 1;
+    return { success: false, status: 502, error: '<html>nginx upstream prematurely closed connection</html>' };
+  });
+  assert.equal(sent, 1);
+  assert.equal(result.data?.success, 0);
+  assert.equal(result.data?.pending, 10);
+  assert.equal(result.data?.not_submitted, 10);
+  assert.ok(result.data?.items.every((entry) => entry.platform === 'bilibili'));
+  assert.doesNotMatch(result.data!.items.map(platformImportResultLabel).join('\n'), /未知平台|502|nginx|upstream|html|可重试/);
+  assert.match(platformImportNotice(result.data!.items), /部分结果尚未确认/);
+});
+
+test('缺失或重复结果阻止后续批次，不接受未请求条目或重复成功数', async () => {
+  const input = urls(20);
+  let sent = 0;
+  const result = await importPlatformBatches(input, async () => {
+    sent += 1;
+    return { success: true, data: { total: 12, success: 12, failed: 0, items: [
+      ...input.slice(0, 10).map((input) => ({ input, success: true, status: 'imported' as const })),
+      { input: input[0], success: true, status: 'imported' as const },
+      { input: 'https://www.bilibili.com/video/BVforeign', success: true, status: 'imported' as const },
+    ] } };
+  });
+  assert.equal(sent, 1);
+  assert.equal(result.data?.success, 9);
+  assert.equal(result.data?.pending, 1);
+  assert.equal(result.data?.not_submitted, 10);
+  assert.equal(result.data?.total, 20);
+});
+
+test('明确拒绝不伪造待确认，短链识别只信任正确域名', async () => {
+  const result = await importPlatformBatches(urls(20), async () => ({ success: false, status: 422, error: 'internal schema text' }));
+  assert.equal(result.data?.failed, 10);
+  assert.equal(result.data?.pending, 0);
+  assert.equal(result.data?.not_submitted, 10);
+  assert.equal(platformFromImportInput('分享 https://b23.tv/abcdef'), 'bilibili');
+  assert.equal(platformFromImportInput('https://www.bilibili.com.evil.test/video/BV123'), 'unknown');
+  assert.equal(platformFromImportInput('https://xhslink.com/abc'), 'xiaohongshu');
+});
+
+test('旧API的skipped:true规范为已跳过而非永久pending', async () => {
+  const input = 'https://www.bilibili.com/video/BV1test234567';
+  const result = await importPlatformBatches([`${input}/`], async () => ({ success: true, data: {
+    items: [{ input, status: 'skipped', success: true }], total: 1, success: 0, failed: 0, skipped: 1,
+  } }));
+  assert.equal(result.data?.pending, 0); assert.equal(result.data?.skipped, 1); assert.equal(result.data?.success, 0);
+  assert.equal(result.data?.interrupted, false);
 });
 
 test('普通同步不重复提示，未完成仍给出下一步', () => {

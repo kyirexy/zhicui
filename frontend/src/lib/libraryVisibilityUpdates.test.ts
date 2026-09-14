@@ -49,7 +49,7 @@ function harness() {
     require(name: string) {
       if (name === './libraryUpdates') return updates;
       if (name === './authSession') return session;
-      if (name === './douyinDesktopSync' || name === './platformImportBatch') return {};
+      if (name === './douyinDesktopSync' || name === './platformImportBatch' || name === './bilibiliImportJobs') return {};
       throw new Error(`Unexpected import: ${name}`);
     },
   });

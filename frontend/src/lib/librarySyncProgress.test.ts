@@ -41,7 +41,7 @@ test(`${desktopVersion} 加载新网页后，资料库和Agent同步入口均先
   vm.runInNewContext(syncCode, library);
   assert.equal((await library.exports.run()).started, false);
   assert.ok(messages[0].includes(desktopVersion));
-  assert.match(messages[0], /安装 1\.1\.4/);
+  assert.ok(messages[0].includes(`安装 ${MIN_LOCAL_DOUYIN_DESKTOP_VERSION}`));
 
   const sheet = readFileSync(new URL('../components/agent/AgentSourceSyncSheet.tsx', import.meta.url), 'utf8');
   const sheetSource = sheet.slice(sheet.indexOf('  const syncDouyin = async'), sheet.indexOf('  const importLinks = async'));
@@ -56,7 +56,7 @@ test(`${desktopVersion} 加载新网页后，资料库和Agent同步入口均先
   vm.runInNewContext(sheetCode, agent);
   await agent.exports.run();
   assert.ok(messages.at(-1)!.includes(desktopVersion));
-  assert.match(messages.at(-1)!, /安装 1\.1\.4/);
+  assert.ok(messages.at(-1)!.includes(`安装 ${MIN_LOCAL_DOUYIN_DESKTOP_VERSION}`));
   assert.equal(agent.runningRef.current, false);
 });
 }

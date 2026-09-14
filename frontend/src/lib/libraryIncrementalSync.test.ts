@@ -25,7 +25,7 @@ test('复用、过期跳过和真实失败分别反馈，过期项不算失败�
   assert.equal(result.data?.success, 2);
   assert.equal(result.data?.failed, 1);
   assert.equal(result.data?.skipped, 1);
-  assert.equal(platformImportSummary(result.data!.items), '新增 1 条，复用 1 条，1 条需要重试，跳过 1 条过期结果；历史资料已保留');
+  assert.equal(platformImportSummary(result.data!.items), '新增 1 条，已有 1 条，1 条未完成，跳过 1 条过期结果');
 });
 
 test('服务端遗漏结果只记待确认，保留已复用结果且不计失败', async () => {
@@ -36,5 +36,5 @@ test('服务端遗漏结果只记待确认，保留已复用结果且不计失�
   }));
   assert.equal(result.data?.failed, 0);
   assert.equal(result.data?.pending, 1);
-  assert.equal(platformImportSummary(result.data!.items), '新增 0 条，复用 1 条，1 条待确认，可重试；历史资料已保留');
+  assert.equal(platformImportSummary(result.data!.items), '新增 0 条，已有 1 条，1 条结果待确认');
 });

@@ -883,10 +883,14 @@ export interface PlatformLibraryListResult {
 export interface PlatformLibraryImportEntry {
   input: string;
   success: boolean;
-  status: 'imported' | 'reused' | 'failed' | 'skipped' | 'pending';
+  status: 'imported' | 'reused' | 'failed' | 'skipped' | 'pending' | 'not_submitted';
   item?: PlatformLibraryItem | null;
   platform?: PlatformLibraryPlatform | 'unknown';
   error?: string;
+  job_id?: string;
+  submission_key?: string;
+  /** 服务端已持久保存，正在后台处理；不同于连接中断后的未知结果。 */
+  background_pending?: boolean;
 }
 
 export interface PlatformLibraryImportResult {
@@ -896,6 +900,23 @@ export interface PlatformLibraryImportResult {
   failed: number;
   skipped?: number;
   pending?: number;
+  not_submitted?: number;
+  /** 本轮有结果尚未确认或请求中断，后续来源不得继续提交。 */
+  interrupted?: boolean;
+}
+
+export interface BilibiliImportJob {
+  id: string;
+  status: 'queued' | 'running' | 'succeeded' | 'partial' | 'failed';
+  total: number;
+  completed: number;
+  items: PlatformLibraryImportEntry[];
+  success: number;
+  failed: number;
+  urls?: string[];
+  source_mode?: string;
+  source_synced_at?: string;
+  source_rank_offset?: number;
 }
 
 export interface LibrarySyncRun {

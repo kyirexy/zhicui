@@ -1,5 +1,5 @@
 import { notifyLibraryUpdated } from './libraryUpdates';
-import type { LibrarySyncRun } from './types';
+import type { BilibiliImportJob, LibrarySyncRun } from './types';
 import type {
   AgentAutomation,
   AgentAutomationCreate,
@@ -91,7 +91,8 @@ import type {
   VideoInfo,
 } from './types';
 import { getEphemeralDouyinMediaSources } from './douyinDesktopSync';
-import { importPlatformBatches, platformImportBatchBody } from './platformImportBatch';
+import { importPlatformBatches, platformImportBatchBody, platformFromImportInput, platformImportInputKey } from './platformImportBatch';
+import { bilibiliSubmissionKey, importBilibiliJobs } from './bilibiliImportJobs';
 import type { PlatformSyncSnapshot } from './platformSyncSnapshot';
 import { readStoredToken, sessionFetch } from './authSession';
 export type { ApiResponse };
@@ -688,6 +689,21 @@ export async function listLibrarySyncRuns(limit = 20): Promise<ApiResponse<{ ite
   return request(`/api/library/sync-runs?limit=${Math.max(1, Math.min(20, limit))}`);
 }
 
+async function bilibiliJobRequest<T>(endpoint: string, options?: RequestInit): Promise<ApiResponse<T>> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  try { return await request<T>(endpoint, { ...options, signal: controller.signal }); }
+  finally { clearTimeout(timeout); }
+}
+
+export async function listBilibiliImportJobs(): Promise<ApiResponse<{ items: BilibiliImportJob[]; total: number }>> {
+  return bilibiliJobRequest('/api/library/bilibili/import-jobs?limit=20');
+}
+
+export async function getBilibiliImportJob(id: string): Promise<ApiResponse<BilibiliImportJob>> {
+  return bilibiliJobRequest(`/api/library/bilibili/import-jobs/${encodeURIComponent(id)}`);
+}
+
 export async function importPlatformLibraryItems(
   urls: string[],
   sourceMode?: 'collect' | 'like' | 'post',
@@ -696,7 +712,20 @@ export async function importPlatformLibraryItems(
 ): Promise<ApiResponse<PlatformLibraryImportResult>> {
   const requestedToken = readStoredToken();
   const sourceSyncedAt = snapshot?.sourceSyncedAt || new Date().toISOString();
-  const response = await importPlatformBatches(urls, async (batch) => {
+  const isBilibiliAccountSync = Boolean(sourceMode) && urls.length > 0
+    && urls.every((url) => platformFromImportInput(url) === 'bilibili');
+  let lastCompleted = 0;
+  const response = isBilibiliAccountSync ? await importBilibiliJobs(urls, (batch) =>
+    bilibiliJobRequest<BilibiliImportJob>('/api/library/bilibili/import-jobs', {
+      method: 'POST', body: JSON.stringify(platformImportBatchBody(batch, sourceSyncedAt, sourceMode, snapshot)),
+    }), getBilibiliImportJob, {
+    isCurrent: () => requestedToken === readStoredToken(),
+    onProgress: (completed, total) => {
+      if (completed > lastCompleted) notifyLibraryUpdated();
+      lastCompleted = completed;
+      onProgress?.(completed, total);
+    },
+  }) : await importPlatformBatches(urls, async (batch) => {
     if (requestedToken !== readStoredToken()) return { success: false, error: '账号已切换，剩余同步已停止' };
     const result = await request<PlatformLibraryImportResult>('/api/library/imports', {
       method: 'POST',
@@ -713,6 +742,8 @@ export async function importPlatformLibraryItems(
       ...response.data,
       items: response.data.items.map((entry) => ({
         ...entry,
+        ...(isBilibiliAccountSync ? { submission_key: bilibiliSubmissionKey(sourceMode, sourceSyncedAt,
+          Math.floor([...new Set(urls.map(platformImportInputKey))].indexOf(platformImportInputKey(entry.input)) / 10) * 10) } : {}),
         item: entry.item ? normalizePlatformLibraryItem(entry.item) : undefined,
       })),
     },

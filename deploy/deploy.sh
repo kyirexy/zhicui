@@ -186,7 +186,7 @@ atomic_runtime_switch() {
 
 set_agent_kill_switch() {
   local mode="$1"
-  sudo -n "$AGENT_KILL_SWITCH_HELPER" "$mode" >/dev/null
+  sudo -n "$AGENT_KILL_SWITCH_HELPER" "$mode" >/dev/null || return 1
   sudo -n "$AGENT_KILL_SWITCH_HELPER" "verify-$mode" >/dev/null
 }
 
@@ -238,6 +238,14 @@ PY
   return "$result"
 }
 
+agent_runtime_is_verified_dark() {
+  # 文件关闭不代表旧进程已经加载；三项均确认后才允许省去重启。
+  # 404 只兼容修复后的旧版本，不能作为跳过重启的运行态证据。
+  sudo -n "$AGENT_KILL_SWITCH_HELPER" verify-dark >/dev/null 2>&1 &&
+    curl -fsS --max-time 5 http://127.0.0.1:8000/api/health >/dev/null 2>&1 &&
+    probe_agent_interface disabled
+}
+
 verify_agent_schema() {
   local runtime="$1"
   "$runtime/.venv/bin/python" "$runtime/deploy/verify-agent-schema.py" \
@@ -262,6 +270,8 @@ verify_agent_schema_rehearsal() {
 }
 
 force_agent_fail_closed() {
+  # 构建或备份失败仍需复验关闭状态，但不打断已健康的旧版本请求。
+  agent_runtime_is_verified_dark && return 0
   local failed=0
   set +e
   set_agent_kill_switch dark || failed=1
@@ -546,14 +556,19 @@ for evidence_action in status verify-backup store-smoke store-deployment verify-
     err "缺少 release evidence $evidence_action 权限；请先执行 preinstall-production-assets.sh"
 done
 if [[ "$AGENT_RELEASE_MODE" == dark ]]; then
-  log '将当前运行态 Agent 接口强制置为 dark'
-  set_agent_kill_switch dark || err '无法原子写入 Agent dark kill-switch'
-  sudo systemctl restart videocapsule-backend
-  wait_backend_health ||
-    err 'Agent dark 预备阶段后端健康检查失败'
-  probe_agent_interface absent-or-disabled ||
-    err 'Agent dark 预备阶段接口未保持关闭'
-  record_gate agent_kill_switch_preflight pass '独立 kill-switch=false；当前 runtime 不暴露 Agent 接口'
+  if agent_runtime_is_verified_dark; then
+    log '当前 Agent 已关闭且后端健康，保持服务运行'
+    record_gate agent_kill_switch_preflight pass '独立 kill-switch=false；运行态关闭且健康；无需前置重启'
+  else
+    log '确认并修复当前运行态 Agent 关闭状态'
+    set_agent_kill_switch dark || err '无法原子写入 Agent dark kill-switch'
+    sudo systemctl restart videocapsule-backend
+    wait_backend_health ||
+      err 'Agent dark 预备阶段后端健康检查失败'
+    probe_agent_interface absent-or-disabled ||
+      err 'Agent dark 预备阶段接口未保持关闭'
+    record_gate agent_kill_switch_preflight pass '独立 kill-switch=false；已重启并确认当前 runtime 不暴露 Agent 接口'
+  fi
 else
   sudo -n "$AGENT_KILL_SWITCH_HELPER" verify-dark >/dev/null ||
     err 'Stable 必须从已完成的 dark=false 运行态进入'

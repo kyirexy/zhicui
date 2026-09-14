@@ -63,6 +63,7 @@ from app.services import (
     note_service,
     omniroute_workspace_service,
     platform_library_service,
+    platform_import_job_service,
     plan_service,
     privacy_account_service,
     settings_service,
@@ -565,6 +566,14 @@ class PlatformLibraryImportRequest(BaseModel):
         if len(cleaned) > platform_library_service.MAX_IMPORT_URLS:
             raise ValueError("每次最多导入 10 条链接")
         return cleaned
+
+
+class BilibiliLibraryImportJobRequest(PlatformLibraryImportRequest):
+    """账号同步先保存任务，字幕和语音提取交给可恢复的后台任务。"""
+
+    model_config = ConfigDict(extra="forbid")
+    source_mode: Literal["collect", "like", "post"]
+    source_synced_at: datetime
 
 
 class LocalDouyinLibraryItemRequest(BaseModel):
@@ -2102,6 +2111,60 @@ def import_platform_library_items(
         raise
     library_sync_service.finish_run(db, run, result)
     result["sync_run_id"] = run.id
+    return _ok(result)
+
+
+@router.post("/api/library/bilibili/import-jobs", status_code=202)
+def create_bilibili_import_job(
+    body: BilibiliLibraryImportJobRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """持久登记 B站同步；返回接收状态，不把排队当作导入成功。"""
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        result = platform_import_job_service.create_job(
+            db, user_id=current_user.id, values=body.urls,
+            source_mode=body.source_mode,
+            source_synced_at=body.source_synced_at,
+            source_rank_offset=body.source_rank_offset,
+            source_snapshot_size=body.source_snapshot_size,
+            source_order_reliable=body.source_order_reliable,
+            source_coverage=body.source_coverage,
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    platform_import_job_service.runner.wake()
+    return _ok(result)
+
+
+@router.get("/api/library/bilibili/import-jobs")
+def list_bilibili_import_jobs(
+    response: Response,
+    limit: int = Query(default=20, ge=1, le=50),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """返回当前用户的近期同步任务，重新打开页面时可恢复查看。"""
+    response.headers["Cache-Control"] = "no-store"
+    items = platform_import_job_service.list_jobs(db, user_id=current_user.id, limit=limit)
+    return _ok({"items": items, "total": len(items)})
+
+
+@router.get("/api/library/bilibili/import-jobs/{job_id}")
+def get_bilibili_import_job(
+    job_id: str,
+    response: Response,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> dict:
+    """读取逐条处理状态；只返回当前账号可见的资料。"""
+    response.headers["Cache-Control"] = "no-store"
+    result = platform_import_job_service.get_job(db, user_id=current_user.id, job_id=job_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="同步任务不存在")
     return _ok(result)
 
 

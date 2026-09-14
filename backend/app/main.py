@@ -124,6 +124,7 @@ from app.services import (
     error_log_service,
     note_service,
     library_extraction_service,
+    platform_import_job_service,
     ops_monitor_runner,
     product_action_run_service,
     video_analysis_catalog_service,
@@ -433,6 +434,7 @@ def create_app() -> FastAPI:
         creator_catalog_quality_worker.runner.start()
         agent_runtime_worker.runner.start()
         library_extraction_service.resume_pending_jobs()
+        platform_import_job_service.runner.start()
         threading.Thread(
             target=_reconcile_video_analysis_agent_runs,
             name="video-analysis-agent-reconcile",
@@ -443,6 +445,7 @@ def create_app() -> FastAPI:
 
     @app.on_event("shutdown")
     def on_shutdown() -> None:
+        platform_import_job_service.runner.stop()
         ops_monitor_runner.runner.stop()
         agent_runtime_worker.runner.stop()
         creator_catalog_quality_worker.runner.stop()

@@ -26,6 +26,8 @@ import { useDesktopApp } from '@/components/DesktopAppFrame';
 import PlatformBrandIcon from '@/components/PlatformBrandIcon';
 import {
   importPlatformLibraryItems,
+  listBilibiliImportJobs,
+  getBilibiliImportJob,
   initializePlatformLibraryItem,
   listPlatformLibraryItems,
 } from '@/lib/api';
@@ -45,11 +47,13 @@ import type {
   PlatformAccountSourceMode,
   PlatformAccountStage,
 } from '@/lib/desktopRuntime';
-import { getLibraryRevision, isLibraryRevisionCurrent, subscribeLibraryUpdates } from '@/lib/libraryUpdates';
+import { getLibraryRevision, isLibraryRevisionCurrent, notifyLibraryUpdated, subscribeLibraryUpdates } from '@/lib/libraryUpdates';
 import { mergeSyncedItems, platformImportSummary } from '@/lib/libraryIncrementalSync';
 import { readLibraryQuickSyncPreferences } from '@/lib/libraryQuickSync';
 import { platformSyncWarning } from '@/lib/platformSyncFeedback';
 import { capturePlatformSyncSnapshot, type PlatformSyncSnapshot } from '@/lib/platformSyncSnapshot';
+import { hasUnresolvedBilibiliSource, mergeBilibiliJobResults, watchBilibiliJobs } from '@/lib/bilibiliImportJobs';
+import { platformImportErrorMessage, platformImportNotice, platformImportResultLabel, unsubmittedPlatformImports } from '@/lib/platformImportBatch';
 import styles from './PlatformLibraryPanel.module.css';
 
 interface PlatformLibraryPanelProps {
@@ -104,6 +108,13 @@ interface AccountConnectionState {
 
 type AccountConnectionMap = Record<PlatformAccountProvider, AccountConnectionState>;
 
+interface BilibiliRetrySource {
+  ownerId: string;
+  urls: string[];
+  mode: PlatformAccountSourceMode;
+  snapshot: PlatformSyncSnapshot;
+}
+
 const INITIAL_ACCOUNT_CONNECTIONS: AccountConnectionMap = {
   douyin: { connected: false, stage: 'idle', message: '尚未连接' },
   bilibili: { connected: false, stage: 'idle', message: '尚未连接' },
@@ -128,22 +139,6 @@ function sourceLabel(item: PlatformLibraryItem): string {
   return item.media_type === 'video' ? '仅发布文案' : '图文正文';
 }
 
-function importResultLabel(entry: PlatformLibraryImportEntry): string {
-  if (entry.status === 'skipped') return '已跳过过期同步结果，保留较新的资料';
-  const platform = entry.item?.platform || entry.platform;
-  const platformName = platform === 'bilibili'
-    ? 'B站'
-    : platform === 'xiaohongshu'
-      ? '小红书'
-      : '未知平台';
-  if (entry.success && entry.item) {
-    const resultState = entry.status === 'reused' ? '已复用，仅更新来源顺序' : '新增';
-    return `${platformName} · ${entry.item.title || '视频'} · ${sourceLabel(entry.item)} · ${resultState}`;
-  }
-  const compactInput = entry.input.length > 42 ? `${entry.input.slice(0, 42)}…` : entry.input;
-  return `${platformName} · ${compactInput} · ${entry.error || '导入失败'}`;
-}
-
 export default function PlatformLibraryPanel({
   search,
   filter,
@@ -162,8 +157,16 @@ export default function PlatformLibraryPanel({
   const [initializingId, setInitializingId] = useState('');
   const [error, setError] = useState('');
   const [results, setResults] = useState<PlatformLibraryImportEntry[]>([]);
+  const [refreshingResults, setRefreshingResults] = useState(false);
   const [feedbackView, setFeedbackView] = useState<PlatformLibraryManagerView>('all');
   const [accountAction, setAccountAction] = useState('');
+  const accountActionRef = useRef(accountAction);
+  accountActionRef.current = accountAction;
+  const resultsRef = useRef(results);
+  resultsRef.current = results;
+  const jobRefreshRef = useRef(0);
+  const bilibiliRetrySourcesRef = useRef<BilibiliRetrySource[]>([]);
+  const [canRetryBilibili, setCanRetryBilibili] = useState(false);
   const [selectedAccountModes, setSelectedAccountModes] = useState<Record<
     PlatformAccountProvider,
     PlatformAccountSourceMode[]
@@ -308,19 +311,71 @@ export default function PlatformLibraryPanel({
       setError('');
       onStateChangeRef.current?.({ loading: false, error: '' });
     } else {
-      const message = response.status === 404
-        ? '跨平台资料服务尚未连接，请重启当前开发服务后重试'
-        : response.error || '暂时无法读取 B站和小红书资料';
+      const message = platformImportErrorMessage(response.error, response.status);
       setError(message);
       onStateChangeRef.current?.({ loading: false, error: message });
     }
     setLoading(false);
   }, [user?.id]);
 
+  const refreshImportResults = useCallback(async (silent = false) => {
+    const requestedUserId = user?.id;
+    if (!requestedUserId) return;
+    const refreshId = ++jobRefreshRef.current;
+    if (!silent) setRefreshingResults(true);
+    try {
+      const response = await listBilibiliImportJobs();
+      if (!mountedRef.current || currentUserIdRef.current !== requestedUserId
+        || refreshId !== jobRefreshRef.current || accountActionRef.current) return;
+      if (!response.success || !response.data) {
+        if (!silent) setError('暂时无法刷新同步结果，请稍后再试');
+        return;
+      }
+      const jobs = response.data.items;
+      const next = mergeBilibiliJobResults(resultsRef.current, jobs);
+      if (next !== resultsRef.current) {
+        setResults(next);
+        setFeedbackView('bilibili');
+        const entries = next.filter((entry) => entry.platform === 'bilibili');
+        updateAccountConnection('bilibili', {
+          stage: entries.some((entry) => entry.status === 'failed' || (entry.status === 'pending' && !entry.background_pending)) ? 'error' : 'success',
+          message: platformImportSummary(entries),
+        });
+      }
+      if (!silent) await load(true);
+    } finally {
+      if (mountedRef.current && currentUserIdRef.current === requestedUserId && refreshId === jobRefreshRef.current) setRefreshingResults(false);
+    }
+  }, [load, updateAccountConnection, user?.id]);
+
+  useEffect(() => {
+    if (managerView === 'bilibili') void refreshImportResults(true);
+  }, [managerView, refreshImportResults]);
+
+  const activeBilibiliJobIds = [...new Set(results.filter((entry) => entry.background_pending && entry.job_id)
+    .map((entry) => entry.job_id!))].sort().join(',');
+  useEffect(() => {
+    const requestedUserId = user?.id;
+    if (!requestedUserId || !activeBilibiliJobIds) return;
+    return watchBilibiliJobs(activeBilibiliJobIds.split(','), getBilibiliImportJob, (jobs) => {
+      const previous = resultsRef.current;
+      const next = mergeBilibiliJobResults(previous, jobs);
+      setResults(next);
+      resultsRef.current = next;
+      const completed = (entries: PlatformLibraryImportEntry[]) => entries.filter((entry) => Boolean(entry.job_id) && entry.status !== 'pending').length;
+      if (completed(next) > completed(previous)) notifyLibraryUpdated();
+      const entries = next.filter((entry) => entry.platform === 'bilibili');
+      updateAccountConnection('bilibili', { stage: entries.some((entry) => entry.status === 'failed'
+        || (entry.status === 'pending' && !entry.background_pending)) ? 'error' : 'success', message: platformImportSummary(entries) });
+    }, { isCurrent: () => mountedRef.current && currentUserIdRef.current === requestedUserId });
+  }, [activeBilibiliJobIds, updateAccountConnection, user?.id]);
+
   useEffect(() => {
     mountedRef.current = true;
     setImporting(false);
     setResults([]);
+    bilibiliRetrySourcesRef.current = [];
+    setCanRetryBilibili(false);
     setAccountAction('');
     const cached = readPlatformLibraryCache(user?.id);
     itemsRef.current = cached || [];
@@ -357,6 +412,7 @@ export default function PlatformLibraryPanel({
 
   const submit = async () => {
     const requestedUserId = user?.id;
+    jobRefreshRef.current += 1;
     setFeedbackView('import');
     const urls = input
       .split(/\r?\n/)
@@ -374,12 +430,12 @@ export default function PlatformLibraryPanel({
     if (!mountedRef.current || requestedUserId !== currentUserIdRef.current) return;
     setImporting(false);
     if (!response.success || !response.data) {
-      setError(response.error || '导入没有完成，请稍后重试');
+      setError(platformImportErrorMessage(response.error, response.status));
       return;
     }
     setResults(response.data.items);
     if (response.data.success > 0) {
-      setInput(response.data.items.filter((entry) => entry.status === 'failed' || entry.status === 'pending')
+      setInput(response.data.items.filter((entry) => !entry.success && entry.status !== 'skipped')
         .map((entry) => entry.input).join('\n'));
       await load(true);
     }
@@ -424,7 +480,13 @@ export default function PlatformLibraryPanel({
       || accountAction
       || modes.length === 0
     ) return;
+    if (platform === 'bilibili' && hasUnresolvedBilibiliSource(resultsRef.current, modes)) {
+      setFeedbackView('bilibili');
+      await refreshImportResults();
+      return;
+    }
     const requestedUserId = user.id;
+    jobRefreshRef.current += 1;
     const stillCurrent = () => mountedRef.current && requestedUserId === currentUserIdRef.current;
     const collectedUrls: Array<{
       mode: PlatformAccountSourceMode;
@@ -436,8 +498,10 @@ export default function PlatformLibraryPanel({
     setFeedbackView(platform);
     const syncAction = `${platform}:sync`;
     setAccountAction(syncAction);
-    setResults([]);
-
+    setResults(resultsRef.current.filter((entry) => entry.background_pending));
+    setRefreshingResults(false);
+    setError('');
+    try {
     for (const mode of modes) {
       updateAccountConnection(platform, {
         stage: 'collecting',
@@ -451,6 +515,10 @@ export default function PlatformLibraryPanel({
         limit: requestedCount,
       });
       if (!stillCurrent()) return;
+      if (collected.cancelled || collected.code === 'state_cancelled') {
+        updateAccountConnection(platform, { stage: 'cancelled', message: '同步已取消' });
+        return;
+      }
       const snapshot = capturePlatformSyncSnapshot(collected, sourceSyncedAt);
       if (!collected.success || !collected.urls?.length) {
         const isRelogin = collected.error?.includes('重新登录');
@@ -499,7 +567,7 @@ export default function PlatformLibraryPanel({
     });
     const importedItems: PlatformLibraryImportEntry[] = [];
     let importError = '';
-    for (const entry of collectedUrls) {
+    for (const [sourceIndex, entry] of collectedUrls.entries()) {
       if (!stillCurrent()) return;
       const imported = await importPlatformLibraryItems(entry.urls, entry.mode, entry.snapshot, (completed, total) => {
         if (!stillCurrent()) return;
@@ -510,10 +578,23 @@ export default function PlatformLibraryPanel({
       });
       if (!stillCurrent()) return;
       if (!imported.success || !imported.data) {
-        importError = imported.error || '作品已读取，但导入资料失败';
+        importError = platformImportErrorMessage(imported.error, imported.status);
         break;
       }
       importedItems.push(...imported.data.items);
+      if (imported.data.interrupted) {
+        if (platform === 'bilibili') {
+          const retrySources = collectedUrls.slice(sourceIndex).map((source) => ({
+            ownerId: requestedUserId, urls: [...source.urls], mode: source.mode, snapshot: { ...source.snapshot },
+          }));
+          // 仅保留本轮原始快照。人工重试沿用相同幂等提交，不重新采集或生成新时间。
+          bilibiliRetrySourcesRef.current = [...bilibiliRetrySourcesRef.current.filter((source) =>
+            !retrySources.some((next) => next.mode === source.mode)), ...retrySources];
+          setCanRetryBilibili(true);
+        }
+        importedItems.push(...unsubmittedPlatformImports(collectedUrls.slice(sourceIndex + 1).flatMap((source) => source.urls)));
+        break;
+      }
     }
     setAccountAction('');
     const importedSuccess = importedItems.filter((entry) => entry.success).length;
@@ -524,15 +605,55 @@ export default function PlatformLibraryPanel({
       });
       return;
     }
-    setResults(importedItems);
+    setResults((current) => [...current.filter((entry) => entry.background_pending
+      && !importedItems.some((incoming) => incoming.job_id === entry.job_id)), ...importedItems]);
     const warnings = [...new Set(collectedUrls.map((entry) => platformSyncWarning(entry.result)).filter(Boolean))];
     const completedMessage = `${platformImportSummary(importedItems)}${importError ? `；${importError}` : ''}`;
     updateAccountConnection(platform, {
       connected: true,
-      stage: importError || importedItems.some((entry) => entry.status === 'failed' || entry.status === 'pending') ? 'error' : 'success',
+      stage: importError || importedItems.some((entry) => entry.status === 'failed'
+        || entry.status === 'not_submitted' || (entry.status === 'pending' && !entry.background_pending)) ? 'error' : 'success',
       message: [completedMessage, ...warnings].join('；'),
     });
     if (importedSuccess > 0) await load(true);
+    } catch {
+      if (stillCurrent()) updateAccountConnection(platform, { stage: 'error', message: '同步暂未完成，请稍后查看结果' });
+    } finally {
+      if (stillCurrent()) setAccountAction('');
+    }
+  };
+
+  const retryBilibiliSync = async () => {
+    const requestedUserId = user?.id;
+    if (!requestedUserId || accountAction || !canRetryBilibili) return;
+    const sources = bilibiliRetrySourcesRef.current.filter((source) => source.ownerId === requestedUserId);
+    if (!sources.length) return;
+    const stillCurrent = () => mountedRef.current && currentUserIdRef.current === requestedUserId;
+    jobRefreshRef.current += 1;
+    setAccountAction('bilibili:sync:import');
+    setRefreshingResults(false);
+    setError('');
+    setFeedbackView('bilibili');
+    try {
+      for (const source of sources) {
+        if (!stillCurrent()) return;
+        const response = await importPlatformLibraryItems(source.urls, source.mode, source.snapshot, (completed, total) => {
+          if (stillCurrent()) updateAccountConnection('bilibili', { stage: 'collecting', message: `正在确认同步 ${completed}/${total} 条…` });
+        });
+        if (!stillCurrent()) return;
+        if (!response.success || !response.data) { setError('暂时无法确认这次同步，请稍后再试'); break; }
+        const incoming = response.data.items;
+        setResults((current) => [...current.filter((entry) => !incoming.some((next) =>
+          (next.submission_key && next.submission_key === entry.submission_key)
+          || (entry.status === 'not_submitted' && next.input === entry.input))), ...incoming]);
+        updateAccountConnection('bilibili', { stage: response.data.interrupted || response.data.failed ? 'error' : 'success', message: platformImportSummary(incoming) });
+        if (response.data.interrupted) break;
+        bilibiliRetrySourcesRef.current = bilibiliRetrySourcesRef.current.filter((entry) => entry !== source);
+        setCanRetryBilibili(bilibiliRetrySourcesRef.current.some((entry) => entry.ownerId === requestedUserId));
+      }
+    } finally {
+      if (stillCurrent()) setAccountAction('');
+    }
   };
 
   const toggleAccountMode = (
@@ -786,7 +907,7 @@ export default function PlatformLibraryPanel({
                               disabled={Boolean(accountAction) || selectedModes.length === 0}
                             >
                               <RefreshCw size={17} />
-                              {selectedModes.length > 1
+                              {platform === 'bilibili' && hasUnresolvedBilibiliSource(results, selectedModes) ? '查看进度' : selectedModes.length > 1
                                 ? '同步喜欢 + 收藏'
                                 : selectedModes.length === 1
                                   ? selectedModes[0] === 'like'
@@ -963,14 +1084,34 @@ export default function PlatformLibraryPanel({
       )}
       {results.length > 0
         && (!controlsOnly || managerView === 'all' || feedbackView === managerView) && (
-        <ul className={styles.results} aria-label="导入结果">
-          {results.map((entry, index) => (
-            <li key={`${entry.input}-${index}`} data-success={entry.success}>
-              {entry.success ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}
-              <span title={entry.success ? undefined : entry.input}>{importResultLabel(entry)}</span>
-            </li>
-          ))}
-        </ul>
+        <div className={styles.importFeedback}>
+          <p role="status">{platformImportSummary(results)}</p>
+          {platformImportNotice(results) && <p>{platformImportNotice(results)}</p>}
+          {results.some((entry) => entry.status === 'pending') && (
+            <button type="button" disabled={refreshingResults || loading}
+              onClick={() => void (feedbackView === 'bilibili' ? refreshImportResults() : load())}>
+              <RefreshCw size={14} />{refreshingResults || loading ? '正在刷新' : '刷新结果'}
+            </button>
+          )}
+          {canRetryBilibili && feedbackView === 'bilibili'
+            && results.some((entry) => entry.status === 'not_submitted' || (entry.status === 'pending' && !entry.background_pending)) && (
+            <button type="button" disabled={Boolean(accountAction) || refreshingResults}
+              onClick={() => void retryBilibiliSync()}>
+              <RefreshCw size={14} />重试未确认的同步
+            </button>
+          )}
+          <details>
+            <summary>查看视频明细（{results.length}）</summary>
+            <ul className={styles.results} aria-label="导入结果">
+              {results.map((entry, index) => (
+                <li key={`${entry.input}-${index}`} data-success={entry.success}>
+                  {entry.success ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}
+                  <span title={entry.input}>{platformImportResultLabel(entry)}</span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        </div>
       )}
 
       {!controlsOnly && (

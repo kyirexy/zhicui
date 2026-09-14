@@ -16,6 +16,8 @@ export function platformImportSummary(entries: PlatformLibraryImportEntry[]): st
   const reused = entries.filter((entry) => entry.success && entry.status === 'reused').length;
   const failed = entries.filter((entry) => entry.status === 'failed').length;
   const skipped = entries.filter((entry) => entry.status === 'skipped').length;
-  const pending = entries.filter((entry) => entry.status === 'pending').length;
-  return `新增 ${added} 条，复用 ${reused} 条${failed ? `，${failed} 条需要重试` : ''}${pending ? `，${pending} 条待确认，可重试` : ''}${skipped ? `，跳过 ${skipped} 条过期结果` : ''}；历史资料已保留`;
+  const pending = entries.filter((entry) => entry.status === 'pending' && !entry.background_pending).length;
+  const background = entries.filter((entry) => entry.status === 'pending' && entry.background_pending).length;
+  const unsubmitted = entries.filter((entry) => entry.status === 'not_submitted').length;
+  return `新增 ${added} 条，已有 ${reused} 条${background ? `，${background} 条后台准备中` : ''}${failed ? `，${failed} 条未完成` : ''}${pending ? `，${pending} 条结果待确认` : ''}${unsubmitted ? `，${unsubmitted} 条尚未开始` : ''}${skipped ? `，跳过 ${skipped} 条过期结果` : ''}`;
 }

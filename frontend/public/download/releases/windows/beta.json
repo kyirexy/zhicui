@@ -5,29 +5,30 @@
   "platform": "windows",
   "architecture": "x64",
   "artifact_kind": "unsigned",
-  "version": "1.1.6",
-  "source_commit": "809b55e1ce001ac2fabd71f1a706baf4b18c8cb5",
-  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.6-x64.exe",
-  "size_bytes": 93674760,
-  "sha256": "3624748044221e7a07e8dfe8adc02191b20fbeccdf78943d558db7dfbe5e406d",
+  "version": "1.1.7",
+  "source_commit": "ba1cf497ce52f4a099bb31f3f94f322232177414",
+  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.7-x64.exe",
+  "size_bytes": 93675320,
+  "sha256": "6161d88a895c05588a42b13e7bbcb18c6df0f60d133c048ff5e8ba0897092f3c",
   "blockmap": {
-    "name": "Zhicui-Setup-1.1.6-x64.exe.blockmap",
-    "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.6-x64.exe.blockmap",
-    "size_bytes": 99112,
-    "sha256": "5aad315018141bbb14dd126d56ef911001a03939e2150c1a6eb2cf0e734e4770"
+    "name": "Zhicui-Setup-1.1.7-x64.exe.blockmap",
+    "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.7-x64.exe.blockmap",
+    "size_bytes": 99108,
+    "sha256": "fc378d8867496b9d2745360f24578bfcf6b002e4c0a7246e6a6de18af4b0f923"
   },
   "update_feed": {
     "name": "beta.yml",
     "download_url": "https://luxai.cn/download/windows/beta.yml",
     "size_bytes": 348,
-    "sha256": "ba5853fb263a3204bed4a70c4b69c49f821160c1ea00d94c4bdbb5fd7202aef3"
+    "sha256": "0f43d34ff09056ca102b38a67c1178ded59da083ce6a1a55c6a4659dca924c6e"
   },
-  "published_at": "2026-09-14T04:34:22.7218729Z",
+  "published_at": "2026-09-14T04:56:23.8667655Z",
   "release_notes": [
     "优化抖音同步窗口，连续同步喜欢和收藏时保持同一窗口。",
-    "修复取消后继续打开窗口及部分视频未显示的问题。",
+    "取消操作仅影响当前同步，不再误关其他任务的窗口。",
+    "修复部分视频未显示的问题，已有资料继续保留。",
     "文案任务支持增量追加，进度显示全部视频的完成数量。",
-    "精简同步提示，已有资料和已完成文案继续保留。"
+    "精简同步提示，已完成文案不重复提取。"
   ],
   "code_signed": false,
   "release_status": "beta_download",

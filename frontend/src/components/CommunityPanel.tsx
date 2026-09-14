@@ -28,7 +28,7 @@ export default function CommunityPanel() {
       if (!response.ok) throw new Error('二维码加载失败');
       const blob = await response.blob();
       const { exportFile } = await import('@/lib/fileExport');
-      const result = await exportFile(blob, '知萃交流群-9月14日前有效.png');
+      const result = await exportFile(blob, '知萃交流群-9月21日前有效.png');
       setMessage(result === 'cancelled' ? '已取消保存。' : result === 'downloaded' ? '已开始下载，可在微信扫一扫中从相册选择。' : '可通过系统面板保存图片，再到微信扫一扫中选择。');
     } catch {
       setMessage('未能保存，可直接截图后在微信扫一扫中从相册选择。');
@@ -48,7 +48,7 @@ export default function CommunityPanel() {
         ) : (
           <>
             <p>电脑上用微信扫码；手机上保存图片，在微信扫一扫中从相册选择。</p>
-            <p className={styles.validity}>本次二维码：2026 年 9 月 14 日前有效</p>
+            <p className={styles.validity}>本次二维码：2026 年 9 月 21 日前有效</p>
           </>
         )}
         <div className={styles.actions}>
@@ -60,7 +60,7 @@ export default function CommunityPanel() {
       </div>
       <div className={styles.qr}>
         {expired === false && !imageFailed ? (
-          <img src={COMMUNITY_QR_PATH} width={800} height={800} alt="微信扫码加入知萃交流建议反馈群，2026年9月14日前有效" onError={() => setImageFailed(true)} />
+          <img src={COMMUNITY_QR_PATH} width={340} height={340} alt="微信扫码加入知萃交流建议反馈群，2026年9月21日前有效" onError={() => setImageFailed(true)} />
         ) : <p role="status">{imageFailed ? '二维码加载失败，请刷新重试或联系支持邮箱。' : expired ? '等待更新群二维码' : '正在检查邀请有效期…'}</p>}
       </div>
     </div>

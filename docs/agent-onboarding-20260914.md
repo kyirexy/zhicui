@@ -26,3 +26,10 @@
 发布前在既有部署锁内清理旧 231 runtime 的 node_modules/.next/.venv 及 232 的 node_modules，保留当前 237 和前版 236。空闲空间从约 2.97 GiB 恢复到 6.22 GiB，未处理源码、业务资料或备份。
 
 测试与发布证据位于 `D:/6month/.codex-artifacts/agent-onboarding-20260914/` 和 `D:/6month/.codex-artifacts/agent-browser-authorization-20260914/`。发布后追加源码提交、安装包摘要和生产回读结果。
+
+## Windows 发行
+
+- 发行源码提交：`e501b4bfd4a207f015980d6878711be3c286e369`。
+- `Zhicui-Setup-1.1.8-x64.exe` 已经由既有 Beta 脚本构建、验证并上传，大小 93,599,366 字节。
+- SHA-256：`972021469f07b602150afa8ea1a20c98361409f6df99f086cfef71715f1499e9`。
+- 版本化安装包、blockmap、beta.yml 与发布清单已更新；公网完整回读和网页/后端 Jenkins 结果完成后记录。

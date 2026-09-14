@@ -5,30 +5,29 @@
   "platform": "windows",
   "architecture": "x64",
   "artifact_kind": "unsigned",
-  "version": "1.1.7",
-  "source_commit": "ba1cf497ce52f4a099bb31f3f94f322232177414",
-  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.7-x64.exe",
-  "size_bytes": 93675320,
-  "sha256": "6161d88a895c05588a42b13e7bbcb18c6df0f60d133c048ff5e8ba0897092f3c",
+  "version": "1.1.8",
+  "source_commit": "e501b4bfd4a207f015980d6878711be3c286e369",
+  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.8-x64.exe",
+  "size_bytes": 93599366,
+  "sha256": "972021469f07b602150afa8ea1a20c98361409f6df99f086cfef71715f1499e9",
   "blockmap": {
-    "name": "Zhicui-Setup-1.1.7-x64.exe.blockmap",
-    "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.7-x64.exe.blockmap",
-    "size_bytes": 99108,
-    "sha256": "fc378d8867496b9d2745360f24578bfcf6b002e4c0a7246e6a6de18af4b0f923"
+    "name": "Zhicui-Setup-1.1.8-x64.exe.blockmap",
+    "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.8-x64.exe.blockmap",
+    "size_bytes": 99100,
+    "sha256": "185835d505e9c701207c9aa1f8d3afea895d43256cfecd954a6890e1d4779c4a"
   },
   "update_feed": {
     "name": "beta.yml",
     "download_url": "https://luxai.cn/download/windows/beta.yml",
     "size_bytes": 348,
-    "sha256": "0f43d34ff09056ca102b38a67c1178ded59da083ce6a1a55c6a4659dca924c6e"
+    "sha256": "49aa1768c7dc14fa0e4a152c54adf52b6ddf09062a143c8fd306391a77e33d48"
   },
-  "published_at": "2026-09-14T04:56:23.8667655Z",
+  "published_at": "2026-09-14T08:35:38.5549077Z",
   "release_notes": [
-    "优化抖音同步窗口，连续同步喜欢和收藏时保持同一窗口。",
-    "取消操作仅影响当前同步，不再误关其他任务的窗口。",
-    "修复部分视频未显示的问题，已有资料继续保留。",
-    "文案任务支持增量追加，进度显示全部视频的完成数量。",
-    "精简同步提示，已完成文案不重复提取。"
+    "Agent 接入支持客户端内安装连接与页内授权。",
+    "可复制当前客户端的接入提示词，交给 Codex 或 Claude Code 使用。",
+    "已接入的 MCP 与 Skill 随客户端维护更新，保留自定义配置。",
+    "连接检查区分安装、授权与可用状态；云端接入尚未开放时明确提示。"
   ],
   "code_signed": false,
   "release_status": "beta_download",

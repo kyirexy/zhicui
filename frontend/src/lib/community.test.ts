@@ -5,9 +5,9 @@ import { isCommunityInviteExpired } from './community.ts';
 import { resolveClientAuthPolicy } from './clientAuthPolicy.ts';
 
 test('北京时间有效期边界与无效时间默认拒绝展示旧码', () => {
-  assert.equal(isCommunityInviteExpired(Date.parse('2026-09-13T23:59:59+08:00')), false);
-  assert.equal(isCommunityInviteExpired(Date.parse('2026-09-14T00:00:00+08:00')), true);
-  assert.equal(isCommunityInviteExpired(Date.parse('2026-09-15T00:00:00+08:00')), true);
+  assert.equal(isCommunityInviteExpired(Date.parse('2026-09-20T23:59:59+08:00')), false);
+  assert.equal(isCommunityInviteExpired(Date.parse('2026-09-21T00:00:00+08:00')), true);
+  assert.equal(isCommunityInviteExpired(Date.parse('2026-09-22T00:00:00+08:00')), true);
   assert.equal(isCommunityInviteExpired(NaN), true);
 });
 test('官网、桌面、移动首页和反馈均有公共加群入口', () => {

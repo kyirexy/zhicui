@@ -5,18 +5,17 @@
   "platform": "windows",
   "architecture": "x64",
   "artifact_kind": "unsigned",
-  "version": "1.1.9",
-  "source_commit": "41ee77b00b984774ecf447b333ef421f6f0acee0",
-  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.9-x64.exe",
-  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.9-x64.exe",
-  "size_bytes": 93600448,
-  "sha256": "08f9fea22674fcd85d926826f0acd7292abfb29aae8a0f28fe12d368d55905db",
-  "published_at": "2026-09-14T10:29:04.4881130Z",
+  "version": "1.1.10",
+  "source_commit": "7d8b777f0ef96359af7b2706d18f02991d0963b7",
+  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.10-x64.exe",
+  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.10-x64.exe",
+  "size_bytes": 93663809,
+  "sha256": "c1c0ee8f132d6e8bad279101b598b1ddaf1d48aef9586e372f20ecd276dcb5e5",
+  "published_at": "2026-09-14T14:28:34.2947541Z",
   "notes": [
-    "每次同步重新读取官方列表，避免旧窗口和缓存影响最新收藏。",
-    "修复页面刷新失败时误用旧首屏的情况，已有资料和顺序继续保留。",
-    "准备文案按待处理视频分批提交，不再重复读取列表顶部。",
-    "增加同步诊断记录，便于准确定位未完成的来源。"
+    "优化版本检查与官方下载，避免重复下载或误取旧版。",
+    "简化客户端更新提示和安装窗口，覆盖安装保留账号与资料。",
+    "页面功能更新可直接刷新，程序更新按当前版本支持的方式完成。"
   ],
   "code_signed": false,
   "release_status": "beta_download"

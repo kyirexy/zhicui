@@ -26,6 +26,7 @@ import {
   type FormEvent,
 } from 'react';
 import ContentChat from '@/components/ContentChat';
+import { useWebBuildActivity } from '@/lib/hooks/useWebBuildActivity';
 import DesktopMediaVideoPlayer from '@/components/DesktopMediaVideoPlayer';
 import { buildBilibiliEmbedUrl } from '@/lib/singleLinkImport';
 import DouyinGalleryViewer from '@/components/DouyinGalleryViewer';
@@ -111,6 +112,7 @@ export default function VideoKnowledgeWorkspace() {
   const [extracting, setExtracting] = useState(false);
   const [initializingAi, setInitializingAi] = useState(false);
   const [agentRunning, setAgentRunning] = useState(false);
+  useWebBuildActivity('video-knowledge', extracting || initializingAi || agentRunning);
   const [instruction, setInstruction] = useState('');
   const [agentNotice, setAgentNotice] = useState('');
   const [error, setError] = useState('');

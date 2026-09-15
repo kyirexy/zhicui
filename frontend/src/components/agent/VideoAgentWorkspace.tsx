@@ -10,6 +10,7 @@ import {
   useState,
 } from 'react';
 import Link from 'next/link';
+import { useWebBuildActivity } from '@/lib/hooks/useWebBuildActivity';
 import {
   ArrowsOut,
   ArrowClockwise,
@@ -683,6 +684,7 @@ export default function VideoAgentWorkspace({
   >(null);
   const [studioCustomOpen, setStudioCustomOpen] = useState(false);
   const [backgroundThreadId, setBackgroundThreadId] = useState<string | null>(null);
+  useWebBuildActivity('video-agent', sending || Boolean(streamingMessageId) || Boolean(backgroundThreadId) || queuedQuestions.length > 0 || Boolean(studioGeneratingType));
   const [terminalTurn, setTerminalTurn] = useState<AgentTurn | null>(null);
   const [turnAction, setTurnAction] = useState<'cancel' | 'retry' | ''>('');
   const [error, setError] = useState('');

@@ -12,7 +12,6 @@ import {
   QUICK_SYNC_CHANGED_EVENT,
   QUICK_SYNC_MAX_COUNT,
   readLibraryQuickSyncPreferences,
-  requireQuickSyncConfirmation,
   saveLibraryQuickSyncPreferences,
   toggleQuickSyncMode,
 } from '@/lib/libraryQuickSync';
@@ -60,12 +59,6 @@ export default function QuickSyncSettingsCard() {
     setSaved(true);
   };
 
-  const confirmNextTime = () => {
-    requireQuickSyncConfirmation();
-    setConfigured(false);
-    setSaved(false);
-  };
-
   return (
     <section className={styles.card} aria-labelledby="quick-sync-settings-title">
       <header className={styles.header}>
@@ -73,10 +66,10 @@ export default function QuickSyncSettingsCard() {
           <ArrowsClockwise size={21} weight="regular" />
         </span>
         <div>
-          <h2 id="quick-sync-settings-title">首页快捷同步</h2>
-          <p>保存后，首页点“同步视频”会直接执行。</p>
+          <h2 id="quick-sync-settings-title">同步偏好</h2>
+          <p>保存常用范围和数量，每次同步前仍会打开选择框确认。</p>
         </div>
-        <span className={styles.status}>{configured ? '已启用' : '先确认'}</span>
+        <span className={styles.status}>{configured ? '已保存' : '默认范围'}</span>
       </header>
 
       <div className={styles.body}>
@@ -126,10 +119,7 @@ export default function QuickSyncSettingsCard() {
         <div className={styles.actions}>
           <button type="button" className={styles.save} onClick={save}>
             {saved ? <Check size={15} weight="bold" /> : null}
-            {saved ? '已保存' : '保存并启用'}
-          </button>
-          <button type="button" className={styles.confirm} onClick={confirmNextTime}>
-            下次先打开设置
+            {saved ? '已保存' : '保存偏好'}
           </button>
         </div>
       </div>

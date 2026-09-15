@@ -106,6 +106,7 @@ for (const outcome of [
     const first = new Promise((resolve) => { resolveFirst = resolve; });
     const calls: Array<{ mode: string; current: () => boolean; sessionKey: string; keepOpen: boolean }> = [];
     const closedSessions: string[] = [];
+    const visibleSources: Array<{ userId: string; platform: string; mode: string }> = [];
     const refreshingFlags: boolean[] = [];
     let globalCancels = 0;
     let resolveClosing!: () => void;
@@ -129,6 +130,10 @@ for (const outcome of [
       selectAutomaticTranscriptPreparationTargets, selectTranscriptPreparationTargets, selectSyncedSourceScope,
       nonNegativeInteger: (value: number) => Math.max(0, Math.trunc(value || 0)), isLibraryRevisionCurrent: () => true,
       publishSourceManagerNotice: noOp, setSourceSyncWarning: noOp, saveLibraryQuickSyncPreferences: noOp,
+      publishLibrarySyncSelection: (userId: string, platform: string, mode: string) => {
+        visibleSources.push({ userId, platform, mode });
+        context.sourceModeRef.current = mode;
+      },
       setSyncCount: noOp, setRefreshing: (value: boolean) => refreshingFlags.push(value),
       setExtractionJob: noOp, setPipelineStage: noOp, setSourceSyncQueue: noOp,
       setItems: noOp, setCatalogRecoveryPending: noOp, setSelected: noOp, setError: noOp, setLoading: noOp, setLibraryOverview: noOp,
@@ -152,6 +157,7 @@ for (const outcome of [
     vm.runInNewContext(code, context);
     const task = context.exports.run(['like', 'collect'], ['like', 'collect']);
     assert.deepEqual(calls.map((call) => call.mode), ['like']);
+    assert.deepEqual(visibleSources, [{ userId: 'owner', platform: 'douyin', mode: 'like' }], '第一条采集完成前就切到本次来源');
     assert.equal(calls[0].current(), true);
     assert.equal(calls[0].keepOpen, true);
     assert.match(calls[0].sessionKey, /^[0-9a-f-]{36}$/);
@@ -178,6 +184,7 @@ for (const outcome of [
     }
     assert.equal((await task).started, true);
     const completedBoth = collectionSucceeded && outcome !== 'account-switch';
+    assert.deepEqual(visibleSources.map((selection) => selection.mode), completedBoth ? ['like', 'collect'] : ['like']);
     assert.deepEqual(calls.map((call) => call.mode), completedBoth ? ['like', 'collect'] : ['like']);
     if (completedBoth) {
       assert.equal(calls[1].sessionKey, calls[0].sessionKey);

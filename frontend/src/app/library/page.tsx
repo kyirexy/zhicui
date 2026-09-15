@@ -104,6 +104,7 @@ import {
 import { useLocalStorage } from '@/lib/hooks/useLocalStorage';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import { useMarqueeSelection } from '@/lib/hooks/useMarqueeSelection';
+import { useWebBuildActivity } from '@/lib/hooks/useWebBuildActivity';
 import {
   QUICK_SYNC_MAX_COUNT,
   isQuickSyncModeReady,
@@ -118,6 +119,7 @@ import {
   writeLibraryListCache,
 } from '@/lib/libraryListCache';
 import { getLibraryRevision, isLibraryRevisionCurrent, subscribeLibraryUpdates } from '@/lib/libraryUpdates';
+import { librarySyncSelectionPath, publishLibrarySyncSelection, subscribeLibrarySyncSelections, type LibrarySyncSelection } from '@/lib/librarySyncSelection';
 import { findNewLibraryItems } from '@/lib/librarySyncDiff';
 import { LibraryExtractionBatchTracker, runReservedExtractionBatches } from '@/lib/libraryExtractionQueue';
 import { selectPlatformLibrarySource, type PlatformLibrarySourceFilter } from '@/lib/platformLibraryOrder';
@@ -483,6 +485,8 @@ export default function VideoLibraryPage() {
   const [bindingCheckPending, setBindingCheckPending] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [batchExtracting, setBatchExtracting] = useState(false);
+  useWebBuildActivity('library-sync', scanning || refreshing || batchExtracting
+    || Boolean(sourceSyncQueue) || syncRecoveryIssues.some((issue) => issue.phase === 'waiting'));
   const [activeBatchOperation, setActiveBatchOperation] = useState<DouyinBatchExtractionOperation | null>(null);
   const [extractionJob, setExtractionJob] = useState<DouyinBatchExtractionJob | null>(null);
   const [sessionAction, setSessionAction] = useState<DouyinSessionAction | null>(null);
@@ -509,7 +513,6 @@ export default function VideoLibraryPage() {
   const [notice, setNotice] = useState('');
   const [sourceManagerNotice, setSourceManagerNotice] = useState('');
   const [sourceSyncWarning, setSourceSyncWarning] = useState('');
-  const [autoSyncing, setAutoSyncing] = useState(false);
   const activeRef = useRef(true);
   const currentUserIdRef = useRef(user?.id);
   currentUserIdRef.current = user?.id;
@@ -1091,6 +1094,26 @@ export default function VideoLibraryPage() {
     currentUrl.searchParams.set('mode', nextMode);
     window.history.replaceState({}, '', `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
   };
+
+  const applySyncSelection = useCallback((selection: LibrarySyncSelection) => {
+    if (!activeRef.current || selection.userId !== currentUserIdRef.current) return;
+    // 分类跟随当前正在同步的来源；已有并发文稿任务不阻挡显示切换。
+    setPlatformFilter(selection.platform);
+    if (selection.platform === 'douyin') {
+      sourceModeRef.current = selection.mode;
+      libraryRequestRef.current += 1;
+      setSourceMode(selection.mode);
+    } else if (selection.mode === 'collect' || selection.mode === 'like') {
+      setBiliSourceMode(selection.mode);
+    }
+    setSelected(new Set());
+    setSelectedPlatform(new Set());
+    setPreviewTarget(null);
+    setPlatformActionErrors({});
+    window.history.replaceState(window.history.state, '', librarySyncSelectionPath(window.location.href, selection));
+  }, [setSourceMode]);
+
+  useEffect(() => subscribeLibrarySyncSelections(user?.id, applySyncSelection), [user?.id, applySyncSelection]);
 
   const initializePlatformSummary = async (item: PlatformLibraryItem) => {
     if (initializingPlatformId) return;
@@ -2608,6 +2631,7 @@ export default function VideoLibraryPage() {
     let failed = blockedModes.length > 0;
     for (const [modeIndex, requestedMode] of modes.entries()) {
       if (!isSyncUserCurrent() || syncRun.cancelled) break;
+      publishLibrarySyncSelection(syncUserId, 'douyin', requestedMode);
       setSourceSyncQueue({
         current: modeIndex + 1,
         total: modes.length,
@@ -2970,30 +2994,14 @@ export default function VideoLibraryPage() {
   }, [user?.id]);
 
   useEffect(() => {
-    if (!quickSyncRequested || loading || refreshing) return;
+    if (!quickSyncRequested || !sourceManagerDialogRef.current) return;
     setQuickSyncRequested(false);
     const preferences = readLibraryQuickSyncPreferences();
     setSourceManagerModes(preferences.modes);
     setSyncCount(preferences.count);
-    if (!preferences.configured || !connected || !loggedIn) {
-      openSourceManager();
-      return;
-    }
-    setAutoSyncing(true);
-    void syncCollectionRef.current(
-      preferences.modes,
-      preferences.modes,
-      preferences.count,
-    ).then((result) => {
-      if (!activeRef.current) return;
-      setAutoSyncing(false);
-      if (!result.started) {
-        openSourceManager();
-        return;
-      }
-      void refreshLoginStatus();
-    });
-  }, [connected, loading, loggedIn, quickSyncRequested, refreshing, refreshLoginStatus]);
+    // 首页入口只展示范围选择；历史偏好和登录状态均不能代替这次点击确认。
+    openSourceManager();
+  }, [loading, quickSyncRequested, user?.id]);
 
   const closeSourceManager = (restoreFocus = true) => {
     sourceManagerRestoreFocusRef.current = restoreFocus;
@@ -3989,15 +3997,15 @@ export default function VideoLibraryPage() {
                 className={styles.headerSourceAction}
                 aria-haspopup="dialog"
                 aria-expanded={sourceManagerOpen}
-                aria-label={refreshing || autoSyncing ? '视频同步中，查看进度' : '同步视频'}
+                aria-label={refreshing ? '视频同步中，查看进度' : '同步视频'}
                 onClick={openSourceManager}
               >
-                {refreshing || autoSyncing ? (
+                {refreshing ? (
                   <LoaderCircle size={17} className="animate-spin" aria-hidden="true" />
                 ) : (
                   <Plus size={17} aria-hidden="true" />
                 )}
-                <span>{refreshing || autoSyncing ? '同步中' : '同步视频'}</span>
+                <span>{refreshing ? '同步中' : '同步视频'}</span>
               </button>
               {showDouyinItems && (
                 <button

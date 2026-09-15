@@ -19,6 +19,7 @@ import {
   WarningCircle,
 } from '@phosphor-icons/react';
 import { askNote, askVisualLibraryItem } from '@/lib/api';
+import { useWebBuildActivity } from '@/lib/hooks/useWebBuildActivity';
 import type {
   CardType,
   NoteAnswerMode,
@@ -147,6 +148,7 @@ export default function ContentChat({ noteId, title, visualSource }: ContentChat
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  useWebBuildActivity('content-chat', sending);
   const [error, setError] = useState('');
   const [lastQuestion, setLastQuestion] = useState('');
   const [restoredKey, setRestoredKey] = useState<string | null>(null);

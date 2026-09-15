@@ -12,6 +12,7 @@ from app.core.database import Base
 from app.models.agent_thread import AgentMessage, AgentThread
 from app.models.chat_model import ChatModelFreeUsage, ChatModelOffering
 from app.models.knowledge_entry import KnowledgeEntry
+from app.models.home_video_preference import HomeVideoPreference
 from app.models.note import Note
 from app.models.system_setting import SystemSetting
 from app.models.user import User
@@ -41,6 +42,7 @@ class PersonalKnowledgeServiceTests(unittest.TestCase):
                 User.__table__,
                 Note.__table__,
                 KnowledgeEntry.__table__,
+                HomeVideoPreference.__table__,
                 UserAIProviderConfig.__table__,
                 UserCustomChatModel.__table__,
                 ChatModelOffering.__table__,

@@ -7,11 +7,12 @@ import math
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from sqlalchemy import and_, exists, or_, text
+from sqlalchemy import and_, case, exists, func, literal, literal_column, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Query, Session
 
 from app.models.knowledge_entry import KnowledgeEntry
+from app.models.home_video_preference import HomeVideoPreference
 from app.models.note import Note
 
 
@@ -454,16 +455,58 @@ def _pages_query(db: Session, user_id: str, term: str) -> Query:
     return query
 
 
+def _video_platform_sql(db: Session):
+    """只识别显式平台或公开页面域名，不能按视频 ID 猜测平台。"""
+    dialect = db.get_bind().dialect.name
+    if dialect == "sqlite":
+        safe_json = case((func.json_valid(Note.ai_summary) == 1, Note.ai_summary), else_="{}")
+        metadata = func.json_extract(safe_json, "$.source_meta.platform")
+        position = func.instr
+    elif dialect == "postgresql":
+        metadata = literal_column("(CASE WHEN notes.ai_summary IS JSON THEN "
+            "notes.ai_summary::jsonb ELSE '{}'::jsonb END #>> '{source_meta,platform}')")
+    else:
+        return literal("")
+
+    def before(value, delimiter):
+        index = position(value, delimiter)
+        return case((index > 0, func.substr(value, 1, index - 1)), else_=value)
+
+    url = func.lower(func.trim(Note.video_url))
+    # 先隔离 authority；路径和 query 中的官方域名不会被当成来源平台。
+    if dialect == "postgresql":
+        hostname = func.rtrim(func.substring(url, r"^https?://([^/?#:@]+)(:[^/?#@]*)?([/?#]|$)"), ".")
+    else:
+        rest = case((url.startswith("https://"), func.substr(url, 9)),
+                    (url.startswith("http://"), func.substr(url, 8)), else_="")
+        authority = before(func.replace(func.replace(rest, "?", "/"), "#", "/"), "/")
+        hostname = func.rtrim(before(authority, ":"), ".")
+        hostname = case((position(authority, "@") > 0, ""), else_=hostname)
+    domains = {"douyin": ("douyin.com", "iesdouyin.com"), "bilibili": ("bilibili.com", "b23.tv")}
+    public_platform = case(*[(or_(*[or_(hostname == domain, hostname.endswith(f".{domain}"))
+        for domain in names]), platform) for platform, names in domains.items()], else_="")
+    return case((metadata.in_(("douyin", "bilibili")), metadata), else_=public_platform)
+
+
 def _inbox_query(db: Session, user_id: str, term: str) -> Query:
     saved = exists().where(and_(
         KnowledgeEntry.user_id == user_id,
         KnowledgeEntry.source_note_id == Note.id,
+    ))
+    saved_video = exists().where(and_(
+        HomeVideoPreference.user_id == user_id,
+        HomeVideoPreference.video_id == Note.video_id,
+        HomeVideoPreference.platform == _video_platform_sql(db),
+        KnowledgeEntry.id == HomeVideoPreference.knowledge_entry_id,
+        KnowledgeEntry.user_id == user_id,
+        KnowledgeEntry.status == _CANONICAL_STATUS,
     ))
     query = db.query(Note).filter(
         Note.user_id == user_id,
         Note.ai_initialized.is_(True),
         Note.ai_summary.is_not(None),
         ~saved,
+        ~saved_video,
         _candidate_eligibility_sql(db),
     )
     if term:
@@ -555,6 +598,13 @@ def save_candidate(db: Session, user_id: str, note_id: str) -> KnowledgeEntry:
     normalized = normalize_candidate_to_page(note)
     if normalized is None:
         raise ValueError("该视频没有可整理的 AI 摘要")
+
+    # 保留候选资格检查；已收藏的抖音/B站书签与首页入口共用每视频事务锁。
+    # 定点导入避免两个服务在模块初始化时相互导入。
+    from app.services.home_video_service import save_video_candidate
+    video_entry = save_video_candidate(db, user_id, note)
+    if video_entry is not None:
+        return video_entry
 
     entry = KnowledgeEntry(
         user_id=user_id,

@@ -5,12 +5,17 @@ import { useEffect, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { desktopUpdatePresentation } from '@/lib/desktopUpdate';
 import { useDesktopUpdate } from '@/lib/hooks/useDesktopUpdate';
+import { useWebBuildUpdate } from '@/lib/hooks/useWebBuildUpdate';
+import { webBuildUpdatePresentation } from '@/lib/webBuildUpdateFlow';
+import webStyles from './WebBuildUpdatePrompt.module.css';
 import DesktopUpdateCard from './DesktopUpdateCard';
 import styles from './DesktopUpdateCard.module.css';
 
 export default function DesktopSidebarUpdate() {
   const state = useDesktopUpdate();
   const view = desktopUpdatePresentation(state);
+  const webUpdate = useWebBuildUpdate();
+  const webView = webBuildUpdatePresentation(webUpdate);
   const [open, setOpen] = useState(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const pathname = usePathname();
@@ -28,6 +33,18 @@ export default function DesktopSidebarUpdate() {
     : state.update.status === 'error' ? CircleAlert : Download;
   return (
     <>
+      {webView.visible && (
+        <div className={webStyles.sidebar} role="status">
+          <button type="button" className={webStyles.sidebarButton} disabled={webView.disabled}
+            aria-label={webView.label}
+            onClick={() => { if (webUpdate.phase === 'error') void webUpdate.retry(); else webUpdate.refresh(); }}>
+            <Download size={18} aria-hidden="true" />
+            <span><strong>{webView.title}</strong><small>{webView.description}</small></span>
+          </button>
+          {webView.preparing && webUpdate.total > 0 && <progress className={webStyles.progress}
+            aria-label="新版页面资源准备进度" value={webUpdate.completed} max={webUpdate.total} />}
+        </div>
+      )}
       {view.attention && (
         <div className={`${styles.sidebar} ${view.canInstall ? styles.sidebarReady : ''}`}>
           <button type="button" className={styles.sidebarButton} onClick={() => setOpen(true)} aria-haspopup="dialog" aria-expanded={open}>

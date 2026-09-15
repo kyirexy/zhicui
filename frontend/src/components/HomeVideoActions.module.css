@@ -1,0 +1,35 @@
+.card { position: relative; min-width: 0; touch-action: pan-y; }
+.card[draggable="true"] { cursor: grab; }
+.card[aria-busy="true"] { opacity: 0.7; }
+.more { position: absolute; z-index: 2; top: 2px; right: 2px; display: grid; width: 44px; height: 44px; padding: 6px; place-items: center; color: #fff; border: 0; border-radius: 10px; background: transparent; cursor: pointer; }
+.more svg { box-sizing: content-box; padding: 2px; border-radius: 6px; background: rgb(10 15 24 / 75%); }
+.more:disabled { cursor: wait; }
+.recapCard { padding-right: 40px; }
+.recapCard .more { top: 50%; right: -4px; transform: translateY(-50%); color: var(--home-ink); }
+.recapCard .more svg { background: var(--home-soft); }
+.more:hover svg { background: var(--home-accent); color: #fff; }
+.more:focus-visible, .menu button:focus-visible, .notice button:focus-visible, .notice a:focus-visible, .preferenceStatus button:focus-visible { outline: 2px solid var(--home-accent, var(--accent-brand)); outline-offset: 2px; }
+.dropZone { display: flex; justify-content: center; align-items: center; gap: 12px; min-height: 68px; margin-top: 16px; padding: 12px 18px; border: 1px dashed var(--home-border); border-radius: 12px; background: var(--home-soft); color: var(--home-muted); }
+.dropZone span { display: grid; gap: 4px; }
+.dropZone strong { font-size: 13px; font-weight: 600; }
+.dropZone small { font-size: 12px; }
+.dragging { position: fixed; z-index: 70; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%); width: min(430px, calc(100vw - 32px)); min-height: 100px; border: 2px dashed var(--home-accent); color: var(--home-ink); background: var(--home-surface); box-shadow: 0 10px 30px rgb(0 0 0 / 18%); }
+.over { background: var(--home-accent-soft); border-style: solid; }
+.menu { position: fixed; z-index: 80; left: var(--menu-x); top: var(--menu-y); width: 240px; padding: 6px; border: 1px solid var(--home-border); border-radius: 12px; background: var(--home-surface); color: var(--home-ink); box-shadow: 0 10px 28px rgb(0 0 0 / 16%); }
+.menu[hidden] { display: none; }
+.menu p { margin: 4px 10px 7px; overflow: hidden; color: var(--home-muted); font-size: 12px; line-height: 1.7; text-overflow: ellipsis; white-space: nowrap; }
+.menu button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 9px 10px; border-radius: 7px; font-size: 14px; text-align: left; cursor: pointer; transition: background 160ms ease-out; }
+.menu button:hover { background: var(--home-soft); }
+.notice { position: fixed; z-index: 80; bottom: calc(84px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 12px; width: max-content; max-width: calc(100vw - 32px); padding: 8px 12px 8px 16px; border: 1px solid var(--home-border); border-radius: 12px; background: var(--home-surface); color: var(--home-ink); box-shadow: 0 8px 24px rgb(0 0 0 / 14%); font-size: 13px; line-height: 1.6; }
+.notice span { min-width: 0; }
+.notice button, .notice a, .preferenceStatus button { min-height: 44px; flex-shrink: 0; color: var(--home-accent); font-weight: 600; cursor: pointer; }
+.notice .closeNotice { display: grid; width: 32px; place-items: center; color: var(--home-muted); }
+.preferenceStatus { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 12px; color: var(--home-muted); font-size: 13px; }
+@media (max-width: 767px) {
+  .menu { left: 16px; top: auto; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); width: calc(100vw - 32px); padding: 10px; }
+  .menu button { min-height: 48px; }
+  .dropZone:not(.dragging) { display: none; }
+  .notice { flex-wrap: wrap; gap: 4px 12px; padding: 10px 12px; }
+  .notice span { flex: 1 1 calc(100% - 44px); }
+}
+@media (prefers-reduced-motion: reduce) { .menu button { transition: none; } }

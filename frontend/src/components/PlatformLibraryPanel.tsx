@@ -50,6 +50,7 @@ import type {
 import { getLibraryRevision, isLibraryRevisionCurrent, notifyLibraryUpdated, subscribeLibraryUpdates } from '@/lib/libraryUpdates';
 import { mergeSyncedItems, platformImportSummary } from '@/lib/libraryIncrementalSync';
 import { readLibraryQuickSyncPreferences } from '@/lib/libraryQuickSync';
+import { publishLibrarySyncSelection } from '@/lib/librarySyncSelection';
 import { platformSyncWarning } from '@/lib/platformSyncFeedback';
 import { capturePlatformSyncSnapshot, type PlatformSyncSnapshot } from '@/lib/platformSyncSnapshot';
 import { hasUnresolvedBilibiliSource, mergeBilibiliJobResults, watchBilibiliJobs } from '@/lib/bilibiliImportJobs';
@@ -481,6 +482,7 @@ export default function PlatformLibraryPanel({
       || modes.length === 0
     ) return;
     if (platform === 'bilibili' && hasUnresolvedBilibiliSource(resultsRef.current, modes)) {
+      publishLibrarySyncSelection(user.id, platform, modes[0]);
       setFeedbackView('bilibili');
       await refreshImportResults();
       return;
@@ -503,6 +505,8 @@ export default function PlatformLibraryPanel({
     setError('');
     try {
     for (const mode of modes) {
+      if (!stillCurrent()) return;
+      publishLibrarySyncSelection(requestedUserId, platform, mode);
       updateAccountConnection(platform, {
         stage: 'collecting',
         message: mode === 'collect' ? '正在读取最近收藏…' : '正在读取最近喜欢…',

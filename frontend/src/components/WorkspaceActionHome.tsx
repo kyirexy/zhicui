@@ -25,6 +25,10 @@ import {
 } from '@/lib/api';
 import LibraryCoverImage from '@/components/LibraryCoverImage';
 import DailyRecap from '@/components/DailyRecap';
+import { HomeVideoActionCard, HomeVideoActionsLayer, useHomeVideoInteractions } from '@/components/HomeVideoActions';
+import { useHomeVideoActions } from '@/lib/hooks/useHomeVideoActions';
+import { useWebBuildActivity } from '@/lib/hooks/useWebBuildActivity';
+import { readLibrarySyncSelections, subscribeLibrarySyncSelections } from '@/lib/librarySyncSelection';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import { buildHomeLinkDestination } from '@/lib/singleLinkImport';
 import { sortPlatformLibrarySource } from '@/lib/platformLibraryOrder';
@@ -43,6 +47,7 @@ import styles from './WorkspaceActionHome.module.css';
 
 interface ChannelPreview {
   key: string;
+  videoId: string;
   href: string;
   title: string;
   cover: string;
@@ -105,7 +110,7 @@ const CHANNEL_KEYS: ChannelKey[] = [
 ];
 
 // 收藏台账校准后，旧首页预览也不能在网络响应前闪回错误排名。
-const HOME_CACHE_VERSION = 'v8';
+const HOME_CACHE_VERSION = 'v9';
 const HOME_CACHE_MAX_AGE = 5 * 60 * 1000;
 
 function homeCacheKey(userId: string): string {
@@ -165,8 +170,9 @@ function formatUpdatedAt(value: string): string {
 }
 
 function toDouyinPreviews(items: DouyinLibraryItem[]): ChannelPreview[] {
-  return items.slice(0, 3).map((item) => ({
+  return items.map((item) => ({
     key: item.aweme_id,
+    videoId: item.aweme_id,
     href: `/library/detail?id=${encodeURIComponent(item.aweme_id)}`,
     title: item.title,
     cover: item.cover_proxy_url || item.cover_url || '',
@@ -175,8 +181,9 @@ function toDouyinPreviews(items: DouyinLibraryItem[]): ChannelPreview[] {
 }
 
 function toPlatformPreviews(items: PlatformLibraryItem[]): ChannelPreview[] {
-  return items.slice(0, 3).map((item) => ({
+  return items.map((item) => ({
     key: item.id,
+    videoId: item.video_id,
     href: `/library/detail?note=${encodeURIComponent(item.id)}`,
     title: item.title,
     cover: item.cover_url || '',
@@ -187,6 +194,10 @@ function toPlatformPreviews(items: PlatformLibraryItem[]): ChannelPreview[] {
 export default function WorkspaceActionHome() {
   const router = useRouter();
   const { user } = useAuth();
+  const videoActions = useHomeVideoActions(user?.id);
+  useWebBuildActivity('home-video-actions', videoActions.busy.size > 0);
+  const videoInteractions = useHomeVideoInteractions(videoActions);
+  const hiddenVideoCount = [...videoActions.preferences.values()].filter((item) => item.platform === 'douyin' && item.hidden).length;
   const [importLink, setImportLink] = useState('');
   const [importError, setImportError] = useState('');
   const [threads, setThreads] = useState<AgentThread[]>([]);
@@ -211,6 +222,11 @@ export default function WorkspaceActionHome() {
     if (!user?.id) return;
     return subscribeLibraryUpdates(() => setRefreshRevision((value) => value + 1));
   }, [user?.id]);
+
+  useEffect(() => subscribeLibrarySyncSelections(user?.id, ({ platform, mode }) => {
+    touchedModes.current.add(platform);
+    setActiveModes((current) => ({ ...current, [platform]: mode }));
+  }), [user?.id]);
 
   useEffect(() => {
     if (!user?.id) {
@@ -240,6 +256,13 @@ export default function WorkspaceActionHome() {
       setChannelTotals(cached.channelTotals);
       setActiveModes(cached.activeModes);
       setLoading(false);
+    }
+    if (initialLoad) {
+      const syncModes = readLibrarySyncSelections(user.id);
+      for (const platform of ['douyin', 'bilibili'] as const) {
+        if (syncModes[platform]) touchedModes.current.add(platform);
+      }
+      setActiveModes((current) => ({ ...current, ...syncModes }));
     }
 
     // 失效缓存不等于资料为空；同账号刷新失败时保留上次成功展示的分组。
@@ -312,7 +335,7 @@ export default function WorkspaceActionHome() {
     }).catch(() => null);
 
     const douyinRequests = (['collect', 'like', 'post'] as const).map((mode) => (
-      listDouyinLibraryItems(6, mode, 'collection', false, true).then((response) => {
+      listDouyinLibraryItems(Math.min(500, 6 + hiddenVideoCount), mode, 'collection', false, true).then((response) => {
         if (!isCurrent() || !response.success) return response;
         const key = `douyin_${mode}` as ChannelKey;
         const total = response.data?.source_total ?? 0;
@@ -369,7 +392,7 @@ export default function WorkspaceActionHome() {
       });
     });
     return () => { active = false; };
-  }, [user?.id, refreshRevision]);
+  }, [user?.id, refreshRevision, hiddenVideoCount]);
 
   const sourceStatus = useMemo(() => {
     if (readyCount === null) return '正在读取资料';
@@ -548,7 +571,7 @@ export default function WorkspaceActionHome() {
         </div>
       </section>
 
-      <DailyRecap />
+      <DailyRecap videoActions={videoActions} videoInteractions={videoInteractions} />
 
       <section className={styles.channels} aria-label="抖音与 B站资料">
         <div className={styles.platformGrid}>
@@ -556,7 +579,9 @@ export default function WorkspaceActionHome() {
             const activeMode = activeModes[platform.key];
             const activeConfig = platform.modes.find((mode) => mode.key === activeMode) || platform.modes[0];
             const activeKey = `${platform.key}_${activeMode}` as ChannelKey;
-            const previews = channelPreviews[activeKey] || [];
+            const previews = (channelPreviews[activeKey] || []).filter((preview) => videoActions.visible({
+              platform: platform.key, video_id: preview.videoId, title: preview.title,
+            })).slice(0, 3);
             const platformTotal = platform.modes.reduce((total, mode) => {
               const count = channelTotals[`${platform.key}_${mode.key}` as ChannelKey];
               return total + (count || 0);
@@ -611,9 +636,13 @@ export default function WorkspaceActionHome() {
                 <div className={styles.channelStrip}>
                   {previews.length > 0 ? (
                     previews.map((preview) => (
-                      <Link
+                      <HomeVideoActionCard
                         key={preview.key}
+                        video={{ platform: platform.key, video_id: preview.videoId, title: preview.title }}
+                        actions={videoActions} interactions={videoInteractions}
+                      ><Link
                         href={preview.href}
+                        draggable={false}
                         className={styles.channelCard}
                         data-cover={preview.cover ? 'true' : 'false'}
                         aria-label={`打开视频：${preview.title}`}
@@ -633,10 +662,10 @@ export default function WorkspaceActionHome() {
                           <strong>{preview.title}</strong>
                           <small>{preview.author}</small>
                         </span>
-                      </Link>
+                      </Link></HomeVideoActionCard>
                     ))
                   ) : (
-                    <div className={styles.channelEmpty}>{activeConfig.empty}</div>
+                    <div className={styles.channelEmpty}>{!videoActions.ready ? '正在读取首页视频…' : (channelTotals[activeKey] || 0) > 0 ? '本组视频已从首页隐藏，可在视频资料中查看' : activeConfig.empty}</div>
                   )}
                 </div>
               </article>
@@ -644,6 +673,8 @@ export default function WorkspaceActionHome() {
           })}
         </div>
       </section>
+
+      <HomeVideoActionsLayer actions={videoActions} interactions={videoInteractions} />
 
       <div className={styles.utilityArea}>
         <nav className={styles.tools} aria-label="常用操作">

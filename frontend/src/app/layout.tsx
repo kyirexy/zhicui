@@ -9,6 +9,7 @@ import AppUpdatePrompt from '@/components/AppUpdatePrompt';
 import WebBuildUpdatePrompt from '@/components/WebBuildUpdatePrompt';
 import DesktopAppFrame from '@/components/DesktopAppFrame';
 import AuthGuard from '@/components/AuthGuard';
+import { CURRENT_WEB_BUILD } from '@/generated/buildVersion';
 import Providers from './Providers';
 import './globals.css';
 
@@ -30,6 +31,7 @@ export const metadata: Metadata = {
   description: '同步你选择的抖音收藏、喜欢或作品，自动提取完整文稿，基于一条或多条视频提问，并把有用内容转成行动计划。',
   keywords: ['知萃', '抖音收藏整理', '批量视频文案', 'AI视频问答', '视频资料助手', '行动计划'],
   manifest: '/manifest.json',
+  other: { 'zhicui-web-build': CURRENT_WEB_BUILD.build_id },
   icons: {
     icon: { url: '/icons/icon-192.png?v=green-leaf-20260907', type: 'image/png', sizes: '192x192' },
     shortcut: '/icons/icon-192.png?v=green-leaf-20260907',

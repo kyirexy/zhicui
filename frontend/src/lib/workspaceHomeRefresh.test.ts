@@ -6,6 +6,7 @@ import ts from 'typescript';
 import * as classification from './homeSourceClassification.ts';
 import * as updates from './libraryUpdates.ts';
 import { sortPlatformLibrarySource } from './platformLibraryOrder.ts';
+import * as syncSelection from './librarySyncSelection.ts';
 
 type Tree = { type: unknown; props: Record<string, unknown> };
 type Request = { key: string; resolve: (result: unknown) => void };
@@ -76,6 +77,10 @@ function harness() {
       if (name === '@/lib/libraryUpdates') return updates;
       if (name === '@/lib/homeSourceClassification') return classification;
       if (name === '@/lib/platformLibraryOrder') return { sortPlatformLibrarySource };
+      if (name === '@/lib/librarySyncSelection') return syncSelection;
+      if (name === '@/lib/hooks/useHomeVideoActions') return { useHomeVideoActions: () => ({ preferences: new Map(), busy: new Set(), ready: true, visible: () => true }) };
+      if (name === '@/lib/hooks/useWebBuildActivity') return { useWebBuildActivity() {} };
+      if (name === '@/components/HomeVideoActions') return { HomeVideoActionCard: 'card-actions', HomeVideoActionsLayer: 'actions-layer', useHomeVideoInteractions: () => ({}) };
       if (name === '@/lib/singleLinkImport') return { buildHomeLinkDestination: () => '/library' };
       if (name === '@/components/LibraryCoverImage') return 'img';
       if (name === '@/components/DailyRecap') return 'daily-recap';
@@ -95,7 +100,7 @@ function harness() {
     const props = (tree as Tree).props || {};
     return [...(typeof props.href === 'string' ? [props.href] : []), ...hrefs(props.children)];
   };
-  return { runtime, requests, render, links: () => hrefs(render()), storage,
+  return { runtime, requests, render, links: () => hrefs(render()), storage, window,
     close() {
       effects.forEach((effect) => effect.cleanup?.());
       for (const [key, descriptor] of originals) {
@@ -142,11 +147,11 @@ test('真实首页忽略同步前旧响应，刷新失败保留其他分类，�
     original.find((request) => request.key === 'douyin_like')!.resolve(result('old-user'));
     await settle();
     assert.ok(!page.links().some((href) => /saved|new-bili|old-user/.test(href)));
-    assert.equal(page.storage['zhicui:workspace-home:v8:user-a'], undefined);
+    assert.equal(page.storage['zhicui:workspace-home:v9:user-a'], undefined);
   } finally { page.close(); }
 });
 
-test('台账校准发布后首页不显示旧 v7 预览，网络返回后写入 v8 快照', async () => {
+test('首页不使用缺少videoId的旧预览，网络返回后写入 v9 快照', async () => {
   const page = harness();
   try {
     const keys = ['douyin_collect', 'douyin_like', 'douyin_post', 'bilibili_collect', 'bilibili_like', 'bilibili_import'];
@@ -165,6 +170,49 @@ test('台账校准发布后首页不显示旧 v7 预览，网络返回后写入 
     await settle();
     assert.ok(page.links().includes('/library/detail?id=corrected-rank'));
     assert.ok(!page.links().includes('/library/detail?id=wrong-old-rank'));
-    assert.match(String(page.storage['zhicui:workspace-home:v8:user-a']), /corrected-rank/);
+    assert.match(String(page.storage['zhicui:workspace-home:v9:user-a']), /corrected-rank/);
+  } finally { page.close(); }
+});
+
+test('首页恢复同步分类后不被旧缓存或晚返回分类覆盖，切换账号隔离旧事件', async () => {
+  const page = harness();
+  try {
+    page.storage['zhicui:library-sync-selection:v1:user-a'] = JSON.stringify({ douyin: 'like' });
+    const keys = ['douyin_collect', 'douyin_like', 'douyin_post', 'bilibili_collect', 'bilibili_like', 'bilibili_import'];
+    page.storage['zhicui:workspace-home:v9:user-a'] = JSON.stringify({
+      savedAt: Date.now(), threads: [], readyCount: 1,
+      channelPreviews: Object.fromEntries(keys.map((key) => [key, []])),
+      channelTotals: Object.fromEntries(keys.map((key) => [key, 0])),
+      activeModes: { douyin: 'collect', bilibili: 'collect' },
+    });
+    page.render();
+    const original = page.requests.splice(0);
+    original.find((request) => request.key === 'douyin_collect')!.resolve(result('collection-default'));
+    original.find((request) => request.key === 'douyin_like')!.resolve(result('liked-selection'));
+    await settle();
+    assert.ok(page.links().includes('/library/detail?id=liked-selection'));
+    assert.ok(!page.links().includes('/library/detail?id=collection-default'));
+
+    page.window.dispatchEvent(new CustomEvent('zhicui:library-sync-selection', {
+      detail: { userId: 'user-a', platform: 'douyin', mode: 'post' },
+    }));
+    original.find((request) => request.key === 'douyin_post')!.resolve(result('posted-selection'));
+    original.filter((request) => !request.key.startsWith('douyin_')).forEach((request) => request.resolve({ success: false }));
+    await settle();
+    assert.ok(page.links().includes('/library/detail?id=posted-selection'));
+    assert.ok(!page.links().includes('/library/detail?id=liked-selection'));
+
+    page.runtime.user = { id: 'user-b' };
+    page.render();
+    page.window.dispatchEvent(new CustomEvent('zhicui:library-sync-selection', {
+      detail: { userId: 'user-a', platform: 'douyin', mode: 'post' },
+    }));
+    page.requests.splice(0).forEach((request) => request.resolve(
+      request.key === 'douyin_collect' ? result('current-user-collection')
+        : request.key === 'douyin_post' ? result('current-user-post') : { success: false },
+    ));
+    await settle();
+    assert.ok(page.links().includes('/library/detail?id=current-user-collection'));
+    assert.ok(!page.links().includes('/library/detail?id=current-user-post'));
   } finally { page.close(); }
 });

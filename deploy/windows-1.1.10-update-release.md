@@ -17,3 +17,9 @@ Windows Beta 1.1.10 从提交 `7d8b777f0ef96359af7b2706d18f02991d0963b7` 的干�
 公网完整安装包回读使用可断点校验的 2 MiB Range 请求；每次请求有超时与有限重试，按 Content-Range 和实际字节数核对后再计算整个文件哈希。本文提交时回读及网页正式部署验证仍在进行，以后续验收记录为准。
 
 原始脱敏证据位于 `D:/6month/.codex-artifacts/desktop-update-ux-20260914/`。
+
+## 已完成验收
+
+2026-09-15 公网完整回读 45 段、93,663,809 字节，SHA256/SHA512 与构建 provenance 完全匹配，Beta manifest/feed/blockmap 一致。没有再次发布相同版本，也没有执行安装器。
+
+网页 1.1.14 已由 Jenkins 241 发布提交 `da9cf17361f68ca8a61a3a7f256c716b10cbb932`，19 项门禁、运行目录提交、三个服务及健康检查通过。公网 build-version 与 Next 产物一致；该标记是 Next route，产物位于 `.next/server/app/build-version.json.body`，不是 public 文件。Windows 下载纯目标选择器已指向 1.1.10 不可变地址；未调用会增加下载统计的接口。Agent 接口保持 dark。

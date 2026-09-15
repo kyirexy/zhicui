@@ -28,6 +28,7 @@ from app.api.ops_routes import router as ops_router
 from app.api.privacy_account_routes import router as privacy_account_router
 from app.api.catalog_quality_routes import router as catalog_quality_router
 from app.api.daily_recap_routes import router as daily_recap_router
+from app.api.home_video_routes import router as home_video_router
 from app.api.showcase_case_routes import router as showcase_case_router
 from app.api.agent_interface_routes import (
     router as agent_interface_router,
@@ -58,6 +59,7 @@ from app.models.privacy_account import (  # noqa: F401
 from app.models.client_download_daily import ClientDownloadDaily  # noqa: F401
 from app.models.feedback import Feedback  # noqa: F401
 from app.models.library_hidden_item import LibraryHiddenItem  # noqa: F401
+from app.models.home_video_preference import HomeVideoPreference  # noqa: F401
 from app.models.library_sync import LibrarySyncRun  # noqa: F401
 from app.models.douyin_account_binding import DouyinAccountBinding  # noqa: F401
 from app.models.bilibili_account_binding import BilibiliAccountBinding  # noqa: F401
@@ -405,6 +407,7 @@ def create_app() -> FastAPI:
     app.include_router(privacy_account_router)
     app.include_router(catalog_quality_router)
     app.include_router(daily_recap_router)
+    app.include_router(home_video_router)
     app.include_router(showcase_case_router)
     app.include_router(agent_interface_router)
     app.include_router(agent_secure_router)

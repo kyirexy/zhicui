@@ -5,6 +5,9 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, ArrowsClockwise, BookmarkSimple, CalendarBlank, Heart, Sparkle } from '@phosphor-icons/react';
 import LibraryCoverImage from '@/components/LibraryCoverImage';
+import { HomeVideoActionCard, type HomeVideoInteractions } from '@/components/HomeVideoActions';
+import type { HomeVideoActions } from '@/lib/hooks/useHomeVideoActions';
+import { useWebBuildActivity } from '@/lib/hooks/useWebBuildActivity';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import {
   dailyRecapDateLabel,
@@ -18,13 +21,13 @@ import { prepareDailyRecap } from '@/lib/prepareDailyRecap';
 import styles from './DailyRecap.module.css';
 
 /** 首页操作区的日常回顾：继承现有主题，清楚标明首次同步时间，桌面与移动端共用。 */
-export default function DailyRecap() {
+export default function DailyRecap({ videoActions, videoInteractions }: { videoActions: HomeVideoActions; videoInteractions: HomeVideoInteractions }) {
   const { user } = useAuth();
   // 更换账号时整个回顾状态重建，旧账号的数据不会短暂显示给新账号。
-  return user?.id ? <DailyRecapContent key={user.id} userId={user.id} /> : null;
+  return user?.id ? <DailyRecapContent key={user.id} userId={user.id} videoActions={videoActions} videoInteractions={videoInteractions} /> : null;
 }
 
-function DailyRecapContent({ userId }: { userId: string }) {
+function DailyRecapContent({ userId, videoActions, videoInteractions }: { userId: string; videoActions: HomeVideoActions; videoInteractions: HomeVideoInteractions }) {
   const router = useRouter();
   const [recap, setRecap] = useState<DailyRecapData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -32,6 +35,7 @@ function DailyRecapContent({ userId }: { userId: string }) {
   const [prepareError, setPrepareError] = useState('');
   const [revision, setRevision] = useState(0);
   const [preparing, setPreparing] = useState(false);
+  useWebBuildActivity('home-recap', preparing);
   const [progress, setProgress] = useState('');
   const [expanded, setExpanded] = useState(false);
   const prepareRequest = useRef<AbortController | null>(null);
@@ -81,7 +85,7 @@ function DailyRecapContent({ userId }: { userId: string }) {
     setPrepareError('');
     setProgress('正在准备昨日资料…');
     try {
-      const result = await prepareDailyRecap(recap, (message) => {
+      const result = await prepareDailyRecap({ ...recap, items: visibleItems, preview: visibleItems.slice(0, 3) }, (message) => {
         if (!controller.signal.aborted) setProgress(message);
       }, controller.signal, userId);
       if (!controller.signal.aborted) router.push(result.href);
@@ -99,8 +103,9 @@ function DailyRecapContent({ userId }: { userId: string }) {
     }
   };
 
-  const items = recap ? (expanded ? recap.items : recap.preview).slice(0, expanded ? 100 : 3) : [];
-  const available = Boolean(recap && recap.total > 0);
+  const visibleItems = recap?.items.filter((item) => videoActions.visible(item)) || [];
+  const items = visibleItems.slice(0, expanded ? 100 : 3);
+  const available = visibleItems.length > 0;
   const dateLabel = recap ? dailyRecapDateLabel(recap.date) : '';
 
   return (
@@ -125,20 +130,20 @@ function DailyRecapContent({ userId }: { userId: string }) {
           <Link href="/library?sync=1" className={styles.primary}>同步视频 <ArrowRight size={16} aria-hidden="true" /></Link>
         ) : null}
         {recap && available && !preparing ? (
-          <span className={styles.readyCount}>{recap.ready_count} 条文稿已就绪，已有文稿直接复用</span>
+            <span className={styles.readyCount}>{visibleItems.filter((item) => item.transcript_ready).length} 条文稿已就绪，已有文稿直接复用</span>
         ) : null}
-        {recap?.has_more ? <span className={styles.scopeLimit}>本次解析前 {recap.items.length} 条</span> : null}
+        {recap?.has_more && available ? <span className={styles.scopeLimit}>本次解析当前 {visibleItems.length} 条</span> : null}
       </div>
 
-      {loading ? (
+      {loading || !videoActions.ready ? (
         <div className={styles.loading} role="status"><span className={styles.loadingBar} aria-hidden="true" />正在读取昨日记录…</div>
       ) : available && recap ? (
         <>
           <div className={styles.counts}>
-            <strong>{recap.total.toLocaleString('zh-CN')} 条视频</strong>
-            <span><Heart size={15} aria-hidden="true" />喜欢 {recap.like_count}</span>
-            <span><BookmarkSimple size={15} aria-hidden="true" />收藏 {recap.collect_count}</span>
-            {recap.total > 3 ? (
+            <strong>{recap.has_more ? '当前 ' : ''}{visibleItems.length.toLocaleString('zh-CN')} 条视频</strong>
+            <span><Heart size={15} aria-hidden="true" />喜欢 {visibleItems.filter((item) => item.source_modes.includes('like')).length}</span>
+            <span><BookmarkSimple size={15} aria-hidden="true" />收藏 {visibleItems.filter((item) => item.source_modes.includes('collect')).length}</span>
+            {visibleItems.length > 3 ? (
               <button type="button" aria-expanded={expanded} aria-controls="daily-recap-items" onClick={() => setExpanded((value) => !value)}>
                 {expanded ? '收起列表' : '查看列表'}<ArrowRight size={14} aria-hidden="true" />
               </button>
@@ -147,7 +152,8 @@ function DailyRecapContent({ userId }: { userId: string }) {
           <ul id="daily-recap-items" className={styles.items} data-expanded={expanded}>
             {items.map((item) => (
               <li key={item.id}>
-                <Link href={dailyRecapItemHref(item)} className={styles.item} aria-label={`打开视频：${item.title}`}>
+                <HomeVideoActionCard video={item} actions={videoActions} interactions={videoInteractions} variant="recap">
+                <Link href={dailyRecapItemHref(item)} draggable={false} className={styles.item} aria-label={`打开视频：${item.title}`}>
                   <span className={styles.cover} aria-hidden="true">
                     <LibraryCoverImage src={item.cover_url} fallbackClassName={styles.coverFallback} retryable={false} iconSize={18} />
                   </span>
@@ -156,13 +162,14 @@ function DailyRecapContent({ userId }: { userId: string }) {
                     <small>{item.platform === 'douyin' ? '抖音' : 'B站'}{item.author_name ? ` · ${item.author_name}` : ''}</small>
                   </span>
                 </Link>
+                </HomeVideoActionCard>
               </li>
             ))}
           </ul>
-          {expanded && recap.has_more ? <p className={styles.note}>先展示前 {recap.items.length} 条，其余记录可在视频资料中查看。</p> : null}
+          {expanded && recap.has_more ? <p className={styles.note}>先展示 {visibleItems.length} 条，其余记录可在视频资料中查看。</p> : null}
         </>
       ) : !error ? (
-        <p className={styles.empty}>昨天没有新同步记录。先同步点赞与收藏，之后就能在这里回顾。</p>
+        <p className={styles.empty}>{recap && recap.total > 0 ? '昨日视频已从首页隐藏，可在视频资料中继续查看。' : '昨天没有新同步记录。先同步点赞与收藏，之后就能在这里回顾。'}</p>
       ) : null}
 
       {preparing ? <p className={styles.progress} role="status">{progress}<span>完成的文稿会保存，可以继续浏览其他资料。</span></p> : null}

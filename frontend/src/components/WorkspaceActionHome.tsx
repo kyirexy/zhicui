@@ -195,8 +195,9 @@ export default function WorkspaceActionHome() {
   const router = useRouter();
   const { user } = useAuth();
   const videoActions = useHomeVideoActions(user?.id);
-  useWebBuildActivity('home-video-actions', videoActions.busy.size > 0);
   const videoInteractions = useHomeVideoInteractions(videoActions);
+  useWebBuildActivity('home-video-actions', videoActions.busy.size > 0
+    || Boolean(videoInteractions.menu) || Boolean(videoInteractions.dragged));
   const hiddenVideoCount = [...videoActions.preferences.values()].filter((item) => item.platform === 'douyin' && item.hidden).length;
   const [importLink, setImportLink] = useState('');
   const [importError, setImportError] = useState('');

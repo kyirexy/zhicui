@@ -82,6 +82,8 @@ const syncCounts = [20, 50, 100] as const;
 const biliSyncCounts = [20, 50, 100] as const;
 const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 const terminalCreatorStages = new Set(['succeeded', 'partial', 'failed', 'cancelled']);
+// 全部同步成功后停留片刻展示“同步完成”，再自动关闭窗口。
+const SYNC_SUCCESS_AUTO_CLOSE_MS = 3_000;
 
 function creatorProgress(run: CreatorSyncRun): string {
   if (run.needs_action?.required) return run.needs_action.message || '需要你处理平台验证后重试';
@@ -151,6 +153,7 @@ export default function AgentSourceSyncSheet({
   const [biliStage, setBiliStage] = useState<PlatformAccountStage | 'idle'>('idle');
   const [biliMessage, setBiliMessage] = useState('');
   const runningRef = useRef(false);
+  const autoCloseTimerRef = useRef<number | null>(null);
   const removeDialogRef = useRef<HTMLDialogElement | null>(null);
   const completedCreatorRef = useRef('');
   const busy = pending || biliPending;
@@ -280,6 +283,32 @@ export default function AgentSourceSyncSheet({
     }
     onClose();
   }, [onBackgrounded, onClose, busy, sourceKind]);
+
+  // 同步全部成功后延迟自动关闭；失败、取消或部分失败时保持窗口打开展示原因。
+  const scheduleAutoClose = useCallback((delayMs = SYNC_SUCCESS_AUTO_CLOSE_MS) => {
+    if (autoCloseTimerRef.current !== null) {
+      window.clearTimeout(autoCloseTimerRef.current);
+    }
+    autoCloseTimerRef.current = window.setTimeout(() => {
+      autoCloseTimerRef.current = null;
+      onClose();
+    }, delayMs);
+  }, [onClose]);
+
+  useEffect(() => {
+    if (open) return;
+    // 窗口已关闭或被重新打开时，作废尚未触发的自动关闭，避免误关新的同步窗口。
+    if (autoCloseTimerRef.current !== null) {
+      window.clearTimeout(autoCloseTimerRef.current);
+      autoCloseTimerRef.current = null;
+    }
+  }, [open]);
+
+  useEffect(() => () => {
+    if (autoCloseTimerRef.current !== null) {
+      window.clearTimeout(autoCloseTimerRef.current);
+    }
+  }, []);
 
   const loadCreatorData = useCallback(async () => {
     const response = await listCreatorSources();
@@ -470,7 +499,10 @@ export default function AgentSourceSyncSheet({
         setMessage(resultMessage);
         await onSynced();
         if (!isCurrentSync()) return;
-        onCompleted(resultMessage, collected.coverage !== 'partial');
+        const succeeded = collected.coverage !== 'partial';
+        onCompleted(resultMessage, succeeded);
+        // 全部同步成功才自动关闭；部分覆盖或需要处理时保持窗口展示原因。
+        if (succeeded) scheduleAutoClose();
         return;
       }
       const connection = await getDouyinLibraryStatus();
@@ -548,6 +580,7 @@ export default function AgentSourceSyncSheet({
       await onSynced();
       if (!isCurrentSync()) return;
       onCompleted(completedMessage, true);
+      scheduleAutoClose();
     } catch (error) {
       if (!isCurrentSync()) return;
       const failureMessage = error instanceof Error ? error.message : '同步失败，请稍后重试';
@@ -793,7 +826,12 @@ export default function AgentSourceSyncSheet({
     const resultMessage = [completedMessage, platformSyncWarning(collected)].filter(Boolean).join('；');
     setBiliMessage(resultMessage);
     if (imported.data.success > 0) await onSynced();
-    onCompleted(resultMessage, imported.data.failed === 0 && (imported.data.pending || 0) === 0 && collected.coverage !== 'partial');
+    const succeeded = imported.data.failed === 0
+      && (imported.data.pending || 0) === 0
+      && collected.coverage !== 'partial';
+    onCompleted(resultMessage, succeeded);
+    // 全部导入成功才自动关闭；存在需要重试的作品时保持窗口展示明细。
+    if (succeeded) scheduleAutoClose();
   };
 
   const cancelBilibili = async () => {

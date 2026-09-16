@@ -14,6 +14,7 @@
 .sidebarButton:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 3px; border-radius: 6px; }
 .sidebar .progress { margin: 8px 0 0; height: 3px; }
 .notice p { margin: 8px 0 12px; color: var(--foreground-secondary); font-size: 13px; line-height: 1.7; text-wrap: pretty; }
+.notice .footnote { margin: 0 0 12px; color: var(--foreground-muted); font-size: 12px; line-height: 1.6; }
 .close { position: absolute; display: grid; top: 5px; right: 5px; width: 44px; height: 44px; place-items: center; color: var(--foreground-secondary); border-radius: 8px; }
 .refresh { display: inline-flex; min-height: 44px; padding: 8px 14px; align-items: center; gap: 8px; border-radius: 8px; background: var(--background-secondary); color: var(--foreground); font-size: 13px; font-weight: 600; }
 .close:hover, .refresh:hover:not(:disabled) { background: var(--card-border); }

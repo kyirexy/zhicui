@@ -112,7 +112,8 @@ export default function VideoKnowledgeWorkspace() {
   const [extracting, setExtracting] = useState(false);
   const [initializingAi, setInitializingAi] = useState(false);
   const [agentRunning, setAgentRunning] = useState(false);
-  useWebBuildActivity('video-knowledge', extracting || initializingAi || agentRunning);
+  // agent 回答由持久 turn + SSE replay 恢复，刷新页面不丢失，不阻塞自动更新。
+  useWebBuildActivity('video-knowledge', extracting || initializingAi);
   const [instruction, setInstruction] = useState('');
   const [agentNotice, setAgentNotice] = useState('');
   const [error, setError] = useState('');

@@ -42,3 +42,28 @@ test('组件不引入 React 之外的 DOM 所有权操作', () => {
 
   assert.doesNotMatch(component, /createPortal|appendChild|removeChild/);
 });
+
+test('服务端持久 job 不再阻塞自动更新', () => {
+  const component = read('components/WebBuildUpdatePrompt.tsx');
+
+  // 创作者同步与视频解析是服务端 job，刷新页面不影响执行。
+  assert.doesNotMatch(component, /global-creator-sync|global-video-analysis/);
+  // 短时前台任务（页面内 SSE 提取、桌面包安装瞬间）仍保持挡刷。
+  assert.match(component, /useWebBuildActivity\('global-extraction', extraction\.isLoading\)/);
+  assert.match(component, /useWebBuildActivity\('native-install', nativeUpdate\.update\.status === 'installing'\)/);
+});
+
+test('可恢复的后台任务不阻塞自动更新', () => {
+  const agent = read('components/agent/VideoAgentWorkspace.tsx');
+  const knowledge = read('components/VideoKnowledgeWorkspace.tsx');
+  const library = read('app/library/page.tsx');
+
+  // 后台线程与 agent 回答由持久 turn + SSE replay 恢复。
+  assert.match(agent, /useWebBuildActivity\('video-agent', sending \|\| Boolean\(streamingMessageId\) \|\| queuedQuestions\.length > 0 \|\| Boolean\(studioGeneratingType\)\)/);
+  assert.doesNotMatch(agent, /activity\('video-agent'[^)]*backgroundThreadId/);
+  assert.match(knowledge, /useWebBuildActivity\('video-knowledge', extracting \|\| initializingAi\)/);
+  // 批量转写与等待处理的同步恢复由服务端持久化。
+  assert.match(library, /useWebBuildActivity\('library-sync', scanning \|\| refreshing\s*\n?\s*\|\| Boolean\(sourceSyncQueue\)\)/);
+  assert.doesNotMatch(library, /activity\('library-sync'[^)]*batchExtracting/);
+  assert.doesNotMatch(library, /activity\('library-sync'[^)]*syncRecoveryIssues/);
+});

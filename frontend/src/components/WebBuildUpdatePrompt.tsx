@@ -7,8 +7,6 @@ import { usePathname } from 'next/navigation';
 import { useDesktopApp } from '@/components/DesktopAppFrame';
 import { useAuth } from '@/lib/hooks/AuthContext';
 import { useExtraction } from '@/lib/hooks/ExtractionContext';
-import { useCreatorSync } from '@/lib/hooks/CreatorSyncContext';
-import { useVideoAnalysis } from '@/lib/hooks/VideoAnalysisContext';
 import { useDesktopUpdate } from '@/lib/hooks/useDesktopUpdate';
 import { useWebBuildActivity } from '@/lib/hooks/useWebBuildActivity';
 import { useWebBuildUpdate, useWebBuildUpdateDriver } from '@/lib/hooks/useWebBuildUpdate';
@@ -21,8 +19,6 @@ export default function WebBuildUpdatePrompt() {
   const { user, loading: authLoading } = useAuth();
   const { resolved, isDesktop } = useDesktopApp();
   const extraction = useExtraction();
-  const creatorSync = useCreatorSync();
-  const analysis = useVideoAnalysis();
   const nativeUpdate = useDesktopUpdate();
   const update = useWebBuildUpdate();
   const [dismissed, setDismissed] = useState('');
@@ -33,8 +29,8 @@ export default function WebBuildUpdatePrompt() {
   const enabled = remotePage && resolved && !authLoading && Boolean(user) && !pathname.startsWith('/login')
     && (process.env.NODE_ENV !== 'development' || preview);
   useWebBuildActivity('global-extraction', extraction.isLoading);
-  useWebBuildActivity('global-creator-sync', creatorSync.activeRuns.length > 0 || creatorSync.loading);
-  useWebBuildActivity('global-video-analysis', analysis.activeRuns.length > 0 || analysis.loading);
+  // 创作者同步与视频解析是服务端持久 job：刷新页面不影响执行，前端恢复轮询即可，
+  // 不能把它们当作前台任务阻塞自动更新（否则长任务期间页面永远停在旧版）。
   useWebBuildActivity('native-install', nativeUpdate.update.status === 'installing');
   useWebBuildUpdateDriver(enabled, user?.id || '');
   const view = webBuildUpdatePresentation(update);

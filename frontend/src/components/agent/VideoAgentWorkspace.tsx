@@ -684,7 +684,9 @@ export default function VideoAgentWorkspace({
   >(null);
   const [studioCustomOpen, setStudioCustomOpen] = useState(false);
   const [backgroundThreadId, setBackgroundThreadId] = useState<string | null>(null);
-  useWebBuildActivity('video-agent', sending || Boolean(streamingMessageId) || Boolean(backgroundThreadId) || queuedQuestions.length > 0 || Boolean(studioGeneratingType));
+  // 后台线程（详细解析/后台回答）由持久 turn + SSE replay 恢复，刷新页面不丢失，
+  // 不阻塞自动更新；只有真正的前台流式/等待输入期间才保持当前页面。
+  useWebBuildActivity('video-agent', sending || Boolean(streamingMessageId) || queuedQuestions.length > 0 || Boolean(studioGeneratingType));
   const [terminalTurn, setTerminalTurn] = useState<AgentTurn | null>(null);
   const [turnAction, setTurnAction] = useState<'cancel' | 'retry' | ''>('');
   const [error, setError] = useState('');

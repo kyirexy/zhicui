@@ -485,8 +485,10 @@ export default function VideoLibraryPage() {
   const [bindingCheckPending, setBindingCheckPending] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [batchExtracting, setBatchExtracting] = useState(false);
-  useWebBuildActivity('library-sync', scanning || refreshing || batchExtracting
-    || Boolean(sourceSyncQueue) || syncRecoveryIssues.some((issue) => issue.phase === 'waiting'));
+  // 批量转写与等待处理的同步恢复由服务端持久化，刷新后自动恢复进度，
+  // 不阻塞自动更新；只保留刷新会丢失的短时前台操作。
+  useWebBuildActivity('library-sync', scanning || refreshing
+    || Boolean(sourceSyncQueue));
   const [activeBatchOperation, setActiveBatchOperation] = useState<DouyinBatchExtractionOperation | null>(null);
   const [extractionJob, setExtractionJob] = useState<DouyinBatchExtractionJob | null>(null);
   const [sessionAction, setSessionAction] = useState<DouyinSessionAction | null>(null);

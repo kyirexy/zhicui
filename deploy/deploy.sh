@@ -175,6 +175,30 @@ prune_reproducible_release_artifacts() {
   return "$failed"
 }
 
+# Jenkins 历史部署目录默认只保留最近 KEEP_RELEASES 个(含 current);
+# 每个新 release 约 2.2G,不裁剪会把系统盘挤满。current 指向的目录始终豁免。
+KEEP_RELEASES="${ZHICUI_KEEP_RELEASES:-3}"
+
+prune_jenkins_releases() {
+  local current_runtime resolved candidate keep_index=0 failed=0
+  current_runtime="$(realpath "$CURRENT_LINK")" || return 1
+  while IFS= read -r -d '' candidate; do
+    resolved="$(realpath "$candidate")" || { failed=1; continue; }
+    case "$resolved" in "$RELEASE_ROOT"/*) ;; *) failed=1; continue ;; esac
+    keep_index=$((keep_index + 1))
+    if [[ "$keep_index" -le "$KEEP_RELEASES" || "$resolved" == "$current_runtime" ]]; then
+      continue
+    fi
+    if ! git -C "$APP_DIR" worktree remove --force "$resolved"; then
+      # 与 manual 清理同款兜底:旧目录可能已不在 worktree 注册表中。
+      rm -rf -- "$resolved" || failed=1
+    fi
+  done < <(ls -1dt "$RELEASE_ROOT"/jenkins-zhicui-deploy-* 2>/dev/null | tr '\n' '\0')
+
+  git -C "$APP_DIR" worktree prune --expire now || failed=1
+  return "$failed"
+}
+
 atomic_runtime_switch() {
   local target="$1" temporary="$RUNTIME_ROOT/.current-$DEPLOY_ID-$$"
   case "$target" in "$APP_DIR"|"$RELEASE_ROOT"/*) ;; *) return 1 ;; esac
@@ -883,10 +907,10 @@ record_gate deployment pass "$TARGET_COMMIT"
 write_evidence 0 || err '成功部署证据无法写入 root-owned 哈希仓；拒绝完成发布'
 EVIDENCE_WRITTEN=1
 DEPLOY_SUCCEEDED=1
-if prune_reproducible_release_artifacts; then
-  record_gate release_retention pass '保留当前与前版，清理其他 manual runtime 与 npm 可再生成缓存；Jenkins 历史版本需单独审核'
+if prune_reproducible_release_artifacts && prune_jenkins_releases; then
+  record_gate release_retention pass "保留当前与前版与最近 ${KEEP_RELEASES} 个 Jenkins 部署，清理更早 release 与可再生成缓存"
 else
-  warn '发布已成功，但旧 runtime 或 npm 缓存未能完全清理'
-  record_gate release_retention warning '发布成功；可再生成缓存需要后续人工清理'
+  warn '发布已成功，但旧 runtime、Jenkins 历史版本或 npm 缓存未能完全清理'
+  record_gate release_retention warning '发布成功；旧 release 与可再生成缓存需要后续人工清理'
 fi
 log '✅ 原子 runtime、备份、readiness、发行与真实用户旅程全部通过'

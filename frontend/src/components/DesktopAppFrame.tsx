@@ -259,6 +259,8 @@ export default function DesktopAppFrame({ children }: { children: ReactNode }) {
     }
     if (pathname.startsWith('/harness')) {
       root.setAttribute('data-desktop-workspace', 'agent');
+    } else if (pathname.startsWith('/studio')) {
+      root.setAttribute('data-desktop-workspace', 'studio');
     } else if (pathname.startsWith('/extract')) {
       root.setAttribute('data-desktop-workspace', 'extract');
     } else if (pathname.startsWith('/settings')) {

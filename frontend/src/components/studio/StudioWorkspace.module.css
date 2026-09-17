@@ -1,0 +1,451 @@
+.workspace {
+  --sw-surface: var(--card-bg);
+  --sw-rail: var(--background-secondary);
+  --sw-line: var(--card-border);
+  --sw-soft: color-mix(in srgb, var(--foreground) 4%, transparent);
+  --sw-soft-strong: color-mix(in srgb, var(--foreground) 8%, transparent);
+  --sw-brand: var(--accent-brand);
+  display: grid;
+  overflow: hidden;
+  width: 100%;
+  min-width: 0;
+  height: calc(100dvh - 8.5rem);
+  min-height: 480px;
+  max-height: 920px;
+  margin: 0 auto;
+  border: 1px solid var(--sw-line);
+  border-radius: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  color: var(--foreground);
+  background: var(--sw-surface);
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+  color: var(--foreground);
+  opacity: 0.8;
+}
+
+/* ---- 左栏:创作对话 ---- */
+
+.conversation {
+  display: flex;
+  overflow-y: auto;
+  min-width: 0;
+  border-right: 1px solid var(--sw-line);
+  flex-direction: column;
+  background: var(--sw-rail);
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px 18px 12px;
+  border-bottom: 1px solid var(--sw-line);
+}
+
+.header h1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.header h1 svg {
+  color: var(--sw-brand);
+}
+
+.header p {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--foreground) 62%, transparent);
+}
+
+.jobList {
+  display: flex;
+  overflow-x: auto;
+  gap: 8px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--sw-line);
+  scrollbar-width: none;
+}
+
+.jobList::-webkit-scrollbar {
+  display: none;
+}
+
+.jobChip {
+  display: inline-flex;
+  overflow: hidden;
+  max-width: 200px;
+  padding: 6px 10px;
+  border: 1px solid var(--sw-line);
+  border-radius: 999px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  font: inherit;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  background: var(--sw-surface);
+  color: var(--foreground);
+  transition: border-color 140ms ease-out;
+}
+
+.jobChip:hover {
+  border-color: var(--sw-brand);
+}
+
+.jobChipActive {
+  border-color: var(--sw-brand);
+  background: color-mix(in srgb, var(--sw-brand) 10%, var(--sw-surface));
+}
+
+.jobChipStatus {
+  font-size: 0.68rem;
+  color: color-mix(in srgb, var(--foreground) 55%, transparent);
+}
+
+.messages {
+  display: flex;
+  overflow-y: auto;
+  padding: 16px 18px;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: color-mix(in srgb, var(--foreground) 55%, transparent);
+}
+
+.requirementEcho {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--sw-line);
+  border-radius: 10px;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  background: var(--sw-surface);
+  white-space: pre-wrap;
+}
+
+.statusLine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.status_drafting,
+.status_queued,
+.status_rendering {
+  color: color-mix(in srgb, var(--sw-brand) 80%, var(--foreground));
+}
+
+.status_completed {
+  color: var(--sw-brand);
+}
+
+.status_failed,
+.status_cancelled {
+  color: color-mix(in srgb, #ef4444 80%, var(--foreground));
+}
+
+.explanation {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--sw-line);
+  border-radius: 10px;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  background: var(--sw-soft);
+  white-space: pre-wrap;
+}
+
+.errorLine {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, #ef4444 45%, var(--sw-line));
+  border-radius: 10px;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  background: color-mix(in srgb, #ef4444 8%, var(--sw-surface));
+}
+
+.spin {
+  flex-shrink: 0;
+  animation: sw-spin 1s linear infinite;
+}
+
+@keyframes sw-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.inputForm {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 12px 18px 16px;
+  border-top: 1px solid var(--sw-line);
+  background: var(--sw-surface);
+}
+
+.inputForm textarea {
+  overflow-y: auto;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--sw-line);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  resize: vertical;
+  background: var(--sw-rail);
+  color: var(--foreground);
+}
+
+.inputForm textarea:focus {
+  border-color: var(--sw-brand);
+  outline: none;
+}
+
+.inputForm button {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  background: var(--sw-brand);
+  color: #fff;
+  transition: opacity 140ms ease-out;
+}
+
+.inputForm button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ---- 右栏:项目面板 ---- */
+
+.project {
+  display: flex;
+  overflow-y: auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px 20px;
+  background: var(--sw-surface);
+}
+
+.projectEmpty {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  text-align: center;
+  color: color-mix(in srgb, var(--foreground) 55%, transparent);
+}
+
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+}
+
+.stepIndex {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--sw-line);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: var(--sw-soft);
+}
+
+.stepDone .stepIndex {
+  border-color: transparent;
+  background: var(--sw-brand);
+  color: #fff;
+}
+
+.stepCurrent .stepIndex {
+  border-color: var(--sw-brand);
+  background: color-mix(in srgb, var(--sw-brand) 12%, var(--sw-surface));
+  color: var(--sw-brand);
+}
+
+.stepBody {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.stepBody strong {
+  font-size: 0.85rem;
+}
+
+.stepBody small {
+  font-size: 0.72rem;
+  color: color-mix(in srgb, var(--foreground) 55%, transparent);
+}
+
+.pricingCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--sw-brand) 40%, var(--sw-line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--sw-brand) 7%, var(--sw-surface));
+}
+
+.pricingCard h2 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.pricingCard p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.82rem;
+  color: color-mix(in srgb, var(--foreground) 70%, transparent);
+}
+
+.confirm,
+.newJob,
+.cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 14px;
+  border: 1px solid var(--sw-line);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--sw-soft-strong);
+  color: var(--foreground);
+  transition: opacity 140ms ease-out;
+}
+
+.confirm {
+  border-color: transparent;
+  background: var(--sw-brand);
+  color: #fff;
+}
+
+.confirm:disabled,
+.newJob:disabled,
+.cancel:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.cancel {
+  border-color: color-mix(in srgb, #ef4444 45%, var(--sw-line));
+  background: color-mix(in srgb, #ef4444 8%, var(--sw-surface));
+}
+
+.svmlBlock {
+  border: 1px solid var(--sw-line);
+  border-radius: 12px;
+  background: var(--sw-rail);
+}
+
+.svmlBlock summary {
+  padding: 10px 12px;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.svmlBlock pre {
+  overflow-x: auto;
+  margin: 0;
+  padding: 0 12px 12px;
+  font-size: 0.72rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  color: color-mix(in srgb, var(--foreground) 78%, transparent);
+}
+
+.result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.result video {
+  width: 100%;
+  border: 1px solid var(--sw-line);
+  border-radius: 12px;
+  background: #000;
+}
+
+.download {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--sw-brand);
+}
+
+@media (max-width: 1024px) {
+  .workspace {
+    overflow: visible;
+    height: auto;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .conversation {
+    overflow: visible;
+    min-height: 420px;
+    border-right: 0;
+    border-bottom: 1px solid var(--sw-line);
+  }
+
+  .project {
+    overflow: visible;
+  }
+}

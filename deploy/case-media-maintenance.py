@@ -22,7 +22,7 @@ LATEST = BACKUPS / "latest.json"
 MIB = 1024 * 1024
 RESERVE = 512 * MIB
 LIMIT = 1024 * MIB
-BUILD_RESERVE = 2560 * MIB
+BUILD_RESERVE = 4608 * MIB
 
 
 def digest_file(path: Path) -> str:

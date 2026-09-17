@@ -60,6 +60,8 @@ import {
   acknowledgeOperationalAlert,
   getUserActivity,
   listAdminChatModels,
+  getVideoCreationAdminConfig,
+  putVideoCreationAdminConfig,
   type ApiResponse,
   type AdminUser,
   type AdminStats,
@@ -79,6 +81,7 @@ import {
   type AdminReadinessCheck,
   type OperationalAlert,
   type UserActivityItem,
+  type VideoCreationAdminConfig,
 } from '@/lib/api';
 import { getPlanProgress, type NoteDetail, type PlanData } from '@/lib/types';
 import AdminLlmConfigPanel from '@/components/admin/AdminLlmConfigPanel';
@@ -233,6 +236,7 @@ export default function AdminPage() {
   const [extractionConfig, setExtractionConfig] = useState<ExtractionConfig | null>(null);
   const [creatorSyncConfig, setCreatorSyncConfig] = useState<CreatorSyncAdminConfig | null>(null);
   const [agentV2Config, setAgentV2Config] = useState<AgentV2AdminConfig | null>(null);
+  const [videoCreationConfig, setVideoCreationConfig] = useState<VideoCreationAdminConfig | null>(null);
 
   // 系统
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
@@ -282,6 +286,7 @@ export default function AdminPage() {
       if (!systemInfo) refreshSystemInfo();
       if (!creatorSyncConfig) refreshCreatorSyncConfig();
       if (!agentV2Config) refreshAgentV2Config();
+      if (!videoCreationConfig) refreshVideoCreationConfig();
     }
     if (tab === 'ops') refreshOperations(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -326,6 +331,10 @@ export default function AdminPage() {
   async function refreshAgentV2Config() {
     const result = await getAgentV2AdminConfig();
     if (result.success && result.data) setAgentV2Config(result.data);
+  }
+  async function refreshVideoCreationConfig() {
+    const result = await getVideoCreationAdminConfig();
+    if (result.success && result.data) setVideoCreationConfig(result.data);
   }
   async function refreshOps() { const r = await getAdminOps(); if (r.success && r.data) setOps(r.data); }
   async function refreshOperations(force = false) {
@@ -1267,6 +1276,22 @@ export default function AdminPage() {
                 />
               )}
 
+              {videoCreationConfig && (
+                <HypitConfigPanel
+                  config={videoCreationConfig}
+                  onSave={async (value) => {
+                    const result = await putVideoCreationAdminConfig(value);
+                    if (result.success && result.data) {
+                      setVideoCreationConfig(result.data);
+                      flash('创作工坊配置已保存');
+                      return true;
+                    }
+                    setErr(result.error || '创作工坊配置保存失败');
+                    return false;
+                  }}
+                />
+              )}
+
               <div className="admin-panel p-5">
                 <h2 className="text-base font-semibold text-foreground mb-3">数据库</h2>
                 <div className="grid grid-cols-2 gap-3 text-sm">
@@ -1664,6 +1689,87 @@ function EditUserForm({
         {busy ? '保存中…' : '保存资料'}
       </button>
     </div>
+  );
+}
+
+function HypitConfigPanel({
+  config,
+  onSave,
+}: {
+  config: VideoCreationAdminConfig;
+  onSave: (value: { admin_enabled?: boolean; api_key?: string }) => Promise<boolean>;
+}) {
+  const [enabled, setEnabled] = useState(config.admin_enabled);
+  const [apiKey, setApiKey] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [localMessage, setLocalMessage] = useState('');
+
+  const save = async () => {
+    setSaving(true);
+    setLocalMessage('');
+    const ok = await onSave({
+      admin_enabled: enabled,
+      ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
+    });
+    setSaving(false);
+    if (ok) {
+      setApiKey('');
+      setLocalMessage('已保存');
+    }
+  };
+
+  return (
+    <section className="admin-panel p-5" aria-labelledby="hypit-config-title">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 id="hypit-config-title" className="text-balance text-base font-semibold text-foreground">
+            创作工坊(Hypit)
+          </h2>
+          <p className="mt-1 max-w-2xl text-pretty text-xs leading-5 text-foreground-muted">
+            用户跟 AI 说需求即可生成视频脚本,确认估价后在服务器渲染成片。服务器环境开关(HYPIT_ENABLED)与这里的副开关同时开启才对用户可见;渲染组件:{config.cli_available ? '✓ 就绪' : '✗ 未就绪'}。
+          </p>
+        </div>
+        <label className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border border-card-border px-3 text-sm text-foreground">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(event) => setEnabled(event.target.checked)}
+          />
+          开启创作工坊
+        </label>
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)]">
+        <label>
+          <span className="mb-1 block text-xs text-foreground-muted">HypiHub API Key(素材生成的托管端点凭据)</span>
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(event) => setApiKey(event.target.value)}
+            placeholder={config.api_key_masked ? `已设置(${config.api_key_masked}),留空不改` : '尚未设置'}
+            className="w-full rounded-lg border border-card-border bg-[var(--admin-surface-2)] px-3 py-2 text-sm text-foreground focus:border-accent-brand/50 focus:outline-none"
+          />
+        </label>
+      </div>
+
+      {!config.env_enabled && (
+        <p className="mt-3 text-xs leading-5 text-accent-rose">
+          服务器环境开关 HYPIT_ENABLED 未开启,此处的配置暂不生效;需先在服务器 .env 打开并重启后端。
+        </p>
+      )}
+
+      <div className="mt-4 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => void save()}
+          disabled={saving}
+          className="min-h-11 rounded-xl bg-accent-brand px-4 text-sm font-semibold text-white hover:bg-accent-brand/90 disabled:opacity-50"
+        >
+          {saving ? '保存中…' : '保存创作工坊配置'}
+        </button>
+        {localMessage && <span className="text-xs text-accent-brand">{localMessage}</span>}
+      </div>
+    </section>
   );
 }
 

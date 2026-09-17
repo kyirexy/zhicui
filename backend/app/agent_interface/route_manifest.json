@@ -10,37 +10,157 @@
     "agent_interface"
   ],
   "rules": [
-    {"pattern": "^/api/admin(?:/|$)", "classification": "admin", "reason": "Administrator-only and never an Agent Action"},
-    {"pattern": "^/api/agent-interface/v1(?:/|$)", "classification": "agent_interface", "reason": "Versioned Action and credential transport"},
-    {"pattern": "^/mcp$", "classification": "agent_interface", "reason": "Remote MCP JSON-RPC transport"},
-
-    {"pattern": "^/api/(?:video/proxy|library/imports/[^/]+/(?:cover|media)|library/douyin/(?:media|cover|gallery)/|client-downloads/)", "classification": "resource_stream", "reason": "Authenticated or public resource bytes, not a tool"},
-    {"pattern": "^/api/(?:extract/stream|agent/threads/[^/]+/(?:messages/stream|turns/[^/]+/(?:stream|events)))(?:/|$)", "classification": "resource_stream", "reason": "Legacy SSE/event transport, represented by Action Runs"},
-
-    {"pattern": "^/api/auth/(?:desktop-handoff|desktop-login|phone-login|dev-session)", "classification": "transport_internal", "reason": "Trusted client login handoff, never exposed as a tool"},
-    {"pattern": "^/api/library/douyin/(?:local-handoff|local-sync|login/qr)", "classification": "transport_internal", "reason": "Desktop-private session/cookie/media transport"},
-    {"pattern": "^/api/library/sync-runs$", "classification": "transport_internal", "reason": "当前用户的只读客户端同步记录，不新增 Agent 执行动作"},
-    {"pattern": "^/api/library/daily-recap$", "classification": "transport_internal", "reason": "首页按首次同步台账查询昨日来源，仅用户本人读取，不新增 Agent 执行动作"},
-    {"pattern": "^/api/client-errors$", "classification": "transport_internal", "reason": "Client diagnostics ingestion"},
-
-    {"pattern": "^/api/showcase-cases/[^/]+/(?:media|poster)$", "classification": "resource_stream", "reason": "仅已发布官网案例的公开媒体，非 Agent Action"},
-    {"pattern": "^/api/showcase-cases(?:/|$)", "classification": "public", "reason": "公开官网案例与受发布状态控制的媒体，不提供 Agent 写入能力"},
-    {"pattern": "^/api/(?:health|readiness|legal/documents/current|app/releases/latest)$", "classification": "public", "reason": "Public health, legal or release metadata"},
-    {"pattern": "^/api/auth/(?:register|login)$", "classification": "public", "reason": "Interactive product authentication, not an Agent Action"},
-    {"pattern": "^/api/auth/me$", "classification": "action", "domain": "account"},
-    {"pattern": "^/api/auth/avatar$", "classification": "transport_internal", "reason": "用户本人在客户端选择预设头像，不向 Agent 开放账号外观写入"},
-
-    {"pattern": "^/api/platform-connections/bilibili(?:/|$)", "classification": "action", "domain": "platform"},
-    {"pattern": "^/api/account(?:/|$)", "classification": "action", "domain": "account"},
-    {"pattern": "^/api/feedback(?:/|$)", "classification": "action", "domain": "feedback"},
-    {"pattern": "^/api/(?:video/info|extract)(?:/|$)", "classification": "action", "domain": "library"},
-    {"pattern": "^/api/library(?:/|$)", "classification": "action", "domain": "library"},
-    {"pattern": "^/api/creator-(?:sources|sync-runs)(?:/|$)", "classification": "action", "domain": "creator"},
-    {"pattern": "^/api/agent(?:/|$)", "classification": "action", "domain": "ask_automation"},
-    {"pattern": "^/api/knowledge(?:/|$)", "classification": "action", "domain": "knowledge"},
-    {"pattern": "^/api/notes(?:/|$)", "classification": "action", "domain": "library"},
-    {"pattern": "^/api/plans(?:/|$)", "classification": "action", "domain": "plan"},
-    {"pattern": "^/api/user(?:/|$)", "classification": "action", "domain": "models_account"},
-    {"pattern": "^/api/video-analysis(?:/|$)", "classification": "action", "domain": "analysis"}
+    {
+      "pattern": "^/api/admin(?:/|$)",
+      "classification": "admin",
+      "reason": "Administrator-only and never an Agent Action"
+    },
+    {
+      "pattern": "^/api/agent-interface/v1(?:/|$)",
+      "classification": "agent_interface",
+      "reason": "Versioned Action and credential transport"
+    },
+    {
+      "pattern": "^/mcp$",
+      "classification": "agent_interface",
+      "reason": "Remote MCP JSON-RPC transport"
+    },
+    {
+      "pattern": "^/api/(?:video/proxy|library/imports/[^/]+/(?:cover|media)|library/douyin/(?:media|cover|gallery)/|client-downloads/)",
+      "classification": "resource_stream",
+      "reason": "Authenticated or public resource bytes, not a tool"
+    },
+    {
+      "pattern": "^/api/(?:extract/stream|agent/threads/[^/]+/(?:messages/stream|turns/[^/]+/(?:stream|events)))(?:/|$)",
+      "classification": "resource_stream",
+      "reason": "Legacy SSE/event transport, represented by Action Runs"
+    },
+    {
+      "pattern": "^/api/auth/(?:desktop-handoff|desktop-login|phone-login|dev-session)",
+      "classification": "transport_internal",
+      "reason": "Trusted client login handoff, never exposed as a tool"
+    },
+    {
+      "pattern": "^/api/library/douyin/(?:local-handoff|local-sync|login/qr)",
+      "classification": "transport_internal",
+      "reason": "Desktop-private session/cookie/media transport"
+    },
+    {
+      "pattern": "^/api/library/sync-runs$",
+      "classification": "transport_internal",
+      "reason": "当前用户的只读客户端同步记录，不新增 Agent 执行动作"
+    },
+    {
+      "pattern": "^/api/library/daily-recap$",
+      "classification": "transport_internal",
+      "reason": "首页按首次同步台账查询昨日来源，仅用户本人读取，不新增 Agent 执行动作"
+    },
+    {
+      "pattern": "^/api/client-errors$",
+      "classification": "transport_internal",
+      "reason": "Client diagnostics ingestion"
+    },
+    {
+      "pattern": "^/api/showcase-cases/[^/]+/(?:media|poster)$",
+      "classification": "resource_stream",
+      "reason": "仅已发布官网案例的公开媒体，非 Agent Action"
+    },
+    {
+      "pattern": "^/api/video-creation/jobs/[^/]+/video$",
+      "classification": "resource_stream"
+    },
+    {
+      "pattern": "^/api/video-creation(?:/|$)",
+      "classification": "action"
+    },
+    {
+      "pattern": "^/api/showcase-cases(?:/|$)",
+      "classification": "public",
+      "reason": "公开官网案例与受发布状态控制的媒体，不提供 Agent 写入能力"
+    },
+    {
+      "pattern": "^/api/(?:health|readiness|legal/documents/current|app/releases/latest)$",
+      "classification": "public",
+      "reason": "Public health, legal or release metadata"
+    },
+    {
+      "pattern": "^/api/auth/(?:register|login)$",
+      "classification": "public",
+      "reason": "Interactive product authentication, not an Agent Action"
+    },
+    {
+      "pattern": "^/api/auth/me$",
+      "classification": "action",
+      "domain": "account"
+    },
+    {
+      "pattern": "^/api/auth/avatar$",
+      "classification": "transport_internal",
+      "reason": "用户本人在客户端选择预设头像，不向 Agent 开放账号外观写入"
+    },
+    {
+      "pattern": "^/api/platform-connections/bilibili(?:/|$)",
+      "classification": "action",
+      "domain": "platform"
+    },
+    {
+      "pattern": "^/api/account(?:/|$)",
+      "classification": "action",
+      "domain": "account"
+    },
+    {
+      "pattern": "^/api/feedback(?:/|$)",
+      "classification": "action",
+      "domain": "feedback"
+    },
+    {
+      "pattern": "^/api/(?:video/info|extract)(?:/|$)",
+      "classification": "action",
+      "domain": "library"
+    },
+    {
+      "pattern": "^/api/library(?:/|$)",
+      "classification": "action",
+      "domain": "library"
+    },
+    {
+      "pattern": "^/api/creator-(?:sources|sync-runs)(?:/|$)",
+      "classification": "action",
+      "domain": "creator"
+    },
+    {
+      "pattern": "^/api/agent(?:/|$)",
+      "classification": "action",
+      "domain": "ask_automation"
+    },
+    {
+      "pattern": "^/api/home(?:/|$)",
+      "classification": "action"
+    },
+    {
+      "pattern": "^/api/knowledge(?:/|$)",
+      "classification": "action",
+      "domain": "knowledge"
+    },
+    {
+      "pattern": "^/api/notes(?:/|$)",
+      "classification": "action",
+      "domain": "library"
+    },
+    {
+      "pattern": "^/api/plans(?:/|$)",
+      "classification": "action",
+      "domain": "plan"
+    },
+    {
+      "pattern": "^/api/user(?:/|$)",
+      "classification": "action",
+      "domain": "models_account"
+    },
+    {
+      "pattern": "^/api/video-analysis(?:/|$)",
+      "classification": "action",
+      "domain": "analysis"
+    }
   ]
 }

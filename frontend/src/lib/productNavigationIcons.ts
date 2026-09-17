@@ -1,6 +1,7 @@
 import {
   BookOpenText,
   CalendarCheck,
+  Clapperboard,
   House,
   Link2,
   Sparkles,
@@ -16,6 +17,7 @@ export const PRODUCT_NAVIGATION_ICONS: Record<ProductDestinationId, LucideIcon> 
   extract: Link2,
   creators: UserRound,
   harness: Sparkles,
+  studio: Clapperboard,
   knowledge: BookOpenText,
   plans: CalendarCheck,
 };

@@ -24,6 +24,7 @@ from app.api.platform_connection_routes import router as platform_connection_rou
 from app.api.phone_login_routes import router as phone_login_router
 from app.api.agent_routes import router as agent_router
 from app.api.video_analysis_routes import router as video_analysis_router
+from app.api.video_creation_routes import router as video_creation_router
 from app.api.ops_routes import router as ops_router
 from app.api.privacy_account_routes import router as privacy_account_router
 from app.api.catalog_quality_routes import router as catalog_quality_router
@@ -110,6 +111,7 @@ from app.models.library_extraction_batch import (  # noqa: F401
     LibraryExtractionBatch,
     LibraryExtractionBatchItem,
 )
+from app.models.video_creation import VideoCreationJob  # noqa: F401
 from app.core.request_context import reset_request_context, set_request_context
 from app.services import (
     activity_service,
@@ -132,6 +134,8 @@ from app.services import (
     video_analysis_catalog_service,
     video_analysis_service,
     video_analysis_worker,
+    video_creation_author,
+    video_creation_worker,
 )
 from app.services.video_analysis_engine import probe_note_duration_ms
 from app.agent_interface.contracts import ActionEnvelope, error_payload
@@ -403,6 +407,7 @@ def create_app() -> FastAPI:
     app.include_router(phone_login_router)
     app.include_router(agent_router)
     app.include_router(video_analysis_router)
+    app.include_router(video_creation_router)
     app.include_router(ops_router)
     app.include_router(privacy_account_router)
     app.include_router(catalog_quality_router)
@@ -433,6 +438,7 @@ def create_app() -> FastAPI:
             agent_service.handle_video_analysis_completion
         )
         video_analysis_worker.runner.start()
+        video_creation_worker.runner.start()
         creator_sync_worker.runner.start()
         creator_catalog_quality_worker.runner.start()
         agent_runtime_worker.runner.start()
@@ -455,6 +461,7 @@ def create_app() -> FastAPI:
         creator_sync_worker.runner.stop()
         automation_runner.runner.stop()
         video_analysis_worker.runner.stop()
+        video_creation_worker.runner.stop()
         video_analysis_worker.unregister_completion_hook(
             agent_service.handle_video_analysis_completion
         )

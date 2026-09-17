@@ -12,7 +12,7 @@
     "typecheck": "npm run generate:build-version && tsc --noEmit",
     "test:agent-access": "node --experimental-strip-types --test src/lib/agentAccessUi.test.ts src/lib/agentStableReleaseMetadata.test.ts",
     "test:agent-v2": "node --experimental-strip-types --test src/lib/agentTurnUi.test.ts src/lib/agentTextStream.test.ts src/lib/agentMarkdownStream.test.ts src/lib/agentScrollFollow.test.ts src/lib/agentMobileParity.test.ts",
-    "test:navigation": "node --experimental-strip-types --test src/lib/productNavigation.test.ts src/lib/marketingHomepage.test.ts",
+    "test:navigation": "node --experimental-strip-types --test src/lib/productNavigation.test.ts src/lib/marketingHomepage.test.ts src/lib/studioUi.test.ts",
     "test:mobile-feedback": "node --experimental-strip-types --test src/lib/mobileFeedbackEntry.test.ts",
     "test:douyin-sync": "node --experimental-strip-types --test src/lib/douyinSyncFeedback.test.ts src/lib/douyinSyncRecovery.test.ts",
     "test:douyin-desktop": "node --experimental-strip-types --test src/lib/douyinDesktopSync.test.ts",

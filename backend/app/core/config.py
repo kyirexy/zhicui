@@ -149,6 +149,20 @@ class Settings(BaseSettings):
     VIDEO_ANALYSIS_FRAME_MAX_WIDTH: int = 1024
     VIDEO_ANALYSIS_JPEG_QUALITY: int = 85
 
+    # Hypit 驱动的「创作工坊」(SVML 文本项目 → 渲染 MP4)。与 Agent 接口同款
+    # fail-closed:默认关闭,且需管理员在系统设置里单独开启;服务器上还必须
+    # 已安装 hypit CLI 与渲染运行时,缺一即整个功能保持不可见。
+    HYPIT_ENABLED: bool = False
+    # hypit 可执行文件;Windows 开发机可能是 hypit.cmd,服务器为全局 npm 安装。
+    HYPIT_CLI_PATH: str = "hypit"
+    # 每个 job 一个子目录,存放 SVML/SVS/SVRUN 与 .hypit 产物。
+    HYPIT_PROJECT_ROOT: str = "backend/data/hypit-projects"
+    # 渲染产物配额:超出后按完成时间从最旧开始清理。
+    HYPIT_RESULT_MAX_TOTAL_MB: int = 2048
+    HYPIT_RESULT_MIN_FREE_MB: int = 1024
+    # build 从提交到导出 MP4 的总时限;渲染是分钟级任务,默认 40 分钟。
+    HYPIT_BUILD_TIMEOUT_MINUTES: int = 40
+
     model_config = {
         # Keep local OmniRoute credentials separate from the application's
         # existing environment file. The second file is optional and ignored

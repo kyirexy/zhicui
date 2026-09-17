@@ -40,3 +40,25 @@ test('单条解析、视频资料和博主作品的桌面选中态互斥', () =>
   assert.equal(isDesktopProductDestinationActive('library', '/library/creators'), false);
   assert.equal(isDesktopProductDestinationActive('creators', '/library/creators'), true);
 });
+
+test('创作工坊只在桌面导航出现且排在发布计划之后', () => {
+  const desktopIds = DESKTOP_PRODUCT_DESTINATIONS.map((destination) => destination.id);
+  const studio = DESKTOP_PRODUCT_DESTINATIONS.find((destination) => destination.id === 'studio');
+  assert.ok(studio);
+  assert.equal(studio.href, '/studio');
+  assert.equal(studio.label, '创作工坊');
+
+  const plansIndex = desktopIds.indexOf('plans');
+  const studioIndex = desktopIds.indexOf('studio');
+  assert.ok(plansIndex >= 0);
+  assert.equal(studioIndex, plansIndex + 1);
+
+  assert.equal(PRODUCT_DESTINATIONS.some((destination) => destination.id === 'studio'), false);
+});
+
+test('创作工坊的桌面选中态只认 /studio 前缀', () => {
+  assert.equal(isDesktopProductDestinationActive('studio', '/studio'), true);
+  assert.equal(isDesktopProductDestinationActive('studio', '/library'), false);
+  assert.equal(isDesktopProductDestinationActive('library', '/studio'), false);
+  assert.equal(isDesktopProductDestinationActive('plans', '/studio'), false);
+});

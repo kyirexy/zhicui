@@ -3355,3 +3355,98 @@ export async function getAIRoutingWorkspace(
     `/api/user/ai-routing/workspace${refresh ? '?refresh=true' : ''}`,
   );
 }
+
+// ---------------------------------------------------------------------------
+// 创作工坊(Hypit SVML → MP4)
+// ---------------------------------------------------------------------------
+
+export interface VideoCreationJobInfo {
+  id: string;
+  status: 'drafting' | 'draft' | 'queued' | 'rendering' | 'completed' | 'failed' | 'cancelled';
+  requirement_text: string;
+  svml_text: string;
+  svrun_text: string;
+  explanation: string;
+  pricing: Record<string, unknown>;
+  build_id: string;
+  output_filename: string;
+  error: string;
+  render_seconds: number;
+  created_at: string | null;
+  updated_at: string | null;
+  completed_at: string | null;
+}
+
+export async function createVideoCreationJob(
+  requirementText: string,
+): Promise<ApiResponse<VideoCreationJobInfo>> {
+  return request<VideoCreationJobInfo>('/api/video-creation/jobs', {
+    method: 'POST',
+    body: JSON.stringify({ requirement_text: requirementText }),
+  });
+}
+
+export async function listVideoCreationJobs(): Promise<ApiResponse<VideoCreationJobInfo[]>> {
+  return request<VideoCreationJobInfo[]>('/api/video-creation/jobs');
+}
+
+export async function getVideoCreationJob(
+  jobId: string,
+): Promise<ApiResponse<VideoCreationJobInfo>> {
+  return request<VideoCreationJobInfo>(
+    `/api/video-creation/jobs/${encodeURIComponent(jobId)}`,
+  );
+}
+
+export async function confirmVideoCreationJob(
+  jobId: string,
+): Promise<ApiResponse<VideoCreationJobInfo>> {
+  return request<VideoCreationJobInfo>(
+    `/api/video-creation/jobs/${encodeURIComponent(jobId)}/confirm`,
+    { method: 'POST', body: JSON.stringify({}) },
+  );
+}
+
+export async function iterateVideoCreationJob(
+  jobId: string,
+  feedback: string,
+): Promise<ApiResponse<VideoCreationJobInfo>> {
+  return request<VideoCreationJobInfo>(
+    `/api/video-creation/jobs/${encodeURIComponent(jobId)}/iterate`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ feedback }),
+    },
+  );
+}
+
+export async function cancelVideoCreationJob(
+  jobId: string,
+): Promise<ApiResponse<VideoCreationJobInfo>> {
+  return request<VideoCreationJobInfo>(
+    `/api/video-creation/jobs/${encodeURIComponent(jobId)}/cancel`,
+    { method: 'POST', body: JSON.stringify({}) },
+  );
+}
+
+export interface VideoCreationAdminConfig {
+  env_enabled: boolean;
+  admin_enabled: boolean;
+  enabled: boolean;
+  cli_available: boolean;
+  api_key_masked: string;
+}
+
+export async function getVideoCreationAdminConfig(): Promise<ApiResponse<VideoCreationAdminConfig>> {
+  return request<VideoCreationAdminConfig>('/api/admin/video-creation-config');
+}
+
+export async function putVideoCreationAdminConfig(body: {
+  admin_enabled?: boolean;
+  api_key?: string;
+}): Promise<ApiResponse<VideoCreationAdminConfig>> {
+  return request<VideoCreationAdminConfig>('/api/admin/video-creation-config', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}

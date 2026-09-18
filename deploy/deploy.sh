@@ -182,11 +182,12 @@ KEEP_RELEASES="${ZHICUI_KEEP_RELEASES:-3}"
 prune_jenkins_releases() {
   local current_runtime resolved candidate keep_index=0 failed=0
   current_runtime="$(realpath "$CURRENT_LINK")" || return 1
+  # previous(current 切换前指向)是回滚候选,与 current 一样始终豁免。
   while IFS= read -r -d '' candidate; do
     resolved="$(realpath "$candidate")" || { failed=1; continue; }
     case "$resolved" in "$RELEASE_ROOT"/*) ;; *) failed=1; continue ;; esac
     keep_index=$((keep_index + 1))
-    if [[ "$keep_index" -le "$KEEP_RELEASES" || "$resolved" == "$current_runtime" ]]; then
+    if [[ "$keep_index" -le "$KEEP_RELEASES" || "$resolved" == "$current_runtime" || "$resolved" == "$PREVIOUS_RUNTIME" ]]; then
       continue
     fi
     if ! git -C "$APP_DIR" worktree remove --force "$resolved"; then
@@ -713,6 +714,43 @@ else
   record_gate agent_same_commit_promotion pass "$TARGET_COMMIT 正在建立关闭态暗发布基线"
 fi
 [[ ! -e "$RELEASE_DIR" ]] || err "发行目录已存在：$RELEASE_DIR"
+
+# 磁盘自适应:worktree 约 2.2G + 构建/产物余量,与 case-media gate 同口径。
+# 空间不足时先自动裁剪旧 release(先按 KEEP_RELEASES,不够再收紧到 2),
+# 仍不足才 fail-closed——部署失败重试不再积压旧目录。
+prerelease_free_mib() {
+  local root_free
+  root_free="$(df -Pm --output=avail "$APP_DIR" | awk 'NR==2 {print $1}')"
+  echo "$root_free"
+}
+
+required_free_mib() { echo 4608; }
+
+ensure_disk_room_for_release() {
+  local required free
+  required="$(required_free_mib)"
+  free="$(prerelease_free_mib)"
+  if [[ "$free" -ge "$required" ]]; then
+    return 0
+  fi
+  warn "磁盘余量 ${free}MiB 低于 ${required}MiB，先自动清理旧 release"
+  if prune_reproducible_release_artifacts && prune_jenkins_releases; then
+    free="$(prerelease_free_mib)"
+  fi
+  if [[ "$free" -lt "$required" && "$KEEP_RELEASES" -gt 2 ]]; then
+    warn "仍不足，收紧保留名额到 2 个后重试清理"
+    KEEP_RELEASES=2
+    if prune_jenkins_releases; then
+      free="$(prerelease_free_mib)"
+    fi
+  fi
+  if [[ "$free" -lt "$required" ]]; then
+    err "磁盘余量 ${free}MiB 不足（需 ${required}MiB）；自动清理后仍不足，请人工介入或升配"
+  fi
+  log "磁盘余量 ${free}MiB 满足发布要求（需 ${required}MiB）"
+}
+
+ensure_disk_room_for_release
 git worktree add --detach "$RELEASE_DIR" "$TARGET_COMMIT"
 WORKTREE_CREATED=1
 if ! timeout 120s git -C "$RELEASE_DIR" -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 submodule update --init --recursive; then

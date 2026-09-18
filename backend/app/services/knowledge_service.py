@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from sqlalchemy import and_, case, exists, func, literal, literal_column, or_, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Query, Session
+from sqlalchemy.orm import Query, Session, load_only
 
 from app.models.knowledge_entry import KnowledgeEntry
 from app.models.home_video_preference import HomeVideoPreference
@@ -140,7 +140,13 @@ def normalize_candidate_to_page(note: Note) -> dict[str, str] | None:
     }
 
 
-def _note_source_fields(note: Note | None) -> dict[str, Any]:
+def _note_source_fields(
+    note: Note | None,
+    *,
+    transcript_ready: bool | None = None,
+) -> dict[str, Any]:
+    """transcript_ready 由调用方传入时（列表路径，Note 走 load_only 未加载
+    transcript_raw 大列）直接采用；None 时回退读取 note.transcript_raw。"""
     if note is None:
         return {
             "video_id": "",
@@ -169,26 +175,33 @@ def _note_source_fields(note: Note | None) -> dict[str, Any]:
         "sections": sections,
         "conclusion": _clean(parsed.get("conclusion"), limit=12_000),
         "key_insight": _clean(parsed.get("key_insight"), limit=4_000),
-        "transcript_ready": bool(note.transcript_raw),
+        "transcript_ready": (
+            bool(transcript_ready) if transcript_ready is not None else bool(note.transcript_raw)
+        ),
     }
 
 
-def serialize_entry(entry: KnowledgeEntry, source_note: Note | None = None) -> dict[str, Any]:
+def serialize_entry(
+    entry: KnowledgeEntry,
+    source_note: Note | None = None,
+    *,
+    transcript_ready: bool | None = None,
+) -> dict[str, Any]:
     """Serialize a canonical page without exposing another user's source Note."""
     item = entry.to_dict()
     linked = source_note is not None and source_note.user_id == entry.user_id
     item["source_note_id"] = source_note.id if linked else None
     item["source_count"] = 1 if linked else 0
-    item.update(_note_source_fields(source_note if linked else None))
+    item.update(_note_source_fields(source_note if linked else None, transcript_ready=transcript_ready))
     return item
 
 
-def serialize_candidate(note: Note) -> dict[str, Any] | None:
+def serialize_candidate(note: Note, *, transcript_ready: bool | None = None) -> dict[str, Any] | None:
     """Project an eligible Note as a read-only inbox candidate."""
     parts = _candidate_parts(note)
     if parts is None:
         return None
-    source = _note_source_fields(note)
+    source = _note_source_fields(note, transcript_ready=transcript_ready)
     meta = _source_meta(parts["parsed"])
     source_label = (
         _clean(meta.get("author_name"), limit=256)
@@ -216,9 +229,9 @@ def serialize_candidate(note: Note) -> dict[str, Any] | None:
     }
 
 
-def serialize_source_reference(note: Note) -> dict[str, Any]:
+def serialize_source_reference(note: Note, *, transcript_ready: bool | None = None) -> dict[str, Any]:
     """Serialize an owned legacy Note that is not eligible for the inbox."""
-    source = _note_source_fields(note)
+    source = _note_source_fields(note, transcript_ready=transcript_ready)
     source.update({
         "section_count": 0,
         "sections": [],
@@ -511,11 +524,27 @@ def _inbox_query(db: Session, user_id: str, term: str) -> Query:
     )
     if term:
         like = f"%{term}%"
-        query = query.filter(or_(
-            Note.video_title.ilike(like),
-            Note.ai_summary.ilike(like),
-        ))
+        # 仅匹配标题：ai_summary 是整份 JSON 串，对它做 ILIKE 会在 inbox
+        # 全量候选上做大列扫描；搜索语义限定在标题上。
+        query = query.filter(Note.video_title.ilike(like))
     return query
+
+
+# 列表序列化只需要这些列；transcript_raw 是大列（整份转写全文），
+# transcript_ready 改由 SQL 表达式提供，避免每页传输 MB 级文本。
+_LIST_NOTE_COLUMNS = (
+    Note.id,
+    Note.user_id,
+    Note.video_id,
+    Note.video_title,
+    Note.video_url,
+    Note.ai_summary,
+    Note.ai_initialized,
+    Note.created_at,
+    Note.updated_at,
+)
+# 与 bool(note.transcript_raw) 等价：空字符串同样视为未就绪。
+_transcript_ready_sql = and_(Note.transcript_raw.is_not(None), Note.transcript_raw != "")
 
 
 def list_knowledge(
@@ -550,25 +579,39 @@ def list_knowledge(
             .all()
         )
         source_ids = {entry.source_note_id for entry in entries if entry.source_note_id}
-        source_notes = {
-            note.id: note
-            for note in db.query(Note).filter(
-                Note.user_id == user_id,
-                Note.id.in_(source_ids),
-            ).all()
-        } if source_ids else {}
-        items = [serialize_entry(entry, source_notes.get(entry.source_note_id)) for entry in entries]
+        source_notes: dict[str, tuple[Note, bool]] = {}
+        if source_ids:
+            source_rows = (
+                db.query(Note, _transcript_ready_sql.label("_ready"))
+                .options(load_only(*_LIST_NOTE_COLUMNS))
+                .filter(
+                    Note.user_id == user_id,
+                    Note.id.in_(source_ids),
+                )
+                .all()
+            )
+            source_notes = {note.id: (note, bool(ready)) for note, ready in source_rows}
+        items = []
+        for entry in entries:
+            note, ready = source_notes.get(entry.source_note_id, (None, False))
+            items.append(serialize_entry(entry, note, transcript_ready=ready))
         total = page_count
     else:
-        notes = (
-            inbox_query.order_by(Note.updated_at.desc(), Note.id.desc())
+        note_rows = (
+            inbox_query.options(load_only(*_LIST_NOTE_COLUMNS))
+            .order_by(Note.updated_at.desc(), Note.id.desc())
+            .add_columns(_transcript_ready_sql.label("_ready"))
             .offset(offset)
             .limit(safe_per_page)
             .all()
         )
         # The DB predicate mirrors this defensive serializer; malformed legacy
         # JSON is still never exposed if a driver behaves unexpectedly.
-        items = [item for note in notes if (item := serialize_candidate(note)) is not None]
+        items = []
+        for note, ready in note_rows:
+            item = serialize_candidate(note, transcript_ready=bool(ready))
+            if item is not None:
+                items.append(item)
         total = inbox_count
 
     return {

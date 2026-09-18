@@ -15,7 +15,6 @@ from app.models.user_ai_provider_config import UserAIProviderConfig
 from app.services import settings_service
 from app.services.user_ai_provider_service import omniroute_config
 
-
 CODE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{1,79}$")
 PROVIDER_MODES = {"platform", "omniroute"}
 
@@ -139,6 +138,14 @@ def list_admin(db: Session) -> list[ChatModelOffering]:
 
 
 def list_published(db: Session) -> list[ChatModelOffering]:
+    """已上架模型列表（实时查询，不做进程内缓存）。
+
+    这里刻意不缓存：返回值是 ORM 实体，SessionLocal 为
+    expire_on_commit=True，任何一次 commit 都会让缓存中的实体过期并在
+    下一次读取时抛 DetachedInstanceError；而目录查询本身只扫十几行的
+    chat_model_offerings，收益远不抵该风险。真正高频的是下游的
+    SystemSetting 快照与 LLM/ASR 配置解析，那些走纯数据缓存。
+    """
     ensure_default_offering(db)
     return db.query(ChatModelOffering).filter(
         ChatModelOffering.enabled.is_(True),

@@ -636,8 +636,8 @@ function KnowledgeWorkspace({ initialView }: { initialView: KnowledgeView }) {
                 type="search"
                 value={searchInput}
                 onChange={(event) => setSearchInput(event.target.value.slice(0, 120))}
-                placeholder={view === 'pages' ? '搜索知识页' : '搜索待整理'}
-                aria-label={view === 'pages' ? '搜索知识页' : '搜索待整理内容'}
+                placeholder={view === 'pages' ? '搜索知识页' : '搜索待整理标题'}
+                aria-label={view === 'pages' ? '搜索知识页' : '搜索待整理标题'}
               />
               {searchInput ? (
                 <button type="button" onClick={() => setSearchInput('')} aria-label="清空搜索">

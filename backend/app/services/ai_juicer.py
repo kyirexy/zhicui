@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 
 from litellm import completion
 
+from app.core import config_cache
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.services import (
@@ -60,15 +61,28 @@ def _get_llm_config() -> dict[str, str]:
     get swallowed by the retry loop's ``except Exception``, and every card
     silently degrades to the fallback — so the admin "LLM config" and
     "re-extract" features have no effect.
-    """
-    with SessionLocal() as db:
-        from app.core.request_context import get_current_user_id
-        from app.services import user_ai_provider_service
 
-        return user_ai_provider_service.effective_config(
-            db,
-            get_current_user_id(),
-        )
+    批量萃取时本函数在每张卡片的循环内被调用；配置解析链（用户自定义
+    模型 → 平台模型目录 → SystemSetting）涉及多条查询。结果按 user_id
+    缓存 30s，管理员/用户改配置经 set_setting 与 user_ai_provider 写路径
+    的 bump() 立即失效。
+    """
+    from app.core.request_context import get_current_user_id
+    from app.services import user_ai_provider_service
+
+    user_id = get_current_user_id()
+    key = str(user_id or "anonymous")
+
+    def _load() -> dict[str, str]:
+        with SessionLocal() as db:
+            return user_ai_provider_service.effective_config(db, user_id)
+
+    return _llm_config_cache.get_or_load(key, _load)
+
+
+_llm_config_cache = config_cache.KeyedTTLCache[str, dict[str, str]](
+    "ai-juicer-llm-config", ttl_seconds=30.0, max_entries=1024
+)
 
 
 def _completion_with_usage(

@@ -21,8 +21,10 @@ import requests as http_requests
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core import config_cache
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.auth import get_current_user, get_current_user_optional, get_current_admin
@@ -3199,6 +3201,13 @@ def list_douyin_library_items(
         [item["aweme_id"] for item in items],
         user_id=current_user.id,
     )
+    # note_map 为列表路径只加载元数据列（不含 transcript_raw 大列），
+    # 字符数统一用 SQL length 批量取，避免逐行懒加载整份转写。
+    transcript_lengths = dict(
+        db.query(Note.id, func.length(Note.transcript_raw))
+        .filter(Note.id.in_([note.id for note in note_map.values()]))
+        .all()
+    ) if note_map else {}
     for item in items:
         note = note_map.get(item["aweme_id"])
         ledger = item_ledgers.get(item["aweme_id"])
@@ -3227,7 +3236,7 @@ def list_douyin_library_items(
                 )
         item["extracted"] = note is not None
         item["extracted_note_id"] = note.id if note else None
-        item["transcript_chars"] = len(note.transcript_raw or "") if note else 0
+        item["transcript_chars"] = int(transcript_lengths.get(note.id) or 0) if note else 0
         item["ai_initialized"] = bool(note.ai_initialized) if note else False
         item["card_type"] = note.card_type if note else None
     return _ok({
@@ -4333,7 +4342,7 @@ def test_user_custom_chat_model(
 def list_notes(
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     per_page: int = Query(20, ge=1, le=100, description="Items per page"),
-    q: str | None = Query(None, min_length=1, max_length=80, description="Search note title or summary"),
+    q: str | None = Query(None, min_length=1, max_length=80, description="Search note title"),
     card_type: Literal["recipe", "insight", "history", "product", "plan", "general"] | None = Query(
         None,
         description="Filter by card type",
@@ -4351,8 +4360,18 @@ def list_notes(
         card_type=card_type,
     )
     total_pages = max(1, (total + per_page - 1) // per_page)
+    # 列表不需要 transcript_raw 全文（大列），只回填字符数。
+    items = [n.to_dict(include_transcript=False) for n in notes]
+    if notes:
+        lengths = dict(
+            db.query(Note.id, func.length(Note.transcript_raw))
+            .filter(Note.id.in_([n.id for n in notes]))
+            .all()
+        )
+        for item, note in zip(items, notes):
+            item["transcript_chars"] = int(lengths.get(note.id) or 0)
     return _ok({
-        "items": [n.to_dict() for n in notes],
+        "items": items,
         "total": total,
         "page": page,
         "per_page": per_page,
@@ -6228,12 +6247,21 @@ def admin_system_info(
 # ---------------------------------------------------------------------------
 # Admin endpoints — operations dashboard (health + table counts + recent audit)
 # ---------------------------------------------------------------------------
+# 运维面板表行数的短缓存：日志表大之后 COUNT(*) 变慢，面板只读，60s 足够。
+_ops_table_counts_cache = config_cache.make_cache("admin-ops-table-counts", 60.0)
+
+
 @router.get("/api/admin/ops")
 def admin_ops(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_admin),
 ) -> dict:
-    """运维概览：各表行数、最近 5 条审计、密钥配置状态。只读，不暴露明文。"""
+    """运维概览：各表行数、最近 5 条审计、密钥配置状态。只读，不暴露明文。
+
+    表行数统计走 60s 缓存：`user_activity_logs` 等日志表百万行级后全表
+    COUNT 明显变慢，且该面板只读、精确到分钟完全够用。审计与密钥状态
+    仍实时查询。
+    """
     from app.models.plan import Plan
     from app.models.admin_audit_log import AdminAuditLog
     from app.models.llm_usage_log import LlmUsageLog
@@ -6250,8 +6278,8 @@ def admin_ops(
         admin_map = {r.id: (r.username or r.email) for r in rows}
     recent = [audit_service.to_dict(it, admin_map.get(it.admin_user_id)) for it in items]
 
-    return _ok({
-        "table_counts": {
+    def _count_tables() -> dict[str, int]:
+        return {
             "users": count_users(db),
             "notes": db.query(Note).count(),
             "plans": db.query(Plan).count(),
@@ -6259,7 +6287,12 @@ def admin_ops(
             "llm_usage_logs": db.query(LlmUsageLog).count(),
             "user_activity_logs": db.query(UserActivityLog).count(),
             "application_error_logs": db.query(ApplicationErrorLog).count(),
-        },
+        }
+
+    return _ok({
+        "table_counts": _ops_table_counts_cache.get_or_load(
+            _count_tables, scope=config_cache.scope_of(db)
+        ),
         "recent_audit": recent,
         "keys": {
             "llm_key_set": bool(llm_cfg["api_key_masked"]),

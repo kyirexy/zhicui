@@ -13,8 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.media_reference import (
@@ -33,6 +32,25 @@ from app.models.plan import Plan
 _VIDEO_TITLE_MAX_LENGTH = 512
 _SEO_TITLE_MAX_LENGTH = 256
 _SEO_META_MAX_LENGTH = 512
+
+# 列表/台账路径只需要这些列；transcript_raw 是大列（整份转写全文），
+# 排除后由调用方按需用 SQL length() 取字符数，避免逐行懒加载大列。
+_NOTE_METADATA_COLUMNS = (
+    Note.id,
+    Note.user_id,
+    Note.video_id,
+    Note.video_title,
+    Note.video_url,
+    Note.ai_summary,
+    Note.ai_initialized,
+    Note.card_type,
+    Note.seo_title,
+    Note.seo_slug,
+    Note.seo_meta,
+    Note.pitfall_rating,
+    Note.created_at,
+    Note.updated_at,
+)
 
 
 def generate_seo_title(video_title: str) -> str:
@@ -267,7 +285,13 @@ def get_notes_by_video_ids(
     video_ids: list[str],
     user_id: str = "",
 ) -> dict[str, Note]:
-    """Return the newest user-owned Note keyed by external video id."""
+    """Return the newest user-owned Note keyed by external video id.
+
+    列表/台账路径只用到 id、ai_summary（来源元数据）与几个标量字段，
+    从不读 transcript_raw 全文，因此这里用 load_only 只取元数据列。
+    调用方若需要字符数请另取 SQL length（见 routes 的抖音资料库列表），
+    直接读 note.transcript_raw 会触发逐行懒加载。
+    """
     clean_ids = list(dict.fromkeys(
         video_id.strip()
         for video_id in video_ids
@@ -276,7 +300,11 @@ def get_notes_by_video_ids(
     if not clean_ids:
         return {}
 
-    query = db.query(Note).filter(Note.video_id.in_(clean_ids))
+    query = (
+        db.query(Note)
+        .options(load_only(*_NOTE_METADATA_COLUMNS))
+        .filter(Note.video_id.in_(clean_ids))
+    )
     if user_id:
         query = query.filter(Note.user_id == user_id)
 
@@ -372,10 +400,9 @@ def list_notes(
             .replace("_", "\\_")
         )
         pattern = f"%{escaped_search}%"
-        query = query.filter(or_(
-            Note.video_title.ilike(pattern, escape="\\"),
-            Note.ai_summary.ilike(pattern, escape="\\"),
-        ))
+        # 仅匹配标题：ai_summary 是整份 JSON 串（含 source_meta/结论全文），
+        # 对它做 ILIKE 等于全表大列扫描，列表搜索语义限定在标题上。
+        query = query.filter(Note.video_title.ilike(pattern, escape="\\"))
     if card_type:
         query = query.filter(Note.card_type == card_type)
 

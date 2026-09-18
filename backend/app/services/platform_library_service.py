@@ -14,7 +14,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote, urlsplit
 
-from sqlalchemy.orm import Session
+from sqlalchemy import func
+from sqlalchemy.orm import Session, load_only
 
 from app.core.config import settings
 from app.core.media_reference import (
@@ -51,6 +52,24 @@ _XHS_MEDIA_HEADERS = {
 }
 _BILIBILI_PLACEHOLDER_TITLES = {"", "B站视频", "未命名视频"}
 _ACCOUNT_SOURCE_MODES = ("collect", "like", "post")
+# 列表路径只需要这些列；transcript_raw 是大列（整份文稿），
+# 字符数与就绪状态改由 SQL length()/trim() 表达式提供。
+_LIST_NOTE_COLUMNS = (
+    Note.id,
+    Note.user_id,
+    Note.video_id,
+    Note.video_title,
+    Note.video_url,
+    Note.ai_summary,
+    Note.ai_initialized,
+    Note.card_type,
+    Note.seo_title,
+    Note.seo_slug,
+    Note.seo_meta,
+    Note.pitfall_rating,
+    Note.created_at,
+    Note.updated_at,
+)
 _DOUYIN_MEDIA_DOMAINS = (
     "douyinvod.com",
     "douyin.com",
@@ -87,6 +106,29 @@ def _load_payload(note: Note) -> dict[str, Any]:
     except (json.JSONDecodeError, TypeError):
         payload = {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _transcript_chars_for(note: Note) -> int:
+    """Return the transcript character count without loading the big column.
+
+    ``list_notes`` (the list path) pre-computes this with SQL ``length()`` and
+    parks it on ``_list_transcript_chars``; detail paths that already hold the
+    full row fall back to measuring ``transcript_raw`` directly.
+    """
+    cached = getattr(note, "_list_transcript_chars", None)
+    if cached is not None:
+        return int(cached)
+    return len(note.transcript_raw or "")
+
+
+def _transcript_ready_for(note: Note) -> bool | None:
+    """Return the list path's cached readiness, or None for detail paths.
+
+    ``list_notes`` parks a SQL-computed boolean here; ``None`` tells the caller
+    to fall back to reading ``transcript_raw`` (detail rows already hold it).
+    """
+    cached = getattr(note, "_list_transcript_ready", None)
+    return bool(cached) if cached is not None else None
 
 
 def _source_meta(note: Note) -> dict[str, Any]:
@@ -561,11 +603,21 @@ def ensure_bilibili_result_ready(
         )
 
 
-def _is_complete_bilibili_note(note: Note) -> bool:
+def _is_complete_bilibili_note(
+    note: Note,
+    *,
+    transcript_ready: bool | None = None,
+) -> bool:
     meta = _source_meta(note)
+    # 判定只关心「文稿是否非空」，不需要读大列。列表路径传入 SQL 算好的
+    # ready 布尔量（与 note.transcript_raw.strip() 等价），详情路径回退读原文。
+    if transcript_ready is None:
+        transcript = (note.transcript_raw or "").strip()
+    else:
+        transcript = "x" if transcript_ready else ""
     return not bilibili_result_issues(
         {"title": note.video_title},
-        note.transcript_raw or "",
+        transcript,
         meta,
     )
 
@@ -1000,14 +1052,21 @@ def list_notes(
 ) -> list[Note]:
     if platform not in {"all", *SUPPORTED_PLATFORMS}:
         raise ValueError("无效的平台筛选")
-    candidates = (
-        db.query(Note)
+    length_expr = func.length(Note.transcript_raw).label("_transcript_chars")
+    ready_expr = (
+        func.length(func.trim(func.coalesce(Note.transcript_raw, ""))) > 0
+    ).label("_transcript_ready")
+    candidates: list[tuple[Note, int | None, bool]] = (
+        db.query(Note, length_expr, ready_expr)
+        .options(load_only(*_LIST_NOTE_COLUMNS))
         .filter(Note.user_id == user_id)
         .order_by(Note.created_at.desc(), Note.id.asc())
         .all()
     )
     result = []
-    for note in candidates:
+    for note, chars, ready in candidates:
+        note._list_transcript_chars = chars  # type: ignore[attr-defined]
+        note._list_transcript_ready = bool(ready)  # type: ignore[attr-defined]
         meta = _source_meta(note)
         if meta.get("source_kind") != SOURCE_KIND:
             continue
@@ -1015,7 +1074,10 @@ def list_notes(
             continue
         if source_mode and source_mode != str(meta.get("source_mode") or "import") and source_mode not in _source_modes(meta.get("source_modes")):
             continue
-        if meta.get("platform") == "bilibili" and not _is_complete_bilibili_note(note):
+        if meta.get("platform") == "bilibili" and not _is_complete_bilibili_note(
+            note,
+            transcript_ready=bool(ready),
+        ):
             # Preserve old partial rows for a later retry, but do not present
             # them as complete video documents in the user's library.
             continue
@@ -1082,12 +1144,12 @@ def serialize_item(
             meta.get("first_seen_at")
             or (note.created_at.isoformat() if note.created_at else "")
         ),
-        "transcript_chars": len(note.transcript_raw or ""),
+        "transcript_chars": _transcript_chars_for(note),
         "transcript_source": meta.get("transcript_source") or "caption-only",
         "speech_ready": bool(meta.get("speech_ready")),
         "metadata_complete": (
             platform != "bilibili"
-            or _is_complete_bilibili_note(note)
+            or _is_complete_bilibili_note(note, transcript_ready=_transcript_ready_for(note))
         ),
         "degraded": bool(meta.get("degraded")),
         "ai_initialized": bool(note.ai_initialized),

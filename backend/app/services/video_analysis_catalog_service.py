@@ -584,6 +584,9 @@ def save_runtime_settings(
         else:
             row.value = value
     db.commit()
+    # 这里直接写行、没走 set_setting，必须显式失效，否则管理员保存后
+    # 仍会读到 TTL 内的旧配置。
+    settings_service.invalidate_config_caches()
     return get_runtime_settings(db)
 
 

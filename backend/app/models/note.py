@@ -63,8 +63,13 @@ class Note(Base):
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
     )
 
-    def to_dict(self) -> dict:
-        """Serialize the note to a plain dict for JSON responses."""
+    def to_dict(self, *, include_transcript: bool = True) -> dict:
+        """Serialize the note to a plain dict for JSON responses.
+
+        列表路径应传 include_transcript=False：transcript_raw 是整份转写
+        全文，列表页只需要字符数（调用方用 SQL length() 批量回填
+        transcript_chars），省掉大列传输与 JSON 序列化开销。
+        """
         import json
 
         # Parse the AI summary JSON to extract structured card data.
@@ -110,8 +115,9 @@ class Note(Base):
                 or source_meta.get("recorded_at")
                 or ""
             ),
-            "transcript_raw": self.transcript_raw,
-            "transcript_chars": len(self.transcript_raw or ""),
+            "transcript_raw": self.transcript_raw if include_transcript else "",
+            # include_transcript=False 时由调用方用 SQL length() 批量回填真实值。
+            "transcript_chars": len(self.transcript_raw or "") if include_transcript else 0,
             "ai_initialized": bool(self.ai_initialized),
             "generation_status": ai.get("generation_status", "ready"),
             "generation_error": ai.get("generation_error", ""),

@@ -15,8 +15,15 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core import config_cache
 from app.core.config import settings
 from app.models.system_setting import SystemSetting
+
+# 单条 SystemSetting 的进程内缓存：热点路径（LLM/ASR 解析、agent 灰度）
+# 每请求重复读同一批 key，而这些值只在管理员保存时变化。
+# 写路径 set_setting 会主动失效快照，TTL 仅作兜底。
+_SETTING_TTL_SECONDS = 30.0
+_snapshot_cache = config_cache.make_cache("system-setting-snapshot", _SETTING_TTL_SECONDS)
 
 # Setting keys — single source of truth for key names.
 LLM_MODEL_KEY = "llm_model"
@@ -111,15 +118,50 @@ def decrypt_value(value: str) -> str:
 
 
 def get_setting(db: Session, key: str, default: str = "") -> str:
-    """Read a setting by key. Returns default if not set. (Plaintext.)"""
-    row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
-    if row is None or row.value is None:
+    """Read a setting by key. Returns default if not set. (Plaintext.)
+
+    读取走进程内快照：命中时零 SQL，未命中时一条全表查询重建快照
+    （system_setting 行数 = 配置项个数，几十行级别，全量读与单 key 读
+    成本相同），TTL 30s，写路径主动失效。
+    """
+    snapshot = _snapshot(db)
+    value = snapshot.get(key)
+    if value is None:
         return default
-    return row.value
+    return value
+
+
+def _load_snapshot(db: Session) -> dict[str, str]:
+    """Load all settings rows into one dict (one query instead of N)."""
+    rows = db.query(SystemSetting).all()
+    return {row.key: row.value for row in rows if row.key}
+
+
+def _snapshot(db: Session) -> dict[str, str]:
+    """Return the cached settings snapshot for this session's database."""
+    return _snapshot_cache.get_or_load(
+        lambda: _load_snapshot(db), scope=config_cache.scope_of(db)
+    )
+
+
+def invalidate_config_caches() -> None:
+    """Drop resolved-config caches after a write that bypassed set_setting.
+
+    多数写路径走 set_setting（自带失效），但仍有服务直接改 SystemSetting
+    行；调用方在 commit 后调用本函数，避免管理员保存后仍读到 TTL 内的旧值。
+    """
+    _snapshot_cache.invalidate()
+    _llm_config_cache.invalidate()
+    _asr_config_cache.invalidate()
+    _agent_v2_cache.invalidate()
 
 
 def set_setting(db: Session, key: str, value: str) -> None:
-    """Upsert a plaintext setting (model names, URLs)."""
+    """Upsert a plaintext setting (model names, URLs).
+
+    写后立即失效快照缓存：管理面板保存配置后，下一次读取即看到新值，
+    不必等 TTL 过期。
+    """
     row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
     if row is None:
         row = SystemSetting(key=key, value=value)
@@ -128,6 +170,10 @@ def set_setting(db: Session, key: str, value: str) -> None:
         row.value = value
     db.commit()
     db.refresh(row)
+    _snapshot_cache.invalidate()
+    _llm_config_cache.invalidate()
+    _asr_config_cache.invalidate()
+    _agent_v2_cache.invalidate()
 
 
 def set_secret(db: Session, key: str, value: str) -> None:
@@ -192,12 +238,30 @@ def to_litellm_model(provider: str, model: str) -> str:
     return model
 
 
+_LLM_CONFIG_TTL_SECONDS = 30.0
+_llm_config_cache = config_cache.make_cache("llm-config", _LLM_CONFIG_TTL_SECONDS)
+_asr_config_cache = config_cache.make_cache("asr-config", _LLM_CONFIG_TTL_SECONDS)
+# agent 灰度判定按 user_id 缓存（判定是稳定哈希函数，结果恒定）。
+_agent_v2_cache = config_cache.KeyedTTLCache[str, bool](
+    "agent-v2-rollout", _LLM_CONFIG_TTL_SECONDS
+)
+
+
 def get_llm_config(db: Session) -> dict[str, str]:
     """Resolve effective LLM config: DB first, fallback to settings (.env).
 
     api_key fallback chain: DB LLM_API_KEY (decrypted) -> settings.LLM_API_KEY
     -> settings.API_KEY (so a single SiliconFlow key in .env still works).
+
+    结果按 TTL 缓存（含解密后的 api_key，仅存服务端进程内存），管理员
+    改配置经 set_setting 失效。热点路径每请求调用，缓存命中时零 SQL。
     """
+    return _llm_config_cache.get_or_load(
+        lambda: _resolve_llm_config(db), scope=config_cache.scope_of(db)
+    )
+
+
+def _resolve_llm_config(db: Session) -> dict[str, str]:
     model = get_setting(db, LLM_MODEL_KEY) or settings.LLM_MODEL
     api_base = get_setting(db, LLM_API_BASE_KEY) or settings.LLM_API_BASE
     api_key = get_secret(db, LLM_API_KEY_KEY) or settings.LLM_API_KEY or settings.API_KEY
@@ -223,7 +287,16 @@ def get_llm_config(db: Session) -> dict[str, str]:
 
 
 def get_asr_config(db: Session) -> dict[str, str]:
-    """Resolve effective ASR config: DB first, fallback to settings."""
+    """Resolve effective ASR config: DB first, fallback to settings.
+
+    同 get_llm_config：结果走 TTL 缓存，写路径失效。
+    """
+    return _asr_config_cache.get_or_load(
+        lambda: _resolve_asr_config(db), scope=config_cache.scope_of(db)
+    )
+
+
+def _resolve_asr_config(db: Session) -> dict[str, str]:
     api_key = get_secret(db, ASR_API_KEY_KEY) or settings.API_KEY
     api_base_url = get_setting(db, ASR_API_BASE_URL_KEY) or settings.ASR_API_BASE_URL
     model = get_setting(db, ASR_MODEL_KEY) or settings.ASR_MODEL
@@ -408,19 +481,29 @@ def set_agent_v2_config(
 
 
 def agent_v2_enabled_for_user(db: Session, user_id: str) -> bool:
-    """Stable rollout assignment; allowlisted users bypass percentage."""
+    """Stable rollout assignment; allowlisted users bypass percentage.
+
+    灰度判定是 user_id 的纯哈希函数（稳定分桶），同一配置下结果恒定，
+    因此以 (user_id) 为 key 缓存判定结果。每条 agent 消息（含流式）都会
+    调用本函数，缓存避免每消息重复解析 allowlist 与重建 set。
+    """
     import hashlib
 
-    config = get_agent_v2_config(db)
-    if not config["enabled"]:
-        return False
-    if user_id in set(config["allowlist"]):
-        return True
-    rollout = int(config["rollout_percent"])
-    if rollout <= 0:
-        return False
-    bucket = int(hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:8], 16) % 100
-    return bucket < rollout
+    def _compute() -> bool:
+        config = get_agent_v2_config(db)
+        if not config["enabled"]:
+            return False
+        if user_id in set(config["allowlist"]):
+            return True
+        rollout = int(config["rollout_percent"])
+        if rollout <= 0:
+            return False
+        bucket = int(hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:8], 16) % 100
+        return bucket < rollout
+
+    return _agent_v2_cache.get_or_load(
+        (config_cache.scope_of(db), str(user_id)), _compute
+    )
 
 
 def set_creator_sync_config(

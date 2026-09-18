@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from sqlalchemy import func
+
 from app.models.note import Note
 from app.models.user import User
 from app.models.video_analysis import VideoAnalysisRun
@@ -166,7 +168,18 @@ def library_list(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
         user_id=ctx.user.id,
         search=_text(payload, "search", maximum=120) or None,
     )
-    return {"items": [item.to_dict() for item in items], "total": total, "page": page, "per_page": per_page}
+    # 列表不传 transcript_raw 全文（大列）；transcript_chars 用 SQL length 回填，
+    # agent 端「X 字文稿」显示不受影响。
+    serialized = [item.to_dict(include_transcript=False) for item in items]
+    if items:
+        lengths = dict(
+            ctx.db.query(Note.id, func.length(Note.transcript_raw))
+            .filter(Note.id.in_([item.id for item in items]))
+            .all()
+        )
+        for item, note in zip(serialized, items):
+            item["transcript_chars"] = int(lengths.get(note.id) or 0)
+    return {"items": serialized, "total": total, "page": page, "per_page": per_page}
 
 
 def library_get(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:

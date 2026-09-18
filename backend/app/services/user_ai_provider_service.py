@@ -7,10 +7,16 @@ from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
+from app.core import config_cache
 from app.core.config import settings
 from app.models.user_ai_provider_config import UserAIProviderConfig
 from app.models.user_custom_chat_model import UserCustomChatModel
 from app.services import settings_service
+
+# 每用户的自定义模型 / 选择变更会使 ai_juicer 的 per-user 配置缓存失效。
+# bump() 全局失效成本极低，且用户级模型变更频率很低。
+def _invalidate_user_config_cache(user_id: str | None = None) -> None:
+    config_cache.bump()
 
 
 PLATFORM_POLICY = {
@@ -251,6 +257,7 @@ def create_custom_model(
     db.add(row)
     db.commit()
     db.refresh(row)
+    _invalidate_user_config_cache(user_id)
     return _serialize_model(row)
 
 
@@ -291,6 +298,7 @@ def update_custom_model(
         row.encrypted_api_key = settings_service.encrypt_value(api_key.strip())
     db.commit()
     db.refresh(row)
+    _invalidate_user_config_cache(user_id)
     return _serialize_model(row)
 
 
@@ -308,6 +316,7 @@ def delete_custom_model(db: Session, user_id: str, model_id: str) -> dict:
     was_selected = bool(row.is_selected)
     db.delete(row)
     db.commit()
+    _invalidate_user_config_cache(user_id)
     return {"deleted": True, "selection_reset": was_selected}
 
 
@@ -321,6 +330,7 @@ def select_custom_model(db: Session, user_id: str, model_id: str) -> dict:
     row.is_selected = True
     db.commit()
     db.refresh(row)
+    _invalidate_user_config_cache(user_id)
     return {
         **list_custom_models(db, user_id),
         "selected": _serialize_model(row),
@@ -330,6 +340,7 @@ def select_custom_model(db: Session, user_id: str, model_id: str) -> dict:
 def select_platform(db: Session, user_id: str) -> dict:
     _clear_selection(db, user_id)
     db.commit()
+    _invalidate_user_config_cache(user_id)
     return list_custom_models(db, user_id)
 
 
@@ -441,6 +452,7 @@ def reset(db: Session, user_id: str) -> dict:
         db.delete(row)
     _clear_selection(db, user_id)
     db.commit()
+    _invalidate_user_config_cache(user_id)
     return serialize(db, user_id)
 
 

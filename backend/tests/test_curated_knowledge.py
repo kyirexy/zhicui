@@ -207,7 +207,7 @@ class CuratedKnowledgeServiceTests(unittest.TestCase):
                     "author_name": "目标作者" if index == 1 else "其他作者",
                     "platform": "douyin",
                 },
-            }, title=f"候选视频 {index}")
+            }, title=f"候选视频 {index}" + (" 目标作者" if index == 1 else ""))
         knowledge_service.create_entry(
             self.db,
             self.user_b.id,

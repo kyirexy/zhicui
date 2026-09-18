@@ -720,7 +720,9 @@ fi
 # 仍不足才 fail-closed——部署失败重试不再积压旧目录。
 prerelease_free_mib() {
   local root_free
-  root_free="$(df -Pm --output=avail "$APP_DIR" | awk 'NR==2 {print $1}')"
+  # POSIX -P 输出第 4 列即可用块;--output 与 -P 互斥,不能混用。
+  root_free="$(df -Pm "$APP_DIR" | awk 'NR==2 {print $4}')"
+  [[ "$root_free" =~ ^[0-9]+$ ]] || return 1
   echo "$root_free"
 }
 

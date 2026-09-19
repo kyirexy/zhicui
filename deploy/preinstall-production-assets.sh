@@ -155,6 +155,8 @@ systemctl restart videocapsule-backend videocapsule-frontend
 # 资产升级完成前必须产生后端可读取的最新安全备份状态。
 systemctl start zhicui-postgres-backup.service
 systemctl start zhicui-postgres-restore-verify.service
+# timer 可能恰好同时触发旧归档校验；再次串行校验，确保状态绑定刚生成的备份。
+systemctl start zhicui-postgres-restore-verify.service
 python3 - /var/lib/zhicui-backups/latest.json "$APP_DIR/backend/.env" <<'PY'
 import json, sys
 p = json.load(open(sys.argv[1], encoding="utf-8"))

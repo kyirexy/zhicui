@@ -78,21 +78,21 @@ install -d -o ubuntu -g ubuntu -m 0775 \
   /var/lib/zhicui-downloads/releases/windows \
   /var/lib/zhicui-downloads/android
 if [[ -d "$APP_DIR/frontend/public/download/windows" ]]; then
-  rsync -rlt --ignore-existing --no-owner --no-group --no-perms --chmod=F0644,D0755 \
+  rsync -rl --ignore-existing --no-owner --no-group --no-perms --chmod=F0644,D0755 \
     "$APP_DIR/frontend/public/download/windows/" /var/lib/zhicui-downloads/windows/
 fi
 if [[ -d "$APP_DIR/frontend/public/download/releases/windows" ]]; then
-  rsync -rlt --ignore-existing --no-owner --no-group --no-perms --chmod=F0644,D0755 \
+  rsync -rl --ignore-existing --no-owner --no-group --no-perms --chmod=F0644,D0755 \
     "$APP_DIR/frontend/public/download/releases/windows/" /var/lib/zhicui-downloads/releases/windows/
 fi
-rsync -rlt --ignore-existing --no-owner --no-group --no-perms --chmod=F0644,D0755 \
+rsync -rl --ignore-existing --no-owner --no-group --no-perms --chmod=F0644,D0755 \
   "$SOURCE_ROOT/frontend/public/download/releases/windows/" /var/lib/zhicui-downloads/releases/windows/
 if [[ -d "$APP_DIR/frontend/public/download/android" ]]; then
-  rsync -rlt --ignore-existing --no-owner --no-group --no-perms --chmod=F0644,D0755 \
+  rsync -rl --ignore-existing --no-owner --no-group --no-perms --chmod=F0644,D0755 \
     "$APP_DIR/frontend/public/download/android/" /var/lib/zhicui-downloads/android/
 fi
 if [[ -d "$SOURCE_ROOT/frontend/public/download/android" ]]; then
-  rsync -rlt --ignore-existing --no-owner --no-group --no-perms --chmod=F0644,D0755 \
+  rsync -rl --ignore-existing --no-owner --no-group --no-perms --chmod=F0644,D0755 \
     "$SOURCE_ROOT/frontend/public/download/android/" /var/lib/zhicui-downloads/android/
 fi
 if [[ -s "$APP_DIR/frontend/public/download/zhicui.apk" && ! -e /var/lib/zhicui-downloads/zhicui.apk ]]; then

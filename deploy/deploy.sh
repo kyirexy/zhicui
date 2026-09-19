@@ -880,7 +880,7 @@ record_gate case_media_storage pass '私有持久目录、FFmpeg/FFprobe、1 GiB
 
 mkdir -p "$DOWNLOAD_ROOT/android"
 if [[ -d "$RELEASE_DIR/frontend/public/download/android" ]]; then
-  rsync -rlt --ignore-existing --no-owner --no-group --no-perms --chmod=F0644,D0755 \
+  rsync -rl --ignore-existing --no-owner --no-group --no-perms --chmod=F0644,D0755 \
     "$RELEASE_DIR/frontend/public/download/android/" "$DOWNLOAD_ROOT/android/"
 fi
 ANDROID_RELEASE_APK_PATH="$(node - "$RELEASE_DIR/frontend/public/download/releases/android/beta.json" "$DOWNLOAD_ROOT/android" <<'NODE'

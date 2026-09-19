@@ -138,9 +138,11 @@ install -d -o ubuntu -g ubuntu -m 0775 \
   /var/lib/zhicui-downloads/windows \
   /var/lib/zhicui-downloads/releases/windows \
   /var/lib/zhicui-downloads/android
-rsync -a --ignore-existing "$APP_DIR/frontend/public/download/releases/windows/" \
+rsync -rlt --ignore-existing --no-owner --no-group --no-perms --chmod=F0644,D0755 \
+  "$APP_DIR/frontend/public/download/releases/windows/" \
   /var/lib/zhicui-downloads/releases/windows/
-rsync -a --ignore-existing "$APP_DIR/frontend/public/download/android/" \
+rsync -rlt --ignore-existing --no-owner --no-group --no-perms --chmod=F0644,D0755 \
+  "$APP_DIR/frontend/public/download/android/" \
   /var/lib/zhicui-downloads/android/ 2>/dev/null || true
 if [ -s "$APP_DIR/frontend/public/download/zhicui.apk" ] && [ ! -e /var/lib/zhicui-downloads/zhicui.apk ]; then
   install -m 0644 "$APP_DIR/frontend/public/download/zhicui.apk" /var/lib/zhicui-downloads/zhicui.apk

@@ -107,7 +107,9 @@ fi
 chown -R ubuntu:ubuntu /var/lib/zhicui-downloads
 # 这里只存放官网公开下载清单与安装包。rsync -a 会把 Jenkins worktree
 # 的私有目录模式一并带入，必须在复制后恢复 Nginx 所需的只读遍历权限。
-find /var/lib/zhicui-downloads -type d -exec chmod 0755 {} +
+# Jenkins 通过 ubuntu 组原子写入新版本化产物和兼容别名；setgid 保证临时文件
+# 继承同一组权限，而公开文件本身仍保持只读 0644。
+find /var/lib/zhicui-downloads -type d -exec chmod 2775 {} +
 find /var/lib/zhicui-downloads -type f -exec chmod 0644 {} +
 
 install -m 0644 "$SOURCE_ROOT/deploy/videocapsule-backend.service" /etc/systemd/system/

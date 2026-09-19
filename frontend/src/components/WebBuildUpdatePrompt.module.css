@@ -21,5 +21,38 @@
 .refresh:disabled { opacity: 0.65; cursor: default; }
 .notice button { transition: background 160ms ease-out; }
 .notice button:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 3px; }
+.spin { animation: spin 1000ms linear infinite; }
+.dialog { width: min(480px, calc(100vw - 32px)); max-height: min(88dvh, 740px); padding: 0; margin: auto; overflow: auto; border: 0; border-radius: 16px; background: var(--card-bg); color: var(--foreground); box-shadow: 0 22px 70px rgb(0 0 0 / 24%); }
+.dialog::backdrop { background: rgb(12 16 23 / 46%); }
+.updatePanel { position: relative; padding: 28px; }
+.updateHeader { display: flex; align-items: flex-start; gap: 14px; padding-right: 26px; }
+.updateIcon { display: grid; width: 44px; height: 44px; flex: 0 0 44px; place-items: center; border-radius: 12px; background: var(--accent-brand-soft); color: var(--accent-brand); }
+.updateHeader h2 { margin: 0; font-size: 21px; line-height: 1.4; font-weight: 650; letter-spacing: -0.02em; }
+.updateHeader p { margin: 7px 0 0; color: var(--foreground-secondary); font-size: 13px; line-height: 1.65; }
+.updateVersions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 24px; padding: 15px 16px; border: 1px solid var(--card-border); border-radius: 10px; color: var(--foreground-secondary); font-size: 12px; }
+.updateVersions strong { margin-left: 5px; color: var(--foreground); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.updateVersions span:last-child strong { color: var(--accent-brand); }
+.updateDescription { margin: 16px 0 0; color: var(--foreground-secondary); font-size: 13px; line-height: 1.7; }
+.updateProgress { margin-top: 20px; }
+.progressLabel { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; color: var(--foreground-secondary); font-size: 12px; }
+.progressLabel strong { color: var(--foreground); font-variant-numeric: tabular-nums; }
+.updateProgress .progress { margin: 0; height: 7px; }
+.indeterminate { position: relative; height: 7px; overflow: hidden; border-radius: 4px; background: var(--background-secondary); }
+.indeterminate::after { position: absolute; inset: 0 auto 0 -35%; width: 35%; border-radius: inherit; background: var(--accent-brand); animation: indeterminate 1200ms ease-in-out infinite; content: ''; }
+.ready { margin: 18px 0 0; padding: 11px 12px; border-radius: 8px; background: var(--accent-brand-soft); color: var(--foreground); font-size: 12px; line-height: 1.6; }
+.error { margin: 18px 0 0; color: var(--ui-danger); font-size: 13px; line-height: 1.7; }
+.updateActions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 25px; }
+.later, .refresh { display: inline-flex; min-height: 42px; align-items: center; justify-content: center; gap: 7px; padding: 9px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; }
+.later { color: var(--foreground-secondary); background: var(--background-secondary); }
+.refresh { background: var(--accent-brand); color: #fff; }
+.later:hover { background: var(--card-border); }
+.refresh:hover:not(:disabled) { filter: brightness(.94); }
+.refresh:disabled { cursor: default; opacity: .62; }
+.dialog .close { position: absolute; top: 8px; right: 8px; display: grid; width: 40px; height: 40px; place-items: center; border-radius: 8px; color: var(--foreground-secondary); }
+.dialog .close:hover { background: var(--background-secondary); }
+.dialog button:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 3px; }
 @media (max-width: 640px) { .notice { right: 16px; } }
-@media (prefers-reduced-motion: reduce) { .notice button { transition: none; } }
+@media (max-width: 640px) { .updatePanel { padding: 22px 18px max(22px, env(safe-area-inset-bottom, 0px)); } .updateHeader h2 { font-size: 19px; } .updateActions { flex-direction: column-reverse; } .later, .refresh { width: 100%; } }
+@media (prefers-reduced-motion: reduce) { .notice button, .spin, .indeterminate::after { transition: none; animation: none; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes indeterminate { from { transform: translateX(0); } to { transform: translateX(390%); } }

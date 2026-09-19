@@ -23,7 +23,8 @@ function getController() {
     safety: () => {
       if (hasWebBuildActivity()) return 'task';
       if (isWebBuildActivitySettling()) return 'settling';
-      if (documentHasPendingInput(document) || document.querySelector('dialog[open]')) return 'input';
+      // 更新详情弹窗只展示状态，不应阻塞已准备好的网页热更新；登录、安装等业务弹窗仍会阻塞刷新。
+      if (documentHasPendingInput(document) || document.querySelector('dialog[open]:not([data-web-update-dialog])')) return 'input';
       if (document.visibilityState !== 'visible') return 'hidden';
       if (Date.now() - lastInteraction < 15_000) return 'interaction';
       return '';

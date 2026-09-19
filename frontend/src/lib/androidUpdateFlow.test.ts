@@ -7,7 +7,7 @@ const require = createRequire(import.meta.url);
 const ts = require('typescript');
 const source = readFileSync(new URL('./appUpdate.ts', import.meta.url), 'utf8');
 const javascript = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-const manifest = { schema_version: 2, channel: 'beta', availability: 'available', platform: 'android', artifact_kind: 'debug', version: '1.3.0', build: 30, published_at: '2026-09-14T00:00:00Z', download_url: 'https://luxai.cn/download/android/zhicui-1.3.0.apk', size_bytes: 123456, mandatory: false, release_notes: ['体验优化。'] };
+const manifest = { schema_version: 2, channel: 'beta', availability: 'available', platform: 'android', artifact_kind: 'debug', version: '1.3.0', build: 30, published_at: '2026-09-14T00:00:00Z', download_url: 'https://luxai.cn/download/android/Zhicui-1.3.0-30.apk', size_bytes: 123456, mandatory: false, release_notes: ['体验优化。'] };
 function setup(payload: unknown = manifest) {
   let requests = 0; let opens = 0;
   const exports: Record<string, any> = {};

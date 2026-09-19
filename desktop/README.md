@@ -103,6 +103,10 @@ Electron 使用 `https://luxai.cn/download/windows/` generic feed。每个版本
 .\scripts\release-desktop.ps1 -Version <version> -Publish
 ```
 
+默认使用最大压缩，优先减少下载量；如果目标是缩短本机解压安装时间，可使用
+`-FastInstall`，这会改用普通压缩，仍保留 `.blockmap` 差分更新。正式 Stable
+发布仍必须配置 Authenticode 发布者、证书指纹和可信时间戳。
+
 脚本会更新版本号、构建并核验 SHA-512，先上传 EXE 和 blockmap，最后原子切换
 `latest.yml`。没有代码签名时脚本默认拒绝公开发布；仅限内部验证时可显式追加
 `-AllowUnsigned`。客户端启动 12 秒后、窗口重新聚焦时和每小时都会检查更新，

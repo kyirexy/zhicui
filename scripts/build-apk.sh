@@ -59,12 +59,17 @@ API_URL="${API_URL:-https://luxai.cn}"
 CHANNEL="${RELEASE_CHANNEL:-beta}"
 PUBLISH="${PUBLISH:-0}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
+CAPACITOR_REMOTE_UI="${CAPACITOR_REMOTE_UI:-0}"
 [[ "$CHANNEL" == "beta" || "$CHANNEL" == "stable" ]] ||
   { echo 'RELEASE_CHANNEL 只能是 beta 或 stable' >&2; exit 1; }
 [[ "$PUBLISH" == "0" || "$PUBLISH" == "1" ]] ||
   { echo 'PUBLISH 只能是 0 或 1，且默认安全关闭' >&2; exit 1; }
 [[ "$SKIP_BUILD" == "0" || "$SKIP_BUILD" == "1" ]] ||
   { echo 'SKIP_BUILD 只能是 0 或 1' >&2; exit 1; }
+[[ "$CAPACITOR_REMOTE_UI" == "0" || "$CAPACITOR_REMOTE_UI" == "1" ]] ||
+  { echo 'CAPACITOR_REMOTE_UI 只能是 0 或 1' >&2; exit 1; }
+[[ "$CHANNEL" != "stable" || "$CAPACITOR_REMOTE_UI" == "0" ]] ||
+  { echo 'Stable APK 必须使用 bundled UI，不能启用 CAPACITOR_REMOTE_UI' >&2; exit 1; }
 git -C "$ROOT" diff --cached --quiet -- || {
   echo 'Git index 已有暂存内容；拒绝混入 Android 发行提交' >&2
   exit 1
@@ -73,6 +78,8 @@ git -C "$ROOT" diff --cached --quiet -- || {
 LEGACY_MANIFEST="$ROOT/frontend/public/download/latest.json"
 CHANNEL_MANIFEST="$ROOT/frontend/public/download/releases/android/$CHANNEL.json"
 APK_PUBLIC_ROOT="$ROOT/frontend/public/download"
+VERSIONED_APK=""
+LEGACY_APK="$APK_PUBLIC_ROOT/zhicui.apk"
 
 resolve_android_sdk() {
   local configured="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
@@ -301,10 +308,13 @@ else
   cd "$ROOT/frontend"
   npm ci --silent
   CAPACITOR_BUILD=true \
+  CAPACITOR_REMOTE_UI="$([[ "$CAPACITOR_REMOTE_UI" == "1" ]] && printf true || printf false)" \
   NEXT_PUBLIC_API_URL="$API_URL" \
   NEXT_PUBLIC_RELEASE_CHANNEL="$CHANNEL" \
   npm run build
-  npx cap sync android
+  # capacitor.config.ts 在 cap sync 阶段再次读取环境变量；不能只给 Next 构建进程传入。
+  CAPACITOR_REMOTE_UI="$([[ "$CAPACITOR_REMOTE_UI" == "1" ]] && printf true || printf false)" \
+    npx cap sync android
   # public/download 是站点发行目录，不能递归嵌入 APK 自身。
   find "$ROOT/frontend/android/app/src/main/assets/public/download" -type f -name '*.apk' -delete 2>/dev/null || true
 
@@ -393,10 +403,15 @@ if [[ "$CHANNEL" == "stable" ]]; then
   TARGET_APK="$APK_PUBLIC_ROOT/android/Zhicui-$VERSION-$BUILD.apk"
   DOWNLOAD_URL="https://luxai.cn/download/android/Zhicui-$VERSION-$BUILD.apk"
 else
-  TARGET_APK="$APK_PUBLIC_ROOT/zhicui.apk"
-  DOWNLOAD_URL='https://luxai.cn/download/zhicui.apk'
+  mkdir -p "$APK_PUBLIC_ROOT/android"
+  TARGET_APK="$APK_PUBLIC_ROOT/android/Zhicui-$VERSION-$BUILD.apk"
+  DOWNLOAD_URL="https://luxai.cn/download/android/Zhicui-$VERSION-$BUILD.apk"
 fi
 cp "$BUILT_APK" "$TARGET_APK"
+if [[ "$CHANNEL" == "beta" ]]; then
+  # 保留旧客户端可访问的兼容地址，但新清单始终绑定不可变版本化路径。
+  cp "$TARGET_APK" "$LEGACY_APK"
+fi
 SIZE_BYTES="$(wc -c <"$TARGET_APK" | tr -d '[:space:]')"
 SHA256="$(sha256sum "$TARGET_APK" | awk '{print tolower($1)}')"
 PUBLISHED_AT="$(node -e 'console.log(new Date().toISOString())')"
@@ -405,9 +420,9 @@ if [[ -z "${RELEASE_NOTES_JSON:-}" ]]; then
 fi
 
 if [[ "$CHANNEL" != "stable" || "$SKIP_BUILD" == "1" ]]; then
-node - "$CHANNEL_MANIFEST" "$CHANNEL" "$VERSION" "$BUILD" "$DOWNLOAD_URL" "$SIZE_BYTES" "$SHA256" "$CERT_SHA256" "$ARTIFACT_KIND" "$DEBUGGABLE" "$PUBLISHED_AT" "$RELEASE_NOTES_JSON" "$RESOLVED_COMMIT" <<'NODE'
+node - "$CHANNEL_MANIFEST" "$CHANNEL" "$VERSION" "$BUILD" "$DOWNLOAD_URL" "$SIZE_BYTES" "$SHA256" "$CERT_SHA256" "$ARTIFACT_KIND" "$DEBUGGABLE" "$PUBLISHED_AT" "$RELEASE_NOTES_JSON" "$RESOLVED_COMMIT" "$CAPACITOR_REMOTE_UI" <<'NODE'
 const fs = require('fs');
-const [path, channel, version, build, downloadUrl, size, sha256, cert, kind, debuggable, publishedAt, notesJson, sourceCommit] = process.argv.slice(2);
+const [path, channel, version, build, downloadUrl, size, sha256, cert, kind, debuggable, publishedAt, notesJson, sourceCommit, remoteUi] = process.argv.slice(2);
 const notes = JSON.parse(notesJson);
 if (!Array.isArray(notes) || notes.length < 1 || !notes.every(value => typeof value === 'string' && value.trim())) {
   throw new Error('RELEASE_NOTES_JSON 必须是至少含一项的 JSON 字符串数组');
@@ -432,6 +447,7 @@ const manifest = {
     identity: channel === 'stable' ? 'configured-release-keystore' : 'Android Debug',
     certificate_sha256: cert,
   },
+  ui_update_mode: remoteUi === '1' ? 'remote' : 'bundled',
   release_notes: notes.map(value => value.trim()),
 };
 fs.mkdirSync(require('path').dirname(path), { recursive: true });
@@ -468,6 +484,7 @@ if [[ "$PUBLISH" == "1" ]]; then
   )
   if [[ "$CHANNEL" == "beta" ]]; then
     allowed_paths+=("${LEGACY_MANIFEST#"$ROOT/"}")
+    allowed_paths+=("${LEGACY_APK#"$ROOT/"}")
   fi
   while IFS= read -r dirty_path; do
     [[ -z "$dirty_path" ]] && continue
@@ -517,6 +534,7 @@ else
   copy_release_output "$TARGET_APK" "${TARGET_APK#"$ROOT/"}"
   if [[ "$CHANNEL" == "beta" ]]; then
     copy_release_output "$LEGACY_MANIFEST" "${LEGACY_MANIFEST#"$ROOT/"}"
+    copy_release_output "$LEGACY_APK" "${LEGACY_APK#"$ROOT/"}"
   fi
   echo "PUBLISH=0：已从源提交 $RESOLVED_COMMIT 完成隔离构建，产物已复制回调用仓库；未暂存、提交或推送。"
 fi

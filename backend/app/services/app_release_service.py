@@ -15,7 +15,9 @@ _RELEASE_MANIFEST_PATH = (
     / "frontend"
     / "public"
     / "download"
-    / "latest.json"
+    / "releases"
+    / "android"
+    / "beta.json"
 )
 
 
@@ -27,7 +29,7 @@ def _is_trusted_download_url(value: str) -> bool:
         and parsed.port is None
         and parsed.username is None
         and parsed.password is None
-        and parsed.path == "/download/zhicui.apk"
+        and bool(re.fullmatch(r"/download/android/Zhicui-[0-9]+\.[0-9]+\.[0-9]+-[1-9][0-9]*\.apk", parsed.path))
     )
 
 
@@ -49,10 +51,19 @@ def get_latest_android_release() -> dict[str, Any]:
     download_url = payload.get("download_url")
     published_at = payload.get("published_at")
     size_bytes = payload.get("size_bytes")
+    ui_update_mode = payload.get("ui_update_mode", "bundled")
+    expected_download_path = (
+        f"/download/android/Zhicui-{version}-{build}.apk"
+        if isinstance(version, str) and isinstance(build, int) and not isinstance(build, bool)
+        else ""
+    )
+    parsed_download_url = urlparse(download_url) if isinstance(download_url, str) else None
 
     valid = (
-        payload.get("schema_version") == 1
+        payload.get("schema_version") == 2
         and payload.get("platform") == "android"
+        and payload.get("channel") == "beta"
+        and payload.get("availability") == "available"
         and isinstance(version, str)
         and bool(_VERSION_RE.fullmatch(version))
         and isinstance(build, int)
@@ -62,9 +73,12 @@ def get_latest_android_release() -> dict[str, Any]:
         and bool(published_at.strip())
         and isinstance(download_url, str)
         and _is_trusted_download_url(download_url)
+        and parsed_download_url is not None
+        and parsed_download_url.path == expected_download_path
         and isinstance(size_bytes, int)
         and not isinstance(size_bytes, bool)
         and size_bytes > 0
+        and ui_update_mode in {"bundled", "remote"}
         and isinstance(notes, list)
         and 1 <= len(notes) <= 20
         and all(
@@ -77,8 +91,10 @@ def get_latest_android_release() -> dict[str, Any]:
         raise RuntimeError("Android 版本清单格式无效")
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "platform": "android",
+        "channel": "beta",
+        "ui_update_mode": ui_update_mode,
         "version": version,
         "build": build,
         "published_at": published_at,

@@ -1,20 +1,12 @@
 [Unit]
-Description=VideoCapsule Frontend (Next.js)
+Description=VideoCapsule Frontend (blue-green coordinator)
 After=network.target videocapsule-backend.service
 
 [Service]
-Type=simple
-User=ubuntu
-Group=ubuntu
-WorkingDirectory=/opt/zhicui-runtime/current/frontend
-Environment=NODE_ENV=production
-Environment=HOSTNAME=127.0.0.1
-Environment=PORT=3000
-ExecStart=/usr/bin/npm run start -- -p 3000 -H 127.0.0.1
-Restart=on-failure
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/zhicui-deploy/frontend-supervisor.sh start
+ExecStop=/usr/local/lib/zhicui-deploy/frontend-supervisor.sh stop
 
 [Install]
 WantedBy=multi-user.target

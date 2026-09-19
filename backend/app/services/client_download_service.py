@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 import json
 from pathlib import Path
 import re
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, update
@@ -25,6 +26,9 @@ _WINDOWS_MANIFEST_PATHS = (
     Path("/var/lib/zhicui-downloads/releases/windows/beta.json"),
     Path(__file__).resolve().parents[3] / "frontend/public/download/releases/windows/beta.json",
 )
+_ANDROID_MANIFEST_PATHS = (
+    Path(__file__).resolve().parents[3] / "frontend/public/download/releases/android/beta.json",
+)
 
 
 def download_target(platform: str) -> str:
@@ -32,6 +36,43 @@ def download_target(platform: str) -> str:
     if platform not in PLATFORMS:
         raise ValueError("unsupported client platform")
     fallback = DOWNLOAD_TARGETS[platform]
+    if platform == "android":
+        for path in _ANDROID_MANIFEST_PATHS:
+            try:
+                with path.open("rb") as stream:
+                    raw = stream.read(65537)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return fallback
+            try:
+                if len(raw) > 65536:
+                    return fallback
+                manifest = json.loads(raw)
+            except (ValueError, UnicodeDecodeError):
+                return fallback
+            if not isinstance(manifest, dict):
+                return fallback
+            version = manifest.get("version")
+            build = manifest.get("build")
+            target = manifest.get("download_url")
+            if (
+                manifest.get("schema_version") != 2
+                or manifest.get("platform") != "android"
+                or manifest.get("channel") != "beta"
+                or manifest.get("availability") != "available"
+                or not isinstance(version, str)
+                or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version)
+                or not isinstance(build, int) or isinstance(build, bool) or build <= 0
+                or not isinstance(target, str)
+                or not re.fullmatch(
+                    rf"https://luxai\.cn/download/android/Zhicui-{re.escape(version)}-{build}\.apk",
+                    target,
+                )
+            ):
+                return fallback
+            return urlparse(target).path
+        return fallback
     if platform != "windows":
         return fallback
     for path in _WINDOWS_MANIFEST_PATHS:

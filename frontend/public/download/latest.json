@@ -8,7 +8,7 @@
   "build": 29,
   "published_at": "2026-09-10T02:36:06.276Z",
   "source_commit": "60d680a23c98c92c6e86742452af62ddab4ab87a",
-  "download_url": "https://luxai.cn/download/zhicui.apk",
+  "download_url": "https://luxai.cn/download/android/Zhicui-1.3.7-29.apk",
   "size_bytes": 34416262,
   "sha256": "6f60497581a47882df61fda113a623e4b53badf06e83b5562bdc561d2d6e85d4",
   "mandatory": false,
@@ -22,5 +22,6 @@
     "首页新增昨日回顾，一键提取点赞收藏文稿并生成 AI 总结。",
     "文稿并发提取，实时显示同时处理中、完成与排队数量。",
     "改善断线恢复与来源记录保存，补全文稿不改变收藏喜欢顺序。"
-  ]
+  ],
+  "ui_update_mode": "bundled"
 }

@@ -112,6 +112,20 @@ fi
 [ -L /opt/zhicui-runtime/current ] || err "/opt/zhicui-runtime/current 必须是符号链接"
 cp $APP_DIR/deploy/videocapsule-backend.service /etc/systemd/system/
 cp $APP_DIR/deploy/videocapsule-frontend.service /etc/systemd/system/
+cp $APP_DIR/deploy/videocapsule-frontend-blue.service /etc/systemd/system/
+cp $APP_DIR/deploy/videocapsule-frontend-green.service /etc/systemd/system/
+install -o root -g root -m 0755 "$APP_DIR/deploy/frontend-supervisor.sh" /usr/local/lib/zhicui-deploy/frontend-supervisor.sh
+install -o root -g root -m 0755 "$APP_DIR/deploy/frontend-route.sh" /usr/local/lib/zhicui-deploy/frontend-route.sh
+install -d -m 0755 /etc/nginx/snippets
+if [ ! -s /etc/zhicui/frontend-color ] || ! grep -Eq '^(blue|green)$' /etc/zhicui/frontend-color; then
+  printf 'blue\n' > /etc/zhicui/frontend-color
+  chmod 0644 /etc/zhicui/frontend-color
+fi
+case "$(tr -d '[:space:]' </etc/zhicui/frontend-color)" in
+  green) printf 'set $zhicui_frontend_port 3002;\n' >/etc/nginx/snippets/zhicui-frontend-port.conf ;;
+  *) printf 'set $zhicui_frontend_port 3001;\n' >/etc/nginx/snippets/zhicui-frontend-port.conf ;;
+esac
+chmod 0644 /etc/nginx/snippets/zhicui-frontend-port.conf
 chown -R ubuntu:ubuntu $APP_DIR
 chmod -R g+w $APP_DIR
 systemctl daemon-reload
@@ -122,9 +136,15 @@ install -d -o root -g root -m 0700 /var/lib/zhicui-deployments
 install -d -o ubuntu -g ubuntu -m 0770 /var/lib/zhicui-cover-cache
 install -d -o ubuntu -g ubuntu -m 0775 \
   /var/lib/zhicui-downloads/windows \
-  /var/lib/zhicui-downloads/releases/windows
+  /var/lib/zhicui-downloads/releases/windows \
+  /var/lib/zhicui-downloads/android
 rsync -a --ignore-existing "$APP_DIR/frontend/public/download/releases/windows/" \
   /var/lib/zhicui-downloads/releases/windows/
+rsync -a --ignore-existing "$APP_DIR/frontend/public/download/android/" \
+  /var/lib/zhicui-downloads/android/ 2>/dev/null || true
+if [ -s "$APP_DIR/frontend/public/download/zhicui.apk" ] && [ ! -e /var/lib/zhicui-downloads/zhicui.apk ]; then
+  install -m 0644 "$APP_DIR/frontend/public/download/zhicui.apk" /var/lib/zhicui-downloads/zhicui.apk
+fi
 chown -R ubuntu:ubuntu /var/lib/zhicui-downloads
 
 log "=== [7/8] 配置 Nginx 反向代理 ==="
@@ -160,6 +180,7 @@ visudo -cf /etc/sudoers.d/jenkins-videocapsule
 log "=== 启动应用服务 ==="
 systemctl restart videocapsule-backend
 sleep 3
+systemctl disable --now videocapsule-frontend-blue.service videocapsule-frontend-green.service 2>/dev/null || true
 systemctl restart videocapsule-frontend
 
 log "=== 初始化备份恢复安全状态 ==="
@@ -172,7 +193,7 @@ fi
 log "=== ✅ 部署完成 ==="
 echo ""
 echo "  后端健康检查: curl http://127.0.0.1:8000/api/health"
-echo "  前端:        http://127.0.0.1:3000"
+echo "  前端:        http://127.0.0.1:3001/3002（蓝绿端口，由 Nginx 选择）"
 echo "  对外访问:    http://$(curl -s --max-time 3 ifconfig.me || echo '服务器IP')"
 echo ""
 warn "剩余步骤:"

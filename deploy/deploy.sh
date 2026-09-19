@@ -17,6 +17,9 @@ AGENT_KILL_SWITCH_FILE="/etc/zhicui/agent-interface.env"
 AGENT_KILL_SWITCH_HELPER="/usr/local/lib/zhicui-deploy/agent-interface-kill-switch.sh"
 RELEASE_EVIDENCE_HELPER="/usr/local/lib/zhicui-deploy/release-evidence-store.py"
 CASE_MEDIA_HELPER="/usr/local/lib/zhicui-deploy/case-media-maintenance.py"
+FRONTEND_ROUTE_HELPER="/usr/local/lib/zhicui-deploy/frontend-route.sh"
+FRONTEND_STATE_FILE="/etc/zhicui/frontend-color"
+FRONTEND_PORT_FILE="/etc/nginx/snippets/zhicui-frontend-port.conf"
 PIP_BOOTSTRAP_VERSION="26.2.1"
 PYPI_INDEX_URL="${ZHICUI_PYPI_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 PIP_NETWORK_TIMEOUT="${ZHICUI_PIP_TIMEOUT_SECONDS:-60}"
@@ -27,7 +30,41 @@ log() { printf "${G}[%s]${N} %s\n" "$(date +%H:%M:%S)" "$1"; }
 warn() { printf "${Y}[%s] 警告:${N} %s\n" "$(date +%H:%M:%S)" "$1"; }
 err() { printf "${R}[%s] 错误:${N} %s\n" "$(date +%H:%M:%S)" "$1" >&2; exit 1; }
 
-for command_name in flock git npm node curl python3 python3.12 timeout cmp diff realpath readlink sha256sum sudo; do
+frontend_color() {
+  local color=""
+  if [[ -s "$FRONTEND_STATE_FILE" ]]; then
+    color="$(tr -d '[:space:]' <"$FRONTEND_STATE_FILE")"
+  fi
+  case "$color" in
+    blue|green) printf '%s' "$color" ;;
+    *) printf '%s' blue ;;
+  esac
+}
+
+frontend_other_color() {
+  [[ "$1" == blue ]] && printf '%s' green || printf '%s' blue
+}
+
+frontend_port() {
+  [[ "$1" == blue ]] && printf '%s' 3001 || printf '%s' 3002
+}
+
+frontend_unit() {
+  printf 'videocapsule-frontend-%s.service' "$1"
+}
+
+wait_frontend_health() {
+  local port="$1" attempt
+  for attempt in $(seq 1 30); do
+    if curl -fsS --max-time 5 "http://127.0.0.1:${port}/" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+for command_name in flock git npm node curl python3 python3.12 timeout cmp diff realpath readlink sha256sum rsync sudo; do
   command -v "$command_name" >/dev/null 2>&1 || err "服务器缺少命令：$command_name"
 done
 case "$AGENT_RELEASE_MODE" in
@@ -43,8 +80,13 @@ if [[ "$AGENT_RELEASE_MODE" == stable && "${SMOKE_REQUIRE_AGENT_INTERFACE:-1}" !
 fi
 [[ "$APP_DIR" == /opt/zhicui && "$RUNTIME_ROOT" == /opt/zhicui-runtime ]] ||
   err '生产发布仅允许批准的 checkout 与 runtime 目录'
-[[ -x "$AGENT_KILL_SWITCH_HELPER" && -x "$RELEASE_EVIDENCE_HELPER" && -f "$AGENT_KILL_SWITCH_FILE" ]] ||
+[[ -x "$AGENT_KILL_SWITCH_HELPER" && -x "$RELEASE_EVIDENCE_HELPER" && -x "$FRONTEND_ROUTE_HELPER" && -f "$AGENT_KILL_SWITCH_FILE" ]] ||
   err 'Agent 独立 kill-switch 或 release evidence helper 未安装；请先执行 preinstall-production-assets.sh'
+[[ -s "$FRONTEND_STATE_FILE" ]] || err '前端蓝绿颜色状态不存在；请先执行 preinstall-production-assets.sh'
+CURRENT_FRONTEND_COLOR="$(frontend_color)"
+CURRENT_FRONTEND_PORT="$(frontend_port "$CURRENT_FRONTEND_COLOR")"
+grep -Fqx "set \$zhicui_frontend_port ${CURRENT_FRONTEND_PORT};" "$FRONTEND_PORT_FILE" ||
+  err '前端颜色状态与 Nginx 端口选择不一致；请先执行 preinstall-production-assets.sh'
 [[ -e "$APP_DIR/.git" && -f "$BACKEND_ENV" ]] ||
   err '生产 checkout 或 backend/.env 不完整'
 [[ "$DOWNLOAD_ROOT" == /var/lib/zhicui-downloads && -d "$DOWNLOAD_ROOT" ]] ||
@@ -79,10 +121,15 @@ GATES_FILE="$(mktemp)"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 PREVIOUS_COMMIT="$(git rev-parse HEAD)"
 PREVIOUS_RUNTIME="$(realpath "$CURRENT_LINK")"
+PREVIOUS_FRONTEND_COLOR="$CURRENT_FRONTEND_COLOR"
+TARGET_FRONTEND_COLOR=""
 PREVIOUS_RUNTIME_COMMIT=""
 TARGET_COMMIT=""
 PREVIOUS_AGENT_SCHEMA_FINGERPRINT=""
 TARGET_AGENT_SCHEMA_FINGERPRINT=""
+ANDROID_LEGACY_ALIAS_BACKUP=""
+ANDROID_LEGACY_ALIAS_TEMP=""
+ANDROID_LEGACY_ALIAS_PUBLISHED=0
 AGENT_SCHEMA_DARK_EVIDENCE=""
 AGENT_SCHEMA_DARK_EVIDENCE_SHA256=""
 AGENT_SCHEMA_REHEARSAL_EVIDENCE=""
@@ -308,20 +355,33 @@ force_agent_fail_closed() {
 }
 
 rollback_runtime() {
-  warn '发布闸门失败，原子切回上一版 runtime'
+  warn '发布闸门失败，切回上一版 runtime 与前端颜色'
   ROLLBACK_RESULT="attempted"
   local failed=0 resolved=''
   set +e
+  if [[ "$ANDROID_LEGACY_ALIAS_PUBLISHED" -eq 1 ]]; then
+    if [[ -n "$ANDROID_LEGACY_ALIAS_BACKUP" && -s "$ANDROID_LEGACY_ALIAS_BACKUP" ]]; then
+      mv -Tf -- "$ANDROID_LEGACY_ALIAS_BACKUP" "$DOWNLOAD_ROOT/zhicui.apk" || failed=1
+    else
+      rm -f -- "$DOWNLOAD_ROOT/zhicui.apk" || failed=1
+    fi
+    ANDROID_LEGACY_ALIAS_PUBLISHED=0
+  else
+    rm -f -- "$ANDROID_LEGACY_ALIAS_BACKUP" "$ANDROID_LEGACY_ALIAS_TEMP"
+  fi
   set_agent_kill_switch dark || failed=1
-  sudo systemctl stop videocapsule-frontend || failed=1
+  if [[ -n "$TARGET_FRONTEND_COLOR" ]]; then
+    sudo systemctl stop "$(frontend_unit "$TARGET_FRONTEND_COLOR")" || failed=1
+  fi
   atomic_runtime_switch "$PREVIOUS_RUNTIME" || failed=1
   resolved="$(realpath "$CURRENT_LINK" 2>/dev/null)" || failed=1
   [[ "$resolved" == "$PREVIOUS_RUNTIME" ]] || failed=1
+  sudo -n "$FRONTEND_ROUTE_HELPER" "$PREVIOUS_FRONTEND_COLOR" || failed=1
   sudo systemctl restart videocapsule-backend || failed=1
-  sudo systemctl start videocapsule-frontend || failed=1
+  sudo systemctl start "$(frontend_unit "$PREVIOUS_FRONTEND_COLOR")" || failed=1
   if [[ "$failed" -eq 0 ]] &&
      wait_backend_health &&
-     curl -fsS --max-time 8 http://127.0.0.1:3000/ >/dev/null 2>&1 &&
+     wait_frontend_health "$(frontend_port "$PREVIOUS_FRONTEND_COLOR")" &&
      probe_agent_interface absent-or-disabled; then
     ROLLBACK_RESULT="succeeded"
     record_gate agent_kill_switch_rollback pass 'Agent 接口已原子恢复为 false 并完成运行态复验'
@@ -332,6 +392,21 @@ rollback_runtime() {
     record_gate rollback fail '回滚后健康检查失败，需人工介入'
   fi
   set -e
+}
+
+publish_android_legacy_alias() {
+  local source="$1"
+  [[ -s "$source" ]] || return 1
+  ANDROID_LEGACY_ALIAS_TEMP="$DOWNLOAD_ROOT/.zhicui.apk.$DEPLOY_ID.tmp"
+  ANDROID_LEGACY_ALIAS_BACKUP="$DOWNLOAD_ROOT/.zhicui.apk.$DEPLOY_ID.previous"
+  rm -f -- "$ANDROID_LEGACY_ALIAS_TEMP" "$ANDROID_LEGACY_ALIAS_BACKUP"
+  if [[ -e "$DOWNLOAD_ROOT/zhicui.apk" ]]; then
+    cp -p -- "$DOWNLOAD_ROOT/zhicui.apk" "$ANDROID_LEGACY_ALIAS_BACKUP" || return 1
+  fi
+  cp -p -- "$source" "$ANDROID_LEGACY_ALIAS_TEMP" || return 1
+  chmod 0644 "$ANDROID_LEGACY_ALIAS_TEMP"
+  mv -Tf -- "$ANDROID_LEGACY_ALIAS_TEMP" "$DOWNLOAD_ROOT/zhicui.apk" || return 1
+  ANDROID_LEGACY_ALIAS_PUBLISHED=1
 }
 
 persist_smoke_evidence() {
@@ -765,6 +840,10 @@ for pair in \
   "$RELEASE_DIR/deploy/nginx-videocapsule.conf:/etc/nginx/sites-available/nginx-videocapsule.conf" \
   "$RELEASE_DIR/deploy/videocapsule-backend.service:/etc/systemd/system/videocapsule-backend.service" \
   "$RELEASE_DIR/deploy/videocapsule-frontend.service:/etc/systemd/system/videocapsule-frontend.service" \
+  "$RELEASE_DIR/deploy/videocapsule-frontend-blue.service:/etc/systemd/system/videocapsule-frontend-blue.service" \
+  "$RELEASE_DIR/deploy/videocapsule-frontend-green.service:/etc/systemd/system/videocapsule-frontend-green.service" \
+  "$RELEASE_DIR/deploy/frontend-supervisor.sh:/usr/local/lib/zhicui-deploy/frontend-supervisor.sh" \
+  "$RELEASE_DIR/deploy/frontend-route.sh:/usr/local/lib/zhicui-deploy/frontend-route.sh" \
   "$RELEASE_DIR/deploy/agent-interface-kill-switch.sh:$AGENT_KILL_SWITCH_HELPER" \
   "$RELEASE_DIR/deploy/release-evidence-store.py:$RELEASE_EVIDENCE_HELPER" \
   "$RELEASE_DIR/deploy/case-media-maintenance.py:$CASE_MEDIA_HELPER" \
@@ -799,7 +878,28 @@ record_gate case_media_backup pass "$CASE_MEDIA_EVIDENCE"
 sudo -n "$CASE_MEDIA_HELPER" preflight || err '案例媒体依赖、私有目录或构建磁盘余量不足'
 record_gate case_media_storage pass '私有持久目录、FFmpeg/FFprobe、1 GiB 媒体额度与 2.5 GiB 构建余量通过'
 
-ZHICUI_DOWNLOAD_ROOT="$DOWNLOAD_ROOT" node "$RELEASE_DIR/scripts/verify-release-manifests.mjs"
+mkdir -p "$DOWNLOAD_ROOT/android"
+if [[ -d "$RELEASE_DIR/frontend/public/download/android" ]]; then
+  rsync -a --ignore-existing "$RELEASE_DIR/frontend/public/download/android/" "$DOWNLOAD_ROOT/android/"
+fi
+ANDROID_RELEASE_APK_PATH="$(node - "$RELEASE_DIR/frontend/public/download/releases/android/beta.json" "$DOWNLOAD_ROOT/android" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const [manifestPath, artifactRoot] = process.argv.slice(2);
+const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+if (manifest.availability !== 'available') process.exit(0);
+const url = new URL(manifest.download_url);
+const artifact = path.basename(url.pathname);
+if (!/^Zhicui-\d+\.\d+\.\d+-\d+\.apk$/.test(artifact)) throw new Error('Android beta APK 路径无效');
+console.log(path.resolve(artifactRoot, artifact));
+NODE
+)"
+if [[ -n "$ANDROID_RELEASE_APK_PATH" ]]; then
+  [[ -s "$ANDROID_RELEASE_APK_PATH" ]] || err '持久 Android 版本化 APK 缺失'
+fi
+ZHICUI_DOWNLOAD_ROOT="$DOWNLOAD_ROOT" \
+ZHICUI_REQUIRE_LEGACY_ANDROID_MATCH=0 \
+  node "$RELEASE_DIR/scripts/verify-release-manifests.mjs"
 record_gate release_manifests pass 'beta/stable 清单与 Android beta 产物一致'
 
 log '为目标 release 创建独立 Python 环境'
@@ -850,34 +950,41 @@ npm run build
 # 或可能存在的构建环境文件。Jenkins 已由 preinstall 加入 ubuntu 组。
 chgrp -R ubuntu "$RELEASE_DIR"
 chmod -R g+rX "$RELEASE_DIR"
-# Nginx only reads versioned public download manifests through the current
-# release symlink.  Keep application source private while granting traversal
-# and read access exclusively to the public asset tree.
+# Nginx reads public web assets from the runtime and immutable client artifacts
+# from the durable download root. Keep application source private while
+# granting traversal and read access exclusively to the public asset tree.
 chmod o+x "$RELEASE_DIR" "$RELEASE_DIR/frontend"
 chmod -R o+rX "$RELEASE_DIR/frontend/public"
 BUILD_ID="$(<"$RELEASE_DIR/frontend/.next/BUILD_ID")"
 record_gate frontend_build pass "$BUILD_ID"
 
-log '原子切换 runtime 并启动目标版本'
+log '启动备用前端、原子切换 runtime，再平滑切换 Nginx 流量'
 SWITCH_STARTED=1
-sudo systemctl stop videocapsule-frontend
+TARGET_FRONTEND_COLOR="$(frontend_other_color "$PREVIOUS_FRONTEND_COLOR")"
+TARGET_FRONTEND_PORT="$(frontend_port "$TARGET_FRONTEND_COLOR")"
+PREVIOUS_FRONTEND_PORT="$(frontend_port "$PREVIOUS_FRONTEND_COLOR")"
+sudo systemctl stop "$(frontend_unit "$TARGET_FRONTEND_COLOR")" >/dev/null 2>&1 || true
 atomic_runtime_switch "$RELEASE_DIR"
 [[ "$(realpath "$CURRENT_LINK")" == "$(realpath "$RELEASE_DIR")" ]] || err 'runtime 身份校验失败'
 set_agent_kill_switch "$AGENT_RELEASE_MODE" || err '无法原子切换目标 Agent kill-switch'
+sudo systemctl start "$(frontend_unit "$TARGET_FRONTEND_COLOR")"
+wait_frontend_health "$TARGET_FRONTEND_PORT" || err '目标前端备用颜色未通过 readiness'
+sudo -n "$FRONTEND_ROUTE_HELPER" "$TARGET_FRONTEND_COLOR" || err 'Nginx 前端颜色切换失败'
 sudo systemctl restart videocapsule-backend
-sudo systemctl start videocapsule-frontend
 
 READY=0
 for _ in $(seq 1 30); do
   if curl -fsS --max-time 5 http://127.0.0.1:8000/api/health >/dev/null 2>&1 &&
      curl -fsS --max-time 5 http://127.0.0.1:8000/api/readiness >/dev/null 2>&1 &&
-     curl -fsS --max-time 5 http://127.0.0.1:3000/ >/dev/null 2>&1; then
+      curl -fsS --max-time 5 "http://127.0.0.1:${TARGET_FRONTEND_PORT}/" >/dev/null 2>&1; then
     READY=1; break
   fi
   sleep 2
 done
 [[ "$READY" -eq 1 ]] || err '目标版本在 60 秒内未通过 liveness/readiness'
 record_gate readiness pass '目标 runtime 本机探测通过'
+sudo systemctl stop "$(frontend_unit "$PREVIOUS_FRONTEND_COLOR")" >/dev/null 2>&1 ||
+  warn '旧前端颜色退出失败；Nginx 已指向新颜色，需人工检查旧进程'
 
 TARGET_AGENT_SCHEMA_FINGERPRINT="$(verify_agent_schema "$RELEASE_DIR")" ||
   err '目标 runtime 的 Agent PostgreSQL 结构校验失败'
@@ -944,9 +1051,18 @@ record_gate agent_kill_switch_final pass "Agent $AGENT_RELEASE_MODE 最终状态
 cd "$APP_DIR"
 git merge --ff-only "$TARGET_COMMIT"
 record_gate deployment pass "$TARGET_COMMIT"
+if [[ -n "$ANDROID_RELEASE_APK_PATH" ]]; then
+  publish_android_legacy_alias "$ANDROID_RELEASE_APK_PATH" ||
+    err '版本化 Android APK 已就绪，但旧客户端兼容地址无法原子更新'
+  ZHICUI_DOWNLOAD_ROOT="$DOWNLOAD_ROOT" node "$RELEASE_DIR/scripts/verify-release-manifests.mjs" ||
+    err 'Android 兼容地址更新后发行清单复验失败'
+fi
 write_evidence 0 || err '成功部署证据无法写入 root-owned 哈希仓；拒绝完成发布'
 EVIDENCE_WRITTEN=1
 DEPLOY_SUCCEEDED=1
+rm -f -- "$ANDROID_LEGACY_ALIAS_BACKUP" "$ANDROID_LEGACY_ALIAS_TEMP"
+ANDROID_LEGACY_ALIAS_BACKUP=""
+ANDROID_LEGACY_ALIAS_TEMP=""
 if prune_reproducible_release_artifacts && prune_jenkins_releases; then
   record_gate release_retention pass "保留当前与前版与最近 ${KEEP_RELEASES} 个 Jenkins 部署，清理更早 release 与可再生成缓存"
 else

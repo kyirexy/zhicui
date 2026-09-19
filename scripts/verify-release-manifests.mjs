@@ -16,6 +16,9 @@ const downloadRoot = resolve(root, 'frontend/public/download');
 const durableDownloadRoot = process.env.ZHICUI_DOWNLOAD_ROOT
   ? resolve(process.env.ZHICUI_DOWNLOAD_ROOT)
   : null;
+// 生产部署在所有 readiness/smoke 闸门通过后才切换旧客户端兼容地址。
+// 在此之前允许持久目录暂时保留上一版，避免失败发布污染旧客户端入口。
+const requireLegacyAndroidMatch = process.env.ZHICUI_REQUIRE_LEGACY_ANDROID_MATCH !== '0';
 const channelPaths = [
   'releases/android/beta.json',
   'releases/android/stable.json',
@@ -77,6 +80,8 @@ function validateAvailableManifest(manifest, path) {
     `${path}: release_notes 无效`,
   );
   if (manifest.platform === 'android') {
+    assert(['bundled', 'remote'].includes(manifest.ui_update_mode), `${path}: ui_update_mode 无效`);
+    if (manifest.channel === 'stable') assert(manifest.ui_update_mode === 'bundled', `${path}: Stable 必须使用内置 UI`);
     assert(Number.isInteger(manifest.build) && manifest.build > 0, `${path}: build 无效`);
     assert(manifest.signing?.verified === true, `${path}: APK 签名未验证`);
     assert(shaPattern.test(manifest.signing?.certificate_sha256 || ''), `${path}: APK 证书指纹无效`);
@@ -90,8 +95,11 @@ function validateAvailableManifest(manifest, path) {
     } else {
       assert(manifest.artifact_kind === 'debug', `${path}: beta 必须明确为 debug APK`);
       assert(manifest.debuggable === true, `${path}: beta Debug APK 身份不一致`);
-      assert(url.pathname === '/download/zhicui.apk', `${path}: beta APK 下载地址无效`);
     }
+    assert(
+      url.pathname === `/download/android/Zhicui-${manifest.version}-${manifest.build}.apk`,
+      `${path}: Android APK 必须使用版本化下载地址`,
+    );
   }
   if (manifest.platform === 'windows') {
     assert(manifest.architecture === 'x64', `${path}: Windows 架构必须为 x64`);
@@ -176,18 +184,28 @@ for (const channel of verifyWindowsArtifact ? ['beta', 'stable'] : []) {
 // 所有 available Android 清单都必须与各自 APK 逐字节一致；Stable 只能指向
 // 版本化 release APK，绝不能把 beta/debug 兼容文件误当作正式产物。
 const androidBeta = manifests.get('android:beta');
-const apkPath = resolve(downloadRoot, 'zhicui.apk');
 if (verifyAndroidArtifact) {
   for (const channel of ['beta', 'stable']) {
     const manifest = manifests.get(`android:${channel}`);
     if (manifest.availability !== 'available') continue;
-    const artifactPath = channel === 'beta'
-      ? apkPath
-      : resolve(downloadRoot, 'android', basename(new URL(manifest.download_url).pathname));
-    assert(await exists(artifactPath), `Android ${channel}: available 清单缺少 APK`);
+    const artifactCandidates = durableDownloadRoot
+      ? [resolve(durableDownloadRoot, 'android', basename(new URL(manifest.download_url).pathname))]
+      : [resolve(downloadRoot, 'android', basename(new URL(manifest.download_url).pathname))];
+    const artifactPath = (await Promise.all(artifactCandidates.map(async path => [path, await exists(path)])))
+      .find(([, present]) => present)?.[0];
+    assert(artifactPath, `Android ${channel}: available 清单缺少 APK`);
     const apkStat = await stat(artifactPath);
     assert(apkStat.size === manifest.size_bytes, `Android ${channel}: size_bytes 与 APK 不一致`);
     assert(await sha256(artifactPath) === manifest.sha256.toLowerCase(), `Android ${channel}: SHA-256 与 APK 不一致`);
+    if (channel === 'beta' && requireLegacyAndroidMatch) {
+      const legacyPath = durableDownloadRoot
+        ? resolve(durableDownloadRoot, 'zhicui.apk')
+        : resolve(downloadRoot, 'zhicui.apk');
+      assert(await exists(legacyPath), 'Android beta: 缺少旧客户端兼容 APK 地址');
+      const legacyStat = await stat(legacyPath);
+      assert(legacyStat.size === manifest.size_bytes, 'Android beta: 兼容 APK 大小不一致');
+      assert(await sha256(legacyPath) === manifest.sha256.toLowerCase(), 'Android beta: 兼容 APK SHA-256 不一致');
+    }
   }
 }
 

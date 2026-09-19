@@ -70,7 +70,7 @@ class ClientDownloadAnalyticsTests(unittest.TestCase):
     def test_redirect_uses_only_allowlisted_package_target(self) -> None:
         response = client_download("android", self.db)
         self.assertEqual(response.status_code, 307)
-        self.assertEqual(response.headers["location"], "/download/zhicui.apk")
+        self.assertEqual(response.headers["location"], "/download/android/Zhicui-1.3.7-29.apk")
 
     def test_count_failure_does_not_block_download(self) -> None:
         with patch.object(client_download_service, "record_download", side_effect=RuntimeError("db unavailable")), patch("app.api.routes.error_log_service.record_error_safely"):

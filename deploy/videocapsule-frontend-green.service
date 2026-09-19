@@ -1,0 +1,17 @@
+[Unit]
+Description=VideoCapsule Frontend (Next.js green)
+After=network.target videocapsule-backend.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/zhicui-runtime/current/frontend
+Environment=NODE_ENV=production
+Environment=HOSTNAME=127.0.0.1
+Environment=PORT=3002
+ExecStart=/usr/bin/npm run start -- -p 3002 -H 127.0.0.1
+Restart=on-failure
+RestartSec=2
+StandardOutput=journal
+StandardError=journal

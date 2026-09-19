@@ -22,6 +22,7 @@ export interface AndroidReleaseManifest {
   sha256?: string;
   debuggable?: boolean;
   release_notes: string[];
+  ui_update_mode?: 'bundled' | 'remote';
 }
 
 export interface RuntimeAppInfo {
@@ -97,12 +98,16 @@ export function parseAndroidReleaseManifest(
   const publishedAt = value.published_at;
   const version = value.version;
   const downloadUrl = value.download_url;
+  const expectedVersionedPath = typeof version === 'string' && Number.isInteger(build)
+    ? `/download/android/Zhicui-${version}-${build}.apk`
+    : '';
 
   const valid = (
     (value.schema_version === 1 || value.schema_version === 2)
     && (value.channel === undefined || value.channel === CLIENT_RELEASE_CHANNEL)
     && (value.availability === undefined || value.availability === 'available')
     && value.platform === 'android'
+    && (value.ui_update_mode === undefined || value.ui_update_mode === 'bundled' || value.ui_update_mode === 'remote')
     && typeof version === 'string'
     && VERSION_PATTERN.test(version)
     && Number.isInteger(build)
@@ -111,6 +116,16 @@ export function parseAndroidReleaseManifest(
     && Number.isFinite(Date.parse(publishedAt))
     && typeof downloadUrl === 'string'
     && isTrustedApkUrl(downloadUrl)
+    && (() => {
+      try {
+        const parsed = new URL(downloadUrl);
+        return value.schema_version === 1
+          ? parsed.pathname === '/download/zhicui.apk' || parsed.pathname === expectedVersionedPath
+          : parsed.pathname === expectedVersionedPath;
+      } catch {
+        return false;
+      }
+    })()
     && Number.isInteger(sizeBytes)
     && Number(sizeBytes) > 0
     && Array.isArray(notes)

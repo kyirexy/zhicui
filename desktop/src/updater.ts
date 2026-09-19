@@ -8,6 +8,11 @@ import { autoUpdater, type NsisUpdater } from 'electron-updater';
 import type { DesktopUpdateResult } from './contract';
 import { NativeUpdateController, type NativeUpdateCapability, type NativeUpdateInfo } from './update-policy';
 import type { PackagedReleaseChannel } from './release-channel';
+import {
+  PERIODIC_CHECK_INTERVAL_MS,
+  STARTUP_CHECK_DELAY_MS,
+  shouldRunAutomaticUpdateCheck,
+} from './update-schedule';
 
 // 仍自动准备更新，但由控制器显式持有下载 promise；关闭应用不绕过安装前的目标校验。
 autoUpdater.autoDownload = false;
@@ -157,10 +162,6 @@ export function initializeDesktopUpdater(publisher: UpdatePublisher, channel: Pa
 export function checkForDesktopUpdates(): Promise<DesktopUpdateResult> { return getController().check(); }
 export function installDesktopUpdate(): Promise<DesktopUpdateResult> { return getController().install(); }
 
-const STARTUP_CHECK_DELAY_MS = 12_000;
-const PERIODIC_CHECK_INTERVAL_MS = 60 * 60_000;
-const FOCUS_CHECK_THROTTLE_MS = 5 * 60_000;
-
 export function scheduleDesktopUpdateChecks(window: BrowserWindow): () => void {
   if (getDesktopUpdateState().status === 'unsupported') return () => {};
   let disposed = false;
@@ -168,7 +169,7 @@ export function scheduleDesktopUpdateChecks(window: BrowserWindow): () => void {
   const run = (force = false) => {
     if (disposed) return;
     const now = Date.now();
-    if (!force && now - lastAutomaticCheckAt < FOCUS_CHECK_THROTTLE_MS) return;
+    if (!shouldRunAutomaticUpdateCheck(now, lastAutomaticCheckAt, force)) return;
     lastAutomaticCheckAt = now;
     void checkForDesktopUpdates();
   };

@@ -18,6 +18,10 @@ Stable 失败路径会先恢复 `false` 再切回旧 runtime。
 每个 runtime 同时携带自己的 `.venv`，代码与 Python 依赖会作为一个身份切换。
 Windows 二进制、Electron feed 和 Windows 渠道清单不跟随 Git 切版，统一持久化在
 `/var/lib/zhicui-downloads/`；Nginx 只读提供它，应用回滚不会删除或覆盖已发布安装包。
+Android 版本化 APK 写入该持久目录，渠道清单跟随当前 runtime 原子切换；`/download/zhicui.apk`
+仅作为旧客户端兼容地址保留。新 Beta 先校验版本化 APK，所有 readiness 与公网冒烟闸门通过后
+才原子替换该兼容地址，失败回滚时恢复旧文件。前端发布使用 blue/green 两个 Next.js 进程，先启动备用颜色
+并通过本机 readiness，再 reload Nginx 切流，旧颜色随后退出。
 
 ## 一次性服务器配置
 
@@ -129,6 +133,9 @@ Stable 上传不能只以 SSH 命令成功作为完成。脚本会禁用 HTTP �
 pwsh scripts/release-desktop.ps1 -Commit $commit -Version 1.1.0 `
   -Channel Stable -SkipBuild -Publish
 ```
+
+若需要缩短安装程序本地解压时间，可在构建时加 `-FastInstall`；默认配置优先较小的下载体积。
+两种配置都生成 blockmap，签名和安装前校验不会被跳过。
 
 生产冒烟不是“接口返回 200”检查。它会创建仅选择临时资料的 `selected` 会话，询问固定
 哨兵事实，并同时要求 SSE 出现非空 `delta`、唯一 `done`、回答包含哨兵值，以及至少一条

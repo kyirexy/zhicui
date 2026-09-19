@@ -19,6 +19,8 @@ esac
 for required in \
   deploy/backup/install.sh deploy/videocapsule-backend.service \
   deploy/videocapsule-frontend.service deploy/nginx-security-headers.conf \
+  deploy/videocapsule-frontend-blue.service deploy/videocapsule-frontend-green.service \
+  deploy/frontend-supervisor.sh deploy/frontend-route.sh deploy/zhicui-frontend-port.conf \
   deploy/nginx-windows-updates.conf deploy/nginx-videocapsule.conf \
   deploy/agent-interface-kill-switch.sh deploy/jenkins-videocapsule.sudoers \
   deploy/release-evidence-store.py deploy/install-case-media.sh \
@@ -73,7 +75,8 @@ AGENT_KILL_SWITCH_STATE="$(
 # Electron 更新源独立于 Git/runtime 生命周期。迁移只补缺，不覆盖已发布版本。
 install -d -o ubuntu -g ubuntu -m 0775 \
   /var/lib/zhicui-downloads/windows \
-  /var/lib/zhicui-downloads/releases/windows
+  /var/lib/zhicui-downloads/releases/windows \
+  /var/lib/zhicui-downloads/android
 if [[ -d "$APP_DIR/frontend/public/download/windows" ]]; then
   rsync -a --ignore-existing "$APP_DIR/frontend/public/download/windows/" /var/lib/zhicui-downloads/windows/
 fi
@@ -81,6 +84,18 @@ if [[ -d "$APP_DIR/frontend/public/download/releases/windows" ]]; then
   rsync -a --ignore-existing "$APP_DIR/frontend/public/download/releases/windows/" /var/lib/zhicui-downloads/releases/windows/
 fi
 rsync -a --ignore-existing "$SOURCE_ROOT/frontend/public/download/releases/windows/" /var/lib/zhicui-downloads/releases/windows/
+if [[ -d "$APP_DIR/frontend/public/download/android" ]]; then
+  rsync -a --ignore-existing "$APP_DIR/frontend/public/download/android/" /var/lib/zhicui-downloads/android/
+fi
+if [[ -d "$SOURCE_ROOT/frontend/public/download/android" ]]; then
+  rsync -a --ignore-existing "$SOURCE_ROOT/frontend/public/download/android/" /var/lib/zhicui-downloads/android/
+fi
+if [[ -s "$APP_DIR/frontend/public/download/zhicui.apk" && ! -e /var/lib/zhicui-downloads/zhicui.apk ]]; then
+  install -m 0644 "$APP_DIR/frontend/public/download/zhicui.apk" /var/lib/zhicui-downloads/zhicui.apk
+fi
+if [[ -s "$SOURCE_ROOT/frontend/public/download/zhicui.apk" && ! -e /var/lib/zhicui-downloads/zhicui.apk ]]; then
+  install -m 0644 "$SOURCE_ROOT/frontend/public/download/zhicui.apk" /var/lib/zhicui-downloads/zhicui.apk
+fi
 if [[ -s /var/lib/zhicui-downloads/windows/latest.yml && ! -e /var/lib/zhicui-downloads/windows/beta.yml ]]; then
   cp -p /var/lib/zhicui-downloads/windows/latest.yml /var/lib/zhicui-downloads/windows/beta.yml
 fi
@@ -92,7 +107,24 @@ find /var/lib/zhicui-downloads -type f -exec chmod 0644 {} +
 
 install -m 0644 "$SOURCE_ROOT/deploy/videocapsule-backend.service" /etc/systemd/system/
 install -m 0644 "$SOURCE_ROOT/deploy/videocapsule-frontend.service" /etc/systemd/system/
+install -m 0644 "$SOURCE_ROOT/deploy/videocapsule-frontend-blue.service" /etc/systemd/system/
+install -m 0644 "$SOURCE_ROOT/deploy/videocapsule-frontend-green.service" /etc/systemd/system/
+install -o root -g root -m 0755 \
+  "$SOURCE_ROOT/deploy/frontend-supervisor.sh" \
+  /usr/local/lib/zhicui-deploy/frontend-supervisor.sh
+install -o root -g root -m 0755 \
+  "$SOURCE_ROOT/deploy/frontend-route.sh" \
+  /usr/local/lib/zhicui-deploy/frontend-route.sh
 install -d -m 0755 /etc/nginx/snippets
+if [[ ! -s /etc/zhicui/frontend-color ]] || ! grep -Eq '^(blue|green)$' /etc/zhicui/frontend-color; then
+  printf 'blue\n' > /etc/zhicui/frontend-color
+  chmod 0644 /etc/zhicui/frontend-color
+fi
+case "$(tr -d '[:space:]' </etc/zhicui/frontend-color)" in
+  green) printf 'set $zhicui_frontend_port 3002;\n' >/etc/nginx/snippets/zhicui-frontend-port.conf ;;
+  *) printf 'set $zhicui_frontend_port 3001;\n' >/etc/nginx/snippets/zhicui-frontend-port.conf ;;
+esac
+chmod 0644 /etc/nginx/snippets/zhicui-frontend-port.conf
 install -m 0644 "$SOURCE_ROOT/deploy/nginx-security-headers.conf" /etc/nginx/snippets/zhicui-security-headers.conf
 install -m 0644 "$SOURCE_ROOT/deploy/nginx-windows-updates.conf" /etc/nginx/snippets/zhicui-windows-updates.conf
 install -m 0644 "$SOURCE_ROOT/deploy/nginx-videocapsule.conf" /etc/nginx/sites-available/nginx-videocapsule.conf
@@ -109,6 +141,7 @@ visudo -cf /etc/sudoers.d/jenkins-videocapsule
 systemctl daemon-reload
 nginx -t
 systemctl reload nginx
+systemctl disable --now videocapsule-frontend-blue.service videocapsule-frontend-green.service >/dev/null 2>&1 || true
 systemctl enable videocapsule-backend videocapsule-frontend
 systemctl restart videocapsule-backend videocapsule-frontend
 

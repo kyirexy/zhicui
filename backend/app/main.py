@@ -19,6 +19,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.routes import router
+from app.api.auth_routes import router as auth_router
+from app.api.public_routes import router as public_router
 from app.api.desktop_login_routes import router as desktop_login_router
 from app.api.platform_connection_routes import router as platform_connection_router
 from app.api.phone_login_routes import router as phone_login_router
@@ -401,6 +403,8 @@ def create_app() -> FastAPI:
     # Register routes
     from app.api.avatar_routes import router as avatar_router
     app.include_router(avatar_router)
+    app.include_router(public_router)
+    app.include_router(auth_router)
     app.include_router(router)
     app.include_router(desktop_login_router)
     app.include_router(platform_connection_router)

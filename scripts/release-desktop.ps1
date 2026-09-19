@@ -21,6 +21,8 @@ param(
     [string]$RemoteDownloadRoot = '/var/lib/zhicui-downloads',
     [switch]$Publish,
     [switch]$SkipBuild,
+    # 牺牲少量安装包压缩率，换取更快的本地解压安装；差分 blockmap 仍然保留。
+    [switch]$FastInstall,
     # 仅保留旧命令兼容；beta 原本就允许未签名，stable 永远不接受此开关。
     [switch]$AllowUnsigned,
 
@@ -44,6 +46,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $channelName = $Channel.ToLowerInvariant()
 $isStable = $channelName -eq 'stable'
+$installerProfile = if ($FastInstall) { 'fast-install' } else { 'balanced-download' }
 
 $workspace = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $desktopDir = Join-Path $workspace 'desktop'
@@ -426,6 +429,7 @@ if ($SkipBuild) {
         $cachedProvenance.source_commit -ne $resolvedCommit -or
         $cachedProvenance.channel -ne $channelName -or
         $cachedProvenance.version -ne $Version -or
+        $cachedProvenance.installer_profile -ne $installerProfile -or
         $cachedProvenance.installer.name -ne $exeName -or
         [string]::IsNullOrWhiteSpace([string]$cachedProvenance.feed.name)
     ) {
@@ -457,6 +461,7 @@ if ($SkipBuild) {
     }
     $publishers[0].channel = $channelName
     $buildConfig.publish = @($publishers)
+    $buildConfig.compression = if ($FastInstall) { 'normal' } else { 'maximum' }
     $buildConfig | Add-Member -NotePropertyName extraMetadata -NotePropertyValue (
         [pscustomobject]@{ releaseChannel = $channelName; nativeUpdatesEnabled = $isStable }
     ) -Force
@@ -621,6 +626,7 @@ if (-not $SkipBuild) {
         source_commit = $resolvedCommit
         channel = $channelName
         version = $Version
+        installer_profile = $installerProfile
         created_at = (Get-Date).ToUniversalTime().ToString('o')
         release_script_sha256 = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant()
         package_lock_sha256 = (Get-FileHash -LiteralPath (Join-Path $desktopDir 'package-lock.json') -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -692,6 +698,7 @@ $manifest = [ordered]@{
     }
     published_at = $publishedAt
     release_notes = @($ReleaseNotes | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    installer_profile = $installerProfile
     code_signed = $codeSigned
     release_status = if ($isStable) { 'stable_download' } else { 'beta_download' }
     signing = [ordered]@{

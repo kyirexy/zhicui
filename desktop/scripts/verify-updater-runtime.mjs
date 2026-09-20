@@ -63,8 +63,9 @@ async function fixture({ enabled = true, publisher = true, validSignature = true
   const context = vm.createContext({
     exports, require: (name) => name === 'electron' ? { app: { isPackaged: true, getVersion: () => '1.1.9', getAppPath: () => dir } }
       : name === 'electron-updater' ? { autoUpdater: updater }
-        : name === 'node:child_process' ? { execFile: strictExecFile }
-        : name === './update-policy' ? require('../dist/update-policy.js') : require(name),
+      : name === 'node:child_process' ? { execFile: strictExecFile }
+        : name === './update-policy' ? require('../dist/update-policy.js')
+          : name === './update-schedule' ? require('../dist/update-schedule.js') : require(name),
     process: { platform: 'win32', resourcesPath: dir, env: { SystemRoot: 'C:\\Windows' } }, Buffer,
     setTimeout, clearTimeout, setInterval, clearInterval,
   });

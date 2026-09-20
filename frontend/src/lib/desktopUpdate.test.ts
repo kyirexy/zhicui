@@ -58,6 +58,21 @@ test('签名缺失与旧 bridge 的 downloaded 都不显示自动重启', () => 
   assert.equal(desktopUpdatePresentation({ ...snapshot, update: status('unsupported', { manualRequired: true, code: 'UPDATE_SIGNATURE_REQUIRED' }) }).label, '下载并安装');
 });
 
+test('未签名包在应用内校验下载完成后直接进入安装，而不是再次打开浏览器', () => {
+  const snapshot = { ...INITIAL_DESKTOP_UPDATE, runtime, release: { ...release, codeSigned: false } };
+  const view = desktopUpdatePresentation({
+    ...snapshot,
+    update: status('downloaded', {
+      manualInstaller: true,
+      canInstall: true,
+      downloadedVersion: release.version,
+    }),
+  });
+  assert.equal(view.manual, false);
+  assert.equal(view.canInstall, true);
+  assert.equal(view.action, 'install');
+});
+
 test('下载完成只允许安装同一新目标，旧目标不会出现重启按钮', () => {
   const snapshot = { ...INITIAL_DESKTOP_UPDATE, runtime, release };
   assert.equal(desktopUpdatePresentation({ ...snapshot, update: status('downloaded', { canInstall: true, downloadedVersion: release.version }) }).canInstall, true);

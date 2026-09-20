@@ -1,11 +1,12 @@
 import { app, type BrowserWindow } from 'electron';
-import { createReadStream, existsSync, readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
-import { execFile } from 'node:child_process';
-import { stat } from 'node:fs/promises';
+import { createReadStream, createWriteStream, existsSync, readFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { execFile, spawn } from 'node:child_process';
+import { mkdir, rename, rm, stat } from 'node:fs/promises';
+import * as https from 'node:https';
 import { join, win32 } from 'node:path';
 import { autoUpdater, type NsisUpdater } from 'electron-updater';
-import type { DesktopUpdateResult } from './contract';
+import type { DesktopInstallerTarget, DesktopUpdateResult } from './contract';
 import { NativeUpdateController, type NativeUpdateCapability, type NativeUpdateInfo } from './update-policy';
 import type { PackagedReleaseChannel } from './release-channel';
 import {
@@ -25,6 +26,129 @@ let publishUpdate: UpdatePublisher = () => {};
 let controller: NativeUpdateController | null = null;
 let updaterReady = false;
 let publisherNames: string[] = [];
+let manualInstaller: { target: DesktopInstallerTarget; path: string } | null = null;
+let manualDownload: Promise<DesktopUpdateResult> | null = null;
+let manualState: DesktopUpdateResult | null = null;
+
+function publishManualState(state: DesktopUpdateResult): DesktopUpdateResult {
+  manualState = state;
+  publishUpdate(state);
+  return state;
+}
+
+function validateManualTarget(target: DesktopInstallerTarget): DesktopInstallerTarget {
+  const version = String(target?.version || '').trim();
+  const downloadUrl = String(target?.downloadUrl || '').trim();
+  const sizeBytes = Number(target?.sizeBytes);
+  const sha256 = String(target?.sha256 || '').trim().toLowerCase();
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)
+    || !Number.isSafeInteger(sizeBytes) || sizeBytes <= 0
+    || !/^[a-f0-9]{64}$/.test(sha256)) {
+    throw new Error('安装包清单无效');
+  }
+  let parsed: URL;
+  try { parsed = new URL(downloadUrl); } catch { throw new Error('安装包地址无效'); }
+  if (parsed.origin !== 'https://luxai.cn' || parsed.username || parsed.password || parsed.search || parsed.hash
+    || parsed.pathname !== `/download/windows/Zhicui-Setup-${version}-x64.exe`) {
+    throw new Error('安装包地址不受信任');
+  }
+  return { version, downloadUrl: parsed.href, sizeBytes, sha256 };
+}
+
+function manualStateFor(target: DesktopInstallerTarget, status: DesktopUpdateResult['status'], extra: Partial<DesktopUpdateResult> = {}): DesktopUpdateResult {
+  return {
+    status,
+    installedVersion: app.getVersion(),
+    version: target.version,
+    manualInstaller: true,
+    ...extra,
+  };
+}
+
+function downloadInstallerFile(target: DesktopInstallerTarget, path: string): Promise<{ size: number; sha256: string }> {
+  return new Promise((resolve, reject) => {
+    const output = createWriteStream(path, { flags: 'wx' });
+    const hash = createHash('sha256');
+    let transferred = 0;
+    let startedAt = Date.now();
+    let settled = false;
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      output.destroy();
+      reject(error);
+    };
+    const request = https.get(target.downloadUrl, { headers: { 'User-Agent': 'Zhicui-Updater/1.0', Accept: 'application/octet-stream' } }, (response) => {
+      if (response.statusCode !== 200) {
+        response.resume();
+        fail(new Error(`安装包下载失败（HTTP ${response.statusCode || 0}）`));
+        return;
+      }
+      response.on('data', (chunk: Buffer) => {
+        transferred += chunk.length;
+        hash.update(chunk);
+        const elapsed = Math.max(1, Date.now() - startedAt);
+        const percent = Math.min(99, Math.floor((transferred / target.sizeBytes) * 100));
+        publishManualState(manualStateFor(target, 'downloading', {
+          percent,
+          transferred,
+          total: target.sizeBytes,
+          bytesPerSecond: Math.floor((transferred * 1000) / elapsed),
+        }));
+        startedAt = Date.now();
+      });
+      response.on('error', fail);
+      response.pipe(output);
+    });
+    request.setTimeout(30_000, () => request.destroy(new Error('安装包下载超时')));
+    request.on('error', fail);
+    output.on('error', fail);
+    output.on('finish', () => {
+      if (settled) return;
+      settled = true;
+      const digest = hash.digest('hex');
+      resolve({ size: transferred, sha256: digest });
+    });
+  });
+}
+
+export async function downloadDesktopInstaller(rawTarget: DesktopInstallerTarget): Promise<DesktopUpdateResult> {
+  if (process.platform !== 'win32' || !app.isPackaged) {
+    return publishManualState({ status: 'unsupported', installedVersion: app.getVersion(), manualRequired: true, error: '当前环境不支持应用内更新' });
+  }
+  const target = validateManualTarget(rawTarget);
+  const semver = require('semver') as { gt: (left: string, right: string) => boolean };
+  if (!semver.gt(target.version, app.getVersion())) {
+    return publishManualState({ status: 'current', installedVersion: app.getVersion() });
+  }
+  if (manualInstaller?.target.version === target.version && existsSync(manualInstaller.path)) {
+    return publishManualState(manualStateFor(target, 'downloaded', { canInstall: true, downloadedVersion: target.version }));
+  }
+  if (manualDownload) return manualDownload;
+  manualDownload = (async () => {
+    const directory = join(app.getPath('temp'), 'Zhicui', 'updates');
+    await mkdir(directory, { recursive: true });
+    const fileName = `Zhicui-Setup-${target.version}-x64.exe`;
+    const finalPath = join(directory, fileName);
+    const tempPath = join(directory, `.${fileName}.${process.pid}.${randomUUID()}.part`);
+    try {
+      publishManualState(manualStateFor(target, 'downloading', { percent: 0, transferred: 0, total: target.sizeBytes }));
+      const result = await downloadInstallerFile(target, tempPath);
+      if (result.size !== target.sizeBytes) throw new Error('安装包大小校验失败');
+      if (result.sha256 !== target.sha256) throw new Error('安装包校验失败');
+      await rm(finalPath, { force: true });
+      await rename(tempPath, finalPath);
+      manualInstaller = { target, path: finalPath };
+      return publishManualState(manualStateFor(target, 'downloaded', { percent: 100, transferred: result.size, total: result.size, canInstall: true, downloadedVersion: target.version }));
+    } catch (error) {
+      await rm(tempPath, { force: true }).catch(() => undefined);
+      return publishManualState(manualStateFor(target, 'error', { manualRequired: true, error: error instanceof Error ? error.message : '安装包下载失败' }));
+    } finally {
+      manualDownload = null;
+    }
+  })();
+  return manualDownload;
+}
 
 function updaterCapability(): NativeUpdateCapability {
   if (!app.isPackaged) return { supported: false, code: 'UPDATE_DEVELOPMENT_BUILD' };
@@ -142,7 +266,7 @@ function getController(): NativeUpdateController {
   return controller;
 }
 
-export function getDesktopUpdateState(): DesktopUpdateResult { return getController().getState(); }
+export function getDesktopUpdateState(): DesktopUpdateResult { return manualState || getController().getState(); }
 
 export function initializeDesktopUpdater(publisher: UpdatePublisher, channel: PackagedReleaseChannel): void {
   publishUpdate = publisher;
@@ -160,7 +284,23 @@ export function initializeDesktopUpdater(publisher: UpdatePublisher, channel: Pa
 }
 
 export function checkForDesktopUpdates(): Promise<DesktopUpdateResult> { return getController().check(); }
-export function installDesktopUpdate(): Promise<DesktopUpdateResult> { return getController().install(); }
+export async function installDesktopUpdate(): Promise<DesktopUpdateResult> {
+  if (!manualInstaller) return getController().install();
+  const { target, path } = manualInstaller;
+  if (!existsSync(path)) {
+    manualInstaller = null;
+    return publishManualState(manualStateFor(target, 'error', { manualRequired: true, canInstall: false, error: '安装包已不存在，请重新下载' }));
+  }
+  try {
+    const child = spawn(path, [], { detached: true, windowsHide: false, stdio: 'ignore' });
+    child.unref();
+    const state = publishManualState(manualStateFor(target, 'installing', { canInstall: false, downloadedVersion: target.version }));
+    setTimeout(() => app.quit(), 250);
+    return state;
+  } catch (error) {
+    return publishManualState(manualStateFor(target, 'error', { manualRequired: true, canInstall: true, downloadedVersion: target.version, error: error instanceof Error ? error.message : '无法启动安装器' }));
+  }
+}
 
 export function scheduleDesktopUpdateChecks(window: BrowserWindow): () => void {
   if (getDesktopUpdateState().status === 'unsupported') return () => {};

@@ -16,6 +16,13 @@ export interface DesktopRuntimeInfo {
   displayName: string;
 }
 
+export interface DesktopInstallerTarget {
+  version: string;
+  downloadUrl: string;
+  sizeBytes: number;
+  sha256: string;
+}
+
 export interface DesktopLoginRequest {
   token: string;
   callbackUrl: string;
@@ -176,6 +183,7 @@ export interface DesktopUpdateResult {
   error?: string;
   code?: string;
   manualRequired?: boolean;
+  manualInstaller?: boolean;
   canInstall?: boolean;
   downloadedVersion?: string;
 }
@@ -309,6 +317,7 @@ export interface ZhicuiDesktopBridge {
   disconnectPlatformAccount(request: PlatformAccountRequest): Promise<PlatformAccountResult>;
   getUpdateState(): Promise<DesktopUpdateResult>;
   checkForUpdates(): Promise<DesktopUpdateResult>;
+  downloadInstaller?(target: DesktopInstallerTarget): Promise<DesktopUpdateResult>;
   installUpdate(): Promise<DesktopUpdateResult>;
   getAgentIntegrationStatus?(): Promise<DesktopAgentIntegrationOverview>;
   onAgentAuthorizationStatus?(listener: (status: DesktopAgentAuthorizationStatus) => void): () => void;

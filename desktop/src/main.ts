@@ -14,6 +14,7 @@ import type {
   DesktopLoginStatus,
   DesktopMediaAsset,
   DesktopRuntimeInfo,
+  DesktopInstallerTarget,
   DesktopUpdateResult,
   DesktopZhicuiLoginStatus,
   DesktopZhicuiSession,
@@ -46,6 +47,7 @@ import {
 } from './security';
 import {
   checkForDesktopUpdates,
+  downloadDesktopInstaller,
   getDesktopUpdateState,
   initializeDesktopUpdater,
   installDesktopUpdate,
@@ -361,6 +363,10 @@ function registerIpc(): void {
   ipcMain.handle('desktop:check-for-updates', (event) => {
     assertTrustedIpcSender(event);
     return checkForDesktopUpdates();
+  });
+  ipcMain.handle('desktop:download-installer', (event, target: DesktopInstallerTarget) => {
+    assertTrustedIpcSender(event);
+    return downloadDesktopInstaller(target);
   });
   ipcMain.handle('desktop:get-update-state', (event) => {
     assertTrustedIpcSender(event);

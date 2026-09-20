@@ -16,6 +16,14 @@ function getController() {
     controller = createDesktopUpdateController(bridge, {
       fetchRelease: fetchDesktopRelease,
       openDownload: (url) => { window.open(url, '_blank', 'noopener,noreferrer'); },
+      downloadInstaller: bridge.downloadInstaller
+        ? (release) => bridge.downloadInstaller!({
+            version: release.version,
+            downloadUrl: release.downloadUrl,
+            sizeBytes: release.sizeBytes,
+            sha256: release.sha256,
+          })
+        : undefined,
     });
   }
   return controller;

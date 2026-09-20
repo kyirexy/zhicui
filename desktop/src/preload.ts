@@ -4,6 +4,7 @@ import type {
   DesktopAgentIntegrationOverview,
   DesktopAgentIntegrationRequest,
   DesktopAgentIntegrationResult,
+  DesktopInstallerTarget,
   DesktopLoginRequest,
   DesktopLoginResult,
   DesktopLoginStatus,
@@ -91,6 +92,12 @@ const bridge: ZhicuiDesktopBridge = {
   checkForUpdates: () => (
     ipcRenderer.invoke(
       'desktop:check-for-updates',
+    ) as Promise<DesktopUpdateResult>
+  ),
+  downloadInstaller: (target: DesktopInstallerTarget) => (
+    ipcRenderer.invoke(
+      'desktop:download-installer',
+      target,
     ) as Promise<DesktopUpdateResult>
   ),
   installUpdate: () => (

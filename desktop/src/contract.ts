@@ -184,8 +184,17 @@ export interface DesktopUpdateResult {
   error?: string;
   code?: string;
   manualRequired?: boolean;
+  /** 本机已校验的未签名安装包，可由安装器直接启动。 */
+  manualInstaller?: boolean;
   canInstall?: boolean;
   downloadedVersion?: string;
+}
+
+export interface DesktopInstallerTarget {
+  version: string;
+  downloadUrl: string;
+  sizeBytes: number;
+  sha256: string;
 }
 
 export type DesktopAgentClient = 'codex' | 'claude';
@@ -317,6 +326,7 @@ export interface ZhicuiDesktopBridge {
   disconnectPlatformAccount(request: PlatformAccountRequest): Promise<PlatformAccountResult>;
   getUpdateState(): Promise<DesktopUpdateResult>;
   checkForUpdates(): Promise<DesktopUpdateResult>;
+  downloadInstaller?(target: DesktopInstallerTarget): Promise<DesktopUpdateResult>;
   installUpdate(): Promise<DesktopUpdateResult>;
   getAgentIntegrationStatus(): Promise<DesktopAgentIntegrationOverview>;
   runAgentIntegrationAction(

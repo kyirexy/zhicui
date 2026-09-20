@@ -1,4 +1,4 @@
-import type { DesktopRuntimeInfo, DesktopUpdateResult } from './desktopRuntime';
+import type { DesktopInstallerTarget, DesktopRuntimeInfo, DesktopUpdateResult } from './desktopRuntime';
 
 export interface DesktopRelease {
   version: string;
@@ -7,6 +7,7 @@ export interface DesktopRelease {
   publishedAt: string;
   notes: string[];
   codeSigned: boolean;
+  sha256: string;
 }
 
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
@@ -58,7 +59,7 @@ export function parseDesktopRelease(value: unknown, channel: 'beta' | 'stable'):
     throw new Error('版本信息暂不可用');
   }
   return { version, downloadUrl: url.href, sizeBytes: Number(data.size_bytes), publishedAt: data.published_at,
-    notes: data.release_notes as string[], codeSigned: data.code_signed };
+    notes: data.release_notes as string[], codeSigned: data.code_signed, sha256: data.sha256 };
 }
 
 export async function fetchDesktopRelease(runtime: DesktopRuntimeInfo): Promise<DesktopRelease | null> {
@@ -91,10 +92,12 @@ export function desktopUpdatePresentation(snapshot: DesktopUpdateSnapshot) {
   const version = newerRelease && (!newerNative || compareDesktopVersions(newerRelease.version, newerNative) === 1)
     ? newerRelease.version : newerNative || newerRelease?.version || null;
   const legacyDownloaded = update.status === 'downloaded' && update.canInstall === undefined;
-  const manual = Boolean(update.manualRequired || (runtime?.platform === 'win32' && newerRelease
-    && (!release?.codeSigned || update.status === 'unsupported' || legacyDownloaded)));
+  const localInstaller = update.manualInstaller === true
+    && ['downloading', 'downloaded', 'installing'].includes(update.status);
+  const manual = Boolean(!localInstaller && (update.manualRequired || (runtime?.platform === 'win32' && newerRelease
+    && (!release?.codeSigned || update.status === 'unsupported' || legacyDownloaded))));
   const progress = Number.isFinite(update.percent) ? Math.max(0, Math.min(100, Math.round(update.percent!))) : 0;
-  const canInstall = update.status === 'downloaded' && update.canInstall === true && !manual && Boolean(version)
+  const canInstall = update.status === 'downloaded' && update.canInstall === true && (localInstaller || !manual) && Boolean(version)
     && update.downloadedVersion === version;
   const fallback = Boolean(newerRelease && (!newerNative || (compareDesktopVersions(newerRelease.version, newerNative) ?? -1) >= 0));
   const installing = update.status === 'installing' || busy === 'install';
@@ -112,7 +115,7 @@ export function desktopUpdatePresentation(snapshot: DesktopUpdateSnapshot) {
   } else if (downloading) {
     title = '正在下载更新'; description = '可以继续使用，下载完成后再重启。'; label = `正在下载 ${progress}%`;
   } else if (manual && version) {
-    title = '发现知萃新版本'; description = '本次更新需要手动安装。打开安装包后按提示完成，账号和资料会保留。';
+    title = '发现知萃新版本'; description = '安装包会在应用内下载并校验，完成后直接启动更新，账号和资料会保留。';
     label = fallback ? '下载并安装' : '重新检查'; action = fallback ? 'download' : 'check';
   } else if (update.status === 'error') {
     title = '更新暂未完成'; description = '请检查网络后重试，当前版本仍可继续使用。'; label = '重试更新';
@@ -124,7 +127,7 @@ export function desktopUpdatePresentation(snapshot: DesktopUpdateSnapshot) {
   } else if (update.status === 'idle') {
     title = '知萃版本与更新'; description = '新版本会自动检查，你也可以随时手动检查。';
   }
-  const alreadyOpened = action === 'download' && snapshot.openedVersion === version;
+  const alreadyOpened = !localInstaller && action === 'download' && snapshot.openedVersion === version;
   if (alreadyOpened) { title = '安装包已打开'; description = '请在浏览器下载中找到安装包，打开后完成更新。'; label = '已打开下载'; }
   if (busy === 'download') label = '正在确认版本…';
   return { title, description, label, action, version, progress, canInstall, manual, downloading, installing,
@@ -137,6 +140,7 @@ interface UpdateBridge {
   getRuntimeInfo(): Promise<DesktopRuntimeInfo>;
   getUpdateState(): Promise<DesktopUpdateResult>;
   checkForUpdates(): Promise<DesktopUpdateResult>;
+  downloadInstaller?(target: DesktopInstallerTarget): Promise<DesktopUpdateResult>;
   installUpdate(): Promise<DesktopUpdateResult>;
   onUpdateStatus(listener: (status: DesktopUpdateResult) => void): () => void;
 }
@@ -144,6 +148,7 @@ interface UpdateBridge {
 export function createDesktopUpdateController(bridge: UpdateBridge, dependencies: {
   fetchRelease: (runtime: DesktopRuntimeInfo) => Promise<DesktopRelease | null>;
   openDownload: (url: string) => void | Promise<void>;
+  downloadInstaller?: (release: DesktopRelease) => Promise<DesktopUpdateResult>;
 }) {
   let snapshot: DesktopUpdateSnapshot = INITIAL_DESKTOP_UPDATE;
   const listeners = new Set<() => void>();
@@ -197,9 +202,14 @@ export function createDesktopUpdateController(bridge: UpdateBridge, dependencies
         if (!fresh.fallback || !snapshot.release) {
           publish({ issue: '暂时无法确认可用安装包，请重新检查更新。' }); return;
         }
-        if (snapshot.openedVersion === snapshot.release.version) return;
-        await dependencies.openDownload(snapshot.release.downloadUrl);
-        publish({ openedVersion: snapshot.release.version });
+        if (snapshot.openedVersion === snapshot.release.version && !dependencies.downloadInstaller) return;
+        if (dependencies.downloadInstaller) {
+          const update = await dependencies.downloadInstaller(snapshot.release);
+          publish({ update, openedVersion: null });
+        } else {
+          await dependencies.openDownload(snapshot.release.downloadUrl);
+          publish({ openedVersion: snapshot.release.version });
+        }
         return;
       }
       const beforeRequest = revision;

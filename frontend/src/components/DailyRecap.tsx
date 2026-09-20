@@ -169,7 +169,7 @@ function DailyRecapContent({ userId, videoActions, videoInteractions }: { userId
           {expanded && recap.has_more ? <p className={styles.note}>先展示 {visibleItems.length} 条，其余记录可在视频资料中查看。</p> : null}
         </>
       ) : !error ? (
-        <p className={styles.empty}>{recap && recap.total > 0 ? '昨日视频已从首页隐藏，可在视频资料中继续查看。' : '昨天没有新同步记录。先同步点赞与收藏，之后就能在这里回顾。'}</p>
+        <p className={styles.empty}>{recap && recap.total > 0 ? '昨日视频已隐藏，不会继续出现在首页和资料列表中。' : '昨天没有新同步记录。先同步点赞与收藏，之后就能在这里回顾。'}</p>
       ) : null}
 
       {preparing ? <p className={styles.progress} role="status">{progress}<span>完成的文稿会保存，可以继续浏览其他资料。</span></p> : null}

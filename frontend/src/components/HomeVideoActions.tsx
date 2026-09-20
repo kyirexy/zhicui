@@ -104,7 +104,7 @@ export function HomeVideoActionsLayer({ actions, interactions }: { actions: Home
       {actions.ready && <div className={`${styles.dropZone} ${interactions.dragged ? styles.dragging : ''} ${interactions.over ? styles.over : ''}`}
         aria-label="从首页隐藏视频" onDragOver={(event) => { if (interactions.dragged) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; interactions.setOver(true); } }}
         onDragLeave={() => interactions.setOver(false)} onDrop={interactions.drop}>
-        <EyeSlash size={22} aria-hidden="true" /><span><strong>{interactions.dragged ? '松开，从首页隐藏' : '拖动视频到这里，从首页隐藏'}</strong><small>原视频和同步记录会保留</small></span>
+        <EyeSlash size={22} aria-hidden="true" /><span><strong>{interactions.dragged ? '松开，永久隐藏这条视频' : '拖动视频到这里，永久隐藏'}</strong><small>首页和视频资料都会隐藏，可在隐藏记录中恢复</small></span>
       </div>}
       <div ref={menuRef} className={styles.menu} role="menu" aria-label="视频操作" hidden={!menu}
         style={{ '--menu-x': `${menu?.x || 0}px`, '--menu-y': `${menu?.y || 0}px` } as CSSProperties}
@@ -118,7 +118,7 @@ export function HomeVideoActionsLayer({ actions, interactions }: { actions: Home
         }}>
         <p>{video?.title}</p>
         <button type="button" role="menuitem" onClick={() => run('save')}><BookBookmark size={19} aria-hidden="true" />{saved ? '已加入知萃知识库' : '加入知萃知识库'}</button>
-        <button type="button" role="menuitem" onClick={() => run('hide')}><EyeSlash size={19} aria-hidden="true" />从首页隐藏</button>
+        <button type="button" role="menuitem" onClick={() => run('hide')}><EyeSlash size={19} aria-hidden="true" />永久隐藏这条视频</button>
       </div>
       {actions.notice && !interactions.dragged && <div className={styles.notice} role="status">
         <span>{actions.notice.message}</span>

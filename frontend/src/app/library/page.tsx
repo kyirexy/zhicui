@@ -376,13 +376,16 @@ export default function VideoLibraryPage() {
   const [status, setStatus] = useState<DouyinLibraryStatus | null>(null);
   const [collectionJob, setCollectionJob] = useState<DouyinCollectionJob | null>(null);
   const [sourceSyncQueue, setSourceSyncQueue] = useState<SourceSyncQueueProgress | null>(null);
-  const [storedSourceMode, setSourceMode] = useLocalStorage<DouyinSourceMode | string>(
-    'zhicui-library-source-mode-v1',
+  const [storedDefaultSourceMode, setDefaultSourceMode] = useLocalStorage<DouyinSourceMode | string>(
+    'zhicui-library-default-source-mode-v1',
     'collect',
   );
-  const sourceMode: DouyinSourceMode = isDouyinSourceMode(storedSourceMode)
-    ? storedSourceMode
+  const defaultSourceMode: DouyinSourceMode = isDouyinSourceMode(storedDefaultSourceMode)
+    ? storedDefaultSourceMode
     : 'collect';
+  // 当前页签只属于本次打开；“默认打开”单独存储，避免用户临时切到喜欢
+  // 后又把收藏偏好悄悄覆盖掉。
+  const [sourceMode, setSourceMode] = useState<DouyinSourceMode>(defaultSourceMode);
   const [storedLayoutMode, setLayoutMode] = useLocalStorage<LibraryLayoutMode | string>(
     'zhicui-library-layout-mode-v1',
     'grid',
@@ -673,12 +676,6 @@ export default function VideoLibraryPage() {
 
   const refreshLibraryRef = useRef(loadLibrary);
   refreshLibraryRef.current = loadLibrary;
-
-  useEffect(() => {
-    if (!isDouyinSourceMode(storedSourceMode)) {
-      setSourceMode('collect');
-    }
-  }, [setSourceMode, storedSourceMode]);
 
   useEffect(() => {
     if (!isLibraryLayoutMode(storedLayoutMode)) {
@@ -1003,6 +1000,9 @@ export default function VideoLibraryPage() {
     && loginBrowserMode === 'visible_chrome'
   );
   const sourceLabel = SOURCE_MODES.find((mode) => mode.value === sourceMode)?.label || '视频';
+  // 批量准备文稿只是后台读取资料，允许用户继续切换来源并勾选下一批；
+  // 结构化分析仍保持锁定，避免同一批选择被并发改写。
+  const selectionLocked = batchExtracting && activeBatchOperation !== 'transcript';
   const sourceManagerLabel = sourceManagerModes.length === SOURCE_MODES.length
     ? '全部内容'
     : sourceManagerModes.length === 0
@@ -1039,11 +1039,11 @@ export default function VideoLibraryPage() {
     containerRef: librarySelectionSurfaceRef,
     selectedIds: selected,
     maxSelection: Math.max(1, MAX_SELECTION - selectedPlatform.size),
-    disabled: batchExtracting
+    disabled: selectionLocked
       || selectedPlatform.size >= MAX_SELECTION
       || !showDouyinItems
       || filteredItems.length === 0,
-    isDisabled: () => batchExtractingRef.current,
+    isDisabled: () => batchExtractingRef.current && activeBatchOperation !== 'transcript',
     shouldStart: canStartLibraryMarquee,
     onSelectionChange: (nextSelection) => {
       setSelected(nextSelection);
@@ -1064,7 +1064,7 @@ export default function VideoLibraryPage() {
   const displayedSelection = libraryMarquee.previewSelectedIds ?? selected;
 
   const switchPlatformFilter = (nextFilter: LibraryPlatformFilter) => {
-    if (batchExtractingRef.current) return;
+    if (batchExtractingRef.current && activeBatchOperation !== 'transcript') return;
     setPlatformFilter(nextFilter);
     setPlatformActionErrors({});
     setPreviewTarget(null);
@@ -1076,7 +1076,7 @@ export default function VideoLibraryPage() {
   };
 
   const switchDouyinSource = (nextMode: DouyinSourceMode) => {
-    if (batchExtractingRef.current || nextMode === sourceModeRef.current) return;
+    if (nextMode === sourceModeRef.current) return;
     sourceModeRef.current = nextMode;
     setSourceMode(nextMode);
     const currentUrl = new URL(window.location.href);
@@ -1143,7 +1143,7 @@ export default function VideoLibraryPage() {
   };
 
   const toggleSelection = (awemeId: string) => {
-    if (batchExtractingRef.current) return;
+    if (batchExtractingRef.current && activeBatchOperation !== 'transcript') return;
     setNotice('');
     setPreviewTarget({ platform: 'douyin', id: awemeId });
     setSelected((current) => {
@@ -1162,7 +1162,7 @@ export default function VideoLibraryPage() {
   };
 
   const togglePlatformSelection = (item: PlatformLibraryItem) => {
-    if (batchExtractingRef.current || item.media_type !== 'video') return;
+    if ((batchExtractingRef.current && activeBatchOperation !== 'transcript') || item.media_type !== 'video') return;
     setNotice('');
     setPreviewTarget({ platform: item.platform, id: item.id });
     setSelectedPlatform((current) => {
@@ -1181,7 +1181,7 @@ export default function VideoLibraryPage() {
   };
 
   const selectVisible = () => {
-    if (batchExtractingRef.current) return;
+    if (batchExtractingRef.current && activeBatchOperation !== 'transcript') return;
     const visibleDouyinIds = (platformFilter === 'all' || platformFilter === 'douyin')
       ? filteredItems.map(item => item.aweme_id)
       : [];
@@ -2717,6 +2717,12 @@ export default function VideoLibraryPage() {
     setRefreshing(false);
     setSourceSyncQueue(null);
     setPipelineStage(failed ? 'idle' : 'done');
+    // 同步完成后回到资料列表；进度和结果已经同步到页面提示，
+    // 不让来源对话框继续遮住昨日回顾或视频资料。
+    if (!failed && typeof sourceManagerDialogRef !== 'undefined' && sourceManagerDialogRef.current?.open) {
+      sourceManagerRestoreFocusRef.current = false;
+      sourceManagerDialogRef.current.close();
+    }
 
     if (syncRun.cancelled) {
       reportNotice('已取消同步');
@@ -4054,7 +4060,7 @@ export default function VideoLibraryPage() {
                 aria-pressed={platformFilter === tab.value}
                 data-active={platformFilter === tab.value}
                 onClick={() => switchPlatformFilter(tab.value)}
-                disabled={batchExtracting}
+                disabled={selectionLocked}
               >
                 {tab.value === 'all' ? (
                   <FileText size={15} aria-hidden="true" />
@@ -4081,7 +4087,7 @@ export default function VideoLibraryPage() {
                     type="button"
                     aria-pressed={biliSourceMode === value}
                     data-active={biliSourceMode === value}
-                    disabled={batchExtracting}
+                    disabled={refreshing}
                     onClick={() => switchBiliSource(value)}
                   >
                     <Icon size={14} aria-hidden="true" />{label}
@@ -4101,7 +4107,7 @@ export default function VideoLibraryPage() {
                     type="button"
                     aria-pressed={sourceMode === value}
                     data-active={sourceMode === value}
-                    disabled={batchExtracting}
+                    disabled={selectionLocked}
                     onClick={() => switchDouyinSource(value)}
                   >
                     <Icon size={14} aria-hidden="true" />
@@ -4110,6 +4116,19 @@ export default function VideoLibraryPage() {
                 ))}
               </div>
               <small>{sourceLabel}与其他来源分开显示</small>
+              <button
+                type="button"
+                className="library-text-action"
+                aria-pressed={defaultSourceMode === sourceMode}
+                onClick={() => {
+                  setDefaultSourceMode(sourceMode);
+                  setNotice(`已设置下次打开默认显示${sourceLabel}`);
+                }}
+                disabled={refreshing}
+                title="设置下次打开视频资料时默认显示的来源"
+              >
+                {defaultSourceMode === sourceMode ? '默认打开此来源' : '设为默认打开'}
+              </button>
               {pendingTranscriptTotal > 0 && (
                 <button
                   type="button"
@@ -4227,7 +4246,7 @@ export default function VideoLibraryPage() {
                 type="button"
                 className="library-text-action"
                 onClick={selectVisible}
-                disabled={visibleSelectableCount === 0 || batchExtracting}
+                disabled={visibleSelectableCount === 0 || selectionLocked}
                 aria-label={allVisibleSelected ? '取消选择当前显示的视频' : '选择当前显示的所有视频'}
               >
                 {allVisibleSelected ? <CheckSquare2 size={15} /> : <Square size={15} />}
@@ -4363,7 +4382,7 @@ export default function VideoLibraryPage() {
                     setSelected(new Set());
                     setSelectedPlatform(new Set());
                   }}
-                  disabled={batchExtracting}
+                  disabled={selectionLocked}
                   aria-label="取消选择"
                   title="取消选择"
                 >
@@ -4543,7 +4562,7 @@ export default function VideoLibraryPage() {
                             hasReadyTranscript(target) ? 'ai' : 'transcript',
                           );
                         }}
-                        selectionDisabled={batchExtracting}
+                        selectionDisabled={false}
                         onRefreshCover={refreshDouyinCover}
                         coverPriority={index < 3}
                       />
@@ -4560,7 +4579,7 @@ export default function VideoLibraryPage() {
                     actionError={platformActionErrors[item.id]}
                     layout={layoutMode}
                     selected={selectedPlatform.has(item.id)}
-                    selectionDisabled={batchExtracting}
+                    selectionDisabled={selectionLocked}
                     onActivate={(target) => setPreviewTarget({
                       platform: target.platform,
                       id: target.id,

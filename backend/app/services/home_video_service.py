@@ -15,6 +15,7 @@ from app.models.knowledge_entry import KnowledgeEntry
 from app.models.note import Note
 from app.models.video_source_ledger import VideoSourceLedger
 from app.services import knowledge_service
+from app.services import library_hidden_service
 
 
 def _key(platform: str, video_id: str) -> tuple[str, str]:
@@ -95,6 +96,16 @@ def set_hidden(db: Session, user_id: str, platform: str, video_id: str, hidden: 
         _owned_video(db, user_id, platform, video_id)
     item = item or _preference(db, user_id, platform, video_id)
     item.hidden = hidden
+    # 首页拖拽隐藏表达的是“以后不再看到这条视频”，因此同步维护抖音资料库
+    # 的永久隐藏记录。这样首页、昨日回顾和视频资料不会出现互相矛盾的可见性。
+    # B 站资料目前没有同一套永久隐藏台账，保留首页范围内的偏好即可。
+    if platform == "douyin":
+        if hidden:
+            library_hidden_service.hide_aweme_ids(
+                db, user_id, [video_id], mode="permanent", commit=False,
+            )
+        else:
+            library_hidden_service.restore_permanent_aweme_ids(db, user_id, [video_id])
     db.commit()
     db.refresh(item)
     return serialize_preference(item)

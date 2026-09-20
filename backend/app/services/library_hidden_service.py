@@ -6,6 +6,7 @@ from typing import Literal
 from sqlalchemy.orm import Session
 
 from app.models.library_hidden_item import LibraryHiddenItem
+from app.models.home_video_preference import HomeVideoPreference
 from app.models.creator_sync import CreatorSourceItem
 
 MAX_BATCH_REMOVE = 50
@@ -251,7 +252,17 @@ def restore_permanent_aweme_ids(
             synchronize_session=False,
         )
     )
-    if restored or creator_items_restored:
+    home_preferences_restored = (
+        db.query(HomeVideoPreference)
+        .filter(
+            HomeVideoPreference.user_id == user_id,
+            HomeVideoPreference.platform == "douyin",
+            HomeVideoPreference.video_id.in_(normalized),
+            HomeVideoPreference.hidden.is_(True),
+        )
+        .update({HomeVideoPreference.hidden: False}, synchronize_session=False)
+    )
+    if restored or creator_items_restored or home_preferences_restored:
         db.commit()
     return {
         "restored": int(restored or 0),

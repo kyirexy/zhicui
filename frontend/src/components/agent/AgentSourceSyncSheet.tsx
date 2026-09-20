@@ -83,7 +83,8 @@ const biliSyncCounts = [20, 50, 100] as const;
 const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 const terminalCreatorStages = new Set(['succeeded', 'partial', 'failed', 'cancelled']);
 // 全部同步成功后停留片刻展示“同步完成”，再自动关闭窗口。
-const SYNC_SUCCESS_AUTO_CLOSE_MS = 3_000;
+// 成功结果已经在父页面提示，面板只短暂保留反馈，避免同步完成后仍挡住昨日回顾。
+const SYNC_SUCCESS_AUTO_CLOSE_MS = 1_000;
 
 function creatorProgress(run: CreatorSyncRun): string {
   if (run.needs_action?.required) return run.needs_action.message || '需要你处理平台验证后重试';

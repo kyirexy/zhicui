@@ -63,8 +63,8 @@ export function createHomeVideoActionsController(deps: {
       const item = action === 'save' ? (result as HomeKnowledgeResult).preference : result as HomeVideoPreference;
       changes += 1;
       const preferences = new Map(snapshot.preferences); preferences.set(key, item);
-      const notice = action === 'hide' ? { message: '已从首页隐藏，原视频仍保留在视频资料中。', undo: video }
-        : action === 'restore' ? { message: '已恢复首页显示。' }
+      const notice = action === 'hide' ? { message: '已永久隐藏，首页和视频资料都不会再显示。', undo: video }
+        : action === 'restore' ? { message: '已恢复显示，首页和视频资料都会重新出现。' }
         : { message: (result as HomeKnowledgeResult).created ? '已加入知萃知识库。' : '这条视频已在知萃知识库。', knowledgeId: item.knowledge_entry_id! };
       publish({ preferences, notice });
     })().catch(() => {

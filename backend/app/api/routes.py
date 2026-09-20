@@ -31,6 +31,7 @@ from app.core.auth import get_current_user, get_current_user_optional, get_curre
 from app.core.media_reference import sanitized_source_meta
 from app.core.sync_diagnostics import normalize_capture_diagnostics
 from app.models.note import Note
+from app.models.home_video_preference import HomeVideoPreference
 from app.models.user import (
     User as UserModel,
     get_user_by_id,
@@ -2857,6 +2858,18 @@ def list_douyin_library_items(
         item for item in items
         if item["aweme_id"] not in hidden_modes
     ]
+    # 首页的“永久隐藏”与资料目录使用同一份用户偏好。否则视频会在首页消失，
+    # 但刷新资料页后又重新出现，用户会误以为隐藏没有生效。
+    home_hidden_ids = {
+        row.video_id
+        for row in db.query(HomeVideoPreference.video_id).filter(
+            HomeVideoPreference.user_id == current_user.id,
+            HomeVideoPreference.platform == "douyin",
+            HomeVideoPreference.hidden.is_(True),
+            HomeVideoPreference.video_id.in_([item["aweme_id"] for item in items]),
+        ).all()
+    }
+    items = [item for item in items if item["aweme_id"] not in home_hidden_ids]
     if limit > 0:
         items = items[:limit]
 

@@ -47,5 +47,6 @@ test('首页收藏入口切换喜欢后URL同步，刷新恢复所选分类且�
   assert.equal(historyWrites.length, 1);
   context.batchExtractingRef.current = true;
   context.exports.switchSource('collect');
-  assert.equal(historyWrites.length, 1);
+  assert.equal(historyWrites.length, 2);
+  assert.equal(storedMode, 'collect');
 });

@@ -5,17 +5,17 @@
   "platform": "windows",
   "architecture": "x64",
   "artifact_kind": "unsigned",
-  "version": "1.1.10",
-  "source_commit": "7d8b777f0ef96359af7b2706d18f02991d0963b7",
-  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.10-x64.exe",
-  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.10-x64.exe",
-  "size_bytes": 93663809,
-  "sha256": "c1c0ee8f132d6e8bad279101b598b1ddaf1d48aef9586e372f20ecd276dcb5e5",
-  "published_at": "2026-09-14T14:28:34.2947541Z",
+  "version": "1.1.11",
+  "source_commit": "27d65b7055e8d52c6324184351c0a0fd9d16f0c6",
+  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.11-x64.exe",
+  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.11-x64.exe",
+  "size_bytes": 93580191,
+  "sha256": "84395e0db06f908bb8409c84c87b1fe34f71f854dbb646ead3dca8e5b251ca9d",
+  "published_at": "2026-09-20T02:03:06.2897814Z",
   "notes": [
-    "优化版本检查与官方下载，避免重复下载或误取旧版。",
-    "简化客户端更新提示和安装窗口，覆盖安装保留账号与资料。",
-    "页面功能更新可直接刷新，程序更新按当前版本支持的方式完成。"
+    "新增知萃 Agent 接入中心，可连接 Codex 与 Claude Code。",
+    "内置 zhicui CLI 与本地 MCP，并支持云端普通用户能力。",
+    "新增独立凭证、最小权限、运行隔离和可撤销授权。"
   ],
   "code_signed": false,
   "release_status": "beta_download"

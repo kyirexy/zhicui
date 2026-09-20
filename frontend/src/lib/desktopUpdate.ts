@@ -11,6 +11,7 @@ export interface DesktopRelease {
 }
 
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
+const DESKTOP_RELEASE_REFRESH_MS = 5 * 60_000;
 
 // 只比较有效版本；未知版本不能当成 0，防止误下旧安装包。
 export function compareDesktopVersions(left: string, right: string): number | null {
@@ -155,6 +156,8 @@ export function createDesktopUpdateController(bridge: UpdateBridge, dependencies
   let revision = 0;
   let started = false;
   let unsubscribe: (() => void) | undefined;
+  let releaseRefreshTimer: number | undefined;
+  let releaseFocusHandler: (() => void) | undefined;
   let manifestInFlight: Promise<void> | null = null;
   let actionInFlight: Promise<void> | null = null;
   const publish = (patch: Partial<DesktopUpdateSnapshot>) => {
@@ -187,6 +190,13 @@ export function createDesktopUpdateController(bridge: UpdateBridge, dependencies
       bridge.getRuntimeInfo().then((runtime) => publish({ runtime })),
     ]);
     await refreshRelease();
+    // Beta 安装包可能在当前页面打开后才发布；即使原生更新能力不可用，
+    // 也要定期重新读取最高版本，避免会话一直停留在旧的 1.1.x 提示。
+    if (typeof window !== 'undefined') {
+      releaseFocusHandler = () => { void refreshRelease(); };
+      window.addEventListener('focus', releaseFocusHandler);
+      releaseRefreshTimer = window.setInterval(() => { void refreshRelease(); }, DESKTOP_RELEASE_REFRESH_MS);
+    }
   };
   const run = (action: DesktopUpdateAction): Promise<void> => {
     if (actionInFlight) return actionInFlight;
@@ -226,6 +236,15 @@ export function createDesktopUpdateController(bridge: UpdateBridge, dependencies
     subscribe: (listener: () => void) => { listeners.add(listener); void start(); return () => { listeners.delete(listener); }; },
     start, run,
     redownload: () => { if (!actionInFlight) publish({ openedVersion: null }); return run('download'); },
-    dispose: () => { unsubscribe?.(); listeners.clear(); },
+    dispose: () => {
+      unsubscribe?.();
+      if (typeof window !== 'undefined') {
+        if (releaseRefreshTimer !== undefined) window.clearInterval(releaseRefreshTimer);
+        if (releaseFocusHandler) window.removeEventListener('focus', releaseFocusHandler);
+      }
+      releaseRefreshTimer = undefined;
+      releaseFocusHandler = undefined;
+      listeners.clear();
+    },
   };
 }

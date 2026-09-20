@@ -47,24 +47,30 @@ Var ZhicuiExisting
     ${If} $ZhicuiPage == error
       Abort
     ${EndIf}
-    SetCtlColors $ZhicuiPage 20232B FFFFFF
+    SetCtlColors $ZhicuiPage 20232B F7F9FC
     CreateFont $ZhicuiFontBrand "Microsoft YaHei UI" 20 700
-    CreateFont $ZhicuiFontTitle "Microsoft YaHei UI" 15 700
+    CreateFont $ZhicuiFontTitle "Microsoft YaHei UI" 13 700
     CreateFont $ZhicuiFontBody "Microsoft YaHei UI" 10 400
 
     InitPluginsDir
     File /oname=$PLUGINSDIR\zhicui.ico "${PROJECT_DIR}\..\frontend\public\icons\desktop-icon.ico"
-    ${NSD_CreateIcon} 0 1u 32u 32u ""
+    ${NSD_CreateIcon} 10u 7u 34u 34u ""
     Pop $0
     ${NSD_SetIcon} $0 "$PLUGINSDIR\zhicui.ico" $1
 
-    ${NSD_CreateLabel} 42u 0u 200u 25u "知萃"
+    ${NSD_CreateLabel} 54u 6u 220u 25u "知萃"
     Pop $0
     SendMessage $0 ${WM_SETFONT} $ZhicuiFontBrand 1
-    SetCtlColors $0 20232B FFFFFF
-    ${NSD_CreateLabel} 43u 27u 230u 14u "桌面客户端  ${VERSION}"
+    SetCtlColors $0 20232B F7F9FC
+    ${NSD_CreateLabel} 55u 32u 230u 16u "桌面客户端  ${VERSION}"
     Pop $0
-    SetCtlColors $0 687184 FFFFFF
+    SendMessage $0 ${WM_SETFONT} $ZhicuiFontBody 1
+    SetCtlColors $0 687184 F7F9FC
+
+    ; 用整宽卡片承载核心说明，避免安装器内容挤在左上角。
+    ${NSD_CreateLabel} 8u 56u 284u 70u ""
+    Pop $0
+    SetCtlColors $0 20232B FFFFFF
 
     StrCpy $ZhicuiExisting 0
     ${If} $hasPerUserInstallation == "1"
@@ -72,30 +78,37 @@ Var ZhicuiExisting
       StrCpy $ZhicuiExisting 1
     ${EndIf}
     ${If} $ZhicuiExisting == 1
-      ${NSD_CreateLabel} 0u 54u 300u 24u "新的知萃，接着用。"
+      ${NSD_CreateLabel} 20u 67u 260u 22u "新的知萃，接着用。"
       Pop $0
       SendMessage $0 ${WM_SETFONT} $ZhicuiFontTitle 1
       SetCtlColors $0 20232B FFFFFF
-      ${NSD_CreateLabel} 0u 80u 300u 24u "更新客户端，保留你的登录和本机资料。"
+      ${NSD_CreateLabel} 20u 94u 260u 20u "更新客户端，保留你的登录和本机资料。"
       Pop $0
+      SendMessage $0 ${WM_SETFONT} $ZhicuiFontBody 1
+      SetCtlColors $0 687184 FFFFFF
     ${Else}
-      ${NSD_CreateLabel} 0u 54u 300u 24u "让收藏，真正用起来。"
+      ${NSD_CreateLabel} 20u 67u 260u 22u "让收藏，真正用起来。"
       Pop $0
       SendMessage $0 ${WM_SETFONT} $ZhicuiFontTitle 1
       SetCtlColors $0 20232B FFFFFF
-      ${NSD_CreateLabel} 0u 80u 300u 24u "同步视频 · AI 问答 · 把方法变成行动计划"
+      ${NSD_CreateLabel} 20u 94u 260u 20u "同步视频 · AI 问答 · 把方法变成行动计划"
       Pop $0
+      SendMessage $0 ${WM_SETFONT} $ZhicuiFontBody 1
+      SetCtlColors $0 687184 FFFFFF
     ${EndIf}
-    SetCtlColors $0 687184 FFFFFF
 
-    ${NSD_CreateLabel} 0u 108u 300u 12u "安装位置"
+    ${NSD_CreateLabel} 8u 137u 284u 53u ""
     Pop $0
+    SetCtlColors $0 20232B FFFFFF
+    ${NSD_CreateLabel} 20u 143u 260u 15u "安装位置"
+    Pop $0
+    SendMessage $0 ${WM_SETFONT} $ZhicuiFontBody 1
     SetCtlColors $0 687184 FFFFFF
-    ${NSD_CreateText} 0u 122u 245u 20u "$INSTDIR"
+    ${NSD_CreateText} 20u 161u 218u 21u "$INSTDIR"
     Pop $ZhicuiPath
     SendMessage $ZhicuiPath ${EM_SETREADONLY} 1 0
     SetCtlColors $ZhicuiPath 4B5466 F4F5F9
-    ${NSD_CreateButton} 253u 122u 47u 20u "更改…"
+    ${NSD_CreateButton} 245u 161u 47u 21u "更改…"
     Pop $0
     ${NSD_OnClick} $0 ZhicuiBrowse
     ${If} $ZhicuiExisting == 1
@@ -109,6 +122,14 @@ Var ZhicuiExisting
     ${EndIf}
     GetDlgItem $0 $HWNDPARENT 2
     SendMessage $0 ${WM_SETTEXT} 0 "STR:取消"
+    ${If} $ZhicuiExisting == 1
+      ${NSD_CreateLabel} 20u 201u 270u 16u "覆盖更新会保留登录状态和本机资料。"
+    ${Else}
+      ${NSD_CreateLabel} 20u 201u 270u 16u "安装完成后即可开始整理你的视频知识。"
+    ${EndIf}
+    Pop $0
+    SendMessage $0 ${WM_SETFONT} $ZhicuiFontBody 1
+    SetCtlColors $0 687184 F7F9FC
     nsDialogs::Show
   FunctionEnd
 
@@ -194,16 +215,21 @@ Var ZhicuiExisting
     ${If} $ZhicuiPage == error
       Abort
     ${EndIf}
-    SetCtlColors $ZhicuiPage 20232B FFFFFF
+    SetCtlColors $ZhicuiPage 20232B F7F9FC
     CreateFont $ZhicuiFontTitle "Microsoft YaHei UI" 18 700
-    ${NSD_CreateLabel} 0u 28u 300u 30u "知萃，准备好了。"
+    CreateFont $ZhicuiFontBody "Microsoft YaHei UI" 10 400
+    ${NSD_CreateLabel} 8u 36u 284u 105u ""
+    Pop $0
+    SetCtlColors $0 20232B FFFFFF
+    ${NSD_CreateLabel} 20u 51u 260u 30u "知萃，准备好了。"
     Pop $0
     SendMessage $0 ${WM_SETFONT} $ZhicuiFontTitle 1
     SetCtlColors $0 20232B FFFFFF
-    ${NSD_CreateLabel} 0u 65u 300u 26u "打开客户端，从同步你的第一组视频开始。"
+    ${NSD_CreateLabel} 20u 84u 260u 22u "打开客户端，从同步你的第一组视频开始。"
     Pop $0
+    SendMessage $0 ${WM_SETFONT} $ZhicuiFontBody 1
     SetCtlColors $0 687184 FFFFFF
-    ${NSD_CreateCheckbox} 0u 108u 290u 20u "完成后打开知萃"
+    ${NSD_CreateCheckbox} 20u 113u 260u 20u "完成后打开知萃"
     Pop $ZhicuiOpen
     ${NSD_Check} $ZhicuiOpen
     SetCtlColors $ZhicuiOpen 20232B FFFFFF
@@ -227,5 +253,6 @@ Var ZhicuiExisting
       ${StdUtils.ExecShellAsUser} $0 "$launchLink" "open" "$1"
     ${EndIf}
     System::Call 'gdi32::DeleteObject(p $ZhicuiFontTitle)'
+    System::Call 'gdi32::DeleteObject(p $ZhicuiFontBody)'
   FunctionEnd
 !macroend

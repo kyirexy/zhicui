@@ -1858,6 +1858,21 @@ def list_platform_library_items(
     notes = platform_library_service.list_notes(
         db, user_id=current_user.id, platform=platform, source_mode=source_mode,
     )
+    # 首页拖拽隐藏是用户对资料可见性的明确选择，跨平台资料列表也要遵守。
+    # 抖音额外由 library_hidden_items 台账维护，旧的首页偏好仍在这里兼容过滤。
+    hidden_query = db.query(
+        HomeVideoPreference.platform,
+        HomeVideoPreference.video_id,
+    ).filter(
+        HomeVideoPreference.user_id == current_user.id,
+        HomeVideoPreference.hidden.is_(True),
+    )
+    hidden_keys = {(row.platform, row.video_id) for row in hidden_query.all()}
+    if hidden_keys:
+        notes = [
+            note for note in notes
+            if (platform_library_service.media_platform(note), note.video_id) not in hidden_keys
+        ]
     return _ok({
         # 列表首屏只需要封面、标题与处理状态。完整 Note（含文稿和 AI
         # 结果）在打开详情时按需读取，避免把数十万字节塞进每次资料页请求。

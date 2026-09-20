@@ -4,7 +4,7 @@ import { Capacitor } from '@capacitor/core';
 import { Download, Globe2, RefreshCw, Smartphone } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import {
-  checkAndroidAppUpdate, formatReleaseDate, formatReleaseSize, getRuntimeAppInfo,
+  checkAndroidAppUpdate, getRuntimeAppInfo,
   openAndroidReleaseDownload, type AndroidUpdateCheck,
 } from '@/lib/appUpdate';
 import { detectDesktopRuntime } from '@/lib/desktopRuntime';
@@ -101,9 +101,8 @@ export default function AppUpdateSettingsCard() {
         <>
           <div className={styles.version}>
             <span>{hasUpdate ? '新版本' : '已是最新版'} <strong>{release.version}</strong></span>
-            <span>{formatReleaseSize(release.size_bytes)} · {formatReleaseDate(release.published_at)}</span>
           </div>
-          <div className={styles.notes}><h3>这次更新</h3><ul>{release.release_notes.map((note) => <li key={note}>{note}</li>)}</ul></div>
+          <div className={styles.notes}><h3>本次更新</h3><p>功能优化，使用更顺畅。</p></div>
         </>
       )}
       {androidResult?.status === 'release-unavailable' && <p className={styles.footnote}>暂未发现可用更新，可以继续使用当前版本。</p>}
@@ -120,7 +119,7 @@ export default function AppUpdateSettingsCard() {
           <a href="/api/client-downloads/windows" className={styles.secondary}>下载 Windows 版</a>
         </>}
       </div>
-      {mode === 'android' && hasUpdate && <p className={styles.footnote}>{alreadyOpened ? '请在浏览器下载中打开安装包，按系统提示完成更新。' : '下载后按 Android 系统提示安装，账号和资料会保留。'}</p>}
+      {mode === 'android' && hasUpdate && <p className={styles.footnote}>{alreadyOpened ? '安装包已打开，按系统提示完成更新。' : '下载后按系统提示完成更新，账号和资料会保留。'}</p>}
       {alreadyOpened && <button type="button" className={styles.textButton} disabled={opening || checking} onClick={() => void download()}>下载没有开始？重新下载</button>}
     </section>
   );

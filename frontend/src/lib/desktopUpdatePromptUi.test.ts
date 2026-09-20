@@ -18,7 +18,7 @@ test('桌面端更新入口主动展示弹窗、版本差异与准备进度', ()
   assert.match(component, /aria-label="新版页面资源准备进度"/);
   assert.match(component, /setOpen\(true\)/);
   assert.match(component, /setWebOpen\(true\)/);
-  assert.match(component, /立即更新页面/);
+  assert.match(component, /立即更新/);
   assert.match(css, /\.updateVersions/);
   assert.match(css, /\.indeterminate/);
 });

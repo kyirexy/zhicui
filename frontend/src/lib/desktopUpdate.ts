@@ -116,7 +116,7 @@ export function desktopUpdatePresentation(snapshot: DesktopUpdateSnapshot) {
   } else if (downloading) {
     title = '正在下载更新'; description = '可以继续使用，下载完成后再重启。'; label = `正在下载 ${progress}%`;
   } else if (manual && version) {
-    title = '发现知萃新版本'; description = '安装包会在应用内下载并校验，完成后直接启动更新，账号和资料会保留。';
+    title = '发现知萃新版本'; description = '下载完成后即可更新，账号和资料会保留。';
     label = fallback ? '下载并安装' : '重新检查'; action = fallback ? 'download' : 'check';
   } else if (update.status === 'error') {
     title = '更新暂未完成'; description = '请检查网络后重试，当前版本仍可继续使用。'; label = '重试更新';
@@ -129,7 +129,7 @@ export function desktopUpdatePresentation(snapshot: DesktopUpdateSnapshot) {
     title = '知萃版本与更新'; description = '新版本会自动检查，你也可以随时手动检查。';
   }
   const alreadyOpened = !localInstaller && action === 'download' && snapshot.openedVersion === version;
-  if (alreadyOpened) { title = '安装包已打开'; description = '请在浏览器下载中找到安装包，打开后完成更新。'; label = '已打开下载'; }
+  if (alreadyOpened) { title = '安装包已准备好'; description = '完成下载后打开安装包，即可完成更新。'; label = '已打开下载'; }
   if (busy === 'download') label = '正在确认版本…';
   return { title, description, label, action, version, progress, canInstall, manual, downloading, installing,
     fallback, alreadyOpened, attention: Boolean(version || update.status === 'error' || installing),

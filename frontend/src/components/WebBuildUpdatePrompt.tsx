@@ -45,7 +45,6 @@ export default function WebBuildUpdatePrompt() {
       <button type="button" className={styles.close} aria-label="稍后更新页面" onClick={dismiss}><X size={18} aria-hidden="true" /></button>
       <h2 id="web-build-update-title">{view.title}</h2>
       <p>{view.description}</p>
-      <p className={styles.footnote}>网页版支持单链接解析；视频同步请在桌面客户端进行。</p>
       {view.preparing && update.total > 0 && <progress className={styles.progress} aria-label="新版页面资源准备进度" value={update.completed} max={update.total} />}
       <button type="button" className={styles.refresh} disabled={view.disabled}
         onClick={() => { if (update.phase === 'error') void update.retry(); else update.refresh(); }}>

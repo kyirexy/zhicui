@@ -36,7 +36,9 @@ test('更新信息聚焦版本变化、更新内容和明确操作', () => {
   assert.match(component, /更新内容/);
   assert.match(component, /下载并安装/);
   assert.match(component, /稍后提醒/);
-  assert.match(component, /安装包来自 luxai\.cn/);
+  assert.match(component, /功能优化，使用更顺畅/);
+  assert.doesNotMatch(component, /安装包来自 luxai\.cn/);
+  assert.doesNotMatch(component, /formatReleaseSize|formatReleaseDate/);
   assert.doesNotMatch(component, /app-update-meta/);
 });
 

@@ -16,17 +16,17 @@ export const INITIAL_WEB_UPDATE: WebUpdateSnapshot = {
 export function webBuildUpdatePresentation(state: WebUpdateSnapshot) {
   const preparing = state.phase === 'preparing';
   const waiting = state.blocked === 'task' || state.blocked === 'input' || state.blocked === 'settling';
-  const title = preparing ? '正在准备页面更新' : state.phase === 'reloading' ? '正在更新页面'
+  const title = preparing ? '正在准备更新' : state.phase === 'reloading' ? '正在更新'
     : state.phase === 'error' ? '页面更新暂未完成' : '新功能已准备好';
   const description = preparing
-    ? (state.total ? `已准备 ${state.completed}/${state.total} 项资源` : '正在检查新版页面资源')
+    ? (state.total ? `正在准备更新 ${state.completed}/${state.total}` : '正在准备更新')
     : state.phase === 'error' ? state.error
-    : state.blocked === 'task' ? '当前任务完成后自动更新，不会中断同步或 AI。'
-    : state.blocked === 'settling' ? '任务已完成，页面空闲后自动更新。'
-    : state.blocked === 'input' ? '先保存当前输入或关闭弹窗，再自动更新。'
+    : state.blocked === 'task' ? '当前任务完成后自动更新。'
+    : state.blocked === 'settling' ? '页面空闲后自动更新。'
+    : state.blocked === 'input' ? '保存当前内容后自动更新。'
     : state.blocked === 'paused' ? '已暂缓，可在方便时更新页面。'
-    : state.blocked === 'already-reloaded' ? '自动更新已尝试一次，可稍后手动刷新。'
-    : '空闲时自动更新页面，无需下载安装。';
+    : state.blocked === 'already-reloaded' ? '请稍后手动更新。'
+    : '空闲时自动更新，无需重新下载。';
   return { title, description, preparing, waiting,
     visible: Boolean(state.available),
     label: state.phase === 'error' ? '重试更新' : preparing ? '正在准备…' : waiting ? '等待当前操作完成' : '现在更新',

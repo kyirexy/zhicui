@@ -6,7 +6,6 @@ import {
   ArrowRight,
   Download,
   LoaderCircle,
-  ShieldCheck,
   X,
 } from 'lucide-react';
 import {
@@ -17,8 +16,6 @@ import {
 } from 'react';
 import {
   checkAndroidAppUpdate,
-  formatReleaseDate,
-  formatReleaseSize,
   openAndroidReleaseDownload,
   type AndroidReleaseManifest,
   type RuntimeAppInfo,
@@ -265,35 +262,12 @@ export default function AppUpdatePrompt() {
                   {available.release.version}
                 </strong>
               </div>
-              <p className={styles.releaseMeta}>
-                <span>{formatReleaseSize(available.release.size_bytes)}</span>
-                <span aria-hidden="true">·</span>
-                <time dateTime={available.release.published_at}>
-                  {formatReleaseDate(available.release.published_at)}
-                </time>
-              </p>
             </section>
 
             <section className={styles.notes} aria-labelledby="app-update-notes-title">
               <h3 id="app-update-notes-title">更新内容</h3>
-              <ul>
-                {available.release.release_notes.slice(0, 4).map((note) => (
-                  <li key={note}>{note}</li>
-                ))}
-              </ul>
-              {available.release.release_notes.length > 4 && (
-                <p className={styles.moreNotes}>
-                  还有 {available.release.release_notes.length - 4} 项改进
-                </p>
-              )}
+              <p className={styles.summary}>功能优化，使用更顺畅。</p>
             </section>
-
-            <div className={styles.safety}>
-              <ShieldCheck size={18} aria-hidden="true" />
-              <p>
-                安装包来自 luxai.cn，Android 系统会在安装前再次确认。
-              </p>
-            </div>
 
             {error && (
               <p className={styles.error} role="alert">
@@ -320,7 +294,7 @@ export default function AppUpdatePrompt() {
               ) : (
                 <Download size={19} aria-hidden="true" />
               )}
-              {opening ? '正在确认版本…' : '下载并安装'}
+              {opening ? '正在准备更新…' : '下载并安装'}
             </button>
           </footer>
         </div>

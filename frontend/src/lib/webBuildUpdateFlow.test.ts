@@ -37,7 +37,7 @@ test('共享一次检查和资源准备，全部资源真实完成后才刷新',
   const first = f.controller.check(), second = f.controller.check();
   assert.equal(first, second); await flush();
   assert.equal(f.controller.getSnapshot().completed, 1); assert.equal(f.counts().reloadCalls, 0);
-  assert.equal(webBuildUpdatePresentation(f.controller.getSnapshot()).description, '已准备 1/2 项资源');
+  assert.equal(webBuildUpdatePresentation(f.controller.getSnapshot()).description, '正在准备更新 1/2');
   gate.resolve(); await first;
   assert.equal(f.counts().prepareCalls, 1); assert.equal(f.counts().reloadCalls, 1);
   f.controller.tick(); f.controller.refresh(); await f.controller.check();

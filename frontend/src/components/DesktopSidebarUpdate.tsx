@@ -68,18 +68,18 @@ export default function DesktopSidebarUpdate() {
     : view.installing ? '正在重启…' : state.update.status === 'error' ? '更新暂未完成' : '发现新版本';
   const Icon = view.canInstall ? Check : view.downloading || view.installing ? LoaderCircle
     : state.update.status === 'error' ? CircleAlert : Download;
-  const webLabel = webView.preparing ? '正在准备页面更新'
+  const webLabel = webView.preparing ? '正在准备更新'
     : webUpdate.phase === 'error' ? '页面更新暂未完成'
-    : webUpdate.phase === 'reloading' ? '正在更新页面'
-    : '网页新版本已准备好';
+    : webUpdate.phase === 'reloading' ? '正在更新'
+    : '新功能已准备好';
   const webDescription = webView.preparing
-    ? (webUpdate.total ? `新版页面 ${webUpdate.completed}/${webUpdate.total} 项资源` : '正在准备新版页面资源')
+    ? (webUpdate.total ? `正在准备更新 ${webUpdate.completed}/${webUpdate.total}` : '正在准备更新')
     : webUpdate.phase === 'error' ? webUpdate.error
     : webUpdate.phase === 'deferred' ? '当前操作完成后自动刷新，也可查看更新详情。'
-    : `网页 ${webUpdate.available?.version || '新版'} · 空闲时自动刷新`;
+    : '新版本已准备好，空闲时自动更新';
   const webActionLabel = webUpdate.phase === 'error' ? '重试准备'
     : webUpdate.phase === 'preparing' ? '准备中…'
-    : webUpdate.phase === 'reloading' ? '正在更新…' : '立即更新页面';
+    : webUpdate.phase === 'reloading' ? '正在更新…' : '立即更新';
   const webActionDisabled = webView.preparing || webUpdate.phase === 'reloading' || webView.waiting;
   return (
     <>
@@ -125,7 +125,7 @@ export default function DesktopSidebarUpdate() {
             <span className={webStyles.updateIcon} aria-hidden="true"><Sparkles size={22} /></span>
             <div>
               <h2 id="desktop-web-update-title">{webLabel}</h2>
-              <p id="desktop-web-update-description">网页更新不需要重新下载安装包，当前账号和资料会保留。</p>
+              <p id="desktop-web-update-description">更新后即可使用新功能，账号和资料会保留。</p>
             </div>
           </header>
           <div className={webStyles.updateVersions} aria-label="网页版本信息">
@@ -137,7 +137,7 @@ export default function DesktopSidebarUpdate() {
           {webView.preparing && (
             <div className={webStyles.updateProgress}>
               <div className={webStyles.progressLabel}>
-                <span>准备新版资源</span>
+                <span>正在准备更新</span>
                 <strong>{webUpdate.total ? `${webUpdate.completed}/${webUpdate.total}` : '准备中…'}</strong>
               </div>
               {webUpdate.total > 0
@@ -145,7 +145,7 @@ export default function DesktopSidebarUpdate() {
                 : <div className={webStyles.indeterminate} aria-label="正在准备新版页面资源" />}
             </div>
           )}
-          {webUpdate.phase === 'ready' && <p className={webStyles.ready} role="status">新版资源已准备完成，点击“立即更新页面”即可刷新到新版本。</p>}
+          {webUpdate.phase === 'ready' && <p className={webStyles.ready} role="status">更新已准备完成，点击“立即更新”即可使用。</p>}
           {webUpdate.phase === 'deferred' && <p className={webStyles.ready} role="status">当前操作结束后会自动刷新；也可以先关闭此窗口继续使用。</p>}
           {webUpdate.phase === 'error' && <p className={webStyles.error} role="alert">{webUpdate.error || '页面资源准备失败，请重试。'}</p>}
           <footer className={webStyles.updateActions}>

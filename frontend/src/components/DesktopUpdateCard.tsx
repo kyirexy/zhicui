@@ -12,7 +12,6 @@ export default function DesktopUpdateCard({ onClose, titleId = 'desktop-update-t
   const state = useDesktopUpdate();
   const view = desktopUpdatePresentation(state);
   const installed = state.runtime?.version || state.update.installedVersion;
-  const notes = state.release?.version === view.version ? state.release.notes.slice(0, 4) : [];
   const Icon = view.canInstall || view.installing ? RotateCw
     : view.action === 'download' ? Download
     : state.busy || view.downloading || state.update.status === 'checking' ? LoaderCircle : RefreshCw;
@@ -39,10 +38,10 @@ export default function DesktopUpdateCard({ onClose, titleId = 'desktop-update-t
           </div>
         </div>
       )}
-      {notes.length > 0 && (
+      {view.version && !view.downloading && !view.canInstall && (
         <div className={styles.notes}>
-          <h3>这次更新</h3>
-          <ul>{notes.map((note) => <li key={note}>{note}</li>)}</ul>
+          <h3>本次更新</h3>
+          <p>功能优化，使用更顺畅。</p>
         </div>
       )}
       {state.issue && <p className={styles.error} role="alert">{state.issue}</p>}
@@ -55,11 +54,11 @@ export default function DesktopUpdateCard({ onClose, titleId = 'desktop-update-t
       </div>
       {state.update.status === 'error' && view.fallback && !view.manual && (
         <button type="button" className={styles.textButton} disabled={Boolean(state.busy) || state.openedVersion === state.release?.version} onClick={() => void state.run('download')}>
-          {state.openedVersion === state.release?.version ? '安装包已打开，请在浏览器下载中查看' : '更新仍未完成？下载完整安装包'}
+          {state.openedVersion === state.release?.version ? '安装包已打开，请完成下载后安装' : '更新仍未完成？重新下载'}
         </button>
       )}
       {view.alreadyOpened && <button type="button" className={styles.textButton} disabled={Boolean(state.busy)} onClick={() => void state.redownload()}>下载没有开始？重新下载</button>}
-      <p className={styles.footnote}>{view.manual ? '无需卸载当前知萃，直接安装即可。' : '更新期间账号和资料会保留。'}</p>
+      <p className={styles.footnote}>{view.manual ? '无需卸载，直接安装即可。' : '账号和资料会保留。'}</p>
     </section>
   );
 }

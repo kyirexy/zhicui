@@ -509,7 +509,9 @@ export default function PlatformLibraryPanel({
       publishLibrarySyncSelection(requestedUserId, platform, mode);
       updateAccountConnection(platform, {
         stage: 'collecting',
-        message: mode === 'collect' ? '正在读取最近收藏…' : '正在读取最近喜欢…',
+        message: platform === 'douyin'
+          ? mode === 'collect' ? '正在自动打开抖音收藏并读取…' : '正在自动打开抖音喜欢并读取…'
+          : mode === 'collect' ? '正在读取最近收藏…' : '正在读取最近喜欢…',
       });
       const sourceSyncedAt = new Date().toISOString();
       const collected = await bridge.collectPlatformAccount({

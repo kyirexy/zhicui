@@ -908,7 +908,9 @@ for (const profilePath of ['self', 'test-profile']) {
     const page = {
       url: () => `https://www.douyin.com/user/${profilePath}`,
       locator: (selector) => {
-        assert.equal(selector, '#semiTabfavorite_collection[role="tab"]');
+        assert.match(selector, /#semiTabfavorite_collection/);
+        assert.match(selector, /aria-label="收藏"/);
+        assert.match(selector, /has-text\("收藏"\)/);
         return {
           isVisible: async () => time >= 1_800,
           click: async () => { clicks += 1; clickedAt = time; },

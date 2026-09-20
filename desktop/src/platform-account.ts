@@ -38,6 +38,11 @@ const BILIBILI_LOGIN_URL = 'https://passport.bilibili.com/login';
 const XHS_LOGIN_URL = 'https://www.xiaohongshu.com/explore';
 const DOUYIN_LOGIN_URL = 'https://www.douyin.com/?showLogin=true';
 const DOUYIN_PROFILE_URL = 'https://www.douyin.com/user/self?from_tab_name=main';
+const DOUYIN_SOURCE_TAB_QUERY: Record<PlatformAccountSourceMode, string> = {
+  like: 'like',
+  collect: 'favorite_collection',
+  post: 'post',
+};
 const DOUYIN_SOURCE_FIRST_PAGE_REQUIRED = 'DOUYIN_SOURCE_FIRST_PAGE_REQUIRED';
 const DOUYIN_SOURCE_ACTION_TIMEOUT_MS = 120_000;
 const DOUYIN_SESSION_IDLE_TIMEOUT_MS = 30_000;
@@ -991,11 +996,17 @@ export class PlatformAccountConnector {
       this.notifyStatus(
         request.platform,
         'collecting',
-        request.mode === 'collect'
-          ? '正在读取最近收藏…'
-          : request.mode === 'post'
-            ? '正在读取最近发布的作品…'
-            : '正在读取最近喜欢…',
+        request.platform === 'douyin'
+          ? request.mode === 'collect'
+            ? '正在自动打开抖音收藏并读取…'
+            : request.mode === 'post'
+              ? '正在自动打开抖音作品并读取…'
+              : '正在自动打开抖音喜欢并读取…'
+          : request.mode === 'collect'
+            ? '正在读取最近收藏…'
+            : request.mode === 'post'
+              ? '正在读取最近发布的作品…'
+              : '正在读取最近喜欢…',
         launched.browser,
       );
       const collection = request.platform === 'douyin'
@@ -1320,7 +1331,17 @@ export class PlatformAccountConnector {
     assertContext?: () => void,
   ): Promise<void> {
     const label = mode === 'collect' ? '收藏' : mode === 'post' ? '作品' : '喜欢';
-    const tab = page.locator(`#${DOUYIN_SOURCE_TAB_IDS[mode]}[role="tab"]`);
+    // 抖音不同版本会在水合前后改变 role，甚至短暂移除固定 id。
+    // 组合定位器可以复用官方固定 id，同时兼容可访问名称和文本定位。
+    const tabCandidates = page.locator([
+      `#${DOUYIN_SOURCE_TAB_IDS[mode]}`,
+      `[role="tab"][aria-label="${label}"]`,
+      `[role="tab"]:has-text("${label}")`,
+    ].join(', '));
+    // Playwright 提供 first()，测试替身和旧版桥接也可能直接返回单个定位器。
+    const tab = typeof (tabCandidates as any).first === 'function'
+      ? tabCandidates.first()
+      : tabCandidates;
     let stableProfile = '';
     let readySince = 0;
     let selectedSince = 0;
@@ -1348,7 +1369,12 @@ export class PlatformAccountConnector {
       readySince ||= Date.now();
       if (Date.now() - readySince < 600) return false;
       selectionDeadline ||= Date.now() + 15_000;
-      const selected = await tab.getAttribute('aria-selected').catch(() => null) === 'true';
+      const ariaSelected = await tab.getAttribute('aria-selected').catch(() => null);
+      const dataState = await tab.getAttribute('data-state').catch(() => null);
+      const className = await tab.getAttribute('class').catch(() => null);
+      const selected = ariaSelected === 'true'
+        || dataState === 'active'
+        || /active|selected|current/i.test(String(className || ''));
       if (selected) {
         selectedSince ||= Date.now();
         return Date.now() - selectedSince >= 600;
@@ -1357,7 +1383,7 @@ export class PlatformAccountConnector {
       // 官网水合期间点击可能无效；仅在仍未选中时有限重试，不能重复触发已选中的首屏。
       if (allowClick && clickAttempts < 3 && (clickAttempts === 0 || Date.now() - lastClickAt >= 2_000)) {
         clickAttempts += 1;
-        await tab.click({ timeout: 2500 }).catch(() => undefined);
+        await tab.click({ timeout: 3500, force: true }).catch(() => undefined);
         lastClickAt = Date.now();
         selectionDeadline = Math.max(selectionDeadline, lastClickAt + 1_500);
       }
@@ -1539,7 +1565,8 @@ export class PlatformAccountConnector {
       const navigationEpoch = documentEpoch;
       documentNavigationPending = true;
       pages = new DouyinSourcePages();
-      await page.goto(DOUYIN_PROFILE_URL, { waitUntil: 'commit', timeout: 25_000 })
+      const targetTab = DOUYIN_SOURCE_TAB_QUERY[mode];
+      await page.goto(`${DOUYIN_PROFILE_URL}&showTab=${targetTab}`, { waitUntil: 'commit', timeout: 25_000 })
         .catch(() => undefined);
       const documentDeadline = Date.now() + 2000;
       while (!this.cancelled && documentEpoch === navigationEpoch && Date.now() < documentDeadline) await wait(50);

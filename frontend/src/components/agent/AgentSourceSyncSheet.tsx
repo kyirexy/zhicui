@@ -452,7 +452,9 @@ export default function AgentSourceSyncSheet({
     const modeLabel = douyinMode === 'collect' ? '收藏' : '喜欢';
     setPending(true);
     setFailed(false);
-    setMessage(`正在读取最近 ${syncCount} 条${modeLabel}…`);
+    setMessage(douyinDesktopAvailable
+      ? `正在自动打开抖音${modeLabel}并读取最近 ${syncCount} 条…`
+      : `正在读取最近 ${syncCount} 条${modeLabel}…`);
     try {
       if (douyinDesktopUpdateRequired) {
         throw new Error(

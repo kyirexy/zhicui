@@ -2288,7 +2288,7 @@ export default function VideoLibraryPage() {
           error: '未检测到可用的知萃桌面连接器',
         };
       }
-      reportNotice(`正在同步抖音${requestedSourceLabel}…`);
+      reportNotice(`正在自动打开抖音${requestedSourceLabel}并读取…`);
       const sourceSyncedAt = new Date().toISOString();
       const activeRequest = { userId: user.id, mode: requestedMode, count: requestedCount, generation: sourceSyncGenerationRef.current, sessionKey };
       activeDesktopSyncRef.current = activeRequest;

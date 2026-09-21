@@ -11,6 +11,13 @@
   color: var(--home-ink);
 }
 
+/* 今日分析与昨日回顾共享结构，但用更鲜明的色调区分“现在要做的事”。 */
+.recap[data-kind='today'] {
+  --recap-action: #2563eb;
+  border-color: color-mix(in srgb, #2563eb 30%, var(--home-border));
+  background: color-mix(in srgb, #2563eb 5%, var(--home-surface));
+}
+
 .heading { min-width: 0; }
 .titleRow { display: flex; align-items: center; gap: 9px; }
 .titleRow > svg { flex: 0 0 auto; color: var(--home-accent); }
@@ -41,6 +48,13 @@
 .loadingBar { width: 56px; height: 7px; border-radius: 4px; background: color-mix(in srgb, var(--home-accent) 22%, var(--home-surface)); }
 .progress { grid-column: 1 / -1; margin: 0; font-size: 0.82rem; line-height: 1.6; }
 .progress span { display: block; margin-top: 3px; color: var(--home-muted); font-size: 0.74rem; }
+.progressBlock { display: grid; grid-column: 1 / -1; gap: 7px; }
+.progressHeader { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; color: var(--home-ink); font-size: 0.82rem; line-height: 1.5; }
+.progressHeader span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.progressHeader strong { flex: 0 0 auto; color: var(--recap-action); font-size: 0.74rem; font-variant-numeric: tabular-nums; }
+.progressTrack { overflow: hidden; height: 7px; border-radius: 99px; background: color-mix(in srgb, var(--recap-action) 14%, var(--home-surface)); }
+.progressTrack > span { display: block; height: 100%; border-radius: inherit; background: var(--recap-action); transition: width 260ms ease-out; }
+.progressBlock > p { margin: 0; color: var(--home-muted); font-size: 0.74rem; line-height: 1.5; }
 .error { display: flex; min-width: 0; grid-column: 1 / -1; align-items: center; gap: 12px; color: var(--home-ink); }
 .error p { margin: 0; font-size: 0.8rem; line-height: 1.6; overflow-wrap: anywhere; }
 .error button { min-width: 76px; min-height: 44px; margin-left: auto; padding: 0 9px; flex-shrink: 0; border: 1px solid var(--home-border); border-radius: 8px; background: var(--home-surface); color: var(--home-ink); font: inherit; font-size: 0.76rem; cursor: pointer; }
@@ -80,4 +94,4 @@
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .spinning { animation: none; } .primary { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .spinning { animation: none; } .progressTrack > span { transition: none; } .primary { transition: none; } }

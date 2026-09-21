@@ -539,11 +539,19 @@ export default function WorkspaceActionHome() {
             </span>
             <ArrowRight size={17} weight="bold" aria-hidden="true" />
           </Link>
-          <a href="#daily-recap-title" className={styles.coreFeature}>
+          <a href="#yesterday-recap-title" className={styles.coreFeature}>
             <span className={styles.coreFeatureIcon} aria-hidden="true"><CalendarBlank size={22} weight="bold" /></span>
             <span className={styles.coreFeatureCopy}>
               <strong>看看昨天干了什么</strong>
               <small>回顾昨天新增的视频，一键交给 AI 提取</small>
+            </span>
+            <ArrowRight size={17} weight="bold" aria-hidden="true" />
+          </a>
+          <a href="#today-recap-title" className={styles.coreFeature}>
+            <span className={styles.coreFeatureIcon} aria-hidden="true"><CalendarCheck size={22} weight="bold" /></span>
+            <span className={styles.coreFeatureCopy}>
+              <strong>分析今天新收藏</strong>
+              <small>整理今天新增的喜欢与收藏，及时沉淀</small>
             </span>
             <ArrowRight size={17} weight="bold" aria-hidden="true" />
           </a>
@@ -608,7 +616,10 @@ export default function WorkspaceActionHome() {
         </div>
       </section>
 
-      <DailyRecap videoActions={videoActions} videoInteractions={videoInteractions} />
+      <div className={styles.dailyCards} aria-label="每日视频分析">
+        <DailyRecap kind="yesterday" videoActions={videoActions} videoInteractions={videoInteractions} />
+        <DailyRecap kind="today" videoActions={videoActions} videoInteractions={videoInteractions} />
+      </div>
 
       <section className={styles.channels} aria-label="抖音与 B站资料">
         <div className={styles.platformGrid}>

@@ -36,7 +36,7 @@ export interface DailyRecap {
   ready_note_ids: string[];
 }
 
-/** 按用户时区请求昨日；不用视频发布时间或本机缓存推断点赞时间。 */
+/** 按用户时区请求指定日期；不使用视频发布时间或本机缓存推断点赞时间。 */
 export async function getDailyRecap(timezone: string, signal?: AbortSignal, date?: string): Promise<DailyRecap> {
   const params = new URLSearchParams({ timezone });
   if (date) params.set('date', date);
@@ -48,7 +48,32 @@ export async function getDailyRecap(timezone: string, signal?: AbortSignal, date
   });
   const result = await response.json().catch(() => null);
   if (!response.ok || !result?.success || !result.data) {
-    throw new Error(typeof result?.error === 'string' ? result.error : '昨日回顾暂时未能读取，请重试');
+    throw new Error(typeof result?.error === 'string' ? result.error : `${date ? '今日分析' : '昨日回顾'}暂时未能读取，请重试`);
+  }
+  const data = result.data as DailyRecap;
+  const apiBase = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/$/, '');
+  const normalizeItem = (item: DailyRecapItem): DailyRecapItem => ({
+    ...item,
+    cover_url: item.cover_url?.startsWith('/') ? `${apiBase}${item.cover_url}` : item.cover_url || '',
+  });
+  return {
+    ...data,
+    items: data.items.map(normalizeItem),
+    preview: data.preview.map(normalizeItem),
+  };
+}
+
+/** 今日新增收藏/喜欢专用查询。后端单独提供路由，便于统计与解析任务解耦。 */
+export async function getDailyAnalysis(timezone: string, signal?: AbortSignal): Promise<DailyRecap> {
+  const token = readStoredToken();
+  const response = await sessionFetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/api/library/daily-analysis?${new URLSearchParams({ timezone })}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    cache: 'no-store',
+    signal,
+  });
+  const result = await response.json().catch(() => null);
+  if (!response.ok || !result?.success || !result.data) {
+    throw new Error(typeof result?.error === 'string' ? result.error : '今日分析暂时未能读取，请重试');
   }
   const data = result.data as DailyRecap;
   const apiBase = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/$/, '');

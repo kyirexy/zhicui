@@ -68,7 +68,10 @@ DEEPSEEK_API_BASE = "https://api.deepseek.com"
 DEEPSEEK_MODELS = ("deepseek-v4-flash", "deepseek-v4-pro")
 MAX_EXTRACTION_ASR_CONCURRENCY = 8
 MAX_EXTRACTION_LLM_CONCURRENCY = 50
-DEFAULT_EXTRACTION_ASR_CONCURRENCY = 4
+# ASR requests are I/O-bound and the batch UI is the main user-facing path.
+# Six workers shortens the common 10–20 item recap without exceeding the
+# guarded process-wide ceiling (admins can still tune this at runtime).
+DEFAULT_EXTRACTION_ASR_CONCURRENCY = 6
 DEFAULT_EXTRACTION_LLM_CONCURRENCY = 12
 DEFAULT_CREATOR_SYNC_CONCURRENCY = {
     "douyin": 1,

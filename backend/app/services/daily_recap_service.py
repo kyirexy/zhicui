@@ -108,6 +108,7 @@ def get_daily_recap(
     db: Session, *, user_id: str, target_date: date | None = None,
     timezone_name: str = "Asia/Shanghai", limit: int = MAX_RECAP_ITEMS,
     reference_at: datetime | None = None,
+    include_import_meta: bool = True,
 ) -> dict[str, Any]:
     if not str(user_id or "").strip():
         raise ValueError("缺少回顾用户")
@@ -146,7 +147,13 @@ def get_daily_recap(
             previous = notes.get(note.video_id)
             if previous is None or (not (previous.transcript_raw or "").strip() and (note.transcript_raw or "").strip()):
                 notes[note.video_id] = note
-    initial_ids, known_initial_modes = _initial_imports(db, user_id=user_id, end=end)
+    # Historical import classification is useful for yesterday's explanation,
+    # but it requires scanning the sync-run ledger and parsing each snapshot.
+    # Today's analysis is a hot path and does not need that extra work.
+    if include_import_meta:
+        initial_ids, known_initial_modes = _initial_imports(db, user_id=user_id, end=end)
+    else:
+        initial_ids, known_initial_modes = set(), set()
     items: list[dict[str, Any]] = []
     unknown_initial_count = 0
     for video_id, memberships in grouped.items():
@@ -168,8 +175,15 @@ def get_daily_recap(
             continue
         modes = [mode for mode in _MODES if any(row.source_mode == mode for row in memberships)]
         first_seen = min(_aware(row.first_seen_at) for row in memberships)
-        initial = any((platform, mode, video_id) in initial_ids for mode in modes)
-        initial_known = all((platform, mode) in known_initial_modes for mode in modes)
+        if include_import_meta:
+            initial = any((platform, mode, video_id) in initial_ids for mode in modes)
+            initial_known = all((platform, mode) in known_initial_modes for mode in modes)
+        else:
+            # The fast today's query intentionally omits historical import
+            # classification; this is a known non-applicable field, not an
+            # unknown state to report to the user.
+            initial = False
+            initial_known = True
         if not initial_known:
             unknown_initial_count += 1
         raw_cover = snapshot.cover_url if snapshot else str(meta.get("cover_url") or "")
@@ -215,3 +229,30 @@ def get_daily_recap(
         "items": selected, "preview": selected[:3], "has_more": len(items) > limit,
         "ready_note_ids": [item["note_id"] for item in selected if item["transcript_ready"]],
     }
+
+
+def get_daily_analysis(
+    db: Session, *, user_id: str,
+    timezone_name: str = "Asia/Shanghai", limit: int = MAX_RECAP_ITEMS,
+    reference_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Return today's newly discovered likes/collections.
+
+    The same ledger based query is deliberately reused so this endpoint stays
+    cheap and deterministic: it never starts ASR/LLM work.  The client can use
+    ``ready_note_ids`` to submit only pending items to the batch extractor and
+    poll its durable progress endpoint.
+    """
+    local_date, _, _ = day_window(
+        timezone_name=timezone_name,
+        reference_at=reference_at,
+    )
+    data = get_daily_recap(
+        db, user_id=user_id, target_date=local_date,
+        timezone_name=timezone_name, limit=limit, reference_at=reference_at,
+        include_import_meta=False,
+    )
+    data["kind"] = "today"
+    data["time_basis_label"] = "按知萃今日首次同步记录"
+    data["message"] = "今天新增的收藏与喜欢已就绪，可批量提取并查看实时进度。"
+    return data

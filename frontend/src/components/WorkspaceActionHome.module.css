@@ -77,7 +77,7 @@
 
 .coreFeatureGrid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -148,6 +148,47 @@
   gap: 34px;
   background: var(--home-soft);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--home-border) 78%, transparent);
+}
+
+.dailyCards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 16px;
+}
+
+.dailyCards > * { min-width: 0; }
+
+/* Desktop workspaces have a fixed navigation/context chrome. Keep the first
+   viewport focused on the four core actions and the daily analysis cards. */
+@media (min-width: 1100px) {
+  :global(html[data-desktop-app='true']) .home { padding-top: 12px; }
+  :global(html[data-desktop-app='true']) .welcome { min-height: 34px; padding-bottom: 8px; }
+  :global(html[data-desktop-app='true']) .coreFeatures {
+    gap: 10px;
+    margin-bottom: 12px;
+    padding: 13px 16px;
+  }
+  :global(html[data-desktop-app='true']) .coreFeaturesHeading {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    align-items: baseline;
+    column-gap: 10px;
+  }
+  :global(html[data-desktop-app='true']) .coreFeaturesHeading h2,
+  :global(html[data-desktop-app='true']) .coreFeaturesHeading p { margin: 0; }
+  :global(html[data-desktop-app='true']) .coreFeaturesHeading h2 { font-size: 1.08rem; }
+  :global(html[data-desktop-app='true']) .coreFeaturesHeading p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  :global(html[data-desktop-app='true']) .coreFeature { min-height: 62px; padding: 8px 10px; gap: 8px; }
+  :global(html[data-desktop-app='true']) .coreFeatureIcon { width: 32px; height: 32px; border-radius: 9px; }
+  :global(html[data-desktop-app='true']) .start { min-height: 112px; padding: 15px 18px; gap: 24px; }
+  :global(html[data-desktop-app='true']) .intro h2 { margin-top: 6px; font-size: 1.34rem; }
+  :global(html[data-desktop-app='true']) .askEntry,
+  :global(html[data-desktop-app='true']) .syncEntry { min-height: 60px; grid-template-columns: 36px minmax(0, 1fr) 36px; gap: 8px; }
+  :global(html[data-desktop-app='true']) .askIcon,
+  :global(html[data-desktop-app='true']) .syncIcon,
+  :global(html[data-desktop-app='true']) .askArrow,
+  :global(html[data-desktop-app='true']) .syncArrow { width: 36px; height: 36px; border-radius: 9px; }
 }
 
 .start::after {
@@ -914,6 +955,10 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .dailyCards {
+    gap: 12px;
+  }
+
   .tools {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1153,6 +1198,11 @@
   .coreFeatureGrid {
     grid-template-columns: minmax(0, 1fr);
     gap: 8px;
+  }
+
+  .dailyCards {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
   }
 
   .coreFeature {

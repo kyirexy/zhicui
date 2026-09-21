@@ -107,6 +107,7 @@
     "GET /api/legal/documents/current",
     "GET /api/library/bilibili/import-jobs",
     "GET /api/library/bilibili/import-jobs/{job_id}",
+    "GET /api/library/daily-analysis",
     "GET /api/library/daily-recap",
     "GET /api/library/douyin/cover/{aweme_id}",
     "GET /api/library/douyin/extractions/batch/{job_id}",

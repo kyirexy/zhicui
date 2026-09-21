@@ -55,3 +55,12 @@ test('后端失败不会伪装成空记录', async () => {
   const invalid = loadApi(null, 502);
   await assert.rejects(invalid.api.getDailyRecap('Asia/Shanghai'), /昨日回顾暂时未能读取/);
 });
+
+test('今日分析使用独立接口并携带时区', async () => {
+  const data = { items: [], preview: [], date: '2026-09-21' } as unknown as DailyRecap;
+  const { api, calls } = loadApi({ success: true, data });
+  await api.getDailyAnalysis('Asia/Shanghai');
+  const url = new URL(calls[0].url);
+  assert.equal(url.pathname, '/api/library/daily-analysis');
+  assert.equal(url.searchParams.get('timezone'), 'Asia/Shanghai');
+});

@@ -56,6 +56,11 @@
       "reason": "首页按首次同步台账查询昨日来源，仅用户本人读取，不新增 Agent 执行动作"
     },
     {
+      "pattern": "^/api/library/daily-analysis$",
+      "classification": "transport_internal",
+      "reason": "首页按首次同步台账查询今日新增收藏与喜欢，仅用户本人读取，不新增 Agent 执行动作"
+    },
+    {
       "pattern": "^/api/client-errors$",
       "classification": "transport_internal",
       "reason": "Client diagnostics ingestion"

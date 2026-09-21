@@ -7,6 +7,7 @@ import {
   ArrowRight,
   ArrowsClockwise,
   CalendarCheck,
+  CalendarBlank,
   ChatCircleDots,
   ClipboardText,
   FileText,
@@ -14,6 +15,7 @@ import {
   Heart,
   LinkSimple,
   Lockers,
+  UsersThree,
   Sparkle,
   VideoCamera,
 } from '@phosphor-icons/react';
@@ -521,6 +523,40 @@ export default function WorkspaceActionHome() {
           </h1>
         </div>
       </header>
+
+      <section className={styles.coreFeatures} aria-labelledby="core-features-title">
+        <div className={styles.coreFeaturesHeading}>
+          <span className={styles.sectionLabel}><Sparkle size={14} weight="fill" aria-hidden="true" />核心功能</span>
+          <h2 id="core-features-title">把喜欢的视频，变成能用的答案</h2>
+          <p>目前支持抖音和 B站，首页就能开始同步、回顾和提问。</p>
+        </div>
+        <div className={styles.coreFeatureGrid}>
+          <Link href="/library?sync=1" className={`${styles.coreFeature} ${styles.coreFeaturePrimary}`}>
+            <span className={styles.coreFeatureIcon} aria-hidden="true"><ArrowsClockwise size={22} weight="bold" /></span>
+            <span className={styles.coreFeatureCopy}>
+              <strong>同步抖音 / B站</strong>
+              <small>同步喜欢、收藏和作品，自动整理成资料</small>
+            </span>
+            <ArrowRight size={17} weight="bold" aria-hidden="true" />
+          </Link>
+          <a href="#daily-recap-title" className={styles.coreFeature}>
+            <span className={styles.coreFeatureIcon} aria-hidden="true"><CalendarBlank size={22} weight="bold" /></span>
+            <span className={styles.coreFeatureCopy}>
+              <strong>看看昨天干了什么</strong>
+              <small>回顾昨天新增的视频，一键交给 AI 提取</small>
+            </span>
+            <ArrowRight size={17} weight="bold" aria-hidden="true" />
+          </a>
+          <Link href="/library/creators" className={styles.coreFeature}>
+            <span className={styles.coreFeatureIcon} aria-hidden="true"><UsersThree size={22} weight="bold" /></span>
+            <span className={styles.coreFeatureCopy}>
+              <strong>博主视频批量提问</strong>
+              <small>提取博主全部作品，多选视频后直接问 AI</small>
+            </span>
+            <ArrowRight size={17} weight="bold" aria-hidden="true" />
+          </Link>
+        </div>
+      </section>
 
       <section className={styles.start} aria-labelledby="workspace-start-title">
         <div className={styles.intro}>

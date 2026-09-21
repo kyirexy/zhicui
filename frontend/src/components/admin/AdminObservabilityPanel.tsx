@@ -52,6 +52,7 @@ export const ADMIN_ACTION_LABELS: Record<string, string> = {
   llm_config_test: '测试 LLM 连接',
   asr_config_test: '测试 ASR 连接',
   feedback_update: '处理用户反馈',
+  community_qr_update: '更新群二维码',
 };
 
 const OPERATION_LABELS: Record<string, string> = {

@@ -52,6 +52,7 @@ from app.services import (
     douyin_legacy_catalog_service,
     douyin_library,
     error_log_service,
+    feedback_service,
     image_memory_cache,
     library_extraction_service,
     library_hidden_service,

@@ -2131,6 +2131,25 @@ export interface AdminStats {
   };
 }
 
+export interface CommunityQrConfig {
+  available: boolean;
+  url: string | null;
+  media_type: string | null;
+  filename: string;
+  expires_at: string | null;
+}
+
+export async function getAdminCommunityQr(): Promise<ApiResponse<CommunityQrConfig>> {
+  return request<CommunityQrConfig>('/api/admin/community-qr');
+}
+
+export async function putAdminCommunityQr(file: File, expiresAt?: string): Promise<ApiResponse<CommunityQrConfig>> {
+  const body = new FormData();
+  body.append('file', file);
+  if (expiresAt) body.append('expires_at', expiresAt);
+  return request<CommunityQrConfig>('/api/admin/community-qr', { method: 'PUT', body });
+}
+
 export interface AdminBusinessOverview {
   days: number; since: string; as_of: string; page: number; per_page: number;
   metrics: Record<'new_users' | 'new_notes' | 'transcripts_ready' | 'summaries_ready' | 'new_plans' | 'new_knowledge' | 'new_creators' | 'model_calls' | 'tokens' | 'model_users' | 'errors' | 'feedback' | 'analysis_points', number>;

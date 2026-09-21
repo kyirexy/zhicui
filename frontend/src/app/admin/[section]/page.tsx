@@ -20,6 +20,7 @@ import {
   Menu,
   MessageSquareText,
   RefreshCw,
+  QrCode,
   Settings2,
   ShieldCheck,
   Users,
@@ -93,9 +94,10 @@ import AdminVideoAnalysisPanel from '@/components/admin/AdminVideoAnalysisPanel'
 import AdminChatModelPanel, { type AdminChatModelPanelHandle } from '@/components/admin/AdminChatModelPanel';
 import AdminOmniroutePanel from '@/components/admin/AdminOmniroutePanel';
 import AdminBusinessOverviewPanel from '@/components/admin/AdminBusinessOverviewPanel';
+import AdminCommunityQrPanel from '@/components/admin/AdminCommunityQrPanel';
 import styles from '../AdminWorkspace.module.css';
 
-type Tab = 'dashboard' | 'users' | 'feedback' | 'showcase-cases' | 'notes' | 'plans' | 'export' | 'ops' | 'models' | 'llm' | 'asr' | 'observability' | 'settings';
+type Tab = 'dashboard' | 'users' | 'feedback' | 'community' | 'showcase-cases' | 'notes' | 'plans' | 'export' | 'ops' | 'models' | 'llm' | 'asr' | 'observability' | 'settings';
 
 interface AdminNavItem {
   key: Tab;
@@ -116,6 +118,7 @@ const NAV_GROUPS: Array<{ label: string; items: AdminNavItem[] }> = [
     items: [
       { key: 'users', label: '用户管理', description: '账号、权限与状态', icon: Users },
       { key: 'feedback', label: '用户反馈', description: '问题、建议与回复', icon: MessageSquareText },
+      { key: 'community', label: '群二维码', description: '上传和替换交流群二维码', icon: QrCode },
       { key: 'showcase-cases', label: '首页案例', description: '真实案例、演示素材与发布', icon: LayoutDashboard },
       { key: 'notes', label: '笔记管理', description: '内容检查与重新生成', icon: FileText },
       { key: 'plans', label: '计划管理', description: '行动计划与完成状态', icon: ListTodo },
@@ -887,6 +890,7 @@ export default function AdminPage() {
 
           {/* 用户反馈 */}
           {tab === 'feedback' && <AdminFeedbackPanel />}
+          {tab === 'community' && <AdminCommunityQrPanel />}
           {tab === 'showcase-cases' && <AdminShowcaseCasesPanel />}
 
           {/* 笔记管理 */}

@@ -33,6 +33,7 @@ from app.api.catalog_quality_routes import router as catalog_quality_router
 from app.api.daily_recap_routes import router as daily_recap_router
 from app.api.home_video_routes import router as home_video_router
 from app.api.showcase_case_routes import router as showcase_case_router
+from app.api.community_qr_routes import router as community_qr_router
 from app.api.agent_interface_routes import (
     router as agent_interface_router,
     mcp_router as agent_mcp_router,
@@ -418,6 +419,7 @@ def create_app() -> FastAPI:
     app.include_router(daily_recap_router)
     app.include_router(home_video_router)
     app.include_router(showcase_case_router)
+    app.include_router(community_qr_router)
     app.include_router(agent_interface_router)
     app.include_router(agent_secure_router)
     app.include_router(agent_mcp_router)

@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { Download, MessageCircle } from 'lucide-react';
-import { COMMUNITY_QR_PATH, isCommunityInviteExpired } from '@/lib/community';
+import { API_BASE } from '@/lib/api';
+import { COMMUNITY_EXPIRES_AT, COMMUNITY_QR_PATH, isCommunityInviteExpired } from '@/lib/community';
 import styles from './CommunityPanel.module.css';
 
 export default function CommunityPanel() {
@@ -10,25 +11,51 @@ export default function CommunityPanel() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [imageFailed, setImageFailed] = useState(false);
+  const [qrPath, setQrPath] = useState(COMMUNITY_QR_PATH);
+  const [expiresAt, setExpiresAt] = useState<string | null>(COMMUNITY_EXPIRES_AT);
+  const [qrFilename, setQrFilename] = useState('知萃交流群二维码.png');
 
   useEffect(() => {
-    const check = () => setExpired(isCommunityInviteExpired(Date.now()));
-    check();
-    const timer = window.setInterval(check, 60_000);
-    return () => window.clearInterval(timer);
+    let cancelled = false;
+    const load = async () => {
+      let configured = false;
+      let effectiveExpires = '';
+      try {
+        const response = await fetch(`${API_BASE}/api/community/qr-info`, { cache: 'no-store' });
+        const payload = await response.json() as { success?: boolean; data?: { available?: boolean; url?: string | null; expires_at?: string | null; filename?: string } };
+        const data = payload.data;
+        if (!cancelled && payload.success && data?.available && data.url) {
+          configured = true;
+          effectiveExpires = data.expires_at || '9999-12-31T00:00:00Z';
+          setQrPath(`${API_BASE}${data.url}`);
+          setExpiresAt(data.expires_at || null);
+          setQrFilename(data.filename || '知萃交流群二维码.png');
+        }
+      } catch { /* fallback to the built-in image */ }
+      if (cancelled) return;
+      if (!configured) setExpiresAt(COMMUNITY_EXPIRES_AT);
+      const check = () => setExpired(isCommunityInviteExpired(Date.now(), configured ? effectiveExpires : undefined));
+      check();
+      const timer = window.setInterval(check, 60_000);
+      return () => window.clearInterval(timer);
+    };
+    let cleanup: (() => void) | undefined;
+    void load().then((dispose) => { cleanup = dispose; });
+    return () => { cancelled = true; cleanup?.(); };
   }, []);
 
   async function saveQr() {
     if (saving) return;
-    if (isCommunityInviteExpired(Date.now())) { setExpired(true); return; }
+    const effectiveExpiry = qrPath === COMMUNITY_QR_PATH ? undefined : (expiresAt || '9999-12-31T00:00:00Z');
+    if (isCommunityInviteExpired(Date.now(), effectiveExpiry)) { setExpired(true); return; }
     setSaving(true);
     setMessage('');
     try {
-      const response = await fetch(COMMUNITY_QR_PATH);
+      const response = await fetch(qrPath);
       if (!response.ok) throw new Error('二维码加载失败');
       const blob = await response.blob();
       const { exportFile } = await import('@/lib/fileExport');
-      const result = await exportFile(blob, '知萃交流群-9月21日前有效.png');
+      const result = await exportFile(blob, qrFilename);
       setMessage(result === 'cancelled' ? '已取消保存。' : result === 'downloaded' ? '已开始下载，可在微信扫一扫中从相册选择。' : '可通过系统面板保存图片，再到微信扫一扫中选择。');
     } catch {
       setMessage('未能保存，可直接截图后在微信扫一扫中从相册选择。');
@@ -48,7 +75,7 @@ export default function CommunityPanel() {
         ) : (
           <>
             <p>电脑上用微信扫码；手机上保存图片，在微信扫一扫中从相册选择。</p>
-            <p className={styles.validity}>本次二维码：2026 年 9 月 21 日前有效</p>
+            <p className={styles.validity}>{expiresAt ? `本次二维码：${new Date(expiresAt).toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' })}前有效` : '本次二维码长期有效'}</p>
           </>
         )}
         <div className={styles.actions}>
@@ -59,7 +86,7 @@ export default function CommunityPanel() {
       </div>
       <div className={styles.qr}>
         {expired === false && !imageFailed ? (
-          <img src={COMMUNITY_QR_PATH} width={340} height={340} alt="微信扫码加入知萃交流建议反馈群，2026年9月21日前有效" onError={() => setImageFailed(true)} />
+          <img src={qrPath} width={340} height={340} alt="微信扫码加入知萃交流建议反馈群" onError={() => setImageFailed(true)} />
         ) : <p role="status">{imageFailed ? '二维码加载失败，请刷新重试。' : expired ? '等待更新群二维码' : '正在检查邀请有效期…'}</p>}
       </div>
     </div>

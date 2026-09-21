@@ -1,116 +1,89 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { ArrowRight, BookOpenText, Check, FileText, ListChecks, Pause, Play, Quotes, Sparkle } from '@phosphor-icons/react';
-import { LANDING_DEMO as demo } from '@/lib/landingDemo';
+import { useEffect, useState } from 'react';
+import { ArrowRight, ArrowsClockwise, CalendarBlank, Check, ChatCircleDots, Pause, Play, UsersThree, VideoCamera } from '@phosphor-icons/react';
+import Link from 'next/link';
 import styles from './LandingProductDemo.module.css';
 
-const STEPS = [
-  { label: '读文案', Icon: FileText },
-  { label: '问重点', Icon: Sparkle },
-  { label: '列行动', Icon: ListChecks },
+const MODES = [
+  { label: '同步视频', Icon: ArrowsClockwise },
+  { label: '昨日回顾', Icon: CalendarBlank },
+  { label: '博主问答', Icon: UsersThree },
 ] as const;
 
+const creatorVideos = ['世界健体第六名：中国健体第一人何同服赛前胸部完整训练计划', '碳循环减脂太快了？健身干货与自然健身建议', '下一个一定更好？珍惜数学与知识分享'];
+
 export default function LandingProductDemo() {
-  const rootRef = useRef<HTMLElement>(null);
-  const [step, setStep] = useState(1);
+  const [mode, setMode] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [source, setSource] = useState<number | null>(null);
-  const [checked, setChecked] = useState<string[]>([]);
+  const [selectedVideos, setSelectedVideos] = useState<number[]>([0, 1]);
+  const [synced, setSynced] = useState(false);
 
   useEffect(() => {
     if (!playing) return;
     const timer = window.setTimeout(() => {
-      if (step === 2) setPlaying(false);
-      else setStep((current) => current + 1);
-    }, 4500);
+      if (mode === MODES.length - 1) setPlaying(false);
+      else setMode((current) => current + 1);
+    }, 4200);
     return () => window.clearTimeout(timer);
-  }, [playing, step]);
+  }, [playing, mode]);
 
   useEffect(() => {
-    const onVisibility = () => {
-      if (document.hidden) setPlaying(false);
-    };
+    const onVisibility = () => { if (document.hidden) setPlaying(false); };
     document.addEventListener('visibilitychange', onVisibility);
-    if (!('IntersectionObserver' in window)) return () => document.removeEventListener('visibilitychange', onVisibility);
-    const observer = new IntersectionObserver(([entry]) => {
-      if (!entry.isIntersecting) setPlaying(false);
-    });
-    if (rootRef.current) observer.observe(rootRef.current);
-    return () => {
-      observer.disconnect();
-      document.removeEventListener('visibilitychange', onVisibility);
-    };
+    return () => document.removeEventListener('visibilitychange', onVisibility);
   }, []);
 
-  const selectStep = (next: number) => {
-    setPlaying(false);
-    setStep(next);
-  };
+  const selectMode = (next: number) => { setPlaying(false); setMode(next); };
+  const toggleVideo = (index: number) => setSelectedVideos((current) => current.includes(index)
+    ? current.filter((item) => item !== index)
+    : [...current, index]);
 
   return (
-    <section id="demo" ref={rootRef} className={styles.demo} aria-label="知萃交互示例" tabIndex={-1}>
+    <section id="demo" className={styles.demo} aria-label="知萃真实功能演示" tabIndex={-1}>
       <header className={styles.topbar}>
         <span className={styles.brand}><img src="/logo.png" alt="" width="23" height="23" /> 知萃工作台</span>
-        <span className={styles.exampleLabel}>交互示例</span>
+        <span className={styles.exampleLabel}>功能演示 · 抖音 / B站</span>
       </header>
-      <div className={styles.steps} aria-label="选择演示步骤">
-        {STEPS.map(({ label, Icon }, index) => (
-          <button key={label} type="button" aria-pressed={step === index} onClick={() => selectStep(index)}>
+      <div className={styles.steps} aria-label="选择功能演示">
+        {MODES.map(({ label, Icon }, index) => (
+          <button key={label} type="button" aria-pressed={mode === index} onClick={() => selectMode(index)}>
             <Icon size={17} aria-hidden="true" /><span>{label}</span><small>0{index + 1}</small>
           </button>
         ))}
       </div>
       <div className={styles.content}>
-        <div className={styles.sourceCard}>
-          <span className={styles.sourceIcon}><BookOpenText size={24} weight="light" aria-hidden="true" /></span>
-          <div><small>{demo.sourceLabel}</small><h2>{demo.title}</h2></div>
-        </div>
-        <div className={styles.panel} aria-live="polite" aria-atomic="true">
-            <div className={styles.transcript} aria-hidden={step !== 0} inert={step !== 0}>
-              <p className={styles.panelLabel}>原文在这里，随时可以核对</p>
-              {demo.paragraphs.map((paragraph, index) => (
-                <p key={paragraph}><span>0{index + 1}</span>{paragraph}</p>
-              ))}
+        {mode === 0 ? (
+          <div className={styles.realPanel}>
+            <div className={styles.panelIntro}><span className={styles.panelEyebrow}>平台同步</span><h2>把喜欢和收藏，自动整理成资料</h2><p>目前支持抖音、B站，Windows 端可直接同步账号内容。</p></div>
+            <div className={styles.platformRows}>
+              <div className={styles.platformRow}><span className={styles.platformBadge}>抖</span><span><strong>抖音</strong><small>喜欢 · 收藏 · 作品</small></span><span className={styles.connected}>{synced ? '已同步' : '可同步'}</span></div>
+              <div className={styles.platformRow}><span className={`${styles.platformBadge} ${styles.biliBadge}`}>哔</span><span><strong>B站</strong><small>收藏 · 喜欢 · 导入视频</small></span><span className={styles.connected}>{synced ? '已同步' : '可同步'}</span></div>
             </div>
-            <div className={styles.answer} aria-hidden={step !== 1} inert={step !== 1}>
-              <div className={styles.question}>{demo.question}<ArrowRight size={18} aria-hidden="true" /></div>
-              <div className={styles.answerHeading}><Sparkle size={18} weight="fill" aria-hidden="true" /><span>把重点，变成下一步</span></div>
-              <p className={styles.answerLead}>{demo.answer}</p>
-              <ol className={styles.points}>
-                {demo.points.map((point, index) => (
-                  <li key={point.title}>
-                    <span className={styles.pointNumber}>0{index + 1}</span>
-                    <div><strong>{point.title}</strong><p>{point.detail}</p></div>
-                    <button type="button" aria-label={`查看第 ${point.source} 段原文依据`} aria-expanded={source === point.source} onClick={() => { setSource(source === point.source ? null : point.source); setPlaying(false); }}>[{point.source}]</button>
-                  </li>
-                ))}
-              </ol>
-              {source !== null && (
-                <aside className={styles.evidence} aria-label={`第 ${source} 段原文`}>
-                  <Quotes size={18} weight="fill" aria-hidden="true" /><p><strong>原文依据 [{source}]</strong>{demo.paragraphs[source - 1]}</p>
-                </aside>
-              )}
-            </div>
-            <div className={styles.plan} aria-hidden={step !== 2} inert={step !== 2}>
-              <p className={styles.panelLabel}>今日行动 · 示例计划</p>
-              <h3>把一条收藏，真正用一次。</h3>
-              <div className={styles.progress}><span>已完成 {checked.length} / {demo.tasks.length}</span><progress value={checked.length} max={demo.tasks.length} aria-label="示例计划完成进度" /></div>
-              <div className={styles.tasks}>
-                {demo.tasks.map((task) => (
-                  <label key={task.id}>
-                    <input type="checkbox" checked={checked.includes(task.id)} onChange={() => { setPlaying(false); setChecked((current) => current.includes(task.id) ? current.filter((id) => id !== task.id) : [...current, task.id]); }} />
-                    <span>{task.title}</span>
-                  </label>
-                ))}
-              </div>
-              <p className={styles.planNote}><Check size={15} aria-hidden="true" />可以勾选试试，体验进度变化。</p>
-            </div>
-        </div>
+            <div className={styles.syncProgress}><span style={{ width: synced ? '100%' : '42%' }} /></div>
+            <div className={styles.panelActions}><button type="button" className={styles.primaryButton} onClick={() => setSynced(true)}><ArrowsClockwise size={16} />{synced ? '同步完成' : '开始同步'}</button><Link href="/library?sync=1">打开同步页 <ArrowRight size={15} /></Link></div>
+          </div>
+        ) : null}
+        {mode === 1 ? (
+          <div className={styles.realPanel}>
+            <div className={styles.panelIntro}><span className={styles.panelEyebrow}>昨日回顾 · 9月20日</span><h2>昨天新增的内容，都在这里</h2><p>按首次同步记录整理，已有文稿会直接复用。</p></div>
+            <div className={styles.recapStats}><strong>12 条视频</strong><span>♡ 喜欢 8</span><span>▣ 收藏 4</span></div>
+            <div className={styles.recapItems}><div><span>抖音</span><strong>世界健体第六名：完整训练计划</strong><small>文案已就绪</small></div><div><span>B站</span><strong>如何安排一周学习计划？</strong><small>等待提取</small></div></div>
+            <div className={styles.panelActions}><Link href="/library?sync=1" className={styles.primaryButton}><Check size={16} />一键提取解析</Link><a href="#demo" onClick={() => selectMode(0)}>继续同步 <ArrowRight size={15} /></a></div>
+          </div>
+        ) : null}
+        {mode === 2 ? (
+          <div className={styles.realPanel}>
+            <div className={styles.panelIntro}><span className={styles.panelEyebrow}>博主作品 · 多选问答</span><h2>选一个博主，批量读懂他的作品</h2><p>已发现 36 条作品，选择视频后直接向 AI 提问。</p></div>
+            <div className={styles.creatorHeader}><span className={styles.creatorAvatar}>知</span><span><strong>知萃精选博主</strong><small>抖音 · 36 条已发现</small></span><VideoCamera size={18} /></div>
+            <div className={styles.creatorVideos}>{creatorVideos.map((title, index) => <label key={title}><input type="checkbox" checked={selectedVideos.includes(index)} onChange={() => toggleVideo(index)} /><span>{title}</span><small>{index === 0 ? '已就绪' : '可提取'}</small></label>)}</div>
+            <div className={styles.panelActions}><Link href="/library/creators" className={styles.primaryButton}><ChatCircleDots size={16} />用 {selectedVideos.length} 条视频提问</Link><Link href="/library/creators">查看全部作品 <ArrowRight size={15} /></Link></div>
+          </div>
+        ) : null}
       </div>
       <footer className={styles.footer}>
-        <p>原创素材 · 预设回答<br /><span>仅供体验，不调用 AI 或保存数据</span></p>
-        <button type="button" onClick={() => { if (playing) setPlaying(false); else { setStep(0); setPlaying(true); } }} aria-label={playing ? '暂停分步演示' : '播放分步演示'}>
+        <p>点击上方标签，查看三项核心功能<br /><span>支持抖音和 B站 · 进入后使用真实数据</span></p>
+        <button type="button" onClick={() => { if (playing) setPlaying(false); else { setMode(0); setPlaying(true); } }} aria-label={playing ? '暂停分步演示' : '播放分步演示'}>
           {playing ? <Pause size={15} weight="fill" aria-hidden="true" /> : <Play size={15} weight="fill" aria-hidden="true" />}
           {playing ? '暂停演示' : '播放演示'}
         </button>

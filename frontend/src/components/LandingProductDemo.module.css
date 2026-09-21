@@ -11,6 +11,40 @@
 .steps button[aria-pressed='true'] { color: #305ca0; background: #eaf1fb; font-weight: 650; }
 .steps small { margin-left: auto; font-size: 11px; font-variant-numeric: tabular-nums; opacity: .65; }
 .content { padding: 22px 25px 24px; }
+.realPanel { display: grid; min-height: 320px; align-content: start; gap: 16px; }
+.panelIntro { display: grid; gap: 6px; }
+.panelEyebrow { color: #426ba8; font-size: 11px; font-weight: 650; }
+.panelIntro h2 { margin: 0; color: #252d36; font-size: 20px; line-height: 1.45; font-weight: 650; }
+.panelIntro p { margin: 0; color: #5e6f7e; font-size: 12px; line-height: 1.7; }
+.platformRows { display: grid; gap: 9px; }
+.platformRow { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid #e5eaf0; border-radius: 10px; }
+.platformBadge { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 9px; color: #111; background: #eef1f4; font-size: 15px; font-weight: 750; }
+.biliBadge { color: #1689b3; background: #e8f6fb; }
+.platformRow span:nth-child(2), .creatorHeader > span:nth-child(2) { display: grid; gap: 2px; min-width: 0; }
+.platformRow strong, .creatorHeader strong { font-size: 13px; font-weight: 650; }
+.platformRow small, .creatorHeader small { overflow: hidden; color: #7a8997; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.connected { color: #398467; font-size: 11px; white-space: nowrap; }
+.syncProgress { height: 5px; border-radius: 4px; overflow: hidden; background: #e9eef4; }
+.syncProgress span { display: block; height: 100%; border-radius: inherit; background: #5b80b3; transition: width 300ms ease; }
+.panelActions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.panelActions a { display: inline-flex; align-items: center; gap: 5px; color: #426aa5; font-size: 12px; font-weight: 550; text-decoration: none; }
+.panelActions a:hover { color: #263f67; }
+.primaryButton { display: inline-flex; min-height: 42px; align-items: center; gap: 7px; padding: 0 14px; border: 1px solid #365e96; border-radius: 9px; color: #fff !important; background: #365e96; font-size: 12px !important; font-weight: 650 !important; cursor: pointer; }
+.primaryButton:hover { background: #2c5082 !important; }
+.recapStats { display: flex; align-items: center; gap: 15px; color: #6d7d8c; font-size: 11px; }
+.recapStats strong { color: #2f4f79; font-size: 14px; }
+.recapItems { display: grid; gap: 8px; }
+.recapItems > div { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 9px; align-items: center; padding: 10px 11px; border: 1px solid #e5eaf0; border-radius: 9px; }
+.recapItems span { color: #426aa5; font-size: 11px; }
+.recapItems strong { overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.recapItems small { color: #7a8997; font-size: 10px; white-space: nowrap; }
+.creatorHeader { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 10px; background: #f0f4f9; color: #5e6f7e; }
+.creatorAvatar { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 50%; color: #fff; background: #5b80b3; font-weight: 700; }
+.creatorVideos { display: grid; gap: 7px; }
+.creatorVideos label { display: grid; grid-template-columns: 17px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid #e5eaf0; border-radius: 8px; cursor: pointer; }
+.creatorVideos input { width: 16px; height: 16px; accent-color: #537aac; }
+.creatorVideos label span { overflow: hidden; font-size: 11px; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
+.creatorVideos label small { color: #398467; font-size: 10px; white-space: nowrap; }
 .sourceCard { display: flex; gap: 12px; align-items: center; padding-bottom: 21px; }
 .sourceIcon { display: grid; place-items: center; width: 44px; height: 51px; flex: none; border-radius: 7px; color: #5e7386; background: #edf1f3; }
 .sourceCard small { display: block; margin-bottom: 5px; font-size: 11px; color: #5e6f7e; }
@@ -61,6 +95,10 @@
   .steps button { padding: 0 9px; gap: 5px; font-size: 12px; }
   .steps small { display: none; }
   .content { padding: 18px 17px 20px; }
+  .realPanel { min-height: 338px; }
+  .panelIntro h2 { font-size: 18px; }
+  .panelActions { align-items: stretch; flex-direction: column; }
+  .panelActions a, .primaryButton { justify-content: center; }
   .sourceCard { gap: 10px; padding-bottom: 16px; }
   .sourceCard h2 { font-size: 14px; }
   .sourceIcon { width: 37px; height: 46px; }

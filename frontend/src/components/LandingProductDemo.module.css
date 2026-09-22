@@ -38,13 +38,19 @@
 .recapItems span { color: #426aa5; font-size: 11px; }
 .recapItems strong { overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .recapItems small { color: #7a8997; font-size: 10px; white-space: nowrap; }
-.creatorHeader { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 10px; background: #f0f4f9; color: #5e6f7e; }
-.creatorAvatar { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 50%; color: #fff; background: #5b80b3; font-weight: 700; }
+.creatorHeader { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid #dfe7ef; border-radius: 10px; background: #f3f6fa; color: #5e6f7e; }
+.creatorAvatar { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 50%; color: #fff; background: #536f98; font-size: 12px; font-weight: 750; letter-spacing: -.04em; }
+.creatorVerified { padding: 5px 7px; border-radius: 999px; color: #39765f; background: #e4f2eb; font-size: 10px; font-weight: 650; white-space: nowrap; }
+.creatorFacts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.creatorFacts > div { display: grid; gap: 3px; padding: 9px 10px; border: 1px solid #e5eaf0; border-radius: 8px; background: #fff; }
+.creatorFacts strong { color: #2f4f79; font-size: 14px; font-weight: 700; }
+.creatorFacts small { color: #7a8997; font-size: 10px; }
 .creatorVideos { display: grid; gap: 7px; }
 .creatorVideos label { display: grid; grid-template-columns: 17px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid #e5eaf0; border-radius: 8px; cursor: pointer; }
 .creatorVideos input { width: 16px; height: 16px; accent-color: #537aac; }
 .creatorVideos label span { overflow: hidden; font-size: 11px; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
 .creatorVideos label small { color: #398467; font-size: 10px; white-space: nowrap; }
+.creatorNote { margin: -3px 0 0; color: #7a8997; font-size: 10px; line-height: 1.6; }
 .sourceCard { display: flex; gap: 12px; align-items: center; padding-bottom: 21px; }
 .sourceIcon { display: grid; place-items: center; width: 44px; height: 51px; flex: none; border-radius: 7px; color: #5e7386; background: #edf1f3; }
 .sourceCard small { display: block; margin-bottom: 5px; font-size: 11px; color: #5e6f7e; }

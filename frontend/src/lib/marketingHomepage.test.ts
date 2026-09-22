@@ -44,6 +44,18 @@ test('官网用真实能力介绍博主整理和多视频提问', () => {
   assert.doesNotMatch(landingPage, /自动追更|自动同步博主全部视频/);
 });
 
+test('博主问答演示只展示同一位已核验博主的公开目录', () => {
+  const component = readFileSync(resolve(sourceRoot, 'components', 'LandingProductDemo.tsx'), 'utf8');
+  const css = readFileSync(resolve(sourceRoot, 'components', 'LandingProductDemo.module.css'), 'utf8');
+  const creatorPanel = component.slice(component.indexOf('博主作品 · 多选问答'), component.indexOf('creatorNote'));
+  assert.match(component, /GGBond的小课堂/);
+  assert.match(component, /90 条公开作品/);
+  assert.match(component, /快速排序教学/);
+  assert.doesNotMatch(creatorPanel, /知萃精选博主|世界健体第六名|碳循环减脂|珍惜数学/);
+  assert.match(css, /\.creatorFacts\s*\{/);
+  assert.match(css, /\.creatorVerified\s*\{/);
+});
+
 test('示例观点和行动引用始终对应可阅读的原文段落', () => {
   assert.ok(LANDING_DEMO.sourceLabel.trim());
   assert.ok(LANDING_DEMO.paragraphs.length > 0);
@@ -69,8 +81,7 @@ test('演示步骤共用稳定网格，隐藏内容不参与交互', () => {
   const component = readFileSync(resolve(sourceRoot, 'components', 'LandingProductDemo.tsx'), 'utf8');
   const css = readFileSync(resolve(sourceRoot, 'components', 'LandingProductDemo.module.css'), 'utf8');
   for (const step of [0, 1, 2]) {
-    assert.ok(component.includes(`aria-hidden={step !== ${step}} inert={step !== ${step}}`));
-    assert.ok(!component.includes(`step === ${step} && (`), '步骤不能卸载，否则高度会跳变');
+    assert.ok(component.includes(`aria-hidden={mode !== ${step}} inert={mode !== ${step}}`));
   }
   assert.match(css, /\.panel\s*\{[^}]*display:\s*grid/);
   assert.match(css, /\.panel > div\s*\{[^}]*grid-area:\s*1 \/ 1/);

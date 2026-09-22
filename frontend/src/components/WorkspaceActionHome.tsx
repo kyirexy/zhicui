@@ -22,7 +22,6 @@ import {
 import {
   listAgentSources,
   listAgentThreads,
-  listCreatorSources,
   listDouyinLibraryItems,
   listPlatformLibraryItems,
 } from '@/lib/api';
@@ -43,11 +42,9 @@ import {
 } from '@/lib/homeSourceClassification';
 import type {
   AgentThread,
-  CreatorSource,
   DouyinLibraryItem,
   PlatformLibraryItem,
 } from '@/lib/types';
-import { featuredCreatorCount, featuredCreatorReadyCount, selectFeaturedCreator } from '@/lib/homeCreatorSelection';
 import styles from './WorkspaceActionHome.module.css';
 
 interface ChannelPreview {
@@ -165,12 +162,6 @@ function BilibiliBrandIcon() {
   );
 }
 
-function creatorPlatformLabel(platform: CreatorSource['platform']): string {
-  if (platform === 'douyin') return '抖音';
-  if (platform === 'bilibili') return 'B站';
-  return '小红书';
-}
-
 function formatUpdatedAt(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
@@ -220,7 +211,6 @@ export default function WorkspaceActionHome() {
   const [channelTotals, setChannelTotals] = useState<Record<ChannelKey, number | null>>(
     () => emptyChannelRecord<number | null>(null),
   );
-  const [featuredCreator, setFeaturedCreator] = useState<CreatorSource | null>(null);
   const [activeModes, setActiveModes] = useState<Record<ChannelPlatform, ChannelMode>>({
     douyin: 'collect',
     bilibili: 'collect',
@@ -261,7 +251,6 @@ export default function WorkspaceActionHome() {
       setReadyCount(null);
       setChannelPreviews(emptyChannelRecord<ChannelPreview[]>([]));
       setChannelTotals(emptyChannelRecord<number | null>(null));
-      setFeaturedCreator(null);
       setActiveModes({ douyin: 'collect', bilibili: 'collect' });
       setLoading(true);
     }
@@ -351,12 +340,6 @@ export default function WorkspaceActionHome() {
       return response;
     }).catch(() => null);
 
-    const creatorRequest = listCreatorSources().then((response) => {
-      if (!isCurrent() || !response.success) return response;
-      setFeaturedCreator(selectFeaturedCreator(response.data?.items || []));
-      return response;
-    }).catch(() => null);
-
     const douyinRequests = (['collect', 'like', 'post'] as const).map((mode) => (
       listDouyinLibraryItems(Math.min(500, 6 + hiddenVideoCount), mode, 'collection', false, true).then((response) => {
         if (!isCurrent() || !response.success) return response;
@@ -385,7 +368,6 @@ export default function WorkspaceActionHome() {
     void Promise.allSettled([
       threadRequest,
       sourceRequest,
-      creatorRequest,
       ...douyinRequests,
       ...biliRequests,
     ]).then(() => {
@@ -592,59 +574,17 @@ export default function WorkspaceActionHome() {
         </div>
       </section>
 
-      <section className={styles.featuredCreator} aria-labelledby="featured-creator-title">
-        <div className={styles.featuredCreatorHeading}>
-          <span className={styles.sectionLabel}><UsersThree size={14} weight="fill" aria-hidden="true" />精选博主</span>
-          <h2 id="featured-creator-title">围绕一个博主，连续读懂他的作品</h2>
-          <p>首页只展示已保存的真实博主，避免把不同视频作者混在一起。</p>
-        </div>
-        {featuredCreator ? (
-          <div className={styles.featuredCreatorCard}>
-            <span className={styles.featuredCreatorAvatar}>
-              {featuredCreator.avatar_url ? <img src={featuredCreator.avatar_url} alt="" /> : <UsersThree size={22} aria-hidden="true" />}
-            </span>
-            <span className={styles.featuredCreatorCopy}>
-              <strong>{featuredCreator.display_name}</strong>
-              <small>{creatorPlatformLabel(featuredCreator.platform)} · {featuredCreatorCount(featuredCreator).toLocaleString('zh-CN')} 条作品 · {featuredCreatorReadyCount(featuredCreator).toLocaleString('zh-CN')} 条文稿已就绪</small>
-            </span>
-            <Link href="/library/creators" className={styles.featuredCreatorLink}>查看作品 <ArrowRight size={15} weight="bold" aria-hidden="true" /></Link>
-          </div>
-        ) : (
-          <div className={styles.featuredCreatorEmpty}>
-            <span>{loading ? '正在读取已保存博主…' : '还没有已保存的博主'}</span>
-            {!loading && <Link href="/library/creators">添加一个博主 <ArrowRight size={15} weight="bold" aria-hidden="true" /></Link>}
-          </div>
-        )}
-      </section>
-
       <section className={styles.start} aria-labelledby="workspace-start-title">
         <div className={styles.intro}>
           <span className={styles.sectionLabel}>
             <Sparkle size={14} weight="fill" aria-hidden="true" />
             视频知识助手
           </span>
-          <h2 id="workspace-start-title">从视频里找答案</h2>
+          <h2 id="workspace-start-title">从资料里找答案</h2>
         </div>
 
         <div className={styles.startAction}>
           <div className={styles.primaryActions}>
-            <Link
-              href="/library?sync=1"
-              className={styles.syncEntry}
-              aria-label="同步抖音和 B站视频"
-            >
-              <span className={styles.syncIcon} aria-hidden="true">
-                <ArrowsClockwise size={20} weight="bold" />
-              </span>
-              <span className={styles.syncCopy}>
-                <strong>同步视频</strong>
-                <small>更新抖音、B站视频资料</small>
-              </span>
-              <span className={styles.syncArrow} aria-hidden="true">
-                <ArrowRight size={16} weight="bold" />
-              </span>
-            </Link>
-
             <Link href="/harness?new=1&source_scope=all_ready" className={styles.askEntry}>
               <span className={styles.askIcon} aria-hidden="true">
                 <ChatCircleDots size={20} weight="duotone" />

@@ -71,17 +71,11 @@ function harness() {
       if (name === '@/lib/hooks/AuthContext') return { useAuth: () => runtime };
       if (name === '@/lib/api') return {
         listAgentThreads: () => request('threads'), listAgentSources: () => request('sources'),
-        listCreatorSources: () => request('creators'),
         listDouyinLibraryItems: (_: number, mode: string) => request(`douyin_${mode}`),
         listPlatformLibraryItems: (_: string, mode: string) => request(`bilibili_${mode}`),
       };
       if (name === '@/lib/libraryUpdates') return updates;
       if (name === '@/lib/homeSourceClassification') return classification;
-      if (name === '@/lib/homeCreatorSelection') return {
-        selectFeaturedCreator: () => null,
-        featuredCreatorCount: () => 0,
-        featuredCreatorReadyCount: () => 0,
-      };
       if (name === '@/lib/platformLibraryOrder') return { sortPlatformLibrarySource };
       if (name === '@/lib/librarySyncSelection') return syncSelection;
       if (name === '@/lib/hooks/useHomeVideoActions') return { useHomeVideoActions: () => ({ preferences: new Map(), busy: new Set(), ready: true, visible: () => true }) };

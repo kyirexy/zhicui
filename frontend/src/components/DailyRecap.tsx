@@ -19,16 +19,17 @@ import {
 } from '@/lib/dailyRecapApi';
 import { getLibraryRevision, isLibraryRevisionCurrent, subscribeLibraryUpdates } from '@/lib/libraryUpdates';
 import { prepareDailyRecap, type DailyRecapKind } from '@/lib/prepareDailyRecap';
+import { syncDailyAnalysisSources } from '@/lib/syncDailyAnalysisSources';
 import styles from './DailyRecap.module.css';
 
 /** 首页操作区的日常回顾：继承现有主题，清楚标明首次同步时间，桌面与移动端共用。 */
-export default function DailyRecap({ videoActions, videoInteractions, kind = 'yesterday' }: { videoActions: HomeVideoActions; videoInteractions: HomeVideoInteractions; kind?: DailyRecapKind }) {
+export default function DailyRecap({ videoActions, videoInteractions, kind = 'yesterday', launchToken = 0 }: { videoActions: HomeVideoActions; videoInteractions: HomeVideoInteractions; kind?: DailyRecapKind; launchToken?: number }) {
   const { user } = useAuth();
   // 更换账号时整个回顾状态重建，旧账号的数据不会短暂显示给新账号。
-  return user?.id ? <DailyRecapContent key={`${user.id}:${kind}`} userId={user.id} kind={kind} videoActions={videoActions} videoInteractions={videoInteractions} /> : null;
+  return user?.id ? <DailyRecapContent key={`${user.id}:${kind}`} userId={user.id} profileKey={user.agent_profile_key || 'guest'} kind={kind} launchToken={launchToken} videoActions={videoActions} videoInteractions={videoInteractions} /> : null;
 }
 
-function DailyRecapContent({ userId, kind, videoActions, videoInteractions }: { userId: string; kind: DailyRecapKind; videoActions: HomeVideoActions; videoInteractions: HomeVideoInteractions }) {
+function DailyRecapContent({ userId, profileKey, kind, launchToken, videoActions, videoInteractions }: { userId: string; profileKey: string; kind: DailyRecapKind; launchToken: number; videoActions: HomeVideoActions; videoInteractions: HomeVideoInteractions }) {
   const router = useRouter();
   const [recap, setRecap] = useState<DailyRecapData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -42,6 +43,7 @@ function DailyRecapContent({ userId, kind, videoActions, videoInteractions }: { 
   const [expanded, setExpanded] = useState(false);
   const prepareRequest = useRef<AbortController | null>(null);
   const requestSequence = useRef(0);
+  const consumedLaunchToken = useRef(0);
 
   useEffect(() => {
     const refresh = () => setRevision((value) => value + 1);
@@ -83,7 +85,7 @@ function DailyRecapContent({ userId, kind, videoActions, videoInteractions }: { 
   }, [revision, kind]);
 
   const prepare = async () => {
-    if (!recap || recap.total === 0 || prepareRequest.current) return;
+    if (!recap || prepareRequest.current || (kind !== 'today' && recap.total === 0)) return;
     const controller = new AbortController();
     prepareRequest.current = controller;
     setPreparing(true);
@@ -96,7 +98,12 @@ function DailyRecapContent({ userId, kind, videoActions, videoInteractions }: { 
         if (controller.signal.aborted) return;
         setProgress(message);
         const extraction = /(?:完成|已检查)\s*(\d+)\s*\/\s*(\d+)/.exec(message);
-        if (extraction) {
+        const sourceSync = /同步\s+(\d+)\/(\d+)/.exec(message);
+        if (sourceSync) {
+          const current = Number(sourceSync[1]);
+          const total = Math.max(1, Number(sourceSync[2]));
+          setProgressPercent(Math.min(42, Math.max(8, Math.round(((current - 1) / total) * 42) + 8)));
+        } else if (extraction) {
           const completed = Number(extraction[1]);
           const total = Math.max(1, Number(extraction[2]));
           setProgressPercent(Math.min(76, 8 + Math.round((completed / total) * 68)));
@@ -107,7 +114,20 @@ function DailyRecapContent({ userId, kind, videoActions, videoInteractions }: { 
         } else {
           setProgressPercent((value) => Math.max(value, 12));
         }
-      }, controller.signal, userId, kind);
+      }, controller.signal, userId, kind, kind === 'today' ? {
+        beforePrepare: () => syncDailyAnalysisSources({
+          userId,
+          profileKey,
+          allowExisting: visibleItems.length > 0,
+          signal: controller.signal,
+          onProgress: (message) => {
+            if (!controller.signal.aborted) setProgress(message);
+          },
+        }),
+        isVisible: (item) => videoActions.visible(item),
+      } : {
+        isVisible: (item) => videoActions.visible(item),
+      });
       if (!controller.signal.aborted) router.push(result.href);
     } catch (reason: unknown) {
       if (!controller.signal.aborted) {
@@ -123,6 +143,12 @@ function DailyRecapContent({ userId, kind, videoActions, videoInteractions }: { 
       }
     }
   };
+
+  useEffect(() => {
+    if (kind !== 'today' || launchToken <= 0 || consumedLaunchToken.current >= launchToken || loading || !recap || preparing) return;
+    consumedLaunchToken.current = launchToken;
+    void prepare();
+  }, [kind, launchToken, loading, recap, preparing]);
 
   const visibleItems = recap?.items.filter((item) => videoActions.visible(item)) || [];
   const items = visibleItems.slice(0, expanded ? 100 : 3);
@@ -148,7 +174,9 @@ function DailyRecapContent({ userId, kind, videoActions, videoInteractions }: { 
             {!preparing ? <ArrowRight size={16} aria-hidden="true" /> : null}
           </button>
         ) : !loading && !error ? (
-          <Link href="/library?sync=1" className={styles.primary}>同步视频 <ArrowRight size={16} aria-hidden="true" /></Link>
+          kind === 'today'
+            ? <button className={styles.primary} type="button" onClick={() => void prepare()} disabled={preparing}><ArrowsClockwise size={18} aria-hidden="true" />同步并分析 <ArrowRight size={16} aria-hidden="true" /></button>
+            : <Link href="/library?sync=1" className={styles.primary}>同步视频 <ArrowRight size={16} aria-hidden="true" /></Link>
         ) : null}
         {recap && available && !preparing ? (
             <span className={styles.readyCount}>{visibleItems.filter((item) => item.transcript_ready).length} 条文稿已就绪，已有文稿直接复用</span>

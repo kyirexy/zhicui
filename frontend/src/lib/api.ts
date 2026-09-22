@@ -689,11 +689,13 @@ export async function listLibrarySyncRuns(limit = 20): Promise<ApiResponse<{ ite
   return request(`/api/library/sync-runs?limit=${Math.max(1, Math.min(20, limit))}`);
 }
 
-async function bilibiliJobRequest<T>(endpoint: string, options?: RequestInit): Promise<ApiResponse<T>> {
+async function bilibiliJobRequest<T>(endpoint: string, options?: RequestInit, outerSignal?: AbortSignal): Promise<ApiResponse<T>> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20_000);
+  const abort = () => controller.abort();
+  outerSignal?.addEventListener('abort', abort, { once: true });
   try { return await request<T>(endpoint, { ...options, signal: controller.signal }); }
-  finally { clearTimeout(timeout); }
+  finally { clearTimeout(timeout); outerSignal?.removeEventListener('abort', abort); }
 }
 
 export async function listBilibiliImportJobs(): Promise<ApiResponse<{ items: BilibiliImportJob[]; total: number }>> {
@@ -709,6 +711,7 @@ export async function importPlatformLibraryItems(
   sourceMode?: 'collect' | 'like' | 'post',
   snapshot?: PlatformSyncSnapshot,
   onProgress?: (completed: number, total: number) => void,
+  signal?: AbortSignal,
 ): Promise<ApiResponse<PlatformLibraryImportResult>> {
   const requestedToken = readStoredToken();
   const sourceSyncedAt = snapshot?.sourceSyncedAt || new Date().toISOString();
@@ -718,15 +721,16 @@ export async function importPlatformLibraryItems(
   const response = isBilibiliAccountSync ? await importBilibiliJobs(urls, (batch) =>
     bilibiliJobRequest<BilibiliImportJob>('/api/library/bilibili/import-jobs', {
       method: 'POST', body: JSON.stringify(platformImportBatchBody(batch, sourceSyncedAt, sourceMode, snapshot)),
-    }), getBilibiliImportJob, {
-    isCurrent: () => requestedToken === readStoredToken(),
+    }, signal), (id) => bilibiliJobRequest<BilibiliImportJob>(`/api/library/bilibili/import-jobs/${encodeURIComponent(id)}`, undefined, signal), {
+    isCurrent: () => !signal?.aborted && requestedToken === readStoredToken(),
+    signal,
     onProgress: (completed, total) => {
       if (completed > lastCompleted) notifyLibraryUpdated();
       lastCompleted = completed;
       onProgress?.(completed, total);
     },
   }) : await importPlatformBatches(urls, async (batch) => {
-    if (requestedToken !== readStoredToken()) return { success: false, error: '账号已切换，剩余同步已停止' };
+    if (signal?.aborted || requestedToken !== readStoredToken()) return { success: false, error: '同步已停止或账号已切换' };
     const result = await request<PlatformLibraryImportResult>('/api/library/imports', {
       method: 'POST',
       body: JSON.stringify(platformImportBatchBody(batch, sourceSyncedAt, sourceMode, snapshot)),

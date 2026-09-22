@@ -52,6 +52,7 @@ export function watchBilibiliJobs(
   onUpdate: (jobs: BilibiliImportJob[]) => void,
   options: {
     isCurrent: () => boolean;
+    signal?: AbortSignal;
     schedule?: (callback: () => void) => () => void;
   },
 ): () => void {
@@ -86,6 +87,7 @@ export async function importBilibiliJobs(
   read: (id: string) => Promise<ApiResponse<BilibiliImportJob>>,
   options: {
     isCurrent: () => boolean;
+    signal?: AbortSignal;
     onProgress?: (completed: number, total: number) => void;
     wait?: () => Promise<void>;
     maxPolls?: number;
@@ -97,14 +99,15 @@ export async function importBilibiliJobs(
   const unconfirmed: PlatformLibraryImportEntry[] = [];
   let interrupted = false;
   const cancelled = () => ({ success: false as const, error: '账号已切换，同步状态读取已停止' });
+  const isActive = () => !options.signal?.aborted && options.isCurrent();
   const safe = async <T>(work: () => Promise<ApiResponse<T>>): Promise<ApiResponse<T>> => {
     try { return await work(); } catch { return { success: false }; }
   };
   for (let offset = 0; offset < input.length; offset += 10) {
-    if (!options.isCurrent()) return cancelled();
+    if (!isActive()) return cancelled();
     const batch = input.slice(offset, offset + 10);
     const response = await safe(() => submit({ urls: batch, sourceRankOffset: offset, sourceSnapshotSize: input.length }));
-    if (!options.isCurrent()) return cancelled();
+    if (!isActive()) return cancelled();
     if (!response.success || !response.data?.id || !['queued', 'running', 'succeeded', 'partial', 'failed'].includes(response.data.status)) {
       const rejected = [400, 401, 403, 404, 422, 429].includes(response.status || 0);
       unconfirmed.push(...batch.map((url): PlatformLibraryImportEntry => ({ input: url, platform: 'bilibili',
@@ -124,12 +127,12 @@ export async function importBilibiliJobs(
   };
   report();
   for (let poll = 0; poll < (options.maxPolls ?? 15) && jobs.some((entry) => !terminal(entry.job)); poll += 1) {
-    if (!options.isCurrent()) return cancelled();
+    if (!isActive()) return cancelled();
     if (poll > 0) await (options.wait?.() ?? new Promise<void>((resolve) => setTimeout(resolve, 2000)));
-    if (!options.isCurrent()) return cancelled();
+    if (!isActive()) return cancelled();
     const active = jobs.filter((entry) => !terminal(entry.job));
     const responses = await Promise.all(active.map((entry) => safe(() => read(entry.job.id))));
-    if (!options.isCurrent()) return cancelled();
+    if (!isActive()) return cancelled();
     let disconnected = false;
     responses.forEach((response, index) => {
       const entry = active[index];

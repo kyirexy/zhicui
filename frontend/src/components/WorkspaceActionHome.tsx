@@ -220,6 +220,7 @@ export default function WorkspaceActionHome() {
   const lastSuccessful = useRef<{ userId: string; value: WorkspaceHomeCache } | null>(null);
   const [refreshRevision, setRefreshRevision] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [todayAnalysisLaunch, setTodayAnalysisLaunch] = useState(0);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -547,14 +548,23 @@ export default function WorkspaceActionHome() {
             </span>
             <ArrowRight size={17} weight="bold" aria-hidden="true" />
           </a>
-          <a href="#today-recap-title" className={styles.coreFeature}>
+          <button
+            type="button"
+            className={styles.coreFeature}
+            onClick={() => {
+              setTodayAnalysisLaunch((value) => value + 1);
+              window.requestAnimationFrame(() => {
+                document.getElementById('today-recap-title')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              });
+            }}
+          >
             <span className={styles.coreFeatureIcon} aria-hidden="true"><CalendarCheck size={22} weight="bold" /></span>
             <span className={styles.coreFeatureCopy}>
               <strong>分析今天新收藏</strong>
               <small>整理今天新增的喜欢与收藏，及时沉淀</small>
             </span>
             <ArrowRight size={17} weight="bold" aria-hidden="true" />
-          </a>
+          </button>
           <Link href="/library/creators" className={styles.coreFeature}>
             <span className={styles.coreFeatureIcon} aria-hidden="true"><UsersThree size={22} weight="bold" /></span>
             <span className={styles.coreFeatureCopy}>
@@ -618,7 +628,7 @@ export default function WorkspaceActionHome() {
 
       <div className={styles.dailyCards} aria-label="每日视频分析">
         <DailyRecap kind="yesterday" videoActions={videoActions} videoInteractions={videoInteractions} />
-        <DailyRecap kind="today" videoActions={videoActions} videoInteractions={videoInteractions} />
+        <DailyRecap kind="today" launchToken={todayAnalysisLaunch} videoActions={videoActions} videoInteractions={videoInteractions} />
       </div>
 
       <section className={styles.channels} aria-label="抖音与 B站资料">

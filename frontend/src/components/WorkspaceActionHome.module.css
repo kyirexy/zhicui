@@ -92,6 +92,9 @@
   gap: 10px;
   color: var(--home-ink);
   background: color-mix(in srgb, var(--home-surface) 94%, transparent);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   text-decoration: none;
   transition: transform 180ms ease-out, border-color 180ms ease-out, box-shadow 180ms ease-out;
 }

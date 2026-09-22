@@ -54,6 +54,7 @@
 .progressHeader strong { flex: 0 0 auto; color: var(--recap-action); font-size: 0.74rem; font-variant-numeric: tabular-nums; }
 .progressTrack { overflow: hidden; height: 7px; border-radius: 99px; background: color-mix(in srgb, var(--recap-action) 14%, var(--home-surface)); }
 .progressTrack > span { display: block; height: 100%; border-radius: inherit; background: var(--recap-action); transition: width 260ms ease-out; }
+.progressTrack > span[data-indeterminate='true'] { animation: progress-indeterminate 1.2s ease-in-out infinite; }
 .progressBlock > p { margin: 0; color: var(--home-muted); font-size: 0.74rem; line-height: 1.5; }
 .error { display: flex; min-width: 0; grid-column: 1 / -1; align-items: center; gap: 12px; color: var(--home-ink); }
 .error p { margin: 0; font-size: 0.8rem; line-height: 1.6; overflow-wrap: anywhere; }
@@ -94,4 +95,5 @@
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .spinning { animation: none; } .progressTrack > span { transition: none; } .primary { transition: none; } }
+@keyframes progress-indeterminate { 0% { transform: translateX(-125%); } 100% { transform: translateX(285%); } }
+@media (prefers-reduced-motion: reduce) { .spinning { animation: none; } .progressTrack > span { transition: none; animation: none; } .primary { transition: none; } }

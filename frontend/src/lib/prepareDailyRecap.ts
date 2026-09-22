@@ -63,9 +63,9 @@ export async function prepareDailyRecap(
     if (signal?.aborted) throw new Error('已暂停等待，已完成的文稿会保留');
   };
   check();
-  // 固定点击时的日期，跨午夜也不会把第二天的记录混入本次分析。
-  const fetchRecap = (date?: string) => kind === 'today'
-    ? getDailyAnalysis(recap.timezone, signal)
+  // 固定点击时的日期；今日接口跳过历史导入统计，跨午夜也沿用快速查询。
+  const fetchRecap = (date: string) => kind === 'today'
+    ? getDailyAnalysis(recap.timezone, signal, date)
     : getDailyRecap(recap.timezone, signal, date);
   // 保留昨日回顾 v1 的任务键以兼容已在运行的任务；今日分析使用独立键避免串会话。
   const key = kind === 'today'
@@ -166,7 +166,7 @@ export async function prepareDailyRecap(
       while (next < bili.length) {
         check();
         const item = bili[next++];
-        try { await importPlatformLibraryItems([item.source_url]); }
+        try { await importPlatformLibraryItems([item.source_url], undefined, undefined, undefined, signal); }
         catch { check(); /* 单条读取失败后继续，最终只使用再次确认已就绪的资料。 */ }
         check();
         onProgress(`B站文稿已检查 ${++biliCompleted}/${bili.length} 条，准备好的资料会自动复用`);

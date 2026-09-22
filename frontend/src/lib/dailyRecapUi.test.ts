@@ -16,7 +16,14 @@ const fixture = (title = '昨日教程') => {
     items: [item], preview: [item], ready_note_ids: [], has_more: false };
 };
 
-function harness() {
+type HarnessOptions = {
+  kind?: 'yesterday' | 'today';
+  launchToken?: number;
+  videoReady?: boolean;
+  profileKey?: string;
+};
+
+function harness(options: HarnessOptions = {}) {
   let slots: unknown[] = [];
   let cursor = 0;
   let pending: (() => void)[] = [];
@@ -24,10 +31,22 @@ function harness() {
   let libraryRevision = 0;
   let refresh = () => {};
   const effects = new Map<number, { deps: unknown[]; cleanup?: () => void }>();
-  const runtime = { user: { id: 'user-a' } as { id: string } | null };
+  const runtime = { user: { id: 'user-a', agent_profile_key: options.profileKey || 'profile-a' } as { id: string; agent_profile_key?: string } | null };
   const requests: Deferred[] = [];
-  const preparations: (Deferred & { userId: string; progress: (text: string) => void })[] = [];
+  const preparations: (Deferred & { userId: string; progress: (text: string) => void; kind?: string; options?: Record<string, unknown> })[] = [];
+  const syncCalls: Record<string, unknown>[] = [];
   const navigations: string[] = [];
+  const props = {
+    kind: options.kind || 'yesterday',
+    launchToken: options.launchToken || 0,
+    videoActions: {
+      ready: options.videoReady !== false,
+      visible: () => true,
+      busy: new Set<string>(),
+      userId: 'user-a',
+    },
+    videoInteractions: {},
+  } as Record<string, unknown>;
   const cleanup = () => { effects.forEach((value) => value.cleanup?.()); effects.clear(); slots = []; };
   const react = {
     useState(initial: unknown) {
@@ -44,7 +63,7 @@ function harness() {
     },
   };
   const jsx = (type: unknown, props: Tree['props'], key?: string): Tree => ({ type, props, key });
-  const exports: { default?: () => Tree | null } = {};
+  const exports: { default?: (props: Record<string, unknown>) => Tree | null } = {};
   const source = readFileSync(new URL('../components/DailyRecap.tsx', import.meta.url), 'utf8');
   const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
   runInNewContext(js, { exports, Error, AbortController, setInterval: () => 1, clearInterval() {},
@@ -55,26 +74,35 @@ function harness() {
       if (name === 'next/navigation') return { useRouter: () => ({ push: (href: string) => navigations.push(href) }) };
       if (name === '@phosphor-icons/react') return new Proxy({}, { get: () => 'icon' });
       if (name === '@/components/LibraryCoverImage') return 'img';
+      if (name === '@/components/HomeVideoActions') return { HomeVideoActionCard: 'div' };
+      if (name === '@/lib/hooks/useWebBuildActivity') return { useWebBuildActivity: () => {} };
       if (name === '@/lib/hooks/AuthContext') return { useAuth: () => runtime };
       if (name === '@/lib/dailyRecapApi') return {
         dailyRecapTimezone: () => 'Asia/Shanghai', dailyRecapDateLabel: () => '9 月 9 日',
         dailyRecapItemHref: (item: { video_id: string }) => `/library/detail?id=${item.video_id}`,
         getDailyRecap: (_: string, signal: AbortSignal) => new Promise((resolve, reject) => requests.push({ resolve, reject, signal })),
+        getDailyAnalysis: (_: string, signal: AbortSignal) => new Promise((resolve, reject) => requests.push({ resolve, reject, signal })),
       };
       if (name === '@/lib/libraryUpdates') return {
         getLibraryRevision: () => libraryRevision, isLibraryRevisionCurrent: (value: number) => value === libraryRevision,
         subscribeLibraryUpdates: (handler: () => void) => { refresh = handler; return () => { refresh = () => {}; }; },
       };
       if (name === '@/lib/prepareDailyRecap') return {
-        prepareDailyRecap: (_: unknown, progress: (text: string) => void, signal: AbortSignal, userId: string) =>
-          new Promise((resolve, reject) => preparations.push({ resolve, reject, signal, progress, userId })),
+        prepareDailyRecap: (_: unknown, progress: (text: string) => void, signal: AbortSignal, userId: string, kind: string, prepareOptions: Record<string, unknown>) =>
+          new Promise((resolve, reject) => preparations.push({ resolve, reject, signal, progress, userId, kind, options: prepareOptions })),
+      };
+      if (name === '@/lib/syncDailyAnalysisSources') return {
+        syncDailyAnalysisSources: (syncOptions: Record<string, unknown>) => {
+          syncCalls.push(syncOptions);
+          return Promise.resolve({ warnings: [] });
+        },
       };
       if (name.endsWith('.module.css')) return new Proxy({}, { get: (_, key) => String(key) });
       throw new Error(name);
     },
   });
   const render = () => {
-    const wrapper = exports.default!();
+    const wrapper = exports.default!(props);
     if (owner !== wrapper?.key) { cleanup(); owner = wrapper?.key; }
     if (!wrapper) return null;
     cursor = 0; pending = [];
@@ -82,7 +110,7 @@ function harness() {
     pending.forEach((setup) => setup());
     return tree;
   };
-  return { runtime, requests, preparations, navigations, render, close: cleanup,
+  return { runtime, requests, preparations, syncCalls, navigations, props, render, close: cleanup,
     updateLibrary() { libraryRevision++; refresh(); },
   };
 }
@@ -161,7 +189,7 @@ test('一键解析只启动一次并传入当前账号，展示进度，后台�
     page.requests.shift()!.resolve(fixture());
     await settle();
     assert.match(text(page.render()), /服务暂时繁忙/);
-    assert.ok(button(page.render(), '继续提取解析'));
+    assert.ok(button(page.render(), '重试分析'));
   } finally { page.close(); }
 });
 
@@ -205,8 +233,70 @@ test('超过单次处理范围及历史导入状态未知时，未展开列表�
     });
     await settle();
     const tree = page.render();
-    assert.match(text(tree), /本次解析前 100 条/);
+    assert.match(text(tree), /本次解析当前 100 条/);
     assert.match(text(tree), /部分旧记录无法区分是否为首次历史导入/);
     assert.equal(button(tree, '查看列表').props['aria-expanded'], false);
+  } finally { page.close(); }
+});
+
+test('今日分析不会在挂载时自动运行，点击首页入口后空记录也会启动同步回调', async () => {
+  const page = harness({ kind: 'today' });
+  try {
+    page.render();
+    page.requests.shift()!.resolve({ ...fixture('今天的新收藏'), date: '2026-09-21', total: 0, like_count: 0, collect_count: 0, items: [], preview: [] });
+    await settle();
+    page.render();
+    assert.equal(page.preparations.length, 0);
+    page.props.launchToken = 1;
+    page.render();
+    assert.equal(page.preparations.length, 1);
+    assert.equal(page.preparations[0].kind, 'today');
+    assert.equal(page.preparations[0].userId, 'user-a');
+    const beforePrepare = page.preparations[0].options?.beforePrepare as (() => Promise<unknown>) | undefined;
+    assert.equal(typeof beforePrepare, 'function');
+    await beforePrepare!();
+    assert.equal(page.syncCalls.length, 1);
+    assert.equal(page.syncCalls[0].userId, 'user-a');
+    assert.equal(page.syncCalls[0].profileKey, 'profile-a');
+  } finally { page.close(); }
+});
+
+test('今日分析准备中重复点击只消费新 token，不排队第二次同步，完成后进入知萃 AI', async () => {
+  const page = harness({ kind: 'today', launchToken: 1 });
+  try {
+    page.render();
+    page.requests.shift()!.resolve({ ...fixture('今天的新收藏'), date: '2026-09-21', total: 0, like_count: 0, collect_count: 0, items: [], preview: [] });
+    await settle();
+    page.render();
+    assert.equal(page.preparations.length, 1);
+    page.props.launchToken = 2;
+    page.render();
+    assert.equal(page.preparations.length, 1);
+    page.preparations[0].resolve({ href: '/harness?thread=today-summary' });
+    await settle();
+    assert.deepEqual(page.navigations, ['/harness?thread=today-summary']);
+  } finally { page.close(); }
+});
+
+test('今日分析等待视频操作权限就绪后才启动，并在账号切换时不重放旧入口', async () => {
+  const page = harness({ kind: 'today', launchToken: 1, videoReady: false });
+  try {
+    page.render();
+    page.requests.shift()!.resolve({ ...fixture('今天的新收藏'), date: '2026-09-21', total: 0, like_count: 0, collect_count: 0, items: [], preview: [] });
+    await settle();
+    page.render();
+    assert.equal(page.preparations.length, 0);
+    (page.props.videoActions as { ready: boolean }).ready = true;
+    page.render();
+    assert.equal(page.preparations.length, 1);
+    const oldSignal = page.preparations[0].signal;
+    page.runtime.user = { id: 'user-b', agent_profile_key: 'profile-b' };
+    page.props.launchToken = 0;
+    page.render();
+    assert.equal(oldSignal?.aborted, true);
+    page.requests.shift()!.resolve({ ...fixture('新账号的今日记录'), date: '2026-09-21', total: 0, like_count: 0, collect_count: 0, items: [], preview: [] });
+    await settle();
+    page.render();
+    assert.equal(page.preparations.length, 1);
   } finally { page.close(); }
 });

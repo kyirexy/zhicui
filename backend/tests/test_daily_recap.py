@@ -120,6 +120,44 @@ class DailyRecapTests(_RecapFixture):
             with self.assertRaises(ValueError):
                 self.daily(**kwargs)
 
+    def test_daily_analysis_defaults_to_local_today(self):
+        # UTC 04:00 对应北京时间 9 月 10 日中午；不能复用 day_window 的昨日默认值。
+        today_start = datetime(2026, 9, 9, 16, tzinfo=timezone.utc)
+        self.add("7000000000000000001", stamp=today_start)
+        self.add("7000000000000000002", stamp=today_start - timedelta(microseconds=1))
+        result = recap.get_daily_analysis(
+            self.db, user_id="owner", reference_at=self.reference,
+        )
+        self.assertEqual(result["date"], "2026-09-10")
+        self.assertEqual([item["video_id"] for item in result["items"]], ["7000000000000000001"])
+        self.assertFalse(result["items"][0]["initial_import"])
+
+    def test_daily_analysis_accepts_fixed_date_and_rejects_future(self):
+        self.add("7000000000000000001", stamp=self.stamp)
+        result = recap.get_daily_analysis(
+            self.db, user_id="owner", target_date=date(2026, 9, 9),
+            reference_at=self.reference,
+        )
+        self.assertEqual(result["date"], "2026-09-09")
+        self.assertEqual(result["total"], 1)
+        with self.assertRaises(ValueError):
+            recap.get_daily_analysis(
+                self.db, user_id="owner", target_date=date(2026, 9, 11),
+                reference_at=self.reference,
+            )
+
+    def test_daily_analysis_date_is_stable_across_local_midnight(self):
+        before_midnight = datetime(2026, 9, 9, 15, 59, 59, tzinfo=timezone.utc)
+        after_midnight = datetime(2026, 9, 9, 16, 0, 1, tzinfo=timezone.utc)
+        self.add("7000000000000000001", stamp=datetime(2026, 9, 9, 15, 59, tzinfo=timezone.utc))
+        self.add("7000000000000000002", stamp=datetime(2026, 9, 9, 16, tzinfo=timezone.utc))
+        first = recap.get_daily_analysis(self.db, user_id="owner", reference_at=before_midnight)
+        second = recap.get_daily_analysis(self.db, user_id="owner", reference_at=after_midnight)
+        self.assertEqual(first["date"], "2026-09-09")
+        self.assertEqual(second["date"], "2026-09-10")
+        self.assertEqual([item["video_id"] for item in first["items"]], ["7000000000000000001"])
+        self.assertEqual([item["video_id"] for item in second["items"]], ["7000000000000000002"])
+
     def test_repeat_sync_ai_edit_and_video_publication_do_not_move_first_discovery(self):
         self.add(stamp=self.stamp - timedelta(days=3), ready=True)
         video_source_ledger_service.upsert_source(
@@ -249,6 +287,15 @@ class DailyRecapTests(_RecapFixture):
             self.assertEqual(self.client.get(f"/api/library/daily-recap?{query}").status_code, 422)
         self.app.dependency_overrides[get_current_user] = lambda: self.other
         self.assertEqual(self.client.get("/api/library/daily-recap?date=2026-09-09").json()["data"]["total"], 0)
+
+    def test_daily_analysis_http_accepts_date(self):
+        self.app.dependency_overrides[get_current_user] = lambda: self.owner
+        self.add(stamp=self.stamp)
+        response = self.client.get("/api/library/daily-analysis?date=2026-09-09")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["data"]["date"], "2026-09-09")
+        self.assertEqual(response.headers["cache-control"], "private, no-store")
+        self.assertEqual(self.client.get("/api/library/daily-analysis?date=garbage").status_code, 422)
 
 
 class BilibiliDiscoveryTests(_RecapFixture):

@@ -63,4 +63,9 @@ test('今日分析使用独立接口并携带时区', async () => {
   const url = new URL(calls[0].url);
   assert.equal(url.pathname, '/api/library/daily-analysis');
   assert.equal(url.searchParams.get('timezone'), 'Asia/Shanghai');
+  assert.equal(url.searchParams.has('date'), false);
+  const controller = new AbortController();
+  await api.getDailyAnalysis('Asia/Shanghai', controller.signal, '2026-09-21');
+  assert.equal(new URL(calls[1].url).searchParams.get('date'), '2026-09-21');
+  assert.equal(calls[1].init.signal, controller.signal);
 });

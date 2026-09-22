@@ -50,6 +50,7 @@ function harness(initial = recap()) {
   let timerSerial = 0;
   const handlers: Record<string, (...args: unknown[]) => unknown> = {
     getDailyRecap: () => copy(runtime.recap),
+    getDailyAnalysis: () => copy(runtime.recap),
     createAgentThread: (body) => {
       const thread = { id: `thread-${++serial}`, ...(body as object), message_count: 0 } as Thread;
       threads.set(thread.id, thread);
@@ -80,7 +81,7 @@ function harness(initial = recap()) {
     require(name: string) {
       if (name === './api') return Object.fromEntries(Object.keys(handlers).map((key) => [key, request(key)]));
       if (name === './authSession') return { readStoredToken: () => runtime.token };
-      if (name === './dailyRecapApi') return { getDailyRecap: request('getDailyRecap') };
+      if (name === './dailyRecapApi') return { getDailyRecap: request('getDailyRecap'), getDailyAnalysis: request('getDailyAnalysis') };
       throw new Error(name);
     },
   });
@@ -89,6 +90,8 @@ function harness(initial = recap()) {
     runtime, handlers, calls, stored, threads, progress,
     run: (signal?: AbortSignal, onProgress = (value: string) => { progress.push(value); }) =>
       exports.prepareDailyRecap(initial, onProgress, signal, 'user-a'),
+    runToday: (options: Parameters<PreparationApi['prepareDailyRecap']>[5] = {}) =>
+      exports.prepareDailyRecap(initial, (value) => { progress.push(value); }, undefined, 'user-a', 'today', options),
     count: (name: string) => calls.filter((call) => call.name === name).length,
     last: (name: string) => calls.filter((call) => call.name === name).at(-1)!,
     tick() { const next = timers.entries().next().value; assert.ok(next, '应存在文稿轮询计时器'); timers.delete(next[0]); next[1](); },
@@ -116,6 +119,37 @@ test('全部文稿就绪时跳过 ASR，只创建选中资料的回顾；跨午�
   assert.match(body.content, /2026-09-09/);
   assert.match(body.content, /不代表当天实际点赞收藏/);
   assert.equal(h.state().complete, true);
+});
+
+test('今日先完成同步，纳入新增资料并过滤隐藏项；快速接口始终固定点击日期', async () => {
+  const h = harness(recap([]));
+  let syncComplete = false;
+  h.handlers.getDailyAnalysis = (_timezone, _signal, date) => {
+    assert.equal(syncComplete, true);
+    assert.equal(date, '2026-09-09');
+    return recap([item(1), item(2)]);
+  };
+  const result = await h.runToday({
+    beforePrepare: async () => { syncComplete = true; return { warnings: ['B站喜欢暂时不可用'] }; },
+    isVisible: (value) => value.id !== item(2).id,
+  });
+  assert.match(result.href, /^\/harness\?thread=/);
+  assert.equal(h.count('getDailyAnalysis'), 2);
+  assert.equal(h.count('getDailyRecap'), 0);
+  assert.deepEqual(copy(h.last('createAgentThread').args[0]), {
+    title: '2026-09-09 今日分析', source_scope: 'selected', source_ids: ['note-1'],
+  });
+  const body = h.last('streamAgentMessage').args[1] as Record<string, string>;
+  assert.match(body.content, /B站喜欢暂时不可用/);
+  assert.match(body.content, /3 个适合继续追问的问题/);
+  assert.equal(body.research_mode, 'fast');
+});
+
+test('今日来源同步失败不会读取旧记录或创建 AI 会话', async () => {
+  const h = harness();
+  await assert.rejects(h.runToday({ beforePrepare: async () => { throw new Error('账号需要重新连接'); } }), /账号需要重新连接/);
+  assert.equal(h.count('getDailyAnalysis'), 0);
+  assert.equal(h.count('createAgentThread'), 0);
 });
 
 test('缺失文稿一次整批提交，实际活动数量 4 展示在进度中，完成后只用重新读取的 Note', async () => {

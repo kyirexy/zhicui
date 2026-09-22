@@ -26,7 +26,7 @@ import {
   listPlatformLibraryItems,
 } from '@/lib/api';
 import LibraryCoverImage from '@/components/LibraryCoverImage';
-import DailyRecap from '@/components/DailyRecap';
+import DailyRecap, { type DailyRecapStatus } from '@/components/DailyRecap';
 import { HomeVideoActionCard, HomeVideoActionsLayer, useHomeVideoInteractions } from '@/components/HomeVideoActions';
 import { useHomeVideoActions } from '@/lib/hooks/useHomeVideoActions';
 import { useWebBuildActivity } from '@/lib/hooks/useWebBuildActivity';
@@ -220,7 +220,9 @@ export default function WorkspaceActionHome() {
   const lastSuccessful = useRef<{ userId: string; value: WorkspaceHomeCache } | null>(null);
   const [refreshRevision, setRefreshRevision] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [todayAnalysisLaunch, setTodayAnalysisLaunch] = useState(0);
+  const [todayAnalysisLaunch, setTodayAnalysisLaunch] = useState<{ userId: string; token: number } | null>(null);
+  const [todayStatus, setTodayStatus] = useState<DailyRecapStatus>({ busy: false, message: '' });
+  useEffect(() => { setTodayAnalysisLaunch(null); setTodayStatus({ busy: false, message: '' }); }, [user?.id]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -551,17 +553,13 @@ export default function WorkspaceActionHome() {
           <button
             type="button"
             className={styles.coreFeature}
-            onClick={() => {
-              setTodayAnalysisLaunch((value) => value + 1);
-              window.requestAnimationFrame(() => {
-                document.getElementById('today-recap-title')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              });
-            }}
+            disabled={todayStatus.busy}
+            onClick={() => { if (user?.id) setTodayAnalysisLaunch((value) => ({ userId: user.id, token: (value?.token || 0) + 1 })); }}
           >
             <span className={styles.coreFeatureIcon} aria-hidden="true"><CalendarCheck size={22} weight="bold" /></span>
             <span className={styles.coreFeatureCopy}>
-              <strong>分析今天新收藏</strong>
-              <small>整理今天新增的喜欢与收藏，及时沉淀</small>
+              <strong>{todayStatus.busy ? '正在同步并分析' : '分析今天新收藏'}</strong>
+              <small aria-live="polite" title={todayStatus.message}>{todayStatus.message || '自动同步 → 提取文稿 → AI 总结与追问'}</small>
             </span>
             <ArrowRight size={17} weight="bold" aria-hidden="true" />
           </button>
@@ -628,7 +626,7 @@ export default function WorkspaceActionHome() {
 
       <div className={styles.dailyCards} aria-label="每日视频分析">
         <DailyRecap kind="yesterday" videoActions={videoActions} videoInteractions={videoInteractions} />
-        <DailyRecap kind="today" launchToken={todayAnalysisLaunch} videoActions={videoActions} videoInteractions={videoInteractions} />
+        <DailyRecap kind="today" launchToken={todayAnalysisLaunch?.userId === user?.id ? todayAnalysisLaunch?.token : 0} onStatusChange={setTodayStatus} videoActions={videoActions} videoInteractions={videoInteractions} />
       </div>
 
       <section className={styles.channels} aria-label="抖音与 B站资料">

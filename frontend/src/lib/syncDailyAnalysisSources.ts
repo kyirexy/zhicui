@@ -13,7 +13,6 @@ interface Options {
   profileKey: string;
   onProgress: (message: string) => void;
   signal?: AbortSignal;
-  allowExisting?: boolean;
 }
 type Source = { platform: 'douyin' | 'bilibili'; mode: 'collect' | 'like'; local: boolean };
 const LIMIT = 100;
@@ -34,7 +33,7 @@ function pause(signal?: AbortSignal): Promise<void> {
 }
 
 /** 先读取已连接账号的最新列表；来源采集串行，避免争用桌面浏览器会话。 */
-export async function syncDailyAnalysisSources({ userId, profileKey, onProgress, signal, allowExisting = false }: Options): Promise<{ warnings: string[] }> {
+export async function syncDailyAnalysisSources({ userId, profileKey, onProgress, signal }: Options): Promise<{ warnings: string[] }> {
   const token = readStoredToken();
   const ensureCurrent = () => {
     if (signal?.aborted) throw aborted();
@@ -48,8 +47,12 @@ export async function syncDailyAnalysisSources({ userId, profileKey, onProgress,
   let connections: Partial<Record<'douyin' | 'bilibili', boolean>> = {};
   if (desktop && profileKey && profileKey !== 'guest') {
     try {
-      const stored = JSON.parse(window.localStorage.getItem(`zhicui-platform-account-connections:${profileKey}`) || '{}');
-      connections = { douyin: stored?.douyin === true, bilibili: stored?.bilibili === true };
+      const profileStored = JSON.parse(window.localStorage.getItem(`zhicui-platform-account-connections:${profileKey}`) || '{}');
+      const userStored = JSON.parse(window.localStorage.getItem(`zhicui-platform-account-connections:${userId}`) || '{}');
+      connections = {
+        douyin: profileStored?.douyin === true || userStored?.douyin === true,
+        bilibili: profileStored?.bilibili === true || userStored?.bilibili === true,
+      };
       version = (await bridge.getRuntimeInfo()).version;
     } catch { /* 本机状态不可用时仍可检查服务端已连接账号。 */ }
   }
@@ -70,14 +73,7 @@ export async function syncDailyAnalysisSources({ userId, profileKey, onProgress,
     if (localDouyin || serverDouyin) sources.push({ platform: 'douyin', mode, local: localDouyin });
     if (desktop && connections.bilibili) sources.push({ platform: 'bilibili', mode, local: true });
   }
-  if (!sources.length) {
-    if (allowExisting) {
-      const warning = warnings.join('；') || '没有可自动同步的账号，继续分析今天已有记录';
-      onProgress(`${warning}。正在读取已有今日记录…`);
-      return { warnings: [warning] };
-    }
-    throw new Error(warnings.join('；') || '请先在“同步视频”中连接抖音或 B站账号，再开始今日分析');
-  }
+  if (!sources.length) throw new Error(warnings.join('；') || '请先在“同步视频”中连接抖音或 B站账号，再开始今日分析');
   let successful = 0;
   for (let index = 0; index < sources.length; index += 1) {
     ensureCurrent();

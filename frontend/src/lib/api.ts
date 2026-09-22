@@ -694,6 +694,7 @@ async function bilibiliJobRequest<T>(endpoint: string, options?: RequestInit, ou
   const timeout = setTimeout(() => controller.abort(), 20_000);
   const abort = () => controller.abort();
   outerSignal?.addEventListener('abort', abort, { once: true });
+  if (outerSignal?.aborted) abort();
   try { return await request<T>(endpoint, { ...options, signal: controller.signal }); }
   finally { clearTimeout(timeout); outerSignal?.removeEventListener('abort', abort); }
 }
@@ -731,10 +732,11 @@ export async function importPlatformLibraryItems(
     },
   }) : await importPlatformBatches(urls, async (batch) => {
     if (signal?.aborted || requestedToken !== readStoredToken()) return { success: false, error: '同步已停止或账号已切换' };
-    const result = await request<PlatformLibraryImportResult>('/api/library/imports', {
-      method: 'POST',
-      body: JSON.stringify(platformImportBatchBody(batch, sourceSyncedAt, sourceMode, snapshot)),
-    });
+      const result = await request<PlatformLibraryImportResult>('/api/library/imports', {
+        method: 'POST',
+        signal,
+        body: JSON.stringify(platformImportBatchBody(batch, sourceSyncedAt, sourceMode, snapshot)),
+      });
     // 每批已落库就失效旧读取；后续批次断线也不能漏掉部分成功。
     notifyLibraryUpdated();
     return result;

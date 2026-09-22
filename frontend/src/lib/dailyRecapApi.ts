@@ -64,9 +64,11 @@ export async function getDailyRecap(timezone: string, signal?: AbortSignal, date
 }
 
 /** 今日新增收藏/喜欢专用查询。后端单独提供路由，便于统计与解析任务解耦。 */
-export async function getDailyAnalysis(timezone: string, signal?: AbortSignal): Promise<DailyRecap> {
+export async function getDailyAnalysis(timezone: string, signal?: AbortSignal, date?: string): Promise<DailyRecap> {
   const token = readStoredToken();
-  const response = await sessionFetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/api/library/daily-analysis?${new URLSearchParams({ timezone })}`, {
+  const params = new URLSearchParams({ timezone });
+  if (date) params.set('date', date);
+  const response = await sessionFetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/api/library/daily-analysis?${params}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     cache: 'no-store',
     signal,

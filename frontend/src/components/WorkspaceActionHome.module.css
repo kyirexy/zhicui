@@ -106,6 +106,14 @@
   transform: translateY(-1px);
 }
 
+.coreFeature:disabled,
+.coreFeature:disabled:hover {
+  cursor: wait;
+  opacity: .72;
+  transform: none;
+  box-shadow: none;
+}
+
 .coreFeaturePrimary {
   border-color: color-mix(in srgb, var(--home-accent) 58%, var(--home-border));
 }

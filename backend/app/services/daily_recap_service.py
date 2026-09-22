@@ -1,4 +1,4 @@
-"""昨日回顾：只读取知萃首次发现的来源记录，不推断平台点赞或收藏日期。"""
+"""每日回顾与分析：只读取知萃首次发现的来源记录，不推断平台操作日期。"""
 
 from __future__ import annotations
 
@@ -31,15 +31,19 @@ def _iso(value: datetime) -> str:
     return _aware(value).isoformat().replace("+00:00", "Z")
 
 
+def _local_timezone(timezone_name: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(timezone_name)
+    except (ZoneInfoNotFoundError, ValueError, TypeError) as exc:
+        raise ValueError("请选择有效的时区") from exc
+
+
 def day_window(
     *, target_date: date | None = None, timezone_name: str = "Asia/Shanghai",
     reference_at: datetime | None = None,
 ) -> tuple[date, datetime, datetime]:
     """以当地两个午夜构建半开区间，兼容夏令时的 23/25 小时日期。"""
-    try:
-        local_tz = ZoneInfo(timezone_name)
-    except (ZoneInfoNotFoundError, ValueError, TypeError) as exc:
-        raise ValueError("请选择有效的时区") from exc
+    local_tz = _local_timezone(timezone_name)
     anchor = _aware(reference_at or datetime.now(timezone.utc)).astimezone(local_tz)
     chosen = target_date or anchor.date() - timedelta(days=1)
     if not isinstance(chosen, date) or isinstance(chosen, datetime):
@@ -232,24 +236,17 @@ def get_daily_recap(
 
 
 def get_daily_analysis(
-    db: Session, *, user_id: str,
+    db: Session, *, user_id: str, target_date: date | None = None,
     timezone_name: str = "Asia/Shanghai", limit: int = MAX_RECAP_ITEMS,
     reference_at: datetime | None = None,
 ) -> dict[str, Any]:
-    """Return today's newly discovered likes/collections.
-
-    The same ledger based query is deliberately reused so this endpoint stays
-    cheap and deterministic: it never starts ASR/LLM work.  The client can use
-    ``ready_note_ids`` to submit only pending items to the batch extractor and
-    poll its durable progress endpoint.
-    """
-    local_date, _, _ = day_window(
-        timezone_name=timezone_name,
-        reference_at=reference_at,
-    )
+    """读取当地今日新增收藏与喜欢；传入日期可固定跨午夜任务的分析范围。"""
+    # 同一次请求共用参考时间，避免刚好跨午夜时选择日期与验证日期不一致。
+    anchor = reference_at or datetime.now(timezone.utc)
+    local_date = target_date or _aware(anchor).astimezone(_local_timezone(timezone_name)).date()
     data = get_daily_recap(
         db, user_id=user_id, target_date=local_date,
-        timezone_name=timezone_name, limit=limit, reference_at=reference_at,
+        timezone_name=timezone_name, limit=limit, reference_at=anchor,
         include_import_meta=False,
     )
     data["kind"] = "today"

@@ -6,7 +6,7 @@ import type { PlatformAccountStatus } from './desktopRuntime';
 import { supportsLocalDouyinRuntime, toLocalDouyinSyncItems } from './douyinDesktopSync';
 import { hasDouyinSyncFailureDiagnostic } from './douyinSyncFeedback';
 import { capturePlatformSyncSnapshot } from './platformSyncSnapshot';
-import { platformSyncWarning } from './platformSyncFeedback';
+import { formatPlatformSyncError, platformSyncWarning } from './platformSyncFeedback';
 
 interface Options {
   userId: string;
@@ -65,7 +65,7 @@ export async function syncDailyAnalysisSources({ userId, profileKey, onProgress,
       const status = await getDouyinLibraryStatus();
       ensureCurrent();
       serverDouyin = Boolean(status.success && status.data?.connected && status.data.cookie_valid);
-    } catch (error) { ensureCurrent(); warnings.push(error instanceof Error ? error.message : '抖音连接状态读取失败'); }
+    } catch (error) { ensureCurrent(); warnings.push(`抖音：${formatPlatformSyncError(error)}`); }
     if (connections.douyin && !serverDouyin) warnings.push('本机抖音连接器不可用，请更新桌面端或重新连接账号');
   }
   const sources: Source[] = [];
@@ -84,8 +84,11 @@ export async function syncDailyAnalysisSources({ userId, profileKey, onProgress,
     try {
       if (source.local && bridge) {
         const sourceSyncedAt = new Date().toISOString();
-        const sessionKey = `daily-analysis:${userId}:${crypto.randomUUID()}`;
-        const cancel = () => { void bridge.cancelPlatformAccountSync?.({ sessionKey }).catch(() => undefined); };
+        // 批次取消属于抖音连接器；B站不接受这组参数，也不能借用全局取消。
+        const sessionKey = source.platform === 'douyin' ? crypto.randomUUID() : undefined;
+        const cancel = () => {
+          if (sessionKey) void bridge.cancelPlatformAccountSync?.({ sessionKey }).catch(() => undefined);
+        };
         const unsubscribe = bridge.onPlatformAccountStatus((status: PlatformAccountStatus) => {
           if (!signal?.aborted && token === readStoredToken() && status.platform === source.platform
             && (!status.mode || status.mode === source.mode) && status.message) progress(status.message);
@@ -95,7 +98,8 @@ export async function syncDailyAnalysisSources({ userId, profileKey, onProgress,
         try {
           ensureCurrent();
           collected = await bridge.collectPlatformAccount({ platform: source.platform, profileKey,
-            mode: source.mode, limit: LIMIT, interactive: false, sessionKey });
+            mode: source.mode, limit: LIMIT, interactive: false,
+            ...(sessionKey ? { sessionKey } : {}) });
         } finally {
           signal?.removeEventListener('abort', cancel);
           unsubscribe();
@@ -151,7 +155,7 @@ export async function syncDailyAnalysisSources({ userId, profileKey, onProgress,
       successful += 1;
     } catch (error) {
       ensureCurrent();
-      warnings.push(`${label}：${error instanceof Error ? error.message : '同步失败'}`);
+      warnings.push(`${label}：${formatPlatformSyncError(error)}`);
     }
   }
   ensureCurrent();

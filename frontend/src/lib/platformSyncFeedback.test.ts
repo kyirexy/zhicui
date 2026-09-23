@@ -1,6 +1,31 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { formatPlatformSyncSourceResults, platformSyncWarning } from './platformSyncFeedback.ts';
+import { formatPlatformSyncError, formatPlatformSyncSourceResults, platformSyncWarning } from './platformSyncFeedback.ts';
+
+test('同步错误移除 Electron 通信包装及重复 Error 前缀', () => {
+  assert.equal(formatPlatformSyncError(new Error("Error invoking remote method 'desktop:collect-platform-account': Error: 读取未完成，请稍后重试")), '读取未完成，请稍后重试');
+  assert.equal(formatPlatformSyncError('Error: Error: 请完成账号验证后继续同步'), '请完成账号验证后继续同步');
+});
+
+test('批次和会话标识错误显示平台通用的刷新提示', () => {
+  for (const message of ['抖音同步批次标识无效', '本机账号会话标识无效']) {
+    const formatted = formatPlatformSyncError(new Error(`Error invoking remote method 'desktop:collect-platform-account': Error: ${message}`));
+    assert.equal(formatted, '同步参数暂不兼容，请刷新页面后重试');
+    assert.doesNotMatch(formatted, /抖音|登录/);
+  }
+});
+
+test('保留可操作的中文登录和读取错误，不添加其他平台名称', () => {
+  for (const message of ['账号登录已失效，请先重新登录', '请完成账号验证后继续同步', '没有读取到可同步的 B站作品，请确认账号列表可见']) {
+    assert.equal(formatPlatformSyncError(new Error(message)), message);
+  }
+});
+
+test('英文技术异常及内部地址使用简洁中文兜底', () => {
+  for (const error of [new Error('TypeError: Failed to fetch'), 'Error invoking remote method \'desktop:collect-platform-account\': Error: socket hang up', new Error('读取失败 https://internal.example/api'), { message: 'ECONNRESET' }, undefined]) {
+    assert.equal(formatPlatformSyncError(error), '同步暂时中断，请稍后重试');
+  }
+});
 
 test('旧客户端可靠前缀保留各来源数量，并合并相同的部分读取诊断', () => {
   const message = formatPlatformSyncSourceResults([

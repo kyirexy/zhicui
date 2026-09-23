@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
+import * as dailyProgress from './dailyRecapProgress.ts';
 import type { DailyRecap, DailyRecapItem } from './dailyRecapApi';
 
 type PreparationApi = typeof import('./prepareDailyRecap');
@@ -82,14 +83,15 @@ function harness(initial = recap()) {
       if (name === './api') return Object.fromEntries(Object.keys(handlers).map((key) => [key, request(key)]));
       if (name === './authSession') return { readStoredToken: () => runtime.token };
       if (name === './dailyRecapApi') return { getDailyRecap: request('getDailyRecap'), getDailyAnalysis: request('getDailyAnalysis') };
+      if (name === './dailyRecapProgress') return dailyProgress;
       throw new Error(name);
     },
   });
   const progress: string[] = [];
   return {
     runtime, handlers, calls, stored, threads, progress,
-    run: (signal?: AbortSignal, onProgress = (value: string) => { progress.push(value); }) =>
-      exports.prepareDailyRecap(initial, onProgress, signal, 'user-a'),
+    run: (signal?: AbortSignal, onProgress = (value: string) => { progress.push(value); }, options: Parameters<PreparationApi['prepareDailyRecap']>[5] = {}) =>
+      exports.prepareDailyRecap(initial, onProgress, signal, 'user-a', 'yesterday', options),
     runToday: (options: Parameters<PreparationApi['prepareDailyRecap']>[5] = {}) =>
       exports.prepareDailyRecap(initial, (value) => { progress.push(value); }, undefined, 'user-a', 'today', options),
     count: (name: string) => calls.filter((call) => call.name === name).length,
@@ -173,7 +175,7 @@ test('缺失文稿一次整批提交，实际活动数量 4 展示在进度中�
   assert.deepEqual(copy(h.last('startDouyinBatchExtraction').args), [
     ['video-0', 'video-1', 'video-2', 'video-3', 'video-4', 'video-5'], 'transcript',
   ]);
-  assert.ok(h.progress.some((message) => message.includes('同时处理 4 条')));
+  assert.ok(h.progress.some((message) => message.includes('处理中 4')));
   assert.equal(h.count('createAgentThread'), 0);
   h.tick();
   await pending;
@@ -215,6 +217,86 @@ test('同一账号日期重复点击只启动一个操作，完成后继续打�
   const result = await first;
   assert.deepEqual(copy(await h.run()), copy(result));
   assert.equal(h.count('createAgentThread'), 1);
+  assert.equal(h.count('streamAgentMessage'), 1);
+});
+
+test('真实失败数推进处理进度，全部失败结束后只分析原有就绪文稿', async () => {
+  const h = harness(recap([item(0), ...Array.from({ length: 23 }, (_, index) => item(index + 1, false))]));
+  h.handlers.startDouyinBatchExtraction = () => ok({ ...job('running', 23), success: 0, failed: 11, active: 4, queued: 8 });
+  h.handlers.getDouyinBatchExtraction = () => ok({ ...job('failed', 23), success: 0, failed: 23, active: 0, queued: 0 });
+  const pending = h.run();
+  await settle();
+  assert.ok(h.progress.some((message) => /已处理 11\/23.*成功 0.*失败 11/.test(message)));
+  h.tick();
+  const result = await pending;
+  assert.match(result.href, /\/harness\?thread=/);
+  assert.ok(h.progress.some((message) => /已处理 23\/23.*失败 23/.test(message)));
+  assert.deepEqual(copy((h.last('createAgentThread').args[0] as { source_ids: string[] }).source_ids), ['note-0']);
+  assert.match((h.last('streamAgentMessage').args[1] as { content: string }).content, /23 条未就绪或已不可见/);
+});
+
+test('先探测缺失文稿播放地址再提取，不把新同步内容混入昨日范围', async () => {
+  const h = harness(recap([item(1), item(2, false)]));
+  let probed = false;
+  h.handlers.startDouyinBatchExtraction = () => {
+    assert.equal(probed, true);
+    h.runtime.recap = recap([item(1), item(2), item(3)]);
+    return ok(job('success', 1));
+  };
+  await h.run(undefined, undefined, { beforeExtract: async (items) => {
+    assert.deepEqual(copy(items.map((value) => value.video_id)), ['video-2']);
+    assert.equal(h.count('startDouyinBatchExtraction'), 0);
+    probed = true;
+    return { warnings: ['部分播放地址未确认'] };
+  } });
+  assert.deepEqual(copy((h.last('createAgentThread').args[0] as { source_ids: string[] }).source_ids), ['note-1', 'note-2']);
+  assert.match((h.last('streamAgentMessage').args[1] as { content: string }).content, /部分播放地址未确认/);
+});
+
+test('已有文稿或已确认无音频时不发起播放地址探测', async () => {
+  const h = harness(recap([item(1), { ...item(2, false), can_extract: false, transcript_status: 'no_audio' }]));
+  await h.run(undefined, undefined, { beforeExtract: async () => { assert.fail('不应重新打开浏览器'); } });
+  assert.equal(h.count('startDouyinBatchExtraction'), 0);
+});
+
+test('探测期间取消后不能开始批量提取或 AI 生成', async () => {
+  const h = harness(recap([item(1, false)]));
+  const controller = new AbortController();
+  await assert.rejects(h.run(controller.signal, undefined, { beforeExtract: async () => {
+    controller.abort();
+    return { warnings: [] };
+  } }), /已暂停/);
+  assert.equal(h.count('startDouyinBatchExtraction'), 0);
+  assert.equal(h.count('createAgentThread'), 0);
+});
+
+test('恢复到已结束的失败任务时，本次点击就重新探测并重试缺失文稿', async () => {
+  const h = harness(recap([item(1, false)]));
+  h.seed({ scope: [item(1).id], jobId: 'old-failed-job' });
+  h.handlers.getDouyinBatchExtraction = () => ok({ ...job('failed', 1), success: 0, failed: 1 });
+  let probes = 0;
+  h.handlers.startDouyinBatchExtraction = () => {
+    assert.equal(probes, 1);
+    h.runtime.recap = recap([item(1)]);
+    return ok(job('success', 1));
+  };
+  const result = await h.run(undefined, undefined, { beforeExtract: async () => { probes++; return { warnings: [] }; } });
+  assert.match(result.href, /\/harness\?thread=/);
+  assert.equal(h.count('getDouyinBatchExtraction'), 1);
+  assert.equal(h.count('startDouyinBatchExtraction'), 1);
+  assert.equal(probes, 1);
+});
+
+test('恢复运行中的任务仅继续轮询，不再打开浏览器或新建批次', async () => {
+  const h = harness(recap([item(1, false)]));
+  h.seed({ scope: [item(1).id], jobId: 'running-job' });
+  h.handlers.getDouyinBatchExtraction = () => ok(job('running', 1));
+  const pending = h.run(undefined, undefined, { beforeExtract: async () => { assert.fail('运行中不得重复探测'); } });
+  await settle();
+  h.handlers.getDouyinBatchExtraction = () => { h.runtime.recap = recap([item(1)]); return ok(job('success', 1)); };
+  h.tick();
+  await pending;
+  assert.equal(h.count('startDouyinBatchExtraction'), 0);
   assert.equal(h.count('streamAgentMessage'), 1);
 });
 

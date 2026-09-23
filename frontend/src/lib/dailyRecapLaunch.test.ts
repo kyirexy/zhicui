@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
+import * as dailyProgress from './dailyRecapProgress.ts';
 import type { DailyRecap, DailyRecapItem } from './dailyRecapApi.ts';
 import type { DailyRecapKind, DailyRecapPreparationOptions } from './prepareDailyRecap.ts';
 
@@ -56,6 +57,7 @@ function harness() {
   const preparations: Preparation[] = [];
   const pushes: string[] = [];
   const syncCalls: Array<{ userId: string; profileKey: string; signal: AbortSignal }> = [];
+  const mediaCalls: Array<{ items: DailyRecapItem[]; options: { userId: string; profileKey: string; signal: AbortSignal } }> = [];
   const read = (kind: DailyRecapKind) => {
     const request = { ...deferred<DailyRecap>(), kind };
     reads.push(request);
@@ -158,6 +160,13 @@ function harness() {
             return Promise.resolve({ warnings: [] });
           },
         };
+        if (name === '@/lib/refreshDailyRecapMedia') return {
+          refreshDailyRecapMedia(items: DailyRecapItem[], options: typeof mediaCalls[number]['options']) {
+            mediaCalls.push({ items, options });
+            return Promise.resolve({ warnings: [] });
+          },
+        };
+        if (name === '@/lib/dailyRecapProgress') return dailyProgress;
         if (name.endsWith('.module.css')) return { __esModule: true, default: new Proxy({}, { get: (_, key) => String(key) }) };
         throw new Error(`未配置组件依赖：${name}`);
       },
@@ -196,7 +205,7 @@ function harness() {
     return button;
   };
   return {
-    render, actions, reads, preparations, pushes, syncCalls, cards, cardProps, topButton,
+    render, actions, reads, preparations, pushes, syncCalls, mediaCalls, cards, cardProps, topButton,
     click(kind: DailyRecapKind) {
       const button = topButton(kind);
       assert.ok(!button.props.disabled, '运行时顶部按钮应禁止重复点击');
@@ -242,10 +251,16 @@ test('点击真实首页昨日入口，自动准备尚未提取的喜欢并在�
     assert.equal(operation.userId, 'user-a');
     assert.equal(operation.recap.items[0].transcript_ready, false);
     assert.equal(operation.options.beforePrepare, undefined);
+    await operation.options.beforeExtract!(operation.recap.items);
+    assert.equal(page.mediaCalls.length, 1);
+    assert.equal(page.mediaCalls[0].items[0].video_id, 'video-a');
+    assert.equal(page.mediaCalls[0].options.profileKey, 'profile-a');
+    assert.equal(page.mediaCalls[0].options.signal, operation.signal);
     assert.equal(page.topButton('yesterday').props.disabled, true);
-    operation.report('文稿同时处理 3 条 · 完成 1/2');
+    operation.report('文稿已处理 1/2 · 成功 0 · 失败 1 · 处理中 1 · 排队 0');
     page.render();
-    assert.match(text(page.topButton('yesterday')), /完成 1\/2/);
+    assert.match(text(page.topButton('yesterday')), /已处理 1\/2/);
+    assert.equal(nodes(page.cards.get('yesterday')).find((node) => node.props.role === 'progressbar')!.props['aria-valuenow'], 50);
     assert.equal(page.pushes.length, 0);
     operation.resolve({ href: '/harness?thread=yesterday-thread' });
     await page.settle();

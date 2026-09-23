@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
+import * as dailyProgress from './dailyRecapProgress.ts';
 
 type Tree = { type: unknown; props: Record<string, unknown>; key?: string };
 type Deferred = { resolve(value: unknown): void; reject(reason: unknown): void; signal?: AbortSignal };
@@ -97,6 +98,8 @@ function harness(options: HarnessOptions = {}) {
           return Promise.resolve({ warnings: [] });
         },
       };
+      if (name === '@/lib/refreshDailyRecapMedia') return { refreshDailyRecapMedia: async () => ({ warnings: [] }) };
+      if (name === '@/lib/dailyRecapProgress') return dailyProgress;
       if (name.endsWith('.module.css')) return new Proxy({}, { get: (_, key) => String(key) });
       throw new Error(name);
     },

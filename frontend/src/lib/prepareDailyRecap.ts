@@ -5,6 +5,7 @@ import {
 } from './api';
 import { readStoredToken } from './authSession';
 import { getDailyAnalysis, getDailyRecap, type DailyRecap, type DailyRecapItem } from './dailyRecapApi';
+import { formatDailyRecapAiProgress, formatDailyRecapExtractionProgress } from './dailyRecapProgress';
 import type { AgentThread, ApiResponse, DouyinBatchExtractionJob } from './types';
 
 interface Preparation {
@@ -45,6 +46,7 @@ function pause(signal?: AbortSignal): Promise<void> {
 
 export interface DailyRecapPreparationOptions {
   beforePrepare?: () => Promise<{ warnings: string[] }>;
+  beforeExtract?: (items: DailyRecapItem[]) => Promise<{ warnings: string[] }>;
   isVisible?: (item: DailyRecapItem) => boolean;
 }
 
@@ -76,6 +78,7 @@ export async function prepareDailyRecap(
   try {
     const syncResult = options.beforePrepare ? await options.beforePrepare() : undefined;
     check();
+    const preparationWarnings = [...(syncResult?.warnings || [])];
     // 每次点击重新确认可见来源；日期固定，跨午夜也不会换成另一天。
     let fresh = await fetchRecap(recap.date);
     check();
@@ -112,7 +115,7 @@ export async function prepareDailyRecap(
           onProgress(`正在恢复已有 AI ${kind === 'today' ? '分析' : '回顾'}…`);
           check();
           const resumed = await resumeAgentTurnStream(state.threadId, state.turnId, {
-            onProgress: (event) => { check(); onProgress(event.message); },
+            onProgress: (event) => { check(); onProgress(formatDailyRecapAiProgress(event.message)); },
           }, signal);
           check();
           // 失败/取消的持久任务仍能打开原会话查看原因或手动重试。
@@ -146,8 +149,21 @@ export async function prepareDailyRecap(
       check();
       if (result.success && result.data) job = result.data;
       else if (result.status !== 404) throw new Error(result.error || '已有文稿任务暂时无法读取，请重试');
+      // 页面曾中断时，恢复到已结束的旧任务不能挡住用户本次主动重试。
+      // 在途任务继续等待；本轮新任务失败后不自动循环重试。
+      if (job && missing.length && ['partial', 'failed'].includes(job.status)) {
+        job = undefined;
+        delete state.jobId;
+        save(key, state);
+      }
     }
     if (!job) {
+      if (missing.length && options.beforeExtract) {
+        // 先更新缺失文稿的临时播放地址；昨日回顾的日期和选中范围保持不变。
+        const refreshed = await options.beforeExtract(missing);
+        check();
+        preparationWarnings.push(...refreshed.warnings);
+      }
       const ids = [...new Set(missing.filter((item) => item.platform === 'douyin').map((item) => item.video_id))];
       if (ids.length) {
         check();
@@ -160,11 +176,12 @@ export async function prepareDailyRecap(
     const waitDouyin = async () => {
       while (job?.status === 'running') {
         check();
-        onProgress(`文稿同时处理 ${job.active} 条 · 完成 ${job.success}/${job.total} · 排队 ${job.queued}${job.skipped ? ` · 无音频 ${job.skipped} 条，已跳过` : ''}`);
+        onProgress(formatDailyRecapExtractionProgress(job));
         await pause(signal);
         check();
         job = data(await getDouyinBatchExtraction(job.job_id, signal), '读取文稿任务失败，已完成的文稿会保留');
       }
+      if (job) { check(); onProgress(formatDailyRecapExtractionProgress(job)); }
     };
     // B站通常导入时已有字幕；残缺旧资料用已有导入入口补齐，不传来源排序参数。
     const bili = missing.filter((item) => item.platform === 'bilibili');
@@ -218,7 +235,7 @@ export async function prepareDailyRecap(
     if (!reuseEmptyThread || !state.clientTurnId) state.clientTurnId = crypto.randomUUID();
     save(key, state);
     check();
-    const syncWarning = syncResult?.warnings.length ? `本次同步存在限制：${syncResult.warnings.join('；')}。请在总结开头明确提醒，仅总结已读取的资料。\n` : '';
+    const syncWarning = preparationWarnings.length ? `本次资料准备存在限制：${preparationWarnings.join('；')}。请在总结开头明确提醒，仅总结已读取的资料。\n` : '';
     const content = syncWarning + `请根据本会话选中的 ${noteIds.length} 条视频资料，整理 ${recap.date} 的「${periodLabel}」。\n`
       + '统计依据是当天首次同步到知萃的点赞与收藏，不代表当天实际点赞收藏，也不代表视频发布时间；首次导入可能包含历史视频。\n'
       + `当天记录共 ${fresh.total} 条，本次选择 ${selected.length} 条；${unavailable} 条未就绪或已不可见，请明确说明覆盖范围，不要假装已经读过。\n`
@@ -232,7 +249,7 @@ export async function prepareDailyRecap(
       output_style: 'summary', web_scope: 'video_only',
     }, {
       onTurn: (turnId) => { check(); state.turnId = turnId; save(key, state); },
-      onProgress: (event) => { check(); onProgress(event.message); },
+      onProgress: (event) => { check(); onProgress(formatDailyRecapAiProgress(event.message)); },
     }, signal);
     check();
     data(result, `AI ${kind === 'today' ? '今日分析' : '昨日回顾'}暂未完成，已保存会话，可继续打开`);

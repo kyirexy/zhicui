@@ -20,6 +20,8 @@ import {
 import { getLibraryRevision, isLibraryRevisionCurrent, subscribeLibraryUpdates } from '@/lib/libraryUpdates';
 import { prepareDailyRecap, type DailyRecapKind } from '@/lib/prepareDailyRecap';
 import { syncDailyAnalysisSources } from '@/lib/syncDailyAnalysisSources';
+import { refreshDailyRecapMedia } from '@/lib/refreshDailyRecapMedia';
+import { dailyRecapProgressPercent } from '@/lib/dailyRecapProgress';
 import styles from './DailyRecap.module.css';
 
 export interface DailyRecapStatus { busy: boolean; message: string }
@@ -104,10 +106,7 @@ function DailyRecapContent({ userId, profileKey, kind, launchToken, onStatusChan
     const reportProgress = (message: string) => {
       if (controller.signal.aborted) return;
       setProgress(message);
-      const extraction = /(?:完成|已检查|已导入)\s*(\d+)\s*\/\s*(\d+)/.exec(message);
-      setProgressPercent(extraction
-        ? Math.min(100, Math.round(Number(extraction[1]) / Math.max(1, Number(extraction[2])) * 100))
-        : null);
+      setProgressPercent(dailyRecapProgressPercent(message));
     };
     try {
       // 初次读取失败后，顶部入口也能重新读取并继续，无需先点卡片里的重试。
@@ -125,6 +124,9 @@ function DailyRecapContent({ userId, profileKey, kind, launchToken, onStatusChan
             userId, profileKey,
             signal: controller.signal, onProgress: reportProgress,
           }) } : {}),
+          beforeExtract: (items) => refreshDailyRecapMedia(items, {
+            userId, profileKey, signal: controller.signal, onProgress: reportProgress,
+          }),
           isVisible: (item) => latestActions.current.visible(item),
         });
       if (!controller.signal.aborted) router.push(result.href);

@@ -5,17 +5,17 @@
   "platform": "windows",
   "architecture": "x64",
   "artifact_kind": "unsigned",
-  "version": "1.1.12",
-  "source_commit": "dd5fb8d57d8099a000988c9e9120cf45055e571c",
-  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.12-x64.exe",
-  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.12-x64.exe",
-  "size_bytes": 93581974,
-  "sha256": "522021f1a0685a9a608900159192e2e539d5c2ccd780dff2f3198c8f723439e0",
-  "published_at": "2026-09-20T03:10:34.0401625Z",
+  "version": "1.1.14",
+  "source_commit": "fda37ac47f84e9d029d9b669e4bf6d4625e7cc09",
+  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.14-x64.exe",
+  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.14-x64.exe",
+  "size_bytes": 93669493,
+  "sha256": "9f1698fdfb0a35e6083380630d5cccaf4e0b017b3bdcab3296a0ce530e9ce1e8",
+  "published_at": "2026-09-23T03:53:19.2908818Z",
   "notes": [
-    "新增知萃 Agent 接入中心，可连接 Codex 与 Claude Code。",
-    "内置 zhicui CLI 与本地 MCP，并支持云端普通用户能力。",
-    "新增独立凭证、最小权限、运行隔离和可撤销授权。"
+    "回顾直接定位待解析视频，减少列表扫描和失败重试。",
+    "同步窗口保持可见，支持系统默认浏览器并优化后台读取。",
+    "下载与语音转写分阶段显示，静音内容自动跳过。"
   ],
   "code_signed": false,
   "release_status": "beta_download"

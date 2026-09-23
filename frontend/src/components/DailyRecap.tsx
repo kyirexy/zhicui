@@ -93,7 +93,7 @@ function DailyRecapContent({ userId, profileKey, kind, launchToken, onStatusChan
   }, [revision, kind]);
 
   const prepare = async () => {
-    if (!recap || !videoActions.ready || prepareRequest.current || (kind !== 'today' && recap.total === 0)) return;
+    if (!videoActions.ready || prepareRequest.current) return;
     const controller = new AbortController();
     prepareRequest.current = controller;
     setPreparing(true);
@@ -110,7 +110,16 @@ function DailyRecapContent({ userId, profileKey, kind, launchToken, onStatusChan
         : null);
     };
     try {
-      const result = await prepareDailyRecap({ ...recap, items: visibleItems, preview: visibleItems.slice(0, 3) },
+      // 初次读取失败后，顶部入口也能重新读取并继续，无需先点卡片里的重试。
+      const currentRecap = recap || await (kind === 'today' ? getDailyAnalysis : getDailyRecap)(dailyRecapTimezone(), controller.signal);
+      if (controller.signal.aborted) return;
+      const selectedItems = currentRecap.items.filter((item) => latestActions.current.visible(item));
+      if (kind === 'yesterday' && !selectedItems.length) {
+        throw new Error(currentRecap.total > 0
+          ? '昨日资料已隐藏，暂无可用于回顾的内容。'
+          : '昨天没有新同步的喜欢或收藏，暂无可生成回顾的资料。');
+      }
+      const result = await prepareDailyRecap({ ...currentRecap, items: selectedItems, preview: selectedItems.slice(0, 3) },
         reportProgress, controller.signal, userId, kind, {
           ...(kind === 'today' ? { beforePrepare: () => syncDailyAnalysisSources({
             userId, profileKey,
@@ -135,10 +144,10 @@ function DailyRecapContent({ userId, profileKey, kind, launchToken, onStatusChan
   };
 
   useEffect(() => {
-    if (kind !== 'today' || launchToken <= 0 || consumedLaunchToken.current >= launchToken) return;
+    if (launchToken <= 0 || consumedLaunchToken.current >= launchToken) return;
     // 运行中的重复点击直接消费，失败后不能自动排队再同步一轮。
     if (preparing || prepareRequest.current) { consumedLaunchToken.current = launchToken; return; }
-    if (loading || !recap || !videoActions.ready) return;
+    if (loading || !videoActions.ready) return;
     consumedLaunchToken.current = launchToken;
     void prepare();
   }, [kind, launchToken, loading, recap, preparing, videoActions.ready]);
@@ -156,14 +165,14 @@ function DailyRecapContent({ userId, profileKey, kind, launchToken, onStatusChan
           <h2 id={`${kind}-recap-title`}>{kind === 'today' ? '今日分析' : '昨日回顾'}</h2>
           {dateLabel ? <time dateTime={recap?.date}>{dateLabel}</time> : null}
         </div>
-        <p className={styles.description}>{kind === 'today' ? '自动同步已连接账号的喜欢与收藏，生成总结后进入知萃 AI 继续追问。' : '昨天新同步的点赞与收藏，一起提取文稿、交给 AI 梳理。'}</p>
+        <p className={styles.description}>{kind === 'today' ? '自动同步已连接账号的喜欢与收藏，生成总结后进入知萃 AI 继续追问。' : '自动补齐昨天新同步的喜欢与收藏文稿，生成总结后进入知萃 AI 继续追问。'}</p>
       </div>
 
       <div className={styles.action}>
         {available || (kind === 'today' && !loading && !error) ? (
           <button className={styles.primary} type="button" onClick={() => void prepare()} disabled={preparing || loading || !videoActions.ready}>
             {preparing ? <ArrowsClockwise size={18} className={styles.spinning} aria-hidden="true" /> : <Sparkle size={18} aria-hidden="true" />}
-            {preparing ? (kind === 'today' ? '正在同步并分析' : '正在提取解析') : prepareError ? '重试分析' : kind === 'today' ? '同步并分析今天' : '一键提取解析'}
+            {preparing ? (kind === 'today' ? '正在同步并分析' : '正在整理昨日回顾') : prepareError ? '重试分析' : kind === 'today' ? '同步并分析今天' : '分析昨天并进入 AI'}
             {!preparing ? <ArrowRight size={16} aria-hidden="true" /> : null}
           </button>
         ) : !loading && !error ? (

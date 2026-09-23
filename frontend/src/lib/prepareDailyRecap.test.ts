@@ -218,6 +218,118 @@ test('同一账号日期重复点击只启动一个操作，完成后继续打�
   assert.equal(h.count('streamAgentMessage'), 1);
 });
 
+test('已有部分总结时再次点击会补齐缺失文稿，新增来源后生成完整总结', async () => {
+  const h = harness(recap([item(1), item(2, false)]));
+  h.handlers.startDouyinBatchExtraction = () => ok({ ...job('partial', 1), success: 0, failed: 1 });
+  const first = await h.run();
+  assert.equal(h.state().complete, true);
+  h.handlers.startDouyinBatchExtraction = () => {
+    h.runtime.recap = recap([item(1), item(2)]);
+    return ok(job('success', 1));
+  };
+  const second = await h.run();
+  assert.notEqual(second.href, first.href);
+  assert.equal(h.count('startDouyinBatchExtraction'), 2);
+  assert.deepEqual(copy(h.last('startDouyinBatchExtraction').args), [['video-2'], 'transcript']);
+  assert.deepEqual(copy((h.last('createAgentThread').args[0] as { source_ids: string[] }).source_ids), ['note-1', 'note-2']);
+  assert.equal(h.count('streamAgentMessage'), 2);
+  assert.equal((await h.run()).href, second.href);
+  assert.equal(h.count('startDouyinBatchExtraction'), 2);
+  assert.equal(h.count('streamAgentMessage'), 2);
+});
+
+test('已有部分总结时补提取仍失败，自动打开原会话且不重复生成', async () => {
+  const h = harness(recap([item(1), item(2, false)]));
+  h.handlers.startDouyinBatchExtraction = () => ok({ ...job('failed', 1), success: 0, failed: 1 });
+  const first = await h.run();
+  assert.equal((await h.run()).href, first.href);
+  assert.equal(h.count('startDouyinBatchExtraction'), 2);
+  assert.equal(h.count('createAgentThread'), 1);
+  assert.equal(h.count('streamAgentMessage'), 1);
+  assert.equal(h.state().complete, true);
+});
+
+test('已完成总结的 Note 来源变化时生成当前范围的新总结，不复用旧来源', async () => {
+  const h = harness();
+  const first = await h.run();
+  h.runtime.recap = recap([{ ...item(1), note_id: 'replacement-note-1' }, item(2)]);
+  const second = await h.run();
+  assert.notEqual(second.href, first.href);
+  assert.equal(h.count('startDouyinBatchExtraction'), 0);
+  assert.deepEqual(copy((h.last('createAgentThread').args[0] as { source_ids: string[] }).source_ids), ['replacement-note-1', 'note-2']);
+  assert.equal(h.count('streamAgentMessage'), 2);
+  assert.equal(h.count('resumeAgentTurnStream'), 0);
+});
+
+test('已完成部分总结中的无音频资料不会重复提取，也不会重复生成摘要', async () => {
+  const h = harness(recap([item(1), { ...item(2, false), can_extract: false, transcript_status: 'no_audio' }]));
+  const first = await h.run();
+  assert.equal((await h.run()).href, first.href);
+  assert.equal(h.count('startDouyinBatchExtraction'), 0);
+  assert.equal(h.count('streamAgentMessage'), 1);
+});
+
+test('已完成部分总结补齐后新会话创建时取消，重试不会沿用旧总结的完成或流标识', async () => {
+  const h = harness(recap([item(1), item(2, false)]));
+  h.handlers.startDouyinBatchExtraction = () => ok({ ...job('partial', 1), success: 0, failed: 1 });
+  h.handlers.streamAgentMessage = (_id, _body, callbacks) => {
+    (callbacks as StreamCallbacks).onTurn!('turn-old-summary');
+    return ok({});
+  };
+  await h.run();
+  const controller = new AbortController();
+  h.handlers.startDouyinBatchExtraction = () => {
+    h.runtime.recap = recap([item(1), item(2)]);
+    return ok(job('success', 1));
+  };
+  const create = h.handlers.createAgentThread;
+  h.handlers.createAgentThread = (...args) => { const result = create(...args); controller.abort(); return result; };
+  await assert.rejects(h.run(controller.signal), /已暂停/);
+  const next = h.state();
+  assert.equal(next.complete, undefined);
+  assert.equal(next.sent, undefined);
+  assert.equal(next.turnId, undefined);
+  assert.equal(h.count('streamAgentMessage'), 1);
+  h.handlers.createAgentThread = create;
+  await h.run();
+  assert.equal(h.count('createAgentThread'), 2);
+  assert.equal(h.last('streamAgentMessage').args[0], next.threadId);
+  assert.equal((h.last('streamAgentMessage').args[1] as { client_turn_id: string }).client_turn_id, next.clientTurnId);
+  assert.equal(h.count('resumeAgentTurnStream'), 0);
+});
+
+test('补提取完成后取消仍保存旧摘要，重试发现新增文稿后继续生成完整范围', async () => {
+  const h = harness(recap([item(1), item(2, false)]));
+  h.handlers.startDouyinBatchExtraction = () => ok({ ...job('partial', 1), success: 0, failed: 1 });
+  const first = await h.run();
+  const previous = h.state();
+  const controller = new AbortController();
+  h.handlers.startDouyinBatchExtraction = () => {
+    h.runtime.recap = recap([item(1), item(2)]);
+    controller.abort();
+    return ok(job('success', 1));
+  };
+  await assert.rejects(h.run(controller.signal), /已暂停/);
+  assert.equal(h.state().threadId, previous.threadId);
+  assert.equal(h.state().complete, true);
+  const second = await h.run();
+  assert.notEqual(second.href, first.href);
+  assert.equal(h.count('startDouyinBatchExtraction'), 2);
+  assert.equal(h.count('createAgentThread'), 2);
+  assert.deepEqual(copy((h.last('createAgentThread').args[0] as { source_ids: string[] }).source_ids), ['note-1', 'note-2']);
+  assert.equal(h.count('streamAgentMessage'), 2);
+});
+
+test('原摘要会话正在继续提问时直接进入原会话，不并行补提取或生成', async () => {
+  const h = harness(recap([item(1), item(2, false)]));
+  h.handlers.startDouyinBatchExtraction = () => ok({ ...job('partial', 1), success: 0, failed: 1 });
+  const first = await h.run();
+  h.threads.get(h.state().threadId)!.active_turn = { id: 'user-followup' };
+  assert.equal((await h.run()).href, first.href);
+  assert.equal(h.count('startDouyinBatchExtraction'), 1);
+  assert.equal(h.count('streamAgentMessage'), 1);
+});
+
 test('初次读取期间切换账号或取消，旧操作不能发起新的提取或 AI 请求', async () => {
   for (const action of ['switch', 'abort'] as const) {
     const h = harness(recap([item(1, false)]));

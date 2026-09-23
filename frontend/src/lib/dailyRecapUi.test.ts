@@ -145,7 +145,7 @@ test('加载、真实空记录与读取错误分开显示，空记录不会伪�
     const tree = page.render();
     assert.match(text(tree), /昨天没有新同步记录/);
     assert.equal(nodes(tree).filter((node) => node.props.href === '/library?sync=1').length, 1);
-    assert.ok(!button(tree, '一键提取解析'));
+    assert.ok(!button(tree, '分析昨天并进入 AI'));
   } finally { page.close(); }
 });
 
@@ -176,11 +176,11 @@ test('一键解析只启动一次并传入当前账号，展示进度，后台�
     page.render();
     page.requests.shift()!.resolve(fixture());
     await settle();
-    const click = button(page.render(), '一键提取解析').props.onClick as () => void;
+    const click = button(page.render(), '分析昨天并进入 AI').props.onClick as () => void;
     click(); click();
     assert.equal(page.preparations.length, 1);
     assert.equal(page.preparations[0].userId, 'user-a');
-    assert.equal(button(page.render(), '正在提取解析').props.disabled, true);
+    assert.equal(button(page.render(), '正在整理昨日回顾').props.disabled, true);
     page.preparations[0].progress('正在并发准备，已完成 2 条');
     assert.match(text(page.render()), /正在并发准备，已完成 2 条/);
     page.preparations[0].reject(new Error('服务暂时繁忙'));
@@ -199,7 +199,7 @@ test('离开或切换账号后不接收提取结果、不跳转到旧账号问�
     page.render();
     page.requests.shift()!.resolve(fixture());
     await settle();
-    (button(page.render(), '一键提取解析').props.onClick as () => void)();
+    (button(page.render(), '分析昨天并进入 AI').props.onClick as () => void)();
     page.runtime.user = null;
     assert.equal(page.render(), null);
     assert.equal(page.preparations[0].signal?.aborted, true);

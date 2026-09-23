@@ -93,13 +93,22 @@ export async function prepareDailyRecap(
     save(key, state);
     const href = () => ({ href: `/harness?thread=${encodeURIComponent(state.threadId!)}` });
     let reusableThread: AgentThread | undefined;
+    let completedThread: AgentThread | undefined;
+    const sameSources = (thread: AgentThread | undefined, noteIds: string[]) => thread?.source_scope === 'selected'
+      && JSON.stringify([...new Set(thread.source_ids)].sort()) === JSON.stringify([...new Set(noteIds)].sort());
+    const missing = selected.filter((item) => !item.transcript_ready && item.can_extract);
 
     if (state.threadId) {
       const result = await getAgentThread(state.threadId);
       check();
       if (result.success && result.data) {
-        if (state.complete) return href();
-        if (state.turnId) {
+        if (state.complete) {
+          // 已完成的部分回顾仍需补齐缺失文稿；来源不变时继续复用，避免重复生成。
+          // 用户已在原会话继续提问时，先打开正在运行的会话，不并行生成另一份总结。
+          const readyIds = selected.filter((item) => item.transcript_ready && item.note_id).map((item) => item.note_id!);
+          if (result.data.active_turn || (!missing.length && sameSources(result.data, readyIds))) return href();
+          completedThread = result.data;
+        } else if (state.turnId) {
           onProgress(`正在恢复已有 AI ${kind === 'today' ? '分析' : '回顾'}…`);
           check();
           const resumed = await resumeAgentTurnStream(state.threadId, state.turnId, {
@@ -114,14 +123,14 @@ export async function prepareDailyRecap(
           return href();
         }
         // 兼容旧版 AI 流：响应中断时先打开原会话，不能自动再次产生同一笔请求。
-        if (state.sent) return href();
-        if (result.data.message_count > 0 || result.data.active_turn) {
+        if (!completedThread && state.sent) return href();
+        if (!completedThread && (result.data.message_count > 0 || result.data.active_turn)) {
           // 已从其他入口使用的会话不再自动补发回顾。
           state.sent = true;
           save(key, state);
           return href();
         }
-        reusableThread = result.data;
+        if (!completedThread) reusableThread = result.data;
       } else if (result.status === 404) {
         delete state.threadId; delete state.turnId; delete state.sent; delete state.complete;
         delete state.clientTurnId;
@@ -138,7 +147,6 @@ export async function prepareDailyRecap(
       if (result.success && result.data) job = result.data;
       else if (result.status !== 404) throw new Error(result.error || '已有文稿任务暂时无法读取，请重试');
     }
-    const missing = selected.filter((item) => !item.transcript_ready && item.can_extract);
     if (!job) {
       const ids = [...new Set(missing.filter((item) => item.platform === 'douyin').map((item) => item.video_id))];
       if (ids.length) {
@@ -182,6 +190,7 @@ export async function prepareDailyRecap(
     const visible = fresh.items.filter((item) => selectedIds.has(item.id) && (options.isVisible?.(item) ?? true));
     const ready = visible.filter((item) => item.transcript_ready && item.note_id);
     const noteIds = [...new Set(ready.map((item) => item.note_id!))];
+    if (completedThread && sameSources(completedThread, noteIds)) return href();
     if (!noteIds.length) {
       const noAudioIds = new Set(job?.items.filter((item) => item.state === 'no_audio').map((item) => item.aweme_id));
       if (visible.length > 0 && visible.every((item) => item.transcript_status === 'no_audio'
@@ -198,13 +207,15 @@ export async function prepareDailyRecap(
     check();
     // 创建后离开页面可能尚未发送；重新确认来源完全一致后复用空会话。
     // 可见资料或 Note 标识发生变化时，旧会话不能继续带入失效来源。
-    const sameSources = reusableThread?.source_scope === 'selected'
-      && JSON.stringify([...new Set(reusableThread.source_ids)].sort()) === JSON.stringify([...noteIds].sort());
-    const thread = sameSources ? reusableThread! : data(await createAgentThread({
+    const reuseEmptyThread = sameSources(reusableThread, noteIds);
+    const thread = reuseEmptyThread ? reusableThread! : data(await createAgentThread({
       title: `${recap.date} ${periodLabel}`, source_scope: 'selected', source_ids: noteIds,
     }), `${kind === 'today' ? '分析' : '回顾'}会话未能创建，已提取文稿会保留`);
     state.threadId = thread.id;
-    if (!sameSources || !state.clientTurnId) state.clientTurnId = crypto.randomUUID();
+    if (!reuseEmptyThread) {
+      delete state.turnId; delete state.sent; delete state.complete;
+    }
+    if (!reuseEmptyThread || !state.clientTurnId) state.clientTurnId = crypto.randomUUID();
     save(key, state);
     check();
     const syncWarning = syncResult?.warnings.length ? `本次同步存在限制：${syncResult.warnings.join('；')}。请在总结开头明确提醒，仅总结已读取的资料。\n` : '';

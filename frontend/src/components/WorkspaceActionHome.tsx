@@ -220,9 +220,14 @@ export default function WorkspaceActionHome() {
   const lastSuccessful = useRef<{ userId: string; value: WorkspaceHomeCache } | null>(null);
   const [refreshRevision, setRefreshRevision] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [yesterdayRecapLaunch, setYesterdayRecapLaunch] = useState<{ userId: string; token: number } | null>(null);
+  const [yesterdayStatus, setYesterdayStatus] = useState<DailyRecapStatus>({ busy: false, message: '' });
   const [todayAnalysisLaunch, setTodayAnalysisLaunch] = useState<{ userId: string; token: number } | null>(null);
   const [todayStatus, setTodayStatus] = useState<DailyRecapStatus>({ busy: false, message: '' });
-  useEffect(() => { setTodayAnalysisLaunch(null); setTodayStatus({ busy: false, message: '' }); }, [user?.id]);
+  useEffect(() => {
+    setYesterdayRecapLaunch(null); setYesterdayStatus({ busy: false, message: '' });
+    setTodayAnalysisLaunch(null); setTodayStatus({ busy: false, message: '' });
+  }, [user?.id]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -542,14 +547,19 @@ export default function WorkspaceActionHome() {
             </span>
             <ArrowRight size={17} weight="bold" aria-hidden="true" />
           </Link>
-          <a href="#yesterday-recap-title" className={styles.coreFeature}>
+          <button
+            type="button"
+            className={styles.coreFeature}
+            disabled={yesterdayStatus.busy}
+            onClick={() => { if (user?.id) setYesterdayRecapLaunch((value) => ({ userId: user.id, token: (value?.token || 0) + 1 })); }}
+          >
             <span className={styles.coreFeatureIcon} aria-hidden="true"><CalendarBlank size={22} weight="bold" /></span>
             <span className={styles.coreFeatureCopy}>
-              <strong>看看昨天干了什么</strong>
-              <small>回顾昨天新增的视频，一键交给 AI 提取</small>
+              <strong>{yesterdayStatus.busy ? '正在整理昨日回顾' : '看看昨天干了什么'}</strong>
+              <small aria-live="polite" title={yesterdayStatus.message}>{yesterdayStatus.message || '自动补齐文稿 → AI 总结 → 继续追问'}</small>
             </span>
             <ArrowRight size={17} weight="bold" aria-hidden="true" />
-          </a>
+          </button>
           <button
             type="button"
             className={styles.coreFeature}
@@ -608,7 +618,7 @@ export default function WorkspaceActionHome() {
       </section>
 
       <div className={styles.dailyCards} aria-label="每日视频分析">
-        <DailyRecap kind="yesterday" videoActions={videoActions} videoInteractions={videoInteractions} />
+        <DailyRecap kind="yesterday" launchToken={yesterdayRecapLaunch?.userId === user?.id ? yesterdayRecapLaunch?.token : 0} onStatusChange={setYesterdayStatus} videoActions={videoActions} videoInteractions={videoInteractions} />
         <DailyRecap kind="today" launchToken={todayAnalysisLaunch?.userId === user?.id ? todayAnalysisLaunch?.token : 0} onStatusChange={setTodayStatus} videoActions={videoActions} videoInteractions={videoInteractions} />
       </div>
 

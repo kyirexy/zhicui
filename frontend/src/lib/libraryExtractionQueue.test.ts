@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { LibraryExtractionBatchTracker, runReservedExtractionBatches } from './libraryExtractionQueue.ts';
+import { aggregateExtractionJobs, LibraryExtractionBatchTracker, runReservedExtractionBatches } from './libraryExtractionQueue.ts';
 import { selectAutomaticTranscriptPreparationTargets } from './libraryTranscriptPreparation.ts';
 import type { DouyinBatchExtractionJob, DouyinLibraryItem } from './types.ts';
 
@@ -20,6 +20,22 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 const flush = async () => { for (let index = 0; index < 24; index += 1) await Promise.resolve(); };
+
+test('跨批次阶段数按去重后的最新条目汇总，不继承首批下载和转写数量', () => {
+  const first = job('first', ['a', 'b']);
+  first.items[0].state = 'downloading';
+  first.items[1].state = 'transcribing';
+  Object.assign(first, { downloading: 1, transcribing: 1, analyzing: 0 });
+  const second = job('second', ['b', 'c', 'd']);
+  second.items[0].state = 'transcribing';
+  second.items[1].state = 'downloading';
+  second.items[2].state = 'analyzing';
+  const result = aggregateExtractionJobs([first, second])!;
+  assert.deepEqual([result.total, result.active, result.downloading, result.transcribing, result.analyzing], [4, 4, 2, 1, 1]);
+  second.items[0].state = 'done';
+  const updated = aggregateExtractionJobs([first, second])!;
+  assert.deepEqual([updated.active, updated.downloading, updated.transcribing, updated.analyzing, updated.success], [3, 2, 0, 1, 1]);
+});
 
 test('跨来源全部待处理 ID 分块，不在第100条静默截断，已完成/不可用/重复内容排除', () => {
   const tracker = new LibraryExtractionBatchTracker();

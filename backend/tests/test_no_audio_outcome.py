@@ -4,6 +4,7 @@ import io
 import tempfile
 import threading
 import unittest
+from concurrent.futures import CancelledError
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -66,6 +67,7 @@ class NoAudioClassificationTests(unittest.TestCase):
                 patch.object(video_extractor.tempfile, "mkdtemp", return_value=str(root)),
                 patch.object(video_extractor.subprocess, "Popen", return_value=process),
                 patch.object(video_extractor, "_get_ffmpeg_path", return_value="ffmpeg"),
+                patch.object(video_extractor, "_audio_is_digital_silence", return_value=False),
                 patch.object(requests, "Session", return_value=session),
                 patch.object(video_extractor, "_asr_audio_file", return_value="") as asr,
                 patch.dict("sys.modules", {"app.services.local_asr": None}),
@@ -84,6 +86,51 @@ class NoAudioClassificationTests(unittest.TestCase):
             with patch.object(requests, "post", return_value=response):
                 with self.assertRaises(video_extractor.CloudAsrError):
                     video_extractor._asr_single_audio_file(str(path), "key")
+
+    def test_silent_audio_and_cancellation_after_download_do_not_call_paid_asr(self):
+        for cancel in (False, True):
+            with self.subTest(cancel=cancel), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                (root / "audio.mp3").write_bytes(b"audio")
+                process = MagicMock()
+                process.stdin = io.BytesIO()
+                process.stderr = io.BytesIO(b"")
+                process.wait.return_value = 0
+                response = MagicMock()
+                response.headers = {}
+                response.iter_content.return_value = [b"video"]
+                response.__enter__.return_value = response
+                session = MagicMock()
+                session.__enter__.return_value = session
+                session.get.return_value = response
+                stages = MagicMock(side_effect=CancelledError() if cancel else None)
+                with (
+                    patch.object(video_extractor.tempfile, "mkdtemp", return_value=str(root)),
+                    patch.object(video_extractor.subprocess, "Popen", return_value=process),
+                    patch.object(video_extractor, "_get_ffmpeg_path", return_value="ffmpeg"),
+                    patch.object(requests, "Session", return_value=session),
+                    patch.object(video_extractor, "_audio_is_digital_silence", return_value=True),
+                    patch.object(video_extractor, "_asr_audio_file") as asr,
+                ):
+                    with self.assertRaises(CancelledError if cancel else video_extractor.NoAudioError):
+                        video_extractor.extract_media_url_transcript(
+                            "https://cdn.example/video", "key", on_stage=stages,
+                        )
+                stages.assert_called_once_with("transcribing")
+                asr.assert_not_called()
+
+    def test_digital_silence_requires_valid_overall_zero_peak_and_nonempty_samples(self):
+        for stderr, expected in (
+            ("Overall\nPeak level dB: -inf\nNumber of samples: 16000", True),
+            ("Overall\nPeak level dB: -110.000\nNumber of samples: 16000", False),
+            ("Overall\nPeak level dB: -inf\nNumber of samples: 0", False),
+            ("Channel 1\nPeak level dB: -inf\nOverall\nPeak level dB: -10.0\nNumber of samples: 16000", False),
+            ("unknown decoder error", False),
+        ):
+            with self.subTest(stderr=stderr), patch.object(
+                video_extractor.subprocess, "run", return_value=SimpleNamespace(returncode=0, stderr=stderr),
+            ):
+                self.assertEqual(video_extractor._audio_is_digital_silence(Path("audio.mp3")), expected)
 
     def test_ffmpeg_early_exit_missing_audio_is_terminal_without_asr(self):
         process = MagicMock()
@@ -175,7 +222,7 @@ class NoAudioPersistenceTests(unittest.TestCase):
             patch.object(library.settings_service, "get_asr_config", return_value={"api_key": "key", "api_base_url": "", "model": "test"}),
             patch.object(video_extractor, "extract_media_url_transcript", side_effect=requests.HTTPError(response=response)),
         ):
-            with self.assertRaises(requests.HTTPError):
+            with self.assertRaisesRegex(RuntimeError, "重新同步播放地址"):
                 library.extract_library_item(user_id="owner", aweme_id="123456789", item=self.item)
         with self.Session() as db:
             self.assertEqual(db.query(MediaExtractionOutcome).count(), 0)

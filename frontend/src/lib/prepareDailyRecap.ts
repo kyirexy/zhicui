@@ -6,6 +6,7 @@ import {
 import { readStoredToken } from './authSession';
 import { getDailyAnalysis, getDailyRecap, type DailyRecap, type DailyRecapItem } from './dailyRecapApi';
 import { formatDailyRecapAiProgress, formatDailyRecapExtractionProgress } from './dailyRecapProgress';
+import { libraryExtractionErrorMessage } from './libraryExtractionOutcome';
 import type { AgentThread, ApiResponse, DouyinBatchExtractionJob } from './types';
 
 interface Preparation {
@@ -46,7 +47,8 @@ function pause(signal?: AbortSignal): Promise<void> {
 
 export interface DailyRecapPreparationOptions {
   beforePrepare?: () => Promise<{ warnings: string[] }>;
-  beforeExtract?: (items: DailyRecapItem[]) => Promise<{ warnings: string[] }>;
+  beforeExtract?: (items: DailyRecapItem[]) => Promise<{ warnings: string[]; blockedVideoIds?: string[] }>;
+  onNotice?: (message: string) => void;
   isVisible?: (item: DailyRecapItem) => boolean;
 }
 
@@ -79,6 +81,7 @@ export async function prepareDailyRecap(
     const syncResult = options.beforePrepare ? await options.beforePrepare() : undefined;
     check();
     const preparationWarnings = [...(syncResult?.warnings || [])];
+    options.onNotice?.(preparationWarnings.join('；'));
     // 每次点击重新确认可见来源；日期固定，跨午夜也不会换成另一天。
     let fresh = await fetchRecap(recap.date);
     check();
@@ -144,6 +147,7 @@ export async function prepareDailyRecap(
     }
 
     let job: DouyinBatchExtractionJob | undefined;
+    const blockedVideoIds = new Set<string>();
     if (state.jobId) {
       const result = await getDouyinBatchExtraction(state.jobId, signal);
       check();
@@ -163,8 +167,11 @@ export async function prepareDailyRecap(
         const refreshed = await options.beforeExtract(missing);
         check();
         preparationWarnings.push(...refreshed.warnings);
+        refreshed.blockedVideoIds?.forEach((id) => blockedVideoIds.add(id));
+        options.onNotice?.(preparationWarnings.join('；'));
       }
-      const ids = [...new Set(missing.filter((item) => item.platform === 'douyin').map((item) => item.video_id))];
+      const ids = [...new Set(missing.filter((item) => item.platform === 'douyin'
+        && !blockedVideoIds.has(item.video_id)).map((item) => item.video_id))];
       if (ids.length) {
         check();
         job = data(await startDouyinBatchExtraction(ids, 'transcript'), '文稿提取未能启动');
@@ -174,14 +181,20 @@ export async function prepareDailyRecap(
       }
     }
     const waitDouyin = async () => {
+      const reportJob = () => {
+        if (!job) return;
+        onProgress(formatDailyRecapExtractionProgress(job));
+        const errors = [...new Set(job.items.filter((item) => item.state === 'error').map((item) => libraryExtractionErrorMessage(item.error)))];
+        if (errors.length) options.onNotice?.([...preparationWarnings, `未完成原因：${errors.slice(0, 2).join('；')}`].join('；'));
+      };
       while (job?.status === 'running') {
         check();
-        onProgress(formatDailyRecapExtractionProgress(job));
+        reportJob();
         await pause(signal);
         check();
         job = data(await getDouyinBatchExtraction(job.job_id, signal), '读取文稿任务失败，已完成的文稿会保留');
       }
-      if (job) { check(); onProgress(formatDailyRecapExtractionProgress(job)); }
+      if (job) { check(); reportJob(); }
     };
     // B站通常导入时已有字幕；残缺旧资料用已有导入入口补齐，不传来源排序参数。
     const bili = missing.filter((item) => item.platform === 'bilibili');
@@ -214,7 +227,7 @@ export async function prepareDailyRecap(
         || item.transcript_source === 'no-audio' || (item.platform === 'douyin' && noAudioIds.has(item.video_id)))) {
         throw new Error('本次内容无音频，暂无可用于提问的文案；原视频和同步记录已保留');
       }
-      throw new Error(`本次${kind === 'today' ? '分析' : '回顾'}文稿尚未就绪，请重试；已有视频和同步记录会保留`);
+      throw new Error(preparationWarnings.join('；') || `本次${kind === 'today' ? '分析' : '回顾'}文稿尚未就绪，请重试；已有视频和同步记录会保留`);
     }
     const unavailable = selected.length - ready.length;
     const periodLabel = kind === 'today' ? '今日分析' : '昨日回顾';

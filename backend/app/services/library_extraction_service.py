@@ -4,11 +4,14 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 import weakref
 from concurrent.futures import CancelledError, ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Callable, Literal
 from urllib.parse import urlsplit
+
+import requests
 
 from app.core.database import SessionLocal
 from app.models.library_extraction_batch import (
@@ -56,6 +59,39 @@ _EPHEMERAL_MEDIA_HOST_SUFFIXES = (
     ".zjcdn.com",
     ".volccdn.com",
 )
+
+
+def _extract_library_transcript(
+    *, aweme_id: str, media_url: str, source: str,
+    asr_config: dict[str, Any], request_headers: dict[str, str],
+    progress: ProgressCallback | None,
+) -> str:
+    """记录安全的渠道与耗时，区分账号连接失败和真正的无音频。"""
+    started = time.monotonic()
+    outcome = "error"
+    http_status = 0
+    logger.info("library_media_started item=%s source=%s", aweme_id, source)
+    try:
+        transcript = video_extractor.extract_media_url_transcript(
+            media_url, asr_config["api_key"], asr_config["api_base_url"],
+            asr_config["model"], request_headers=request_headers, on_stage=progress,
+        )
+        outcome = "done"
+        return transcript
+    except video_extractor.NoAudioError:
+        outcome = "no_audio"
+        raise
+    except requests.HTTPError as exc:
+        http_status = exc.response.status_code if exc.response is not None else 0
+        if source == "account_connector" and http_status in {401, 403, 404, 410}:
+            # 连接器上游的账号验证失败也可能被映射为 404，不能判定原视频已删除或无音频。
+            raise RuntimeError("账号连接未能读取视频，请在桌面端重新同步播放地址后重试") from exc
+        raise
+    finally:
+        logger.info(
+            "library_media_finished item=%s source=%s outcome=%s http_status=%d duration_ms=%d",
+            aweme_id, source, outcome, http_status, int((time.monotonic() - started) * 1000),
+        )
 
 
 def _utcnow() -> datetime:
@@ -381,7 +417,7 @@ def extract_library_item(
             gate = asr_gate or threading.Semaphore(1)
             with gate:
                 if progress:
-                    progress("transcribing")
+                    progress("downloading")
                 try:
                     if item.get("provider") == "desktop-local":
                         media_url = optional_ephemeral_media_url(ephemeral_media_url)
@@ -411,12 +447,10 @@ def extract_library_item(
                         request_headers = douyin_library.companion_headers(
                             session_scope,
                         )
-                    transcript = video_extractor.extract_media_url_transcript(
-                        media_url,
-                        asr_config["api_key"],
-                        asr_config["api_base_url"],
-                        asr_config["model"],
-                        request_headers=request_headers,
+                    transcript = _extract_library_transcript(
+                        aweme_id=clean_id, media_url=media_url,
+                        source="account_connector" if "X-Zhicui-Scope" in request_headers else "desktop_media",
+                        asr_config=asr_config, request_headers=request_headers, progress=progress,
                     )
                 except video_extractor.NoAudioError as exc:
                     with SessionLocal() as db:
@@ -533,7 +567,10 @@ def _job_counts(items: list[LibraryExtractionBatchItem]) -> dict[str, int]:
         "success": sum(state == "done" for state in states),
         "failed": sum(state == "error" for state in states),
         "skipped": sum(state == "no_audio" for state in states),
-        "active": sum(state in {"transcribing", "analyzing"} for state in states),
+        "active": sum(state in {"downloading", "transcribing", "analyzing"} for state in states),
+        "downloading": sum(state == "downloading" for state in states),
+        "transcribing": sum(state == "transcribing" for state in states),
+        "analyzing": sum(state == "analyzing" for state in states),
         "queued": sum(state == "queued" for state in states),
     }
 
@@ -896,7 +933,7 @@ def cancel_batch_job(job_id: str, user_id: str) -> dict[str, Any] | None:
             job.updated_at = now
             db.query(LibraryExtractionBatchItem).filter(
                 LibraryExtractionBatchItem.batch_id == job.id,
-                LibraryExtractionBatchItem.state.in_(["queued", "transcribing", "analyzing"]),
+                LibraryExtractionBatchItem.state.in_(["queued", "downloading", "transcribing", "analyzing"]),
             ).update({
                 LibraryExtractionBatchItem.state: "canceled",
                 LibraryExtractionBatchItem.updated_at: now,
@@ -924,7 +961,7 @@ def resume_pending_jobs() -> int:
         for job in jobs:
             rows = db.query(LibraryExtractionBatchItem).filter(
                 LibraryExtractionBatchItem.batch_id == job.id,
-                LibraryExtractionBatchItem.state.in_(["queued", "transcribing", "analyzing"]),
+                LibraryExtractionBatchItem.state.in_(["queued", "downloading", "transcribing", "analyzing"]),
             ).all()
             if not rows:
                 # 最后一条结果已提交、任务汇总尚未提交时也可能重启。

@@ -42,10 +42,15 @@ function harness(options: {
   const cancels: PlatformAccountSyncCancelRequest[] = [];
   const listeners = new Set<(status: PlatformAccountStatus) => void>();
   const progress: string[] = [];
-  const sync = load<typeof import('./douyinDesktopSync')>('./douyinDesktopSync.ts');
+  const sync = load<typeof import('./douyinDesktopSync')>('./douyinDesktopSync.ts', {
+    require(name: string) {
+      if (name === './authSession.ts') return { readStoredToken: () => token };
+      throw new Error(name);
+    },
+  });
   sync.toLocalDouyinSyncItems((options.existing || []).map(media));
   const bridge = {
-    getRuntimeInfo: async () => ({ version: options.version || '1.2.0' }),
+    getRuntimeInfo: async () => ({ version: options.version || '1.1.13' }),
     collectPlatformAccount: async (request: PlatformAccountCollectRequest) => {
       validators.validatePlatformAccountCollectRequest(request);
       requests.push(request);
@@ -184,4 +189,43 @@ test('浏览器取消探测后不继续其它模式', async () => {
   await assert.rejects(() => h.run([recap('both', { source_modes: ['collect', 'like'] })]), { name: 'AbortError' });
   assert.equal(h.requests.length, 1);
   assert.equal(h.listeners.size, 0);
+});
+
+test('新版客户端直接定位缺失作品，不扫描收藏喜欢，不缓存范围外视频', async () => {
+  const h = harness({ version: '1.1.14', existing: ['70000000001'], onCollect: (request) => {
+    assert.deepEqual(Array.from(request.targetVideoIds || []), ['70000000002', '70000000003']);
+    return { success: true, platform: 'douyin', coverage: 'partial',
+      items: [media('70000000002'), media('70000000003'), media('70000000999')] };
+  } });
+  const result = await h.run([recap('70000000001'), recap('70000000002'), recap('70000000003', { source_modes: ['like'] })]);
+  assert.equal(h.requests.length, 1);
+  assert.equal(result.warnings.length, 0);
+  assert.equal(result.blockedVideoIds?.length, 0);
+  assert.equal(h.sync.getEphemeralDouyinMediaSources(['70000000999']).length, 0);
+});
+
+test('定向读取仅覆盖部分视频，未读取项留待重试，不走失败的备用通道', async () => {
+  const h = harness({ version: '1.1.14', onCollect: () => ({ success: true, platform: 'douyin',
+    items: [media('70000000001')] }) });
+  const result = await h.run([recap('70000000001'), recap('70000000002')]);
+  assert.deepEqual(Array.from(result.blockedVideoIds || []), ['70000000002']);
+  assert.match(result.warnings.join(''), /1 条.*已保留待重试/);
+  assert.doesNotMatch(result.warnings.join(''), /无音频|同步完整/);
+});
+
+test('旧版列表未覆盖时明确提示升级，仍保留真实视频', async () => {
+  const h = harness({ onCollect: () => ({ success: true, platform: 'douyin', items: [] }) });
+  const result = await h.run([recap('old-target')]);
+  assert.equal(h.requests[0].targetVideoIds, undefined);
+  assert.deepEqual(Array.from(result.blockedVideoIds || []), ['old-target']);
+  assert.match(result.warnings.join(''), /1\.1\.14/);
+});
+
+test('旧账号已缓存的地址不会被新账号复用', async () => {
+  const h = harness({ existing: ['collect'] });
+  assert.equal(h.sync.getEphemeralDouyinMediaSources(['collect']).length, 1);
+  h.setToken('user-b-token');
+  await h.run([recap('collect')], { userId: 'user-b', profileKey: 'profile-b' });
+  assert.equal(h.requests.length, 1, '新账号必须重新读取自己的播放地址');
+  assert.equal(h.requests[0].profileKey, 'profile-b');
 });

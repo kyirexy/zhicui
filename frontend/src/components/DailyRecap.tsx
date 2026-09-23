@@ -43,6 +43,7 @@ function DailyRecapContent({ userId, profileKey, kind, launchToken, onStatusChan
   const [preparing, setPreparing] = useState(false);
   useWebBuildActivity(`home-recap-${kind}`, preparing);
   const [progress, setProgress] = useState('');
+  const [preparationNotice, setPreparationNotice] = useState('');
   const [progressPercent, setProgressPercent] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(false);
   const prepareRequest = useRef<AbortController | null>(null);
@@ -101,6 +102,7 @@ function DailyRecapContent({ userId, profileKey, kind, launchToken, onStatusChan
     setPreparing(true);
     setError('');
     setPrepareError('');
+    setPreparationNotice('');
     setProgress(`正在准备${kind === 'today' ? '今日' : '昨日'}资料…`);
     setProgressPercent(null);
     const reportProgress = (message: string) => {
@@ -127,6 +129,7 @@ function DailyRecapContent({ userId, profileKey, kind, launchToken, onStatusChan
           beforeExtract: (items) => refreshDailyRecapMedia(items, {
             userId, profileKey, signal: controller.signal, onProgress: reportProgress,
           }),
+          onNotice: (message) => { if (!controller.signal.aborted) setPreparationNotice(message); },
           isVisible: (item) => latestActions.current.visible(item),
         });
       if (!controller.signal.aborted) router.push(result.href);
@@ -230,6 +233,7 @@ function DailyRecapContent({ userId, profileKey, kind, launchToken, onStatusChan
             <span data-indeterminate={progressPercent === null} style={{ width: progressPercent === null ? '35%' : `${progressPercent}%` }} />
           </div>
           <p>完成后自动进入知萃 AI 查看总结并继续追问，请保持本页打开。</p>
+          {preparationNotice ? <p>{preparationNotice}</p> : null}
         </div>
       ) : null}
       {prepareError ? <p className={styles.progress} role="alert">{prepareError}<span>已完成的文稿会保留，点击“重试分析”可重试。<Link href="/library?sync=1">管理平台连接</Link></span></p> : null}

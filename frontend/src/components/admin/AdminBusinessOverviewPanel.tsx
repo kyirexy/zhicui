@@ -6,7 +6,7 @@ import { getAdminBusinessOverview, type AdminBusinessOverview } from '@/lib/api'
 
 const statusLabels: Record<string, string> = {
   queued: '排队', pending: '待处理', prepared: '待确认', running: '执行中',
-  transcribing: '转文案中', analyzing: '生成摘要中', processing: '处理中', resolving: '解析链接中',
+  downloading: '下载音频中', transcribing: '转文案中', analyzing: '生成摘要中', processing: '处理中', resolving: '解析链接中',
   discovering: '读取清单中', importing: '导入中', done: '成功', succeeded: '成功',
   error: '失败', failed: '失败', partial: '部分完成', cancelled: '已取消',
   reused: '复用', cached: '缓存命中', reauthorization_required: '需要重新授权',

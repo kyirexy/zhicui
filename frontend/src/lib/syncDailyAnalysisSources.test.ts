@@ -94,6 +94,7 @@ test('今日分析按收藏、喜欢串行读取已连接的桌面来源', async
   }), ['douyin:collect', 'bilibili:collect', 'douyin:like', 'bilibili:like']);
   const requests = h.calls.filter((entry) => entry.name === 'collectPlatformAccount').map((entry) => entry.args[0] as PlatformAccountCollectRequest);
   for (const request of requests) {
+    assert.equal(request.interactive, true, '用户主动点击今日分析时显示官方同步窗口');
     if (request.platform === 'douyin') assert.match(request.sessionKey!, /^[A-Za-z0-9_-]{16,80}$/);
     else assert.equal(Object.hasOwn(request, 'sessionKey'), false);
     assert.equal(Object.hasOwn(request, 'keepSessionOpen'), false);

@@ -97,7 +97,7 @@ class LibraryExtractionPersistenceTests(unittest.TestCase):
         with patch.object(library_extraction_service, "_submit_batch"):
             created = library_extraction_service.create_batch_job(
                 user_id=self.user_id,
-                aweme_ids=["resume-a", "resume-b"],
+                aweme_ids=["resume-a", "resume-b", "resume-c"],
                 operation="transcript",
                 asr_concurrency=1,
                 llm_concurrency=1,
@@ -108,11 +108,16 @@ class LibraryExtractionPersistenceTests(unittest.TestCase):
                 LibraryExtractionBatchItem.aweme_id == "resume-a",
             ).one()
             first.state = "transcribing"
+            downloading = db.query(LibraryExtractionBatchItem).filter(
+                LibraryExtractionBatchItem.batch_id == created["job_id"],
+                LibraryExtractionBatchItem.aweme_id == "resume-b",
+            ).one()
+            downloading.state = "downloading"
             db.commit()
 
         with patch.object(library_extraction_service, "_submit_batch") as submit:
             resumed = library_extraction_service.resume_pending_jobs()
-        self.assertEqual(resumed, 2)
+        self.assertEqual(resumed, 3)
         self.assertEqual(submit.call_count, 1)
         with self.Session() as db:
             states = {
@@ -131,11 +136,13 @@ class LibraryExtractionPersistenceTests(unittest.TestCase):
                 asr_concurrency=1,
                 llm_concurrency=1,
             )
+        library_extraction_service._update_item(created["job_id"], "cancel-a", state="downloading")
         first = library_extraction_service.cancel_batch_job(created["job_id"], self.user_id)
         second = library_extraction_service.cancel_batch_job(created["job_id"], self.user_id)
         self.assertEqual(first["status"], "canceled")
         self.assertEqual(second["status"], "canceled")
         self.assertTrue(second["cancellation_requested"])
+        self.assertEqual(second["items"][0]["state"], "canceled")
         self.assertIsNone(
             library_extraction_service.cancel_batch_job(created["job_id"], self.other_id)
         )

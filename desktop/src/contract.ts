@@ -98,6 +98,8 @@ export interface PlatformAccountCollectRequest extends PlatformAccountRequest {
   interactive?: boolean;
   sessionKey?: string;
   keepSessionOpen?: boolean;
+  /** 仅更新指定抖音视频的临时播放地址，不代表账号列表同步。 */
+  targetVideoIds?: string[];
 }
 
 export interface PlatformAccountStatus {

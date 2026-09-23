@@ -50,7 +50,8 @@ test(`${desktopVersion} 加载新网页后，资料库和Agent同步入口均先
   }).outputText;
   const agent = {
     exports: {} as { run: () => Promise<void> }, user: { id: 'a' }, currentUserIdRef: { current: 'a' }, accountEpochRef: { current: 1 }, runningRef: { current: false },
-    douyinDesktopVersion: desktopVersion, douyinDesktopUpdateRequired: requiresLocalDouyinDesktopUpdate(desktopVersion), MIN_LOCAL_DOUYIN_DESKTOP_VERSION,
+    douyinDesktopVersion: desktopVersion, douyinDesktopAvailable: true,
+    douyinDesktopUpdateRequired: requiresLocalDouyinDesktopUpdate(desktopVersion), MIN_LOCAL_DOUYIN_DESKTOP_VERSION,
     douyinMode: 'collect', syncCount: 50, setPending: () => {}, setFailed: () => {}, setMessage: (message: string) => messages.push(message), onCompleted: () => {},
   };
   vm.runInNewContext(sheetCode, agent);

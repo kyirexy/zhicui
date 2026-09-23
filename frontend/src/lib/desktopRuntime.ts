@@ -101,6 +101,7 @@ export interface PlatformAccountCollectRequest extends PlatformAccountRequest {
   interactive?: boolean;
   sessionKey?: string;
   keepSessionOpen?: boolean;
+  targetVideoIds?: string[];
 }
 
 export interface PlatformAccountSyncCancelRequest {

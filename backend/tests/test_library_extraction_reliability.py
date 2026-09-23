@@ -4,6 +4,7 @@ import gc
 import threading
 import unittest
 import weakref
+import requests
 from concurrent.futures import Future
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -22,6 +23,41 @@ from app.services import library_extraction_service as service
 
 
 class LibraryExtractionSchedulingTests(unittest.TestCase):
+    def test_progress_separates_download_and_asr_without_losing_active_items(self) -> None:
+        counts = service._job_counts([SimpleNamespace(state=state) for state in (
+            "downloading", "downloading", "transcribing", "analyzing", "done", "error", "no_audio", "queued",
+        )])
+        self.assertEqual((counts["total"], counts["active"], counts["downloading"],
+                          counts["transcribing"], counts["analyzing"], counts["queued"]), (8, 4, 2, 1, 1, 1))
+
+    def test_sidecar_http_failure_requests_media_refresh_without_leaking_signed_url(self) -> None:
+        response = requests.Response()
+        response.status_code = 404
+        error = requests.HTTPError("secret=https://private.example?token=temporary", response=response)
+        with (
+            patch.object(service.video_extractor, "extract_media_url_transcript", side_effect=error),
+            self.assertLogs(service.logger, level="INFO") as logs,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "账号连接.*重新同步播放地址"):
+                service._extract_library_transcript(
+                    aweme_id="video", media_url="http://127.0.0.1/media/video", source="account_connector",
+                    asr_config={"api_key": "secret", "api_base_url": "private", "model": "test"},
+                    request_headers={"X-Zhicui-Scope": "private-scope"}, progress=None,
+                )
+        logged = " ".join(logs.output)
+        self.assertIn("source=account_connector", logged)
+        self.assertIn("http_status=404", logged)
+        self.assertIn("duration_ms=", logged)
+        for value in ("https://", "private", "temporary", "secret"):
+            self.assertNotIn(value, logged)
+        with patch.object(service.video_extractor, "extract_media_url_transcript", side_effect=error):
+            with self.assertRaises(requests.HTTPError):
+                service._extract_library_transcript(
+                    aweme_id="video", media_url="https://v.douyinvod.com/video", source="desktop_media",
+                    asr_config={"api_key": "key", "api_base_url": "", "model": "test"},
+                    request_headers={}, progress=None,
+                )
+
     def test_local_metadata_skips_sidecar_and_keeps_only_requested_items(self) -> None:
         local = [{"aweme_id": "a", "title": "本地标题"}, {"aweme_id": "unrelated"}]
         with (

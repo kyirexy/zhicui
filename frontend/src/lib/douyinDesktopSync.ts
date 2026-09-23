@@ -1,5 +1,6 @@
 import type { PlatformAccountItem } from '@/lib/desktopRuntime';
 import type { DouyinLocalSyncItem } from '@/lib/types';
+import { readStoredToken } from './authSession.ts';
 
 // 1.1.9 隔离每轮主文档并重新读取网络列表，旧窗口和缓存不能继续写入可信排名。
 export const MIN_LOCAL_DOUYIN_DESKTOP_VERSION = '1.1.9';
@@ -18,6 +19,15 @@ const TRUSTED_DOUYIN_MEDIA_DOMAINS = [
   'volccdn.com',
 ] as const;
 const ephemeralMedia = new Map<string, { mediaUrl: string; capturedAt: number }>();
+let mediaOwner: string | null | undefined;
+
+function ensureMediaOwner(): void {
+  const owner = readStoredToken();
+  if (owner !== mediaOwner) {
+    ephemeralMedia.clear();
+    mediaOwner = owner;
+  }
+}
 
 export function isTrustedEphemeralDouyinMediaUrl(value: string): boolean {
   try {
@@ -36,11 +46,19 @@ export function isTrustedEphemeralDouyinMediaUrl(value: string): boolean {
 }
 
 export function supportsLocalDouyinRuntime(version: string): boolean {
+  return versionAtLeast(version, MIN_LOCAL_DOUYIN_DESKTOP_VERSION);
+}
+
+export function supportsTargetedDouyinMedia(version: string): boolean {
+  return versionAtLeast(version, '1.1.14');
+}
+
+function versionAtLeast(version: string, minimumVersion: string): boolean {
   const parts = String(version || '')
     .split('.')
     .slice(0, 3)
     .map((value) => Number.parseInt(value, 10) || 0);
-  const minimum = MIN_LOCAL_DOUYIN_DESKTOP_VERSION.split('.').map(Number);
+  const minimum = minimumVersion.split('.').map(Number);
   for (let index = 0; index < minimum.length; index += 1) {
     const current = parts[index] || 0;
     if (current !== minimum[index]) return current > minimum[index];
@@ -55,6 +73,7 @@ export function requiresLocalDouyinDesktopUpdate(version: string): boolean {
 export function toLocalDouyinSyncItems(
   items: PlatformAccountItem[],
 ): DouyinLocalSyncItem[] {
+  ensureMediaOwner();
   return items.slice(0, 100).map((item) => {
     const mediaUrl = String(item.ephemeralMediaUrl || '').trim();
     if (isTrustedEphemeralDouyinMediaUrl(mediaUrl)) {
@@ -79,6 +98,7 @@ export function toLocalDouyinSyncItems(
 export function getEphemeralDouyinMediaSources(
   videoIds: string[],
 ): Array<{ aweme_id: string; media_url: string }> {
+  ensureMediaOwner();
   const now = Date.now();
   const sources: Array<{ aweme_id: string; media_url: string }> = [];
   for (const videoId of videoIds) {

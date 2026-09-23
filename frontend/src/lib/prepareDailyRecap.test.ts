@@ -4,6 +4,7 @@ import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import * as dailyProgress from './dailyRecapProgress.ts';
+import * as extractionOutcome from './libraryExtractionOutcome.ts';
 import type { DailyRecap, DailyRecapItem } from './dailyRecapApi';
 
 type PreparationApi = typeof import('./prepareDailyRecap');
@@ -84,6 +85,7 @@ function harness(initial = recap()) {
       if (name === './authSession') return { readStoredToken: () => runtime.token };
       if (name === './dailyRecapApi') return { getDailyRecap: request('getDailyRecap'), getDailyAnalysis: request('getDailyAnalysis') };
       if (name === './dailyRecapProgress') return dailyProgress;
+      if (name === './libraryExtractionOutcome') return extractionOutcome;
       throw new Error(name);
     },
   });
@@ -145,6 +147,29 @@ test('今日先完成同步，纳入新增资料并过滤隐藏项；快速接�
   assert.match(body.content, /B站喜欢暂时不可用/);
   assert.match(body.content, /3 个适合继续追问的问题/);
   assert.equal(body.research_mode, 'fast');
+});
+
+test('本机无法取得地址时不提交坏的备用任务，仍用已就绪文稿总结并说明覆盖范围', async () => {
+  const h = harness(recap([item(1), item(2, false)]));
+  const notices: string[] = [];
+  const result = await h.run(undefined, undefined, {
+    beforeExtract: async () => ({ warnings: ['1 条视频无法读取，保留待重试'], blockedVideoIds: ['video-2'] }),
+    onNotice: (message) => notices.push(message),
+  });
+  assert.match(result.href, /harness/);
+  assert.equal(h.count('startDouyinBatchExtraction'), 0);
+  assert.deepEqual(copy(h.last('createAgentThread').args[0] as { source_ids: string[] }).source_ids, ['note-1']);
+  assert.match(String((h.last('streamAgentMessage').args[1] as Record<string, string>).content), /1 条未就绪/);
+  assert.match(notices.join(''), /保留待重试/);
+});
+
+test('全部缺少地址且无可用文稿时给出可行动原因，不提交 ASR 或空 AI 会话', async () => {
+  const h = harness(recap([item(1, false)]));
+  await assert.rejects(h.run(undefined, undefined, {
+    beforeExtract: async () => ({ warnings: ['请升级桌面端后重试播放地址探测'], blockedVideoIds: ['video-1'] }),
+  }), /请升级桌面端/);
+  assert.equal(h.count('startDouyinBatchExtraction'), 0);
+  assert.equal(h.count('createAgentThread'), 0);
 });
 
 test('全为已确认无音频时不重复转写、不创建空会话，也不提示重试', async () => {

@@ -18,6 +18,14 @@ test('整批失败到达 100% 处理进度，同时明确显示成功为 0', () 
   assert.equal(dailyRecapProgressPercent(message), 100);
 });
 
+test('有实际阶段时区分下载与语音转写，仍按终态数量推进', () => {
+  const message = formatDailyRecapExtractionProgress({ total: 23, success: 10, failed: 2,
+    active: 4, queued: 7, downloading: 1, transcribing: 3, analyzing: 0 });
+  assert.match(message, /下载音频 1 · 语音转写 3 · 排队 7/);
+  assert.doesNotMatch(message, /处理中|AI 整理/);
+  assert.equal(dailyRecapProgressPercent(message), 52);
+});
+
 test('无音频跳过计入终态，成功与失败混合也能准确到达 100%', () => {
   const skipped = formatDailyRecapExtractionProgress({ total: 5, success: 0, failed: 0, skipped: 5, active: 0, queued: 0 });
   assert.equal(skipped, '文稿已处理 5/5 · 成功 0 · 失败 0 · 无音频 5，已跳过 · 处理中 0 · 排队 0');

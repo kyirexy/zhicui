@@ -164,10 +164,17 @@ export function validatePlatformAccountCollectRequest(
     throw new Error('保留同步窗口选项必须为布尔值');
   }
   if (value.keepSessionOpen && !value.sessionKey) throw new Error('保留同步窗口需要批次标识');
+  if (value.targetVideoIds !== undefined && (request.platform !== 'douyin'
+    || !Array.isArray(value.targetVideoIds) || value.targetVideoIds.length === 0
+    || value.targetVideoIds.length > limit
+    || value.targetVideoIds.some((id) => typeof id !== 'string' || !/^\d{5,32}$/.test(id)))) {
+    throw new Error('定向播放地址更新需要 1–100 个有效抖音视频标识，且不能超过同步数量');
+  }
   return { ...request, mode, limit,
     ...(value.interactive === undefined ? {} : { interactive: value.interactive }),
     ...(value.sessionKey === undefined ? {} : { sessionKey: value.sessionKey }),
     ...(value.keepSessionOpen === undefined ? {} : { keepSessionOpen: value.keepSessionOpen }),
+    ...(value.targetVideoIds === undefined ? {} : { targetVideoIds: [...new Set(value.targetVideoIds)] }),
   };
 }
 

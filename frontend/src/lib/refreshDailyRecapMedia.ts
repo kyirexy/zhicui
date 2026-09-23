@@ -1,7 +1,7 @@
 import { readStoredToken } from './authSession';
 import type { DailyRecapItem } from './dailyRecapApi';
 import { supportsPlatformAccountSync } from './desktopRuntime';
-import { getEphemeralDouyinMediaSources, supportsLocalDouyinRuntime, toLocalDouyinSyncItems } from './douyinDesktopSync';
+import { getEphemeralDouyinMediaSources, supportsLocalDouyinRuntime, supportsTargetedDouyinMedia, toLocalDouyinSyncItems } from './douyinDesktopSync';
 import { formatPlatformSyncError } from './platformSyncFeedback';
 
 interface Options {
@@ -21,7 +21,7 @@ function aborted(message = '已取消播放地址探测，已完成的文稿会�
 export async function refreshDailyRecapMedia(
   items: DailyRecapItem[],
   { userId, profileKey, onProgress, signal }: Options,
-): Promise<{ warnings: string[] }> {
+): Promise<{ warnings: string[]; blockedVideoIds?: string[] }> {
   const token = readStoredToken();
   const ensureCurrent = () => {
     if (signal?.aborted) throw aborted();
@@ -53,13 +53,20 @@ export async function refreshDailyRecapMedia(
   if (!supportsLocalDouyinRuntime(version)) return { warnings: [unavailable] };
 
   const warnings: string[] = [];
-  for (const mode of ['collect', 'like'] as const) {
+  const targeted = supportsTargetedDouyinMedia(version);
+  // 新客户端直接读取指定作品详情；旧版仍兼容列表探测，不能把未覆盖当成成功。
+  const requests: Array<{ mode: 'collect' | 'like'; ids?: string[] }> = targeted
+    ? Array.from({ length: Math.ceil(missingIds().size / 100) }, (_, index) => ({
+      mode: 'collect', ids: [...missingIds()].slice(index * 100, (index + 1) * 100),
+    }))
+    : [{ mode: 'collect' }, { mode: 'like' }];
+  for (const { mode, ids } of requests) {
     ensureCurrent();
     const missing = missingIds();
     if (!missing.size) break;
-    if (!targets.some((item) => missing.has(item.video_id)
+    if (!targeted && !targets.some((item) => missing.has(item.video_id)
       && (!item.source_modes.length || item.source_modes.includes(mode)))) continue;
-    const label = `抖音${mode === 'collect' ? '收藏' : '喜欢'}`;
+    const label = targeted ? '抖音视频' : `抖音${mode === 'collect' ? '收藏' : '喜欢'}`;
     onProgress(`正在打开浏览器检查${label}，更新 ${missing.size} 条待解析视频的播放地址…`);
     const sessionKey = crypto.randomUUID();
     let cancelled = false;
@@ -79,6 +86,7 @@ export async function refreshDailyRecapMedia(
       ensureCurrent();
       const result = await bridge.collectPlatformAccount({
         platform: 'douyin', profileKey, mode, limit: 100, interactive: true, sessionKey,
+        ...(ids ? { targetVideoIds: ids.filter((id) => missing.has(id)) } : {}),
       });
       ensureCurrent();
       if (result.cancelled) throw aborted();
@@ -98,6 +106,8 @@ export async function refreshDailyRecapMedia(
   }
   ensureCurrent();
   const remaining = missingIds().size;
-  if (remaining) warnings.push(`还有 ${remaining} 条视频未取得有效播放地址，本次先尝试服务端读取；若仍失败，请在同步视频中重新同步对应喜欢或收藏`);
-  return { warnings };
+  if (remaining) warnings.push(`还有 ${remaining} 条视频未取得有效播放地址，已保留待重试，本次仅解析已读取的内容。`
+    + (targeted ? '请检查浏览器中的账号登录和视频访问状态。' : '升级到桌面端 1.1.14 后可直接定位这些视频，无需重新扫描整个列表。'));
+  // 已在本机确认读取不到的资源不再反复提交给账号验证失败的备用通道。
+  return { warnings, blockedVideoIds: [...missingIds()] };
 }

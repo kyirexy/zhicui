@@ -98,7 +98,7 @@ export async function syncDailyAnalysisSources({ userId, profileKey, onProgress,
         try {
           ensureCurrent();
           collected = await bridge.collectPlatformAccount({ platform: source.platform, profileKey,
-            mode: source.mode, limit: LIMIT, interactive: false,
+            mode: source.mode, limit: LIMIT, interactive: true,
             ...(sessionKey ? { sessionKey } : {}) });
         } finally {
           signal?.removeEventListener('abort', cancel);

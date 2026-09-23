@@ -1,7 +1,8 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { chromium, type BrowserContext } from 'playwright-core';
+import type { BrowserContext } from 'playwright-core';
+import { launchIsolatedPlatformBrowser } from './platform-browser';
 import type {
   DesktopLoginRequest,
   DesktopLoginResult,
@@ -112,27 +113,7 @@ export class DouyinDesktopLogin {
   private async launchBrowser(
     profilePath: string,
   ): Promise<{ context: BrowserContext; browser: SupportedBrowser }> {
-    let lastError: unknown;
-    for (const browser of ['chrome', 'msedge'] as const) {
-      try {
-        const context = await chromium.launchPersistentContext(profilePath, {
-          channel: browser,
-          headless: false,
-          locale: 'zh-CN',
-          viewport: null,
-          args: [
-            '--start-maximized',
-            '--disable-background-mode',
-            '--no-first-run',
-            '--no-default-browser-check',
-          ],
-        });
-        return { context, browser };
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    throw lastError || new Error('未找到可用浏览器');
+    return launchIsolatedPlatformBrowser(profilePath);
   }
 
   private async run(

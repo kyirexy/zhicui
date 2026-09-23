@@ -795,6 +795,7 @@ export type DouyinBatchExtractionOperation = 'transcript' | 'ai' | 'full';
 export type DouyinBatchExtractionState =
   | 'queued'
   | 'transcribing'
+  | 'downloading'
   | 'analyzing'
   | 'done'
   | 'no_audio'
@@ -827,6 +828,9 @@ export interface DouyinBatchExtractionJob {
   failed: number;
   skipped?: number;
   active: number;
+  downloading?: number;
+  transcribing?: number;
+  analyzing?: number;
   queued: number;
   items: DouyinBatchExtractionItem[];
   database_stores_media: false;

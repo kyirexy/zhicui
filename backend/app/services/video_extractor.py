@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html import unescape
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, urljoin, urlsplit
 
 
@@ -123,6 +123,27 @@ def _ffmpeg_has_no_audio(stderr: str) -> bool:
         or "output file does not contain any stream" in message
         or "output file #0 does not contain any stream" in message
     )
+
+
+def _audio_is_digital_silence(audio_path: Path) -> bool:
+    """仅整段解码采样全部为零时跳过 ASR；安静人声和音乐仍交给识别。"""
+    try:
+        result = subprocess.run(
+            [_get_ffmpeg_path(), "-nostdin", "-hide_banner", "-i", str(audio_path),
+             "-af", "astats=metadata=0:reset=0", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return False
+    if result.returncode != 0:
+        return False
+    # 必须读取 Overall 段，不能把某个静音声道误当成整段静音。
+    overall = result.stderr.rsplit("Overall", 1)
+    if len(overall) != 2:
+        return False
+    peak = re.search(r"Peak level dB:\s*(-inf|[-+\d.]+)", overall[1])
+    samples = re.search(r"Number of samples:\s*(\d+)", overall[1])
+    return bool(peak and peak.group(1) == "-inf" and samples and int(samples.group(1)) > 0)
 
 
 # ---------------------------------------------------------------------------
@@ -1386,6 +1407,7 @@ def extract_media_url_transcript(
     *,
     max_bytes: int = 800 * 1024 * 1024,
     request_headers: dict[str, str] | None = None,
+    on_stage: Callable[[str], None] | None = None,
 ) -> str:
     """Transcribe a trusted direct media URL from the companion library.
 
@@ -1528,6 +1550,11 @@ def extract_media_url_transcript(
             "transcript_media_ready duration_ms=%d media_bytes=%d audio_bytes=%d",
             int((time.monotonic() - media_started) * 1000), written, audio_path.stat().st_size,
         )
+        # 下载完成才进入识别阶段；回调也会复查取消，避免下载期间取消后仍发起付费请求。
+        if on_stage:
+            on_stage("transcribing")
+        if _audio_is_digital_silence(audio_path):
+            raise NoAudioError("silent_audio")
         if api_key:
             try:
                 asr_started = time.monotonic()

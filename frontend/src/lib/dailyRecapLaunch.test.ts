@@ -262,6 +262,9 @@ test('点击真实首页昨日入口，自动准备尚未提取的喜欢并在�
     assert.match(text(page.topButton('yesterday')), /已处理 1\/2/);
     assert.equal(nodes(page.cards.get('yesterday')).find((node) => node.props.role === 'progressbar')!.props['aria-valuenow'], 50);
     assert.equal(page.pushes.length, 0);
+    operation.options.onNotice?.('2 条视频暂未取得播放地址，已保留待重试');
+    page.render();
+    assert.match(text(page.cards.get('yesterday')), /2 条视频暂未取得播放地址/);
     operation.resolve({ href: '/harness?thread=yesterday-thread' });
     await page.settle();
     assert.deepEqual(page.pushes, ['/harness?thread=yesterday-thread']);

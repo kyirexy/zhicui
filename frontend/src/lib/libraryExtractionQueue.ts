@@ -31,11 +31,14 @@ export function aggregateExtractionJobs(jobs: DouyinBatchExtractionJob[]): Douyi
   const success = items.filter((item) => item.state === 'done').length;
   const failed = items.filter((item) => item.state === 'error').length;
   const skipped = items.filter(isNoAudioResult).length;
-  const active = items.filter((item) => item.state === 'transcribing' || item.state === 'analyzing').length;
+  const downloading = items.filter((item) => item.state === 'downloading').length;
+  const transcribing = items.filter((item) => item.state === 'transcribing').length;
+  const analyzing = items.filter((item) => item.state === 'analyzing').length;
+  const active = downloading + transcribing + analyzing;
   const queued = items.filter((item) => item.state === 'queued').length;
   const running = jobs.some((job) => job.status === 'running');
   return { ...jobs[0], job_id: jobs.map((job) => job.job_id).join(','), items, total: items.length,
-    success, failed, skipped, active, queued,
+    success, failed, skipped, active, queued, downloading, transcribing, analyzing,
     operation: jobs.every((job) => job.operation === jobs[0].operation) ? jobs[0].operation : 'full',
     status: running ? 'running' : failed ? success || skipped ? 'partial' : 'failed' : 'success',
     error: [...new Set(jobs.map((job) => job.error).filter(Boolean))].join('；') || undefined,

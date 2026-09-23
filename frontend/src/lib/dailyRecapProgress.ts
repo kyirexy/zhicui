@@ -1,6 +1,6 @@
 import type { DouyinBatchExtractionJob } from './types';
 
-type ExtractionProgress = Pick<DouyinBatchExtractionJob, 'total' | 'success' | 'failed' | 'skipped' | 'active' | 'queued'>;
+type ExtractionProgress = Pick<DouyinBatchExtractionJob, 'total' | 'success' | 'failed' | 'skipped' | 'active' | 'queued' | 'downloading' | 'transcribing' | 'analyzing'>;
 
 function count(value: number | undefined, maximum = Number.MAX_SAFE_INTEGER): number {
   return typeof value === 'number' && Number.isFinite(value)
@@ -17,9 +17,16 @@ export function formatDailyRecapExtractionProgress(job: ExtractionProgress): str
   const processed = success + failed + skipped;
   const active = count(job.active, total - processed);
   const queued = count(job.queued, total - processed - active);
+  const hasStages = job.downloading !== undefined && job.transcribing !== undefined && job.analyzing !== undefined;
+  const downloading = count(job.downloading, active);
+  const transcribing = count(job.transcribing, active - downloading);
+  const analyzing = count(job.analyzing, active - downloading - transcribing);
+  const stages = hasStages
+    ? ` · 下载音频 ${downloading} · 语音转写 ${transcribing}` + (analyzing ? ` · AI 整理 ${analyzing}` : '')
+    : ` · 处理中 ${active}`;
   return `文稿已处理 ${processed}/${total} · 成功 ${success} · 失败 ${failed}`
     + (skipped ? ` · 无音频 ${skipped}，已跳过` : '')
-    + ` · 处理中 ${active} · 排队 ${queued}`;
+    + stages + ` · 排队 ${queued}`;
 }
 
 /** 仅使用后端报告的条目计数，不根据等待时间估算百分比。 */

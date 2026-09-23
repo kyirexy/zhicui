@@ -23,6 +23,7 @@ export type LibraryExtractState =
   | 'idle'
   | 'queued'
   | 'extracting'
+  | 'downloading'
   | 'transcribing'
   | 'analyzing'
   | 'done'
@@ -55,7 +56,7 @@ export default function LibraryVideoCard({
   const noAudio = isNoAudioResult(item) || extractState === 'no_audio';
   const hasError = extractState === 'error' && !noAudio;
   const errorMessage = libraryExtractionErrorMessage(extractError);
-  const isWorking = ['queued', 'extracting', 'transcribing', 'analyzing'].includes(extractState);
+  const isWorking = ['queued', 'extracting', 'downloading', 'transcribing', 'analyzing'].includes(extractState);
   const isExtracted = item.extracted || extractState === 'done';
   const visualState = hasError
     ? 'has-extract-error'
@@ -70,7 +71,7 @@ export default function LibraryVideoCard({
   const organizationLabel = noAudio ? '无音频' : hasError
     ? '暂未完成'
     : isWorking
-      ? '整理中'
+      ? extractState === 'downloading' ? '下载音频中' : extractState === 'transcribing' ? '语音转写中' : '整理中'
         : item.ai_initialized
         ? '已整理'
         : hasTranscript

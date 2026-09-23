@@ -1,13 +1,14 @@
 import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
-  chromium,
   type BrowserContext,
   type Frame,
   type Page,
   type Request,
   type Response,
 } from 'playwright-core';
+import { launchIsolatedPlatformBrowser } from './platform-browser';
+import { collectTargetedDouyinMedia } from './douyin-targeted-media';
 import type {
   PlatformAccountCaptureDiagnostics,
   PlatformAccountCollectRequest,
@@ -901,6 +902,7 @@ export class PlatformAccountConnector {
   private activeOperation: symbol | undefined;
   private activeMode: PlatformAccountSourceMode | undefined;
   private activeFocus: Promise<void> | null = null;
+  private activeTargetPage: Page | null = null;
   private activeBrowser: SupportedBrowser = 'chrome';
   private restoredBrowser: { context: BrowserContext; browser: SupportedBrowser } | null = null;
   private retainedSession: RetainedDouyinSession | null = null;
@@ -922,6 +924,7 @@ export class PlatformAccountConnector {
       this.notifyStatus(request.platform, 'starting', '正在打开本机浏览器…');
       const launched = await this.launchBrowser(profilePath);
       this.activeContext = launched.context;
+      this.activeBrowser = launched.browser;
       const page = launched.context.pages()[0] || await launched.context.newPage();
       const loginUrl = request.platform === 'bilibili'
         ? BILIBILI_LOGIN_URL
@@ -986,9 +989,10 @@ export class PlatformAccountConnector {
       this.activeBrowser = launched.browser;
       this.activeContext = launched.context;
       if (this.cancelled) return { success: false, cancelled: true, platform: request.platform };
+      let windowNeedsAttention = false;
       if (request.interactive) {
-        const page = launched.context.pages()[0];
-        if (page) await showPlatformAccountPage(page).catch(() => undefined);
+        const page = launched.context.pages().find((candidate) => !candidate.isClosed?.()) || await launched.context.newPage();
+        await showPlatformAccountPage(page).catch(() => { windowNeedsAttention = true; });
       }
       if (!hasPlatformAuthCookie(request.platform, await launched.context.cookies())) {
         throw new Error('账号登录已失效，请先重新登录');
@@ -997,7 +1001,7 @@ export class PlatformAccountConnector {
         request.platform,
         'collecting',
         request.platform === 'douyin'
-          ? request.mode === 'collect'
+          ? request.targetVideoIds?.length ? '正在按指定视频更新播放地址…' : request.mode === 'collect'
             ? '正在自动打开抖音收藏并读取…'
             : request.mode === 'post'
               ? '正在自动打开抖音作品并读取…'
@@ -1009,8 +1013,20 @@ export class PlatformAccountConnector {
               : '正在读取最近喜欢…',
         launched.browser,
       );
+      if (windowNeedsAttention) {
+        this.notifyStatus(request.platform, 'needs-action',
+          '官方同步窗口已打开，请从任务栏切换到本次窗口查看；读取成功后会自动继续', launched.browser);
+      }
       const collection = request.platform === 'douyin'
-        ? await this.collectDouyin(launched.context, request.mode, request.limit)
+        ? request.targetVideoIds?.length
+          ? await collectTargetedDouyinMedia(launched.context, request.targetVideoIds, {
+            normalize: normalizeDouyinRecord, cancelled: () => this.cancelled,
+            onProgress: (message) => this.notifyStatus('douyin', 'collecting', message, launched.browser),
+            onActivePage: (page) => { this.activeTargetPage = page; },
+            showPage: showPlatformAccountPage,
+            onNeedsAction: (message) => this.notifyStatus('douyin', 'needs-action', message, launched.browser, 'DOUYIN_MEDIA_VERIFICATION_REQUIRED'),
+          })
+          : await this.collectDouyin(launched.context, request.mode, request.limit)
         : request.platform === 'bilibili'
         ? await this.collectBilibili(launched.context, request.mode, request.limit)
         : {
@@ -1024,6 +1040,9 @@ export class PlatformAccountConnector {
         return { success: false, cancelled: true, platform: request.platform };
       }
       if (urls.length === 0) {
+        if (request.targetVideoIds?.length) {
+          throw new Error('暂未取得指定作品的有效播放地址，请在官方窗口确认作品可播放或完成验证，再重试解析');
+        }
         throw new Error(request.platform === 'bilibili'
           ? '没有读取到可同步的 B站作品，请确认账号列表可见'
           : request.platform === 'douyin'
@@ -1079,7 +1098,10 @@ export class PlatformAccountConnector {
       || request.platform !== this.activePlatform || request.profileKey !== this.activeProfileKey) {
       return { success: false, platform: request.platform, code: 'LOCAL_ACTION_NOT_FOUND', error: '当前账号没有正在等待的官方窗口，请重新同步' };
     }
-    const page = context.pages().find((candidate) => !candidate.isClosed());
+    const pages = context.pages();
+    const target = this.activeTargetPage;
+    const page = target && pages.includes(target) && !target.isClosed()
+      ? target : pages.find((candidate) => !candidate.isClosed());
     if (!page) return { success: false, platform: request.platform, code: 'LOCAL_ACTION_NOT_FOUND', error: '官方窗口已关闭，请重新同步' };
     const focused = this.activeFocus || showPlatformAccountPage(page);
     this.activeFocus = focused;
@@ -1124,6 +1146,7 @@ export class PlatformAccountConnector {
     this.activeSessionKey = batch.sessionKey;
     this.activeOperation = Symbol();
     this.activeMode = undefined;
+    this.activeTargetPage = null;
     let lease: DesktopActionLease | null = null;
     let result: PlatformAccountResult | null = null;
     try {
@@ -1160,6 +1183,7 @@ export class PlatformAccountConnector {
     } finally {
       const context = this.activeContext;
       this.activeContext = null;
+      this.activeTargetPage = null;
       // 前置窗口与首屏完成可能同时发生，不能在窗口恢复操作尚未结束时关掉同一会话。
       if (this.activeFocus) await this.activeFocus.catch(() => undefined);
       if (context && lease && !this.cancelled && platform === 'douyin' && batch.sessionKey
@@ -1220,28 +1244,7 @@ export class PlatformAccountConnector {
     profilePath: string,
     background = false,
   ): Promise<{ context: BrowserContext; browser: SupportedBrowser }> {
-    let lastError: unknown;
-    for (const browser of ['chrome', 'msedge'] as const) {
-      try {
-        const context = await chromium.launchPersistentContext(profilePath, {
-          channel: browser,
-          headless: false,
-          locale: 'zh-CN',
-          viewport: null,
-          acceptDownloads: false,
-          args: [
-            background ? '--start-minimized' : '--start-maximized',
-            '--disable-background-mode',
-            '--no-first-run',
-            '--no-default-browser-check',
-          ],
-        });
-        return { context, browser };
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    throw lastError || new Error('未找到可用浏览器');
+    return launchIsolatedPlatformBrowser(profilePath, background);
   }
 
   private notifyStatus(
@@ -1458,7 +1461,7 @@ export class PlatformAccountConnector {
       if (page.isClosed?.()) throw new Error('登录或同步窗口已关闭');
       if (!checkProfile()) throw new Error('同步期间离开了本人抖音主页或切换了账号，本次结果未保存；请重新同步');
     };
-    const browser = context.browser()?.browserType().name() === 'chromium' ? 'chrome' : 'msedge';
+    const browser = this.activeBrowser;
     let recoveryDeadline = 0;
     const ensureOfficialFirstPage = async (): Promise<void> => {
       if (this.cancelled || pages.snapshot(limit).orderReliable) return;

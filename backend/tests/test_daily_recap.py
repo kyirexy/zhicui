@@ -18,6 +18,7 @@ from app.core.database import Base, get_db
 from app.models.douyin_local_library_item import DouyinLocalLibraryItem
 from app.models.library_hidden_item import LibraryHiddenItem
 from app.models.library_sync import LibrarySyncRun
+from app.models.media_extraction_outcome import MediaExtractionOutcome
 from app.models.note import Note
 from app.models.user import User
 from app.models.video_source_ledger import VideoSourceLedger
@@ -29,7 +30,7 @@ class _RecapFixture(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
         Base.metadata.create_all(self.engine, tables=[
-            User.__table__, Note.__table__, DouyinLocalLibraryItem.__table__,
+            User.__table__, MediaExtractionOutcome.__table__, Note.__table__, DouyinLocalLibraryItem.__table__,
             LibraryHiddenItem.__table__, LibrarySyncRun.__table__, VideoSourceLedger.__table__,
         ])
         self.db = sessionmaker(bind=self.engine, expire_on_commit=False)()

@@ -1,5 +1,6 @@
 import type { DouyinLibraryItem } from './types';
 import { sourceSnapshotTime } from './platformSyncSnapshot.ts';
+import { isNoAudioResult } from './libraryExtractionOutcome.ts';
 
 export function hasReadyTranscript(item: DouyinLibraryItem): boolean {
   return Boolean(item.extracted_note_id) && item.transcript_chars > 0;
@@ -47,6 +48,7 @@ export function selectTranscriptPreparationTargets(
         !id
         || seen.has(id)
         || !item.can_extract
+        || isNoAudioResult(item)
         || readyIds.has(id)
       ) {
         continue;

@@ -152,7 +152,7 @@ export async function prepareDailyRecap(
     const waitDouyin = async () => {
       while (job?.status === 'running') {
         check();
-        onProgress(`文稿同时处理 ${job.active} 条 · 完成 ${job.success}/${job.total} · 排队 ${job.queued}`);
+        onProgress(`文稿同时处理 ${job.active} 条 · 完成 ${job.success}/${job.total} · 排队 ${job.queued}${job.skipped ? ` · 无音频 ${job.skipped} 条，已跳过` : ''}`);
         await pause(signal);
         check();
         job = data(await getDouyinBatchExtraction(job.job_id, signal), '读取文稿任务失败，已完成的文稿会保留');
@@ -182,7 +182,14 @@ export async function prepareDailyRecap(
     const visible = fresh.items.filter((item) => selectedIds.has(item.id) && (options.isVisible?.(item) ?? true));
     const ready = visible.filter((item) => item.transcript_ready && item.note_id);
     const noteIds = [...new Set(ready.map((item) => item.note_id!))];
-    if (!noteIds.length) throw new Error(`本次${kind === 'today' ? '分析' : '回顾'}文稿尚未就绪，请重试；已有视频和同步记录会保留`);
+    if (!noteIds.length) {
+      const noAudioIds = new Set(job?.items.filter((item) => item.state === 'no_audio').map((item) => item.aweme_id));
+      if (visible.length > 0 && visible.every((item) => item.transcript_status === 'no_audio'
+        || item.transcript_source === 'no-audio' || (item.platform === 'douyin' && noAudioIds.has(item.video_id)))) {
+        throw new Error('本次内容无音频，暂无可用于提问的文案；原视频和同步记录已保留');
+      }
+      throw new Error(`本次${kind === 'today' ? '分析' : '回顾'}文稿尚未就绪，请重试；已有视频和同步记录会保留`);
+    }
     const unavailable = selected.length - ready.length;
     const periodLabel = kind === 'today' ? '今日分析' : '昨日回顾';
     onProgress(unavailable > 0

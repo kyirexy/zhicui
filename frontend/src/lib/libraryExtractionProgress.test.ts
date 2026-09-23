@@ -8,7 +8,7 @@ const job = { operation: 'transcript', status: 'running', total: 10, success: 3,
 
 test('并发进度显示服务端实际活动数，完成和失败都推进进度', () => {
   assert.deepEqual(summarizeLibraryExtraction(job), {
-    total: 10, completed: 3, active: 4, queued: 2, failed: 1, percent: 40,
+    total: 10, completed: 3, active: 4, queued: 2, failed: 1, skipped: 0, percent: 40,
   });
   assert.equal(libraryExtractionHeading(job), '文案准备中');
 });

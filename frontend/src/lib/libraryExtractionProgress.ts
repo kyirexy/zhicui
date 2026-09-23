@@ -9,6 +9,7 @@ export interface LibraryExtractionSummary {
   active: number;
   queued: number;
   failed: number;
+  skipped: number;
   percent: number;
 }
 
@@ -36,6 +37,7 @@ export function summarizeLibraryExtraction(
       active: 0,
       queued: 0,
       failed: 0,
+      skipped: 0,
       percent: 0,
     };
   }
@@ -43,9 +45,10 @@ export function summarizeLibraryExtraction(
   const total = Math.max(0, Number(job.total) || job.items.length);
   const completed = Math.max(0, Number(job.success) || 0);
   const failed = Math.max(0, Number(job.failed) || 0);
+  const skipped = Math.max(0, Number(job.skipped) || job.items.filter((item) => item.state === 'no_audio').length);
   const active = Math.max(0, Number(job.active) || 0);
   const queued = Math.max(0, Number(job.queued) || 0);
-  const settled = Math.min(total, completed + failed);
+  const settled = Math.min(total, completed + failed + skipped);
 
   return {
     total,
@@ -53,6 +56,7 @@ export function summarizeLibraryExtraction(
     active,
     queued,
     failed,
+    skipped,
     percent: total > 0 ? Math.round((settled / total) * 100) : 0,
   };
 }

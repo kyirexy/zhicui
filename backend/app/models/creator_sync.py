@@ -322,6 +322,9 @@ class CreatorSourceItem(Base):
         if self.removed_at is not None or self.state == "removed":
             availability_status = "removed"
             transcript_status = "removed"
+        elif self.error_code == "no_audio" and not self.note_id:
+            availability_status = "available" if self.is_available else "unavailable"
+            transcript_status = "no_audio"
         elif self.metadata_quality == "quarantined":
             availability_status = "available" if self.is_available else "unavailable"
             transcript_status = "needs_action"
@@ -359,6 +362,7 @@ class CreatorSourceItem(Base):
                 and self.removed_at is None
                 and self.state != "removed"
                 and not self.note_id
+                and self.error_code != "no_audio"
                 and not self.transcription_blocked
                 and self.metadata_quality != "quarantined"
             ),
@@ -367,12 +371,12 @@ class CreatorSourceItem(Base):
             "needs_enrichment": bool(self.needs_enrichment),
             "transcription_eligibility": (
                 "blocked"
-                if self.transcription_blocked or self.metadata_quality == "quarantined"
+                if self.transcription_blocked or self.metadata_quality == "quarantined" or transcript_status == "no_audio"
                 else "ready"
             ),
             "quality_checked_at": _iso(self.quality_checked_at),
             "quarantined_at": _iso(self.quarantined_at),
-            "state": self.state,
+            "state": "no_audio" if transcript_status == "no_audio" else self.state,
             "error_code": self.error_code,
             "first_seen_at": _iso(self.first_seen_at),
             "last_seen_at": _iso(self.last_seen_at),
@@ -573,6 +577,7 @@ class CreatorSyncRunItem(Base):
     )
 
     def to_dict(self) -> dict[str, Any]:
+        state = "no_audio" if self.state == "skipped_removed" and self.error_code == "no_audio" else self.state
         return {
             "id": self.id,
             "run_id": self.run_id,
@@ -581,8 +586,8 @@ class CreatorSyncRunItem(Base):
             "external_id": self.external_id,
             "note_id": self.note_id,
             "ordinal": self.ordinal,
-            "state": self.state,
-            "status": self.state,
+            "state": state,
+            "status": state,
             "attempt_count": self.attempt_count,
             "error_code": self.error_code,
             "error_message": self.error_message,

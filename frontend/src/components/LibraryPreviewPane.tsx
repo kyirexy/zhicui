@@ -12,6 +12,7 @@ import {
 import LibraryCoverImage from '@/components/LibraryCoverImage';
 import PlatformBrandIcon, { type PlatformBrand } from '@/components/PlatformBrandIcon';
 import type { DouyinLibraryItem, PlatformLibraryItem } from '@/lib/types';
+import { isNoAudioResult } from '@/lib/libraryExtractionOutcome';
 import styles from './LibraryReferenceWorkspace.module.css';
 
 export type LibraryPreviewSelection =
@@ -81,7 +82,7 @@ function normalizeSelection(selection: LibraryPreviewSelection): NormalizedPrevi
       detailHref: `/library/detail?id=${encodeURIComponent(item.aweme_id)}`,
       noteId: item.extracted_note_id || '',
       transcriptChars: item.transcript_chars,
-      transcriptLabel: transcriptReady
+      transcriptLabel: isNoAudioResult(item) ? '无音频' : transcriptReady
         ? '完整文案已就绪'
         : item.can_extract
           ? '完整文案待提取'
@@ -94,7 +95,7 @@ function normalizeSelection(selection: LibraryPreviewSelection): NormalizedPrevi
 
   const item = selection.item;
   const transcriptReady = item.speech_ready && item.transcript_chars > 0;
-  const transcriptLabel = transcriptReady
+  const transcriptLabel = isNoAudioResult(item) ? '无音频' : transcriptReady
     ? item.transcript_source === 'manual-subtitle'
       ? '人工字幕已就绪'
       : item.transcript_source === 'automatic-subtitle'

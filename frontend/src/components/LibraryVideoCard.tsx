@@ -12,10 +12,12 @@ import {
   Play,
   RefreshCw,
   Square,
+  VolumeX,
 } from 'lucide-react';
 import LibraryCoverImage from '@/components/LibraryCoverImage';
 import PlatformBrandIcon from '@/components/PlatformBrandIcon';
 import type { DouyinLibraryItem } from '@/lib/types';
+import { isNoAudioResult, libraryExtractionErrorMessage } from '@/lib/libraryExtractionOutcome';
 
 export type LibraryExtractState =
   | 'idle'
@@ -24,6 +26,7 @@ export type LibraryExtractState =
   | 'transcribing'
   | 'analyzing'
   | 'done'
+  | 'no_audio'
   | 'error';
 
 interface LibraryVideoCardProps {
@@ -49,9 +52,12 @@ export default function LibraryVideoCard({
   onRetryExtraction,
   onRefreshCover,
 }: LibraryVideoCardProps) {
+  const noAudio = isNoAudioResult(item) || extractState === 'no_audio';
+  const hasError = extractState === 'error' && !noAudio;
+  const errorMessage = libraryExtractionErrorMessage(extractError);
   const isWorking = ['queued', 'extracting', 'transcribing', 'analyzing'].includes(extractState);
   const isExtracted = item.extracted || extractState === 'done';
-  const visualState = extractState === 'error'
+  const visualState = hasError
     ? 'has-extract-error'
     : isWorking
       ? 'is-extracting'
@@ -61,8 +67,8 @@ export default function LibraryVideoCard({
   const displayDate = item.date || item.recorded_at?.slice(0, 10) || '';
   const dateDescription = `${item.date ? '发布于' : '记录于'} ${displayDate}`;
   const hasTranscript = isExtracted && item.transcript_chars > 0;
-  const organizationLabel = extractState === 'error'
-    ? '失败'
+  const organizationLabel = noAudio ? '无音频' : hasError
+    ? '暂未完成'
     : isWorking
       ? '整理中'
         : item.ai_initialized
@@ -72,15 +78,15 @@ export default function LibraryVideoCard({
           : item.can_extract
             ? '待整理'
             : '仅可查看';
-  const organizationTone = extractState === 'error'
+  const organizationTone = noAudio ? 'is-pending' : hasError
     ? 'is-error'
     : isWorking
       ? 'is-working'
       : item.ai_initialized || hasTranscript
         ? 'is-ready'
         : 'is-pending';
-  const organizationDescription = extractState === 'error' && extractError
-    ? `${organizationLabel}：${extractError}`
+  const organizationDescription = noAudio ? '无音频' : hasError
+    ? `${organizationLabel}：${errorMessage}`
     : !item.can_extract && !hasTranscript
       ? '当前视频暂不可整理，可继续查看原视频'
       : organizationLabel;
@@ -88,7 +94,7 @@ export default function LibraryVideoCard({
   return (
     <article
       className={`library-video-card ${selected ? 'is-selected' : ''} ${visualState}`}
-      data-extract-state={extractState}
+      data-extract-state={noAudio ? 'no_audio' : extractState}
       data-marquee-id={item.aweme_id}
     >
       <Link
@@ -168,7 +174,7 @@ export default function LibraryVideoCard({
               aria-label={`整理状态：${organizationDescription}`}
               title={organizationDescription}
             >
-              {extractState === 'error' ? (
+              {noAudio ? <VolumeX size={13} /> : hasError ? (
                 <AlertCircle size={13} />
               ) : isWorking ? (
                 <LoaderCircle size={13} className="animate-spin" />
@@ -183,9 +189,9 @@ export default function LibraryVideoCard({
             </span>
           </div>
         </div>
-        {extractState === 'error' && extractError && (
-          <div className="library-video-inline-error" role="alert" title={extractError}>
-            <span>{extractError}</span>
+        {hasError && (
+          <div className="library-video-inline-error" role="alert" title={errorMessage}>
+            <span>{errorMessage}</span>
             {onRetryExtraction && item.can_extract && (
               <button
                 type="button"

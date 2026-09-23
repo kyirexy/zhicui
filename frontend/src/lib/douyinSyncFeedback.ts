@@ -39,24 +39,27 @@ export function formatTranscriptPreparationProgress(job: {
   total: number;
   success: number;
   failed: number;
+  skipped?: number;
   active?: number;
   queued?: number;
   error?: string;
 }): string {
   const completed = boundedCount(job.success);
   const total = boundedCount(job.total);
+  const skipped = boundedCount(job.skipped);
+  const skippedMessage = skipped ? `，${skipped} 条无音频，已跳过` : '';
   if (job.status === 'failed') {
     const hint = /余额|额度|配额/.test(job.error || '') ? '请检查可用额度后重试'
       : /登录|401/.test(job.error || '') ? '请重新登录后重试'
         : /未配置|配置.*(?:缺失|无效)|API.*(?:key|密钥)/i.test(job.error || '') ? '请检查文案提取设置后重试'
           : '请稍后重试';
-    return `文案准备未完成 · 已完成 ${completed}/${total}，${hint}`;
+    return `文案准备未完成 · 已完成 ${completed}/${total}${skippedMessage}，${hint}`;
   }
   if (job.status === 'partial' || (job.status === 'success' && job.failed > 0)) {
-    return `文案已完成 ${completed}/${total}，${boundedCount(job.failed)} 条未完成，可重试`;
+    return `文案已完成 ${completed}/${total}${skippedMessage}，${boundedCount(job.failed)} 条未完成，可重试`;
   }
-  if (job.status === 'success') return `文案已完成 ${completed}/${total}`;
-  return `文案准备中 · 已完成 ${completed}/${total}${job.failed > 0 ? `，${boundedCount(job.failed)} 条未完成` : ''}`;
+  if (job.status === 'success') return `文案已完成 ${completed}/${total}${skippedMessage}`;
+  return `文案准备中 · 已完成 ${completed}/${total}${skippedMessage}${job.failed > 0 ? `，${boundedCount(job.failed)} 条未完成` : ''}`;
 }
 
 function boundedCount(value: number | undefined): number {

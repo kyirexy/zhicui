@@ -1,4 +1,5 @@
 import type { DouyinBatchExtractionItem, DouyinBatchExtractionJob, DouyinBatchExtractionOperation, DouyinLibraryItem } from './types';
+import { isNoAudioResult } from './libraryExtractionOutcome.ts';
 
 interface BatchEntry {
   key: string;
@@ -29,13 +30,14 @@ export function aggregateExtractionJobs(jobs: DouyinBatchExtractionJob[]): Douyi
   const items = [...new Map(jobs.flatMap((job) => job.items).map((item) => [item.aweme_id, item])).values()];
   const success = items.filter((item) => item.state === 'done').length;
   const failed = items.filter((item) => item.state === 'error').length;
+  const skipped = items.filter(isNoAudioResult).length;
   const active = items.filter((item) => item.state === 'transcribing' || item.state === 'analyzing').length;
   const queued = items.filter((item) => item.state === 'queued').length;
   const running = jobs.some((job) => job.status === 'running');
   return { ...jobs[0], job_id: jobs.map((job) => job.job_id).join(','), items, total: items.length,
-    success, failed, active, queued,
+    success, failed, skipped, active, queued,
     operation: jobs.every((job) => job.operation === jobs[0].operation) ? jobs[0].operation : 'full',
-    status: running ? 'running' : failed ? success ? 'partial' : 'failed' : 'success',
+    status: running ? 'running' : failed ? success || skipped ? 'partial' : 'failed' : 'success',
     error: [...new Set(jobs.map((job) => job.error).filter(Boolean))].join('；') || undefined,
   };
 }
@@ -52,10 +54,13 @@ export class LibraryExtractionBatchTracker {
   reserve(targets: DouyinLibraryItem[], operation: DouyinBatchExtractionOperation): ReservedExtractionBatch[] {
     const runningIds = new Set([...this.entries.values()].filter((entry) => entry.observing || entry.job.status === 'running').flatMap((entry) => entry.ids));
     const readyIds = new Set(targets.filter((item) => isReady(item, operation)).map((item) => item.aweme_id));
+    const noAudioIds = new Set(targets.filter(isNoAudioResult).map((item) => item.aweme_id));
     for (const entry of this.entries.values()) for (const item of entry.job.items) {
+      if (isNoAudioResult(item)) noAudioIds.add(item.aweme_id);
       if (item.state === 'done' && isReady({ ...item, extracted_note_id: item.note_id || null }, operation)) readyIds.add(item.aweme_id);
     }
     const pending = [...new Set(targets.filter((item) => item.can_extract && item.aweme_id
+      && !noAudioIds.has(item.aweme_id)
       && !readyIds.has(item.aweme_id) && !runningIds.has(item.aweme_id)
       && (operation !== 'ai' || Boolean(item.extracted_note_id) && item.transcript_chars > 0))
       .map((item) => item.aweme_id))];
@@ -85,7 +90,7 @@ export class LibraryExtractionBatchTracker {
   update(key: string, job: DouyinBatchExtractionJob): void {
     const entry = this.entries.get(key);
     if (entry) entry.job = job.status === 'failed' ? { ...job,
-      items: job.items.map((item) => item.state === 'done' ? item : { ...item, state: 'error', error: item.error || job.error || '任务未完成，可重试' }),
+      items: job.items.map((item) => item.state === 'done' || isNoAudioResult(item) ? item : { ...item, state: 'error', error: item.error || job.error || '任务未完成，可重试' }),
     } : job;
   }
 
@@ -98,7 +103,7 @@ export class LibraryExtractionBatchTracker {
     const entry = this.entries.get(key);
     if (!entry) return;
     entry.job = { ...entry.job, status: 'failed', error, active: 0, queued: 0,
-      items: entry.job.items.map((item) => item.state === 'done' ? item : { ...item, state: 'error', error }),
+      items: entry.job.items.map((item) => item.state === 'done' || isNoAudioResult(item) ? item : { ...item, state: 'error', error }),
     };
     entry.observing = false;
   }

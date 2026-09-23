@@ -15,6 +15,9 @@ from app.models.douyin_account_binding import DouyinAccountBinding
 from app.models.douyin_legacy_catalog import DouyinLegacyCatalog
 from app.models.library_sync import LibrarySyncRun
 from app.models.library_hidden_item import LibraryHiddenItem
+from app.models.home_video_preference import HomeVideoPreference
+from app.models.knowledge_entry import KnowledgeEntry
+from app.models.media_extraction_outcome import MediaExtractionOutcome
 from app.models.note import Note
 from app.models.plan import Plan
 from app.models.user import User
@@ -36,7 +39,7 @@ class LocalDouyinLibraryTests(unittest.TestCase):
         Base.metadata.create_all(
             self.engine,
             tables=[
-                User.__table__,
+                User.__table__, MediaExtractionOutcome.__table__,
                 Note.__table__,
                 Plan.__table__,
                 DouyinLocalLibraryItem.__table__,
@@ -45,6 +48,8 @@ class LocalDouyinLibraryTests(unittest.TestCase):
                 VideoSourceLedger.__table__,
                 LibrarySyncRun.__table__,
                 LibraryHiddenItem.__table__,
+                HomeVideoPreference.__table__,
+                KnowledgeEntry.__table__,
             ],
         )
         self.Session = sessionmaker(bind=self.engine, expire_on_commit=False)

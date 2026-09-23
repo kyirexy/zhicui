@@ -44,6 +44,7 @@ import LibrarySyncHistory from '@/components/LibrarySyncHistory';
 import DouyinSyncRecovery from '@/components/DouyinSyncRecovery';
 import CrossPlatformLibraryRow from '@/components/CrossPlatformLibraryRow';
 import LibraryExtractionLiveProgress from '@/components/LibraryExtractionLiveProgress';
+import { isNoAudioResult } from '@/lib/libraryExtractionOutcome';
 import MarqueeSelectionOverlay from '@/components/MarqueeSelectionOverlay';
 import LibraryPreviewPane, {
   type LibraryPreviewSelection,
@@ -1234,12 +1235,14 @@ export default function VideoLibraryPage() {
     });
     const completed = new Map(
       job.items
-        .filter((item) => item.state === 'done')
+        .filter((item) => item.state === 'done' || isNoAudioResult(item))
         .map((item) => [item.aweme_id, item]),
     );
     if (completed.size > 0) {
       setItems((current) => current.map((item) => {
         const result = completed.get(item.aweme_id);
+        if (result && isNoAudioResult(result)) return { ...item, can_extract: false,
+          transcript_status: 'no_audio', transcript_source: 'no-audio' };
         return result
           ? {
               ...item,
@@ -1379,7 +1382,7 @@ export default function VideoLibraryPage() {
       extractionNoticeRef.current(
         aggregate.operation === 'transcript'
           ? formatTranscriptPreparationProgress(aggregate)
-          : `${aggregate.operation === 'full' ? '结构化文案' : '智能分析'} ${aggregate.total} 条：处理中 ${aggregate.active} 条，等待 ${aggregate.queued} 条，已完成 ${aggregate.success} 条${aggregate.failed ? `，${aggregate.failed} 条可重试` : ''}`,
+          : `${aggregate.operation === 'full' ? '结构化文案' : '智能分析'} ${aggregate.total} 条：处理中 ${aggregate.active} 条，等待 ${aggregate.queued} 条，已完成 ${aggregate.success} 条${aggregate.skipped ? `，${aggregate.skipped} 条无音频，已跳过` : ''}${aggregate.failed ? `，${aggregate.failed} 条可重试` : ''}`,
       );
     };
     // 先预留全部分块再发请求，进度总数包括正在提交的任务，旧批次结束不能清空追加任务。
@@ -1411,7 +1414,8 @@ export default function VideoLibraryPage() {
 
   const extractStructuredSelected = async () => {
     if (selectedItems.length === 0 || batchExtractingRef.current) return;
-    const snapshot = [...selectedItems];
+    const snapshot = selectedItems.filter((item) => !isNoAudioResult(item));
+    if (!snapshot.length) { setNotice('所选内容无音频，无需提取'); return; }
     const pending = snapshot.filter(
       (item) => !item.ai_initialized || !hasReadyTranscript(item),
     );
@@ -1429,7 +1433,7 @@ export default function VideoLibraryPage() {
     if (result.status === 'skipped') return;
     if (result.status === 'success') {
       setPipelineStage('done');
-      setNotice(`已选 ${snapshot.length} 条视频的结构化文案已就绪`);
+      setNotice(`已完成 ${result.success} 条结构化文案${result.job?.skipped ? `，${result.job.skipped} 条无音频，已跳过` : ''}`);
       return;
     }
     if (result.status === 'partial') {
@@ -1442,8 +1446,10 @@ export default function VideoLibraryPage() {
 
   const openSelectedInAgent = async () => {
     if (selectedCount === 0 || batchExtractingRef.current) return;
-    const snapshot = [...selectedItems];
+    const snapshot = selectedItems.filter((item) => !isNoAudioResult(item));
     const platformNoteIds = selectedPlatformItems.map(item => item.id);
+    const noAudioIds = new Set<string>();
+    if (!snapshot.length && !platformNoteIds.length) { setNotice('所选内容无音频，暂无可用于提问的文案'); return; }
     const missingTranscript = snapshot.filter((item) => !hasReadyTranscript(item));
     const ineligible = missingTranscript.filter((item) => !item.can_extract);
     if (ineligible.length > 0) {
@@ -1463,6 +1469,7 @@ export default function VideoLibraryPage() {
       const result = await extractItems(missingTranscript, 'transcript');
       if (result.status === 'skipped') return;
       result.job?.items.forEach((item) => {
+        if (isNoAudioResult(item)) noAudioIds.add(item.aweme_id);
         if (item.state === 'done' && item.note_id && item.transcript_chars > 0) {
           resolvedNoteIds.set(item.aweme_id, item.note_id);
         }
@@ -1470,13 +1477,14 @@ export default function VideoLibraryPage() {
     }
 
     const noteIds = [
-      ...snapshot.map((item) => resolvedNoteIds.get(item.aweme_id) || ''),
+      ...snapshot.filter((item) => !noAudioIds.has(item.aweme_id)).map((item) => resolvedNoteIds.get(item.aweme_id) || ''),
       ...platformNoteIds,
     ];
     const uniqueNoteIds = new Set(noteIds.filter(Boolean));
+    if (!noteIds.length) { setPipelineStage('done'); setNotice('所选内容无音频，暂无可用于提问的文案'); return; }
     if (
       noteIds.some((noteId) => !noteId)
-      || uniqueNoteIds.size !== selectedCount
+      || uniqueNoteIds.size !== noteIds.length
     ) {
       const failedCount = noteIds.filter((noteId) => !noteId).length;
       setPipelineStage('idle');
@@ -2816,7 +2824,7 @@ export default function VideoLibraryPage() {
     const result = await extractItems(snapshot, 'transcript');
     if (!isCurrentPreparation() || result.status === 'skipped' || batchExtractingRef.current) return;
     if (result.status === 'success') {
-      setNotice(`${result.success} 条视频文案已就绪`);
+      setNotice(`${result.success} 条视频文案已就绪${result.job?.skipped ? `，${result.job.skipped} 条无音频，已跳过` : ''}`);
     } else if (result.status === 'partial' || result.status === 'failed') {
       setNotice(`已完成 ${result.success}/${snapshot.length} 条；未完成项可再次准备。若仍无法读取，请重新同步${sourceLabel}，或用单条解析重试`);
     } else if (result.status === 'running') {

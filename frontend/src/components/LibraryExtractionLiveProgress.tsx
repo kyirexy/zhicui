@@ -60,13 +60,14 @@ export default function LibraryExtractionLiveProgress({
         </span>
         <div>
           <strong className="tabular-nums">
-            {libraryExtractionHeading(job)} · 已完成 {summary.completed}/{summary.total}
+            {libraryExtractionHeading(job)} · {summary.skipped > 0 ? '已处理' : '已完成'} {summary.completed + summary.skipped}/{summary.total}
           </strong>
           <p>
+            {summary.skipped > 0 && `${summary.skipped} 条无音频，已跳过${summary.completed || summary.failed || job.status === 'running' ? '；' : ''}`}
             {summary.failed > 0
               ? `${summary.failed} 条未完成，${job.status === 'running' ? '其余会继续处理' : '可重试'}`
               : job.status === 'running' ? '其余会继续处理'
-                : job.status === 'failed' || job.status === 'partial' ? '未完成的视频可以重试' : '现在可以查看或提问'}
+                : job.status === 'failed' || job.status === 'partial' ? '未完成的视频可以重试' : summary.completed > 0 ? '现在可以查看或提问' : ''}
           </p>
         </div>
       </div>
@@ -76,8 +77,8 @@ export default function LibraryExtractionLiveProgress({
         role="progressbar"
         aria-valuemin={0}
         aria-valuemax={summary.total}
-        aria-valuenow={summary.completed + summary.failed}
-        aria-valuetext={`已完成 ${summary.completed} 条，失败 ${summary.failed} 条，共 ${summary.total} 条`}
+        aria-valuenow={Math.min(summary.total, summary.completed + summary.failed + summary.skipped)}
+        aria-valuetext={`已完成 ${summary.completed} 条，无音频 ${summary.skipped} 条，失败 ${summary.failed} 条，共 ${summary.total} 条`}
       >
         <span style={progressStyle} />
       </div>

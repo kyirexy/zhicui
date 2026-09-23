@@ -68,6 +68,7 @@ from app.models.library_sync import LibrarySyncRun  # noqa: F401
 from app.models.douyin_account_binding import DouyinAccountBinding  # noqa: F401
 from app.models.bilibili_account_binding import BilibiliAccountBinding  # noqa: F401
 from app.models.douyin_local_library_item import DouyinLocalLibraryItem  # noqa: F401
+from app.models.media_extraction_outcome import MediaExtractionOutcome  # noqa: F401
 from app.models.douyin_legacy_catalog import DouyinLegacyCatalog  # noqa: F401
 from app.models.desktop_handoff import DesktopHandoff  # noqa: F401
 from app.models.desktop_login_session import DesktopLoginSession  # noqa: F401

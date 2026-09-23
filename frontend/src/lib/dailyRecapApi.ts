@@ -12,6 +12,8 @@ export interface DailyRecapItem {
   source_modes: Array<'like' | 'collect'>;
   first_seen_at: string;
   can_extract: boolean;
+  transcript_status?: string;
+  transcript_source?: string;
   transcript_ready: boolean;
   ai_initialized: boolean;
   initial_import: boolean;
@@ -28,6 +30,7 @@ export interface DailyRecap {
   collect_count: number;
   ready_count: number;
   pending_count: number;
+  no_audio_count?: number;
   initial_import_count: number;
   initial_import_unknown_count?: number;
   items: DailyRecapItem[];

@@ -1133,7 +1133,8 @@ def _reconcile_library_transcript_batch(db: Session, run: ProductActionRun) -> N
     payload = library_extraction_service.get_batch_job(run.external_id, run.user_id)
     if payload is None:
         return
-    progress = int(payload.get("success") or 0) + int(payload.get("failed") or 0)
+    progress = (int(payload.get("success") or 0) + int(payload.get("failed") or 0)
+                + int(payload.get("skipped") or 0))
     if progress > int(run.external_event_cursor or 0):
         run.external_event_cursor = progress
         run.updated_at = utcnow()
@@ -1148,6 +1149,7 @@ def _reconcile_library_transcript_batch(db: Session, run: ProductActionRun) -> N
                 "source": "library_transcript_batch",
                 "total": int(payload.get("total") or 0),
                 "success": int(payload.get("success") or 0),
+                "skipped": int(payload.get("skipped") or 0),
                 "failed": int(payload.get("failed") or 0),
                 "active": int(payload.get("active") or 0),
                 "queued": int(payload.get("queued") or 0),

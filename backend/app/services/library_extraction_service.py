@@ -21,6 +21,7 @@ from app.services import (
     douyin_legacy_catalog_service,
     douyin_library,
     local_douyin_library_service,
+    media_extraction_outcome_service,
     note_service,
     plan_service,
     settings_service,
@@ -248,17 +249,6 @@ def _video_info(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _metadata_transcript_fallback(item: dict[str, Any]) -> str:
-    """Build a truthful text fallback for silent, caption-led Douyin works."""
-    title = str(item.get("title") or "").strip()
-    caption = str(item.get("caption") or "").strip()
-    if len(caption) < 12:
-        return ""
-    if title and title not in caption:
-        return f"【作品标题】\n{title}\n\n【作品发布文案】\n{caption}"
-    return f"【作品发布文案】\n{caption}"
-
-
 def _generate_ai_result(
     *,
     transcript: str,
@@ -329,6 +319,10 @@ def extract_library_item(
                 result = existing.to_dict()
                 result["already_existed"] = True
                 return result
+            if not existing_transcript and media_extraction_outcome_service.has_no_audio(
+                db, user_id=user_id, video_id=clean_id,
+            ):
+                return media_extraction_outcome_service.no_audio_result(already_existed=True)
             if (
                 existing is not None
                 and operation in {"ai", "full"}
@@ -373,6 +367,12 @@ def extract_library_item(
                 item = None
         if item is None:
             raise ValueError("收藏视频不存在或尚未同步")
+        if not existing_transcript and item.get("has_audio") is False:
+            with SessionLocal() as db:
+                media_extraction_outcome_service.record_no_audio(
+                    db, user_id=user_id, video_id=clean_id, reason="no_audio_stream",
+                )
+            return media_extraction_outcome_service.no_audio_result()
         if not item.get("can_extract"):
             raise ValueError("该作品没有可提取的视频文件")
 
@@ -418,23 +418,12 @@ def extract_library_item(
                         asr_config["model"],
                         request_headers=request_headers,
                     )
-                except RuntimeError as exc:
-                    # Short Douyin works are often silent and communicate through
-                    # on-screen copy plus their publishing caption. In that case
-                    # cloud ASR truthfully returns no speech. Preserve the creator's
-                    # own text as a searchable document instead of marking the item
-                    # as a generic extraction failure. Media/network failures still
-                    # raise normally and remain retryable.
-                    fallback = (
-                        _metadata_transcript_fallback(item)
-                        if "云端 ASR 返回空文案" in str(exc)
-                        else ""
-                    )
-                    if not fallback:
-                        raise
-                    transcript = fallback
-                    item["transcript_source"] = "creator-caption"
-                    item["transcript_notice"] = "视频未识别到有效语音，文稿来自作品发布文案"
+                except video_extractor.NoAudioError as exc:
+                    with SessionLocal() as db:
+                        media_extraction_outcome_service.record_no_audio(
+                            db, user_id=user_id, video_id=clean_id, reason=exc.reason,
+                        )
+                    return media_extraction_outcome_service.no_audio_result()
         if not transcript.strip():
             raise RuntimeError("语音识别没有返回文案")
 
@@ -516,8 +505,19 @@ def extract_library_item(
 
 
 def _safe_error(exc: Exception) -> str:
+    import requests
+
     if isinstance(exc, video_extractor.CloudAsrError):
         return exc.public_message[:360]
+    if isinstance(exc, requests.HTTPError):
+        status = exc.response.status_code if exc.response is not None else None
+        if status in {404, 410}:
+            return "资源暂不可用，请稍后重试"
+        if status in {401, 403}:
+            return "暂时无法读取视频，请重新同步账号后重试"
+        return "视频读取暂时失败，请稍后重试"
+    if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+        return "视频连接暂时失败，请稍后重试"
     if isinstance(exc, KeyError) and "videoInfoRes" in str(exc):
         return "抖音公开页面没有返回播放信息，请在桌面端重新同步后再提取文案"
     message = str(exc).strip()
@@ -532,6 +532,7 @@ def _job_counts(items: list[LibraryExtractionBatchItem]) -> dict[str, int]:
         "total": len(states),
         "success": sum(state == "done" for state in states),
         "failed": sum(state == "error" for state in states),
+        "skipped": sum(state == "no_audio" for state in states),
         "active": sum(state in {"transcribing", "analyzing"} for state in states),
         "queued": sum(state == "queued" for state in states),
     }
@@ -589,7 +590,7 @@ def _update_item(job_id: str, aweme_id: str, **updates: Any) -> bool:
             LibraryExtractionBatchItem.batch_id == job_id,
             LibraryExtractionBatchItem.aweme_id == aweme_id,
         ).first()
-        if item is None or item.state in {"done", "error", "canceled"}:
+        if item is None or item.state in {"done", "error", "no_audio", "canceled"}:
             return False
         allowed = {
             "state", "error", "note_id", "transcript_chars", "card_type",
@@ -623,7 +624,7 @@ def _finish_job_if_ready(job_id: str) -> None:
             # Keep the legacy browser contract stable.  ProductActionRun maps
             # this durable domain status to the v1 protocol's ``succeeded``.
             job.status = "success"
-        elif counts["success"] == 0:
+        elif counts["success"] == 0 and counts["skipped"] == 0:
             job.status = "failed"
         else:
             job.status = "partial"
@@ -669,7 +670,7 @@ def _run_job_item(
         _update_item(
             job_id,
             aweme_id,
-            state="done",
+            state="no_audio" if result.get("state") == "no_audio" else "done",
             error="",
             note_id=result.get("id"),
             transcript_chars=int(result.get("transcript_chars") or 0),

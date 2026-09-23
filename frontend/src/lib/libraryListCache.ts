@@ -5,8 +5,8 @@ import type {
   PlatformLibraryItem,
 } from './types';
 
-// 排名修复后不再复用旧的来源顺序和分类快照。
-const CACHE_PREFIX = 'zhicui-library-list-v5';
+// 刷新包含无音频持久状态的目录，避免旧缓存短暂恢复为待提取。
+const CACHE_PREFIX = 'zhicui-library-list-v6';
 const PLATFORM_CACHE_PREFIX = 'zhicui-platform-library-list-v2';
 const CACHE_MAX_AGE_MS = 30 * 60 * 1000;
 

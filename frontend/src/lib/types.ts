@@ -729,6 +729,8 @@ export interface DouyinLibraryItem {
   cover_proxy_url?: string;
   gallery_images?: string[];
   can_extract: boolean;
+  transcript_status?: 'no_audio' | string;
+  transcript_source?: string;
   extracted: boolean;
   extracted_note_id?: string | null;
   transcript_chars: number;
@@ -795,12 +797,14 @@ export type DouyinBatchExtractionState =
   | 'transcribing'
   | 'analyzing'
   | 'done'
+  | 'no_audio'
   | 'error';
 
 export interface DouyinBatchExtractionItem {
   aweme_id: string;
   state: DouyinBatchExtractionState;
   error: string;
+  error_code?: string;
   note_id?: string | null;
   transcript_chars: number;
   ai_initialized: boolean;
@@ -821,6 +825,7 @@ export interface DouyinBatchExtractionJob {
   total: number;
   success: number;
   failed: number;
+  skipped?: number;
   active: number;
   queued: number;
   items: DouyinBatchExtractionItem[];

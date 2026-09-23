@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.database import Base
 from app.models.library_extraction_batch import LibraryExtractionBatch, LibraryExtractionBatchItem
+from app.models.media_extraction_outcome import MediaExtractionOutcome
 from app.models.note import Note
 from app.models.user import User
 from app.models.video_source_ledger import VideoSourceLedger
@@ -70,7 +71,7 @@ class LibraryExtractionParallelTests(unittest.TestCase):
                 raise AssertionError("工作线程共享了数据库 Session")
 
         Base.metadata.create_all(self.engine, tables=[
-            User.__table__, Note.__table__, VideoSourceLedger.__table__,
+            User.__table__, MediaExtractionOutcome.__table__, Note.__table__, VideoSourceLedger.__table__,
             LibraryExtractionBatch.__table__, LibraryExtractionBatchItem.__table__,
         ])
         self.Session = sessionmaker(bind=self.engine, class_=OwnedSession)

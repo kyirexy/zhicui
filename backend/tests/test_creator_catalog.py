@@ -23,6 +23,8 @@ from app.models.creator_sync import (
 )
 from app.models.note import Note
 from app.models.library_hidden_item import LibraryHiddenItem
+from app.models.home_video_preference import HomeVideoPreference
+from app.models.knowledge_entry import KnowledgeEntry
 from app.models.system_setting import SystemSetting
 from app.models.bilibili_account_binding import BilibiliAccountBinding
 from app.models.user import User
@@ -46,6 +48,8 @@ class CreatorCatalogServiceTests(unittest.TestCase):
                 User.__table__,
                 Note.__table__,
                 LibraryHiddenItem.__table__,
+                HomeVideoPreference.__table__,
+                KnowledgeEntry.__table__,
                 SystemSetting.__table__,
                 CreatorSource.__table__,
                 CreatorSyncRun.__table__,
@@ -968,6 +972,40 @@ class CreatorCatalogServiceTests(unittest.TestCase):
         self.assertNotIn("signed-url", message)
 
 
+    def test_silent_douyin_work_returns_no_audio_without_fabricated_transcript(self) -> None:
+        run = SimpleNamespace(user_id=self.user.id, platform="douyin", operation="selected_transcript")
+        work = {"external_id": "123456789", "title": "九秒文字作品",
+                "source_url": "https://www.douyin.com/video/123456789",
+                "description": "发布文案不能伪装成音频转写"}
+        with patch.object(library_extraction_service, "extract_library_item", return_value={"state": "no_audio"}):
+            self.assertEqual(creator_sync_service._import_work(run, work), ("no_audio", None))
+
+    def test_no_audio_is_skipped_in_parallel_and_future_selected_runs(self) -> None:
+        works = [self._all_work(1), self._all_work(2)]
+        run, _ = self._create_run(operation="catalog_all", auto_transcribe=True)
+        with patch.object(creator_sync_service, "_import_work", return_value=("no_audio", None)):
+            self._process_with_catalog(run.id, lambda *_a, **_kw: {"items": works, "complete": True, "total_count": 2})
+        self.db.expire_all()
+        final = self.db.get(CreatorSyncRun, run.id)
+        self.assertEqual((final.new_count, final.reused_count, final.failed_count, final.skipped_count), (0, 0, 0, 2))
+        self.assertEqual(final.status, "succeeded")
+        rows = self.db.query(CreatorSourceItem).all()
+        self.assertTrue(all(row.to_dict()["transcript_status"] == "no_audio" for row in rows))
+        self.assertTrue(all(not row.to_dict()["can_transcribe"] for row in rows))
+        self.assertTrue(all(row["status"] == "no_audio" for row in final.safe_results()))
+        pending = creator_sync_service.list_source_items(self.db, user_id=self.user.id, source_id=self.source.id, status="untranscribed")
+        self.assertEqual(pending["total"], 0)
+        self.assertEqual(creator_sync_service._source_counts(self.db, self.source)["untranscribed"], 0)
+        followup, _ = self._create_run(operation="selected_transcript", item_ids=[row.id for row in rows])
+        with patch.object(creator_sync_service, "_import_work") as importer:
+            self._process_with_catalog(followup.id, lambda *_a, **_kw: self.fail("已有目录不能重复发现"))
+        importer.assert_not_called()
+        self.db.expire_all()
+        self.assertEqual(self.db.get(CreatorSyncRun, followup.id).skipped_count, 2)
+        details = creator_sync_service.list_run_items(self.db, user_id=self.user.id, run_id=followup.id)
+        self.assertTrue(all(item["state"] == "no_audio" for item in details["items"]))
+
+
 class CreatorConnectorAdminGateTests(unittest.TestCase):
     def test_bilibili_profile_test_keeps_recent_available_when_catalog_is_unhealthy(self) -> None:
         from app.api import routes
@@ -1100,25 +1138,6 @@ class CreatorCatalogMigrationTests(unittest.TestCase):
                     "VALUES ('bad','source-1',7,0)"
                 ))
         engine.dispose()
-
-    def test_silent_douyin_work_uses_creator_caption_as_text_fallback(self) -> None:
-        transcript = library_extraction_service._metadata_transcript_fallback({
-            "title": "九秒文字作品",
-            "caption": "这里是创作者发布的完整说明，内容足以作为可搜索文稿。",
-        })
-        self.assertIn("【作品标题】", transcript)
-        self.assertIn("九秒文字作品", transcript)
-        self.assertIn("【作品发布文案】", transcript)
-
-    def test_caption_fallback_rejects_empty_or_too_short_metadata(self) -> None:
-        self.assertEqual(
-            library_extraction_service._metadata_transcript_fallback({
-                "title": "没有语音",
-                "caption": "太短",
-            }),
-            "",
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

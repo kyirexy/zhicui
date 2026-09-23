@@ -104,6 +104,27 @@ if str(_SCRIPTS_DIR) not in sys.path:
 from douyin_downloader import DouyinProcessor  # noqa: E402
 
 
+class NoAudioError(RuntimeError):
+    """已确认没有音轨或有效语音；与可重试的下载和供应商故障区分。"""
+
+    def __init__(self, reason: str = "no_audio_stream") -> None:
+        super().__init__("无音频")
+        self.reason = reason
+
+
+def _ffmpeg_has_no_audio(stderr: str) -> bool:
+    message = stderr.lower()
+    return (
+        "stream map '0:a:0' matches no streams" in message
+        or (
+            "matches no streams" in message
+            and "failed to set value '0:a:0' for option 'map'" in message
+        )
+        or "output file does not contain any stream" in message
+        or "output file #0 does not contain any stream" in message
+    )
+
+
 # ---------------------------------------------------------------------------
 # Platform detection and Bilibili helpers
 # ---------------------------------------------------------------------------
@@ -1149,7 +1170,12 @@ def _asr_single_audio_file(
                 status_code=status_code,
                 attempts=attempt,
             )
-        return str(payload.get("text") or "")
+        if "text" not in payload or not isinstance(payload["text"], str):
+            raise CloudAsrError(
+                "云端语音识别未返回有效文案字段，请稍后重新提取",
+                retryable=False, status_code=status_code, attempts=attempt,
+            )
+        return payload["text"]
 
     raise AssertionError("ASR retry loop exited unexpectedly")
 
@@ -1402,6 +1428,8 @@ def extract_media_url_transcript(
             "-nostats",
             "-i",
             "pipe:0",
+            "-map",
+            "0:a:0",
             "-vn",
             "-ac",
             "1",
@@ -1474,11 +1502,19 @@ def extract_media_url_transcript(
                 else b"".join(stderr_tail).decode("utf-8", errors="replace")
             )
             if return_code != 0 or not audio_path.exists():
+                if _ffmpeg_has_no_audio(stderr):
+                    raise NoAudioError()
                 raise RuntimeError(f"FFmpeg 提取音频失败：{stderr[-300:]}")
-        except Exception:
+        except Exception as exc:
             if process.poll() is None:
                 process.kill()
                 process.wait()
+            # 无音轨时 FFmpeg 可能提前退出，写入视频管道会先得到 BrokenPipe。
+            if isinstance(exc, BrokenPipeError):
+                stderr_reader.join(timeout=2)
+                stderr = b"".join(stderr_tail).decode("utf-8", errors="replace")
+                if _ffmpeg_has_no_audio(stderr):
+                    raise NoAudioError() from exc
             raise
         finally:
             if process.stdin is not None:
@@ -1507,7 +1543,10 @@ def extract_media_url_transcript(
                 )
                 if transcript and transcript.strip():
                     return transcript.strip()
-                failures.append("云端 ASR 返回空文案")
+                # 成功的空语音结果已是内容结论，无需再次调用本地模型或重试计费。
+                raise NoAudioError("no_speech")
+            except NoAudioError:
+                raise
             except CloudAsrError as exc:
                 cloud_failure = exc
                 failures.append(exc.public_message)
@@ -1525,7 +1564,11 @@ def extract_media_url_transcript(
                 transcript = transcribe_with_whisper(str(audio_path), model_size="base")
             if transcript and transcript.strip():
                 return transcript.strip()
+            if cloud_failure is None:
+                raise NoAudioError("no_speech")
             failures.append("本地 ASR 返回空文案")
+        except NoAudioError:
+            raise
         except Exception as exc:
             failures.append(f"本地 ASR：{exc}")
 

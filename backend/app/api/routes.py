@@ -55,6 +55,7 @@ from app.services import (
     feedback_service,
     image_memory_cache,
     library_extraction_service,
+    media_extraction_outcome_service,
     library_hidden_service,
     library_sync_service,
     local_douyin_library_service,
@@ -2932,6 +2933,7 @@ def list_douyin_library_items(
         item["transcript_chars"] = int(transcript_lengths.get(note.id) or 0) if note else 0
         item["ai_initialized"] = bool(note.ai_initialized) if note else False
         item["card_type"] = note.card_type if note else None
+    media_extraction_outcome_service.annotate_items(db, user_id=current_user.id, items=items)
     return _ok({
         "items": items,
         "total": len(items),
@@ -3121,6 +3123,7 @@ def get_douyin_library_item(
     item["transcript_chars"] = len(note.transcript_raw or "") if note else 0
     item["ai_initialized"] = bool(note.ai_initialized) if note else False
     item["card_type"] = note.card_type if note else None
+    media_extraction_outcome_service.annotate_items(db, user_id=current_user.id, items=[item])
     return _ok({
         "item": item,
         "note": note.to_dict() if note else None,

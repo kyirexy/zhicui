@@ -44,16 +44,64 @@ test('官网用真实能力介绍博主整理和多视频提问', () => {
   assert.doesNotMatch(landingPage, /自动追更|自动同步博主全部视频/);
 });
 
-test('博主问答演示只展示同一位已核验博主的公开目录', () => {
+test('官网支持平台条使用真实抖音和 B 站品牌图标', () => {
+  assert.match(landingPage, /PlatformBrandIcon platform="douyin"/);
+  assert.match(landingPage, /PlatformBrandIcon platform="bilibili"/);
+  assert.match(landingStyles, /data-platform-brand='douyin'/);
+  assert.match(landingStyles, /data-platform-brand='bilibili'/);
+});
+
+test('博主问答演示使用同一博主的示例目录并明确说明演示数据', () => {
   const component = readFileSync(resolve(sourceRoot, 'components', 'LandingProductDemo.tsx'), 'utf8');
   const css = readFileSync(resolve(sourceRoot, 'components', 'LandingProductDemo.module.css'), 'utf8');
-  const creatorPanel = component.slice(component.indexOf('博主作品 · 多选问答'), component.indexOf('creatorNote'));
+  const creatorPanel = component.slice(component.indexOf('博主作品 · 一键提取并提问'));
   assert.match(component, /GGBond的小课堂/);
   assert.match(component, /90 条公开作品/);
   assert.match(component, /快速排序教学/);
+  assert.match(component, /客户端流程 · 示例数据/);
+  assert.match(component, /示例目录/);
+  assert.doesNotMatch(component, /已核验的目录元数据/);
   assert.doesNotMatch(creatorPanel, /知萃精选博主|世界健体第六名|碳循环减脂|珍惜数学/);
   assert.match(css, /\.creatorFacts\s*\{/);
   assert.match(css, /\.creatorVerified\s*\{/);
+});
+
+test('同步演示使用真实平台图标并展示批量读取与 AI 全部解析', () => {
+  const component = readFileSync(resolve(sourceRoot, 'components', 'LandingProductDemo.tsx'), 'utf8');
+  const css = readFileSync(resolve(sourceRoot, 'components', 'LandingProductDemo.module.css'), 'utf8');
+  assert.match(component, /PlatformBrandIcon/);
+  assert.match(component, /客户端 · 批量读取/);
+  assert.match(component, /本次读取范围/);
+  assert.match(component, /AI 全部解析/);
+  assert.doesNotMatch(component, /className=\{styles\.platformBadge\}>抖|className=\{`\$\{styles\.platformBadge\}[^}]*\}>哔/);
+  assert.match(css, /\.scopeChip\s*\{/);
+  assert.match(css, /\.analysisSummary\s*\{/);
+});
+
+test('官网演示覆盖四条客户端核心流程并自动播放流式问答', () => {
+  const component = readFileSync(resolve(sourceRoot, 'components', 'LandingProductDemo.tsx'), 'utf8');
+  assert.match(component, /批量同步/);
+  assert.match(component, /今日 \/ 昨日回顾/);
+  assert.match(component, /视频生成计划/);
+  assert.match(component, /博主批量问答/);
+  assert.match(component, /useState\(true\)/, '演示应默认自动播放');
+  assert.match(component, /streamQuestion/);
+  assert.match(component, /streamAnswer/);
+  assert.match(component, /一键解析并提问/);
+  assert.match(component, /一键提取并提问/);
+});
+
+test('演示时间线等待完整回答且点击标签会重新自动播放', () => {
+  const component = readFileSync(resolve(sourceRoot, 'components', 'LandingProductDemo.tsx'), 'utf8');
+  assert.match(component, /CHAT_START\[mode\] \+ chatDuration\(DIALOGUES\[mode\]\) \+ RESULT_HOLD_MS/);
+  assert.match(component, /message\.text\.length \* TYPE_MS \+ MESSAGE_GAP_MS/);
+  assert.match(component, /selectMode = .*setMode\(next\); setElapsed\(0\); setPlaying\(true\)/);
+  assert.match(component, /if \(!playing \|\| !visible\) return/);
+  assert.match(component, /window\.clearInterval\(timer\)/);
+  assert.doesNotMatch(component, /4200|setSynced\(true\)/);
+  assert.match(component, /elapsed >= PLAN_READY_AT &&/);
+  assert.match(component, /PLAN_READY_AT = CHAT_START\[2\] \+ chatDuration\(DIALOGUES\[2\]\.slice\(0, 2\)\)/);
+  assert.match(component, /role="progressbar"/);
 });
 
 test('示例观点和行动引用始终对应可阅读的原文段落', () => {
@@ -80,7 +128,7 @@ test('示例行动具有独立标识，勾选一项不会同时完成其他任�
 test('演示步骤共用稳定网格，隐藏内容不参与交互', () => {
   const component = readFileSync(resolve(sourceRoot, 'components', 'LandingProductDemo.tsx'), 'utf8');
   const css = readFileSync(resolve(sourceRoot, 'components', 'LandingProductDemo.module.css'), 'utf8');
-  for (const step of [0, 1, 2]) {
+  for (const step of [0, 1, 2, 3]) {
     assert.ok(component.includes(`aria-hidden={mode !== ${step}} inert={mode !== ${step}}`));
   }
   assert.match(css, /\.panel\s*\{[^}]*display:\s*grid/);

@@ -10,6 +10,7 @@ import LandingProductDemo from './LandingProductDemo';
 import LandingShowcase from './LandingShowcase';
 import MobileDownloadHelp from './MobileDownloadHelp';
 import CommunityPanel from './CommunityPanel';
+import PlatformBrandIcon from './PlatformBrandIcon';
 import styles from './WebLandingPage.module.css';
 
 // 保留已经发布的双架构测试产物与真实发布状态。
@@ -121,7 +122,7 @@ export default function WebLandingPage() {
 
       <div className={styles.platformStrip} aria-label="支持的内容入口">
         <span>你喜欢的内容，从这里开始</span>
-        <strong>抖音</strong><strong>哔哩哔哩</strong><span className={styles.stripDivider} aria-hidden="true" />
+        <strong><PlatformBrandIcon platform="douyin" size={17} />抖音</strong><strong><PlatformBrandIcon platform="bilibili" size={17} />哔哩哔哩</strong><span className={styles.stripDivider} aria-hidden="true" />
         <span>分享链接</span><span>收藏与喜欢</span><span>博主作品</span>
         <a href="/platform-limits">查看支持范围 <ArrowRight size={14} aria-hidden="true" /></a>
       </div>

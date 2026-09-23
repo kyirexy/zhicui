@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
+from app.models.media_extraction_outcome import MediaExtractionOutcome
 from app.models.note import Note
 from app.models.library_extraction_batch import LibraryExtractionBatch, LibraryExtractionBatchItem
 from app.models.user import User
@@ -119,7 +120,7 @@ class LibraryTranscriptCheckpointTests(unittest.TestCase):
             "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
         )
         Base.metadata.create_all(self.engine, tables=[
-            User.__table__, Note.__table__, VideoSourceLedger.__table__,
+            User.__table__, MediaExtractionOutcome.__table__, Note.__table__, VideoSourceLedger.__table__,
             LibraryExtractionBatch.__table__, LibraryExtractionBatchItem.__table__,
         ])
         self.Session = sessionmaker(bind=self.engine)

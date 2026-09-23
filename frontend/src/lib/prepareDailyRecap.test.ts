@@ -145,6 +145,13 @@ test('今日先完成同步，纳入新增资料并过滤隐藏项；快速接�
   assert.equal(body.research_mode, 'fast');
 });
 
+test('全为已确认无音频时不重复转写、不创建空会话，也不提示重试', async () => {
+  const h = harness(recap([{ ...item(1, false), can_extract: false, transcript_status: 'no_audio' }]));
+  await assert.rejects(h.run(), (error: Error) => /无音频/.test(error.message) && !/重试/.test(error.message));
+  assert.equal(h.count('startDouyinBatchExtraction'), 0);
+  assert.equal(h.count('createAgentThread'), 0);
+});
+
 test('今日来源同步失败不会读取旧记录或创建 AI 会话', async () => {
   const h = harness();
   await assert.rejects(h.runToday({ beforePrepare: async () => { throw new Error('账号需要重新连接'); } }), /账号需要重新连接/);

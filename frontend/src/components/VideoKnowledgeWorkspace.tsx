@@ -29,6 +29,7 @@ import ContentChat from '@/components/ContentChat';
 import { useWebBuildActivity } from '@/lib/hooks/useWebBuildActivity';
 import DesktopMediaVideoPlayer from '@/components/DesktopMediaVideoPlayer';
 import { buildBilibiliEmbedUrl } from '@/lib/singleLinkImport';
+import { isNoAudioResult, libraryExtractionErrorMessage } from '@/lib/libraryExtractionOutcome';
 import DouyinGalleryViewer from '@/components/DouyinGalleryViewer';
 import TranscriptViewer from '@/components/TranscriptViewer';
 import VideoAnalysisEntry from '@/components/VideoAnalysisEntry';
@@ -222,7 +223,7 @@ export default function VideoKnowledgeWorkspace() {
   }, [plan]);
 
   const prepareVideo = async () => {
-    if (!workspace || extracting || importedNoteId) return;
+    if (!workspace || extracting || importedNoteId || isNoAudioResult(workspace.item)) return;
     setExtracting(true);
     setError('');
     const response = await extractDouyinLibraryItem(
@@ -231,7 +232,7 @@ export default function VideoKnowledgeWorkspace() {
     );
     setExtracting(false);
     if (!response.success) {
-      setError(response.error || '完整文案提取失败，请稍后重试');
+      setError(libraryExtractionErrorMessage(response.error));
       return;
     }
     await loadWorkspace();
@@ -251,7 +252,7 @@ export default function VideoKnowledgeWorkspace() {
       : await extractDouyinLibraryItem(workspace.item.aweme_id, 'ai');
     setInitializingAi(false);
     if (!response.success) {
-      setError(response.error || '摘要笔记生成失败，请稍后重试');
+      setError(libraryExtractionErrorMessage(response.error));
       return;
     }
     await loadWorkspace();
@@ -311,9 +312,10 @@ export default function VideoKnowledgeWorkspace() {
   if (!workspace) return null;
 
   const { item } = workspace;
+  const noAudio = isNoAudioResult(item);
   const isGallery = item.media_type === 'gallery' || item.media_type === 'image';
   const emptyTab = activeTab === 'transcript'
-    ? { title: '暂无完整文案', copy: isGallery ? '图文作品可直接使用图片问答。' : '提取后即可查看和搜索文案。', Icon: FileText }
+    ? { title: noAudio ? '无音频' : '暂无完整文案', copy: noAudio ? '没有可提取的语音文案，可继续查看原内容。' : isGallery ? '图文作品可直接使用图片问答。' : '提取后即可查看和搜索文案。', Icon: FileText }
     : activeTab === 'summary'
       ? { title: '暂无摘要笔记', copy: isGallery ? '先从图片问答开始。' : '生成文案后可整理摘要。', Icon: BookOpenText }
       : activeTab === 'plan'
@@ -329,7 +331,7 @@ export default function VideoKnowledgeWorkspace() {
         <button type="button" onClick={() => setActiveTab('assistant')}>
           返回图片问答
         </button>
-      ) : item.can_extract ? (
+      ) : item.can_extract && !noAudio ? (
         <button
           type="button"
           onClick={() => void prepareVideo()}
@@ -425,7 +427,7 @@ export default function VideoKnowledgeWorkspace() {
           <div className="video-knowledge-facts">
             <span>
               <FileText size={14} />
-              {note
+              {noAudio ? '无音频' : note
                 ? `${(note.transcript_raw?.length || 0).toLocaleString('zh-CN')} 字完整文案`
                 : item.media_type === 'gallery'
                   ? `${item.gallery_images?.length || 0} 张图片`

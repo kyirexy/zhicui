@@ -17,7 +17,7 @@ from app.models.library_hidden_item import LibraryHiddenItem
 from app.models.library_sync import LibrarySyncRun
 from app.models.note import Note
 from app.models.video_source_ledger import VideoSourceLedger
-from app.services import local_douyin_library_service, platform_library_service
+from app.services import local_douyin_library_service, platform_library_service, media_extraction_outcome_service
 
 MAX_RECAP_ITEMS = 100
 _MODES = ("collect", "like")
@@ -210,6 +210,7 @@ def get_daily_recap(
             "initial_import": initial, "initial_import_known": initial_known,
             "_rank": min((row.source_rank for row in memberships if row.source_rank is not None), default=2_147_483_647),
         })
+    media_extraction_outcome_service.annotate_items(db, user_id=user_id, items=items)
     items.sort(key=lambda item: (-datetime.fromisoformat(item["first_seen_at"].replace("Z", "+00:00")).timestamp(), item["_rank"], item["id"]))
     for item in items:
         item.pop("_rank", None)
@@ -227,7 +228,8 @@ def get_daily_recap(
         "like_count": sum("like" in item["source_modes"] for item in items),
         "collect_count": sum("collect" in item["source_modes"] for item in items),
         "ready_count": sum(item["transcript_ready"] for item in items),
-        "pending_count": sum(not item["transcript_ready"] for item in items),
+        "pending_count": sum(item["needs_extraction"] for item in items),
+        "no_audio_count": sum(item.get("transcript_status") == "no_audio" for item in items),
         "initial_import_count": initial_count,
         "initial_import_unknown_count": unknown_initial_count,
         "items": selected, "preview": selected[:3], "has_more": len(items) > limit,

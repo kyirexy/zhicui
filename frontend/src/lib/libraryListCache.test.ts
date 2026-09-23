@@ -55,13 +55,14 @@ test('drops an expired library list cache', () => {
   );
 });
 
-test('收藏台账校准后不读取旧 v4 快照，后续仅写入 v5 且平台缓存版本不变', () => {
+test('无音频状态上线后不读取旧快照，后续仅写入 v6 且平台缓存版本不变', () => {
   const storage = new MemoryStorage();
   Object.assign(globalThis, { window: { sessionStorage: storage } });
   storage.setItem('zhicui-library-list-v4:user-a:collect:collection', JSON.stringify({ savedAt: 1_000, result }));
+  storage.setItem('zhicui-library-list-v5:user-a:collect:collection', JSON.stringify({ savedAt: 1_000, result }));
   assert.equal(readLibraryListCache('user-a', 'collect', 'collection', 2_000), null);
   writeLibraryListCache('user-a', 'collect', 'collection', result, 2_000);
-  assert.ok(storage.getItem('zhicui-library-list-v5:user-a:collect:collection'));
+  assert.ok(storage.getItem('zhicui-library-list-v6:user-a:collect:collection'));
   assert.deepEqual(readLibraryListCache('user-a', 'collect', 'collection', 2_001), result);
   storage.setItem('zhicui-platform-library-list-v2:user-a', JSON.stringify({ savedAt: 1_000, items: [{ id: 'bili' }] }));
   assert.deepEqual(readPlatformLibraryCache('user-a', 2_000), [{ id: 'bili' }]);

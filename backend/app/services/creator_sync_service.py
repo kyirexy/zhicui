@@ -345,7 +345,9 @@ def _source_counts(db: Session, source: CreatorSource) -> dict[str, int]:
         "total": base.count(),
         "untranscribed": base.filter(
             CreatorSourceItem.note_id.is_(None), CreatorSourceItem.state != "failed",
+            CreatorSourceItem.error_code != "no_audio",
         ).count(),
+        "no_audio": base.filter(CreatorSourceItem.note_id.is_(None), CreatorSourceItem.error_code == "no_audio").count(),
         "imported": base.filter(CreatorSourceItem.note_id.is_not(None)).count(),
         "failed": base.filter(CreatorSourceItem.state == "failed").count(),
     }
@@ -671,6 +673,7 @@ def list_source_items(
     if status == "untranscribed":
         query = query.filter(
             CreatorSourceItem.note_id.is_(None), CreatorSourceItem.state != "failed",
+            CreatorSourceItem.error_code != "no_audio",
         )
     elif status == "imported":
         query = query.filter(CreatorSourceItem.note_id.is_not(None))
@@ -1540,6 +1543,8 @@ def _import_work(
             operation="transcript",
             item=safe_item,
         )
+        if result.get("state") == "no_audio":
+            return "no_audio", None
         return (
             "reused" if result.get("already_existed") else "imported",
             str(result.get("id") or "") or None,
@@ -1587,7 +1592,7 @@ def _recompute_run_counts(db: Session, run: CreatorSyncRun) -> None:
     run.results_json = json.dumps([
         {
             "external_id": row.external_id,
-            "status": status_map.get(row.state, row.state),
+            "status": "no_audio" if row.error_code == "no_audio" else status_map.get(row.state, row.state),
             "note_id": row.note_id,
             "error_code": row.error_code,
         }
@@ -1606,7 +1611,10 @@ def _mark_item_result(
     error_code: str = "",
     error_message: str = "",
 ) -> None:
-    run_item.state = state
+    # 复用已有的跳过终态及原因字段，兼容生产数据库已有的状态 CHECK 约束。
+    run_item.state = "skipped_removed" if state == "no_audio" else state
+    if state == "no_audio":
+        error_code, error_message = "no_audio", "无音频"
     run_item.note_id = note_id
     run_item.error_code = error_code[:80]
     run_item.error_message = error_message[:240]
@@ -1615,7 +1623,10 @@ def _mark_item_result(
         run.error_code = error_code[:80]
         run.error_message = error_message[:240]
     if item is not None:
-        if state in {"succeeded", "reused"}:
+        if state == "no_audio":
+            item.state = "discovered"
+            item.error_code = "no_audio"
+        elif state in {"succeeded", "reused"}:
             item.note_id = note_id
             item.state = "ready"
             item.error_code = ""
@@ -1702,6 +1713,10 @@ def _prepare_parallel_item(run_id: str, lease_token: str, run_item_id: str):
             return None
         if item.note_id:
             item.note_id = None
+        if item.error_code == "no_audio":
+            _mark_item_result(db, run, run_item, item, state="no_audio")
+            db.commit()
+            return None
         if (
             item.metadata_quality == "quarantined"
             or item.transcription_blocked
@@ -1791,7 +1806,7 @@ def _process_parallel_transcripts(run_id: str, lease_token: str, run_snapshot: S
                             item = db.get(CreatorSourceItem, row.source_item_id)
                             if error is None:
                                 _mark_item_result(db, run, row, item,
-                                    state="reused" if status == "reused" else "succeeded", note_id=note_id)
+                                    state="no_audio" if status == "no_audio" else "reused" if status == "reused" else "succeeded", note_id=note_id)
                             else:
                                 code, message = _safe_error(error)
                                 if _is_needs_action(code):
@@ -1946,6 +1961,10 @@ def _process_transcript_run(
                 continue
             if item.note_id:
                 item.note_id = None
+            if item.error_code == "no_audio":
+                _mark_item_result(db, run, run_item, item, state="no_audio")
+                db.commit()
+                continue
             if (
                 item.metadata_quality == "quarantined"
                 or item.transcription_blocked
@@ -2049,7 +2068,7 @@ def _process_transcript_run(
                 run,
                 run_item,
                 item,
-                state="reused" if status == "reused" else "succeeded",
+                state="no_audio" if status == "no_audio" else "reused" if status == "reused" else "succeeded",
                 note_id=note_id,
             )
             _heartbeat(db, run, lease_token, "importing")

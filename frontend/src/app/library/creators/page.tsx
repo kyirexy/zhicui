@@ -23,6 +23,7 @@ import {
 import LibraryCoverImage from '@/components/LibraryCoverImage';
 import PlatformBrandIcon from '@/components/PlatformBrandIcon';
 import AuthGuard from '@/components/AuthGuard';
+import { isNoAudioResult, libraryExtractionErrorMessage } from '@/lib/libraryExtractionOutcome';
 import {
   cancelCreatorSyncRun,
   createCreatorSyncRun,
@@ -100,7 +101,7 @@ function runProgress(run: CreatorSyncRun): string {
     return `已发现 ${run.total_count ?? run.discovered_count ?? 0} 条公开作品`;
   }
   const target = run.target_count || run.requested_limit;
-  return `已处理 ${run.processed_count || run.checked_count}/${target} · 新增 ${run.new_count} · 复用 ${run.reused_count} · 失败 ${run.failed_count}`;
+  return `已处理 ${run.processed_count || run.checked_count}/${target} · 新增 ${run.new_count} · 复用 ${run.reused_count}${run.skipped_count ? ` · 跳过 ${run.skipped_count}` : ''} · 失败 ${run.failed_count}`;
 }
 
 function itemStatus(item: CreatorSourceItem): string {
@@ -109,6 +110,7 @@ function itemStatus(item: CreatorSourceItem): string {
 
 function itemStatusLabel(item: CreatorSourceItem): string {
   const status = itemStatus(item);
+  if (isNoAudioResult(item)) return '无音频';
   if (!item.is_available || item.availability_status === 'unavailable') return '已不可用';
   if (status === 'imported') return '已入库';
   if (status === 'failed') return '失败';
@@ -119,6 +121,7 @@ function itemStatusLabel(item: CreatorSourceItem): string {
 function isSelectable(item: CreatorSourceItem): boolean {
   const status = itemStatus(item);
   return item.is_available !== false
+    && !isNoAudioResult(item)
     && item.availability_status !== 'removed'
     && status !== 'imported'
     && status !== 'removed'
@@ -659,15 +662,16 @@ function CreatorLibraryWorkspace() {
                   <div className={styles.emptyState}><LoaderCircle size={20} className="animate-spin" />正在读取任务明细…</div>
                 ) : detailItems.length ? detailItems.map((item) => {
                   const state = item.state || item.status;
+                  const noAudio = isNoAudioResult({ ...item, state });
                   return (
                   <article key={item.id || item.external_id}>
                     <FileText size={16} aria-hidden="true" />
                     <div>
                       <strong>{item.external_id}</strong>
-                      <small>{item.error_message || (state === 'failed' ? '处理失败，可重试' : state)}</small>
+                      <small>{noAudio ? '无音频' : state === 'failed' ? libraryExtractionErrorMessage(item.error_message) : item.error_message || '处理结果已保存'}</small>
                     </div>
                     <span data-status={state}>
-                      {state === 'failed'
+                      {noAudio ? '无音频' : state === 'failed'
                         ? '失败'
                         : state === 'imported' || state === 'succeeded'
                           ? '已入库'

@@ -8,23 +8,19 @@ const testDirectory = dirname(fileURLToPath(import.meta.url));
 const srcRoot = resolve(testDirectory, '..');
 const read = (path: string) => readFileSync(resolve(srcRoot, path), 'utf8');
 
-test('桌面端不显示网页更新角标，仅靠空闲自动刷新', () => {
+test('网页更新保持静默，仅靠空闲自动刷新', () => {
   const component = read('components/WebBuildUpdatePrompt.tsx');
 
-  // 渲染 gate 包含桌面端判断；桌面端返回 null，网页版照常显示角标。
-  assert.match(component, /if \(!enabled \|\| isDesktop \|\| !view\.visible/);
-  assert.doesNotMatch(component, /!enabled && !isDesktop/);
-  // 驱动（检测、预取与空闲自动重载）在桌面端保持开启，只隐藏 UI。
+  // 驱动（检测、预取与空闲自动重载）保持开启，但浏览器不再渲染右下角角标。
   assert.match(component, /useWebBuildUpdateDriver\(enabled/);
-  assert.doesNotMatch(component, /useWebBuildUpdateDriver\(!isDesktop/);
+  assert.match(component, /return null/);
+  assert.doesNotMatch(component, /<aside className=\{styles\.notice\}/);
 });
 
-test('网页版角标保持简洁，不展示客户端技术说明', () => {
+test('静默热更新不引入网页更新操作文案', () => {
   const component = read('components/WebBuildUpdatePrompt.tsx');
 
-  assert.doesNotMatch(component, /单链接解析/);
-  assert.doesNotMatch(component, /视频同步请在桌面客户端进行/);
-  assert.doesNotMatch(component, /同步视频请在此操作|网页端同步/);
+  assert.doesNotMatch(component, /现在更新|重试更新|稍后更新页面/);
 });
 
 test('角标小字沿用玻璃拟态变量且不放大版式', () => {

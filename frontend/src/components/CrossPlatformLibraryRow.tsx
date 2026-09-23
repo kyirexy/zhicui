@@ -11,6 +11,7 @@ import {
 import LibraryCoverImage from '@/components/LibraryCoverImage';
 import PlatformBrandIcon from '@/components/PlatformBrandIcon';
 import type { PlatformLibraryItem } from '@/lib/types';
+import { isNoAudioResult, libraryExtractionErrorMessage } from '@/lib/libraryExtractionOutcome';
 import styles from './LibraryReferenceWorkspace.module.css';
 
 export interface CrossPlatformLibraryRowProps {
@@ -45,6 +46,7 @@ function platformLabel(item: PlatformLibraryItem): string {
 }
 
 function transcriptLabel(item: PlatformLibraryItem): string {
+  if (isNoAudioResult(item)) return '无音频';
   if (item.speech_ready) {
     if (item.transcript_source === 'manual-subtitle') return '人工字幕已就绪';
     if (item.transcript_source === 'automatic-subtitle') return '平台字幕已就绪';
@@ -145,8 +147,8 @@ export default function CrossPlatformLibraryRow({
           )}
         </div>
 
-        {actionError && (
-          <p className={styles.crossRowError} role="alert">{actionError}</p>
+        {actionError && !isNoAudioResult(item) && (
+          <p className={styles.crossRowError} role="alert">{libraryExtractionErrorMessage(actionError)}</p>
         )}
 
       </div>

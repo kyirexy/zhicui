@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CliError, EXIT_CODES } from './errors.js';
 import { redactedProcessMessage, runProcess } from './process-utils.js';
@@ -74,13 +74,53 @@ function envPrefixArgs(name: AgentClientName): string[] {
   });
 }
 
+// Codex 桌面内置 CLI 不一定加入 Windows 注册 PATH。只检查官方的一层哈希目录，
+// 不把 .codex 配置目录当成安装证据，也不跟随 junction / 符号链接到其他位置。
+export async function findWindowsCodexCommand(
+  localAppData = process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'),
+): Promise<string | null> {
+  if (!isAbsolute(localAppData) || localAppData.startsWith('\\\\')) return null;
+  try {
+    let directory = await realpath(localAppData);
+    for (const segment of ['OpenAI', 'Codex', 'bin']) {
+      directory = join(directory, segment);
+      const metadata = await lstat(directory);
+      if (!metadata.isDirectory() || metadata.isSymbolicLink()
+        || pathIdentity(await realpath(directory)) !== pathIdentity(directory)) return null;
+    }
+    const candidates: Array<{ command: string; modified: number }> = [];
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !/^[a-f0-9]{16,64}$/iu.test(entry.name)) continue;
+      try {
+        const versionDirectory = join(directory, entry.name);
+        const versionMetadata = await lstat(versionDirectory);
+        if (versionMetadata.isSymbolicLink()
+          || pathIdentity(await realpath(versionDirectory)) !== pathIdentity(versionDirectory)) continue;
+        const command = join(versionDirectory, 'codex.exe');
+        const metadata = await lstat(command);
+        if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size === 0
+          || pathIdentity(await realpath(command)) !== pathIdentity(command)) continue;
+        candidates.push({ command, modified: metadata.mtimeMs });
+      } catch {
+        // 更新留下的空目录、未完成安装或已清理的版本均不是可执行安装。
+      }
+    }
+    // 目录名是内容哈希，不是 SemVer；按可执行文件更新时间选择最新完整安装。
+    candidates.sort((left, right) => right.modified - left.modified
+      || (left.command < right.command ? -1 : left.command > right.command ? 1 : 0));
+    return candidates[0]?.command || null;
+  } catch { return null; }
+}
+
 async function resolveCommand(name: AgentClientName): Promise<string | null> {
   if (envCommand(name)) return envCommand(name)!;
   const lookup = process.platform === 'win32'
     ? await runProcess('where.exe', [name], { allowFailure: true })
+      .catch(() => ({ code: 1, stdout: '', stderr: '' }))
     : await runProcess('/usr/bin/env', ['which', name], { allowFailure: true });
-  if (lookup.code !== 0) return null;
-  const candidates = lookup.stdout.split(/\r?\n/u).map((item) => item.trim()).filter(Boolean);
+  const candidates = lookup.code === 0
+    ? lookup.stdout.split(/\r?\n/u).map((item) => item.trim()).filter(Boolean)
+    : [];
   if (process.platform !== 'win32') return candidates[0] || null;
 
   // npm creates three Windows shims: an extensionless POSIX shell script,
@@ -93,7 +133,7 @@ async function resolveCommand(name: AgentClientName): Promise<string | null> {
     const candidate = candidates.find((item) => item.toLowerCase().endsWith(extension));
     if (candidate) return candidate;
   }
-  return null;
+  return name === 'codex' ? findWindowsCodexCommand() : null;
 }
 
 function configPath(name: AgentClientName): string {

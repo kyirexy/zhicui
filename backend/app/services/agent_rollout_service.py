@@ -9,6 +9,7 @@ granting administrator capabilities.
 from __future__ import annotations
 
 from app.core.config import settings
+from app.agent_interface.profiles import profile_allows_action, profile_name
 
 
 def _values(raw: str) -> frozenset[str]:
@@ -27,10 +28,10 @@ def _allows(raw: str, value: str) -> bool:
 def user_is_enabled(user_id: str) -> bool:
     """Return whether this immutable user ID is inside the current rollout."""
 
-    return _allows(settings.AGENT_INTERFACE_USER_ALLOWLIST, str(user_id))
+    return profile_name() != "invalid" and _allows(settings.AGENT_INTERFACE_USER_ALLOWLIST, str(user_id))
 
 
 def action_is_enabled(action_id: str) -> bool:
     """Return whether this reviewed Registry Action is inside the rollout."""
 
-    return _allows(settings.AGENT_INTERFACE_ACTION_ALLOWLIST, str(action_id))
+    return profile_allows_action(str(action_id)) and _allows(settings.AGENT_INTERFACE_ACTION_ALLOWLIST, str(action_id))

@@ -6,6 +6,8 @@ not make it an Agent tool; an Action must be reviewed and registered here.
 
 from __future__ import annotations
 
+from app.agent_interface.profiles import profile_input_schema
+
 import re
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -117,7 +119,7 @@ class ProductActionDefinition:
             version=self.version,
             title=self.title,
             description=self.description,
-            input_schema=dict(self.input_schema),
+            input_schema=profile_input_schema(self.id, dict(self.input_schema)),
             output_schema=dict(self.output_schema),
             scopes=list(self.scopes),
             risk=list(self.risk),

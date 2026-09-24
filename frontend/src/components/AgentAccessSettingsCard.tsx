@@ -56,6 +56,7 @@ import {
 } from '@/lib/desktopRuntime';
 import styles from './AgentAccessSettingsCard.module.css';
 import AgentQuickConnect from './AgentQuickConnect';
+import { CORE_AGENT_LOGIN_COMMAND } from '@/lib/agentQuickConnect';
 
 const FALLBACK_SCOPES: AgentScopeDefinition[] = [
   { id: 'library:read', title: '读取资料', description: '查看你已保存的视频资料与文稿。' },
@@ -69,7 +70,6 @@ const FALLBACK_SCOPES: AgentScopeDefinition[] = [
   { id: 'library:write', title: '整理资料', description: '导入链接、提取文稿并修改资料。' },
 ];
 
-const LOGIN_COMMAND = 'zhicui auth login';
 const LOCAL_MCP_SETUP_COMMAND = 'zhicui agent setup --client all';
 const REMOTE_MCP_COMMAND = 'codex mcp add zhicui --url https://luxai.cn/mcp --bearer-token-env-var ZHICUI_AGENT_TOKEN';
 
@@ -114,8 +114,11 @@ export default function AgentAccessSettingsCard({
   nativeIOS = false,
 }: AgentAccessSettingsCardProps) {
   const mountedRef = useRef(true);
+  const authorizationSectionRef = useRef<HTMLElement | null>(null);
   const platform = resolveAgentAccessPlatform({ desktop: isDesktop, android: nativeAndroid, ios: nativeIOS });
   const [capabilities, setCapabilities] = useState<AgentCapabilities | null>(null);
+  const coreAccess = capabilities?.release_profile === 'core';
+  const loginCommand = coreAccess ? CORE_AGENT_LOGIN_COMMAND : 'zhicui auth login';
   const [credentials, setCredentials] = useState<AgentCredential[]>([]);
   const [devices, setDevices] = useState<AgentDeviceConnection[]>([]);
   const [recentCalls, setRecentCalls] = useState<AgentRecentCall[]>([]);
@@ -147,6 +150,7 @@ export default function AgentAccessSettingsCard({
   const [pendingLocalRemoval, setPendingLocalRemoval] = useState<DesktopAgentClient | null>(null);
   const [automaticAuthorization, setAutomaticAuthorization] = useState(false);
   const [manualAuthorizationOpen, setManualAuthorizationOpen] = useState(false);
+  const authorizationVisible = !interfaceDisabled && (Boolean(deviceUserCode) || manualAuthorizationOpen);
   const localPendingRef = useRef('');
   const authorizationRevision = useRef(0);
   const authorizationCodeRef = useRef('');
@@ -157,7 +161,6 @@ export default function AgentAccessSettingsCard({
 
   const loadAccessData = useCallback(async () => {
     setLoading(true);
-    setInterfaceDisabled(false);
     setErrorContext('global');
     setError('');
     const results = await Promise.allSettled([
@@ -280,6 +283,16 @@ export default function AgentAccessSettingsCard({
       mountedRef.current = false;
     };
   }, [loadAccessData, loadDesktopStatus]);
+
+  useEffect(() => {
+    if (!authorizationVisible) return;
+    const section = authorizationSectionRef.current;
+    section?.focus({ preventScroll: true });
+    section?.scrollIntoView({
+      block: 'center',
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
+    });
+  }, [authorizationVisible]);
 
   useEffect(() => {
     const bridge = window.zhicuiDesktop;
@@ -405,7 +418,7 @@ export default function AgentAccessSettingsCard({
   };
 
   const availableScopes = useMemo(() => {
-    const supplied = capabilities?.scopes?.length ? capabilities.scopes : FALLBACK_SCOPES;
+    const supplied = capabilities ? capabilities.scopes : FALLBACK_SCOPES;
     const safe = new Set(safeAgentScopes(supplied.map((scope) => scope.id)));
     return supplied.filter((scope) => safe.has(scope.id));
   }, [capabilities]);
@@ -445,6 +458,7 @@ export default function AgentAccessSettingsCard({
   };
 
   const submitPat = async () => {
+    if (interfaceDisabled || loading || creating) return;
     const scopes = safeAgentScopes(selectedScopes);
     if (!patName.trim()) {
       setErrorContext('pat');
@@ -580,9 +594,9 @@ export default function AgentAccessSettingsCard({
       <section className={styles.hero} aria-labelledby="agent-access-title">
         <div className={styles.heroIcon} aria-hidden="true"><Bot size={22} /></div>
         <div className={styles.heroCopy}>
-          <h2 id="agent-access-title">Agent 接入</h2>
+          <h1 id="agent-access-title">Agent 接入</h1>
           <p>
-            把知萃连接到你常用的 AI 工具，直接使用已保存的视频和知识。
+            {coreAccess ? '基础接入 · 已保存资料、文稿问答、知识与计划' : '让 Codex、Claude Code 和本地工具直接使用你的视频、文稿与知识。'}
           </p>
         </div>
         <span className={styles.platformBadge}>
@@ -590,16 +604,120 @@ export default function AgentAccessSettingsCard({
         </span>
       </section>
 
+      {coreAccess && <p className={styles.capabilityHint}>连接后可使用已保存的资料；平台同步、视频下载和新文稿提取请先在知萃客户端完成。</p>}
+
+      {interfaceDisabled && (
+        <div className={styles.serviceBanner} role="status">
+          <div><strong>当前环境的 Agent 接口尚未启用</strong><p>连接入口和个人访问令牌已就绪；服务启用后即可授权和创建 PAT。</p></div>
+          <button type="button" disabled={loading} onClick={() => void loadAccessData()}><RefreshCw size={16} />重新检查</button>
+        </div>
+      )}
+
+      <div className={styles.connectGrid}>
       <AgentQuickConnect
         desktop={canRunLocalAgentActions(platform)}
         bridgeAvailable={supportsDesktopAgentIntegration(desktopBridge)}
         overview={desktopOverview}
         interfaceDisabled={interfaceDisabled}
+        releaseProfile={capabilities?.release_profile}
+        loginCommand={loginCommand}
         pending={localPending}
         copied={copied === 'agent-prompt'}
+        commandCopied={copied === 'login'}
         onAction={(client, operation) => void runDesktopAction(client, operation)}
         onCopy={(text) => void runCopy('agent-prompt', text)}
+        onCopyCommand={() => void runCopy('login', loginCommand)}
+        onManualAuthorization={() => setManualAuthorizationOpen(true)}
       />
+
+      <section className={`${styles.card} ${styles.patCard}`} id="personal-access-token" aria-labelledby="pat-title">
+        <header className={styles.cardHeader}>
+          <span className={styles.cardIcon}><KeyRound size={19} /></span>
+          <div>
+            <h3 id="pat-title">个人访问令牌 PAT</h3>
+            <p>把知萃接入脚本、CLI 或远程 MCP。权限和有效期由你决定。</p>
+          </div>
+        </header>
+        {error && errorContext === 'pat' && (
+          <p className={styles.inlineError} role="alert">{error}</p>
+        )}
+
+        {oneTimeToken && (
+          <div className={styles.secretPanel} role="alert">
+            <div>
+              <ShieldCheck size={18} aria-hidden="true" />
+              <span>
+                <strong>请现在复制令牌</strong>
+                <small>完整令牌只显示这一次。关闭后知萃无法再次找回。</small>
+              </span>
+            </div>
+            <code>{oneTimeToken}</code>
+            <div className={styles.secretActions}>
+              <button type="button" onClick={() => void runCopy('token', oneTimeToken)}>
+                {copied === 'token' ? <Check size={15} /> : <Clipboard size={15} />}
+                {copied === 'token' ? '已复制' : '复制令牌'}
+              </button>
+              <button type="button" onClick={() => setOneTimeToken(null)}>我已保存，关闭</button>
+            </div>
+          </div>
+        )}
+
+        <div className={styles.formRow}>
+          <label>
+            <span>连接名称</span>
+            <input value={patName} maxLength={80} placeholder="例如：我的视频工作流" disabled={interfaceDisabled || creating} onChange={(event) => setPatName(event.target.value)} />
+          </label>
+          <label>
+            <span>有效期</span>
+            <select value={expiryDays} disabled={interfaceDisabled || creating} onChange={(event) => setExpiryDays(Number(event.target.value))}>
+              <option value={30}>30 天</option>
+              <option value={60}>60 天</option>
+              <option value={90}>90 天</option>
+            </select>
+          </label>
+        </div>
+
+        <details className={styles.scopePicker}>
+          <summary>访问权限 <span>已选择 {selectedScopes.length} 项 · 点击调整</span></summary>
+        <fieldset className={styles.scopeFieldset} disabled={interfaceDisabled || creating}>
+          <legend>选择权限</legend>
+          <p>从最小权限开始；以后需要更多能力时可新建令牌。</p>
+          <div className={styles.scopeGrid}>
+            {availableScopes.map((scope) => {
+              const selected = selectedScopes.includes(scope.id);
+              return (
+                <label key={scope.id} className={selected ? styles.scopeSelected : ''}>
+                  <input
+                    type="checkbox"
+                    checked={selected}
+                    onChange={() => toggleScope(scope.id)}
+                  />
+                  <span>
+                    <strong>{scope.title}</strong>
+                    <small>{scope.description}</small>
+                    <code>{scope.id}</code>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </fieldset>
+        </details>
+        <p className={styles.selectedScopes}>{selectedScopes.length ? selectedScopes.map((scope) => scopeMap.get(scope)?.title || scope).join('、') : '尚未选择权限'}</p>
+        {riskySyncSelected && (
+          <p className={styles.warningText}>
+            同步和写入仍只会在你或 Agent 明确调用时发生，不会自动同步、离线排队或连续风控重试。
+          </p>
+        )}
+        <div className={styles.formActions}>
+          <button type="button" disabled={creating || loading || interfaceDisabled || Boolean(oneTimeToken)} onClick={() => void submitPat()}>
+            {creating ? <Loader2 size={16} /> : <KeyRound size={16} />}
+            {creating ? '正在创建…' : '创建个人访问令牌'}
+          </button>
+        </div>
+        <p className={styles.authorizationHint}>{interfaceDisabled ? '接口启用后即可创建，权限设置不会自动授权。' : '默认只允许读取资料。完整令牌仅创建时显示，可随时在下方吊销。'}</p>
+      </section>
+      </div>
 
       {notice && <div className={styles.noticeBanner} role="status">{notice}</div>}
       {error && errorContext === 'global' && !interfaceDisabled && (
@@ -610,7 +728,7 @@ export default function AgentAccessSettingsCard({
         <div className={styles.errorBanner} role="alert">{error}</div>
       )}
 
-      {!interfaceDisabled && (deviceUserCode || manualAuthorizationOpen) && <section className={`${styles.card} ${styles.authorizationCard}`} aria-labelledby="device-authorization-title">
+      {authorizationVisible && <section ref={authorizationSectionRef} tabIndex={-1} className={`${styles.card} ${styles.authorizationCard}`} aria-labelledby="device-authorization-title">
         <header className={styles.cardHeader}>
           <span className={styles.cardIcon}><ShieldCheck size={19} /></span>
           <div>
@@ -793,6 +911,84 @@ export default function AgentAccessSettingsCard({
         </section>
       )}
 
+      <section className={styles.card} aria-labelledby="connections-title">
+        <header className={styles.cardHeader}>
+          <span className={styles.cardIcon}><ShieldCheck size={19} /></span>
+          <div>
+            <h3 id="connections-title">已授权连接</h3>
+            <p>{activeCredentials.length} 个 PAT · {activeDevices.length} 个设备连接。可随时吊销。</p>
+          </div>
+          <button
+            type="button"
+            className={styles.iconButton}
+            aria-label="刷新连接"
+            disabled={loading}
+            onClick={() => void loadAccessData()}
+          >
+            {loading ? <Loader2 size={16} /> : <RefreshCw size={16} />}
+          </button>
+        </header>
+        {error && errorContext === 'connections' && (
+          <p className={styles.inlineError} role="alert">{error}</p>
+        )}
+
+        {activeCredentials.length === 0 && activeDevices.length === 0 ? (
+          <p className={styles.emptyState}>{loading ? '正在读取连接…' : interfaceDisabled ? '接口尚未启用，暂时无法读取已授权连接。启用后点击刷新即可查看。' : '还没有已授权的 Agent 连接。'}</p>
+        ) : (
+          <div className={styles.connectionList}>
+            {activeCredentials.map((credential) => (
+              <ConnectionRow
+                key={credential.id}
+                title={credential.name}
+                subtitle={`PAT · ${agentCredentialPrefix(credential)} · ${formatDate(credential.last_used_at)}`}
+                scopes={credential.scopes}
+                scopeMap={scopeMap}
+                disabled={interfaceDisabled || revokingId === credential.id}
+                onRevoke={() => setPendingRevokeId(credential.id)}
+              />
+            ))}
+            {activeDevices.map((device) => (
+              <ConnectionRow
+                key={device.id}
+                title={device.name}
+                subtitle={`${device.client_type || '本地设备'} · ${formatDate(device.last_used_at)}`}
+                scopes={device.scopes}
+                scopeMap={scopeMap}
+                disabled={interfaceDisabled || revokingId === device.id}
+                onRevoke={() => setPendingRevokeId(device.id)}
+              />
+            ))}
+          </div>
+        )}
+        <dialog
+          open={Boolean(pendingRevokeId)}
+          className={styles.confirmDialog}
+          role="alertdialog"
+          aria-labelledby="agent-revoke-title"
+          aria-describedby="agent-revoke-description"
+        >
+          <strong id="agent-revoke-title">吊销这个 Agent 连接？</strong>
+          <p id="agent-revoke-description">
+            {pendingCredential?.name || pendingDevice?.name || '该连接'} 的新请求会立即失效，其他连接不受影响。
+          </p>
+          <div className={styles.confirmDialogActions}>
+            <button type="button" disabled={Boolean(revokingId)} onClick={() => setPendingRevokeId('')}>取消</button>
+            <button
+              type="button"
+              className={styles.dangerAction}
+              disabled={Boolean(revokingId) || (!pendingCredential && !pendingDevice)}
+              onClick={() => {
+                if (pendingCredential) void revokeConnection('credential', pendingCredential.id);
+                else if (pendingDevice) void revokeConnection('device', pendingDevice.id);
+              }}
+            >
+              {revokingId ? <Loader2 size={15} /> : <Unplug size={15} />}
+              确认吊销
+            </button>
+          </div>
+        </dialog>
+      </section>
+
       {!interfaceDisabled && canShowAgentInstallGuide(platform) && (
         <details className={styles.advanced}>
         <summary>高级接入：已有 CLI 或远程 MCP</summary>
@@ -807,9 +1003,9 @@ export default function AgentAccessSettingsCard({
           <div className={styles.commandGrid}>
             <CommandRow
               label="浏览器授权"
-              value={LOGIN_COMMAND}
+              value={loginCommand}
               copied={copied === 'login'}
-              onCopy={() => void runCopy('login', LOGIN_COMMAND)}
+              onCopy={() => void runCopy('login', loginCommand)}
             />
             <CommandRow
               label="Codex 远程 MCP"
@@ -947,168 +1143,9 @@ export default function AgentAccessSettingsCard({
         </details>
       )}
 
-      {!interfaceDisabled && <details className={styles.advanced}>
-      <summary>高级接入：个人访问令牌</summary>
-      <section className={styles.card} aria-labelledby="pat-title">
-        <header className={styles.cardHeader}>
-          <span className={styles.cardIcon}><KeyRound size={19} /></span>
-          <div>
-            <h3 id="pat-title">创建个人访问令牌（PAT）</h3>
-            <p>适合 CI 或不能打开浏览器的本地工具。默认 90 天，可随时吊销。</p>
-          </div>
-        </header>
-        {error && errorContext === 'pat' && (
-          <p className={styles.inlineError} role="alert">{error}</p>
-        )}
 
-        {oneTimeToken && (
-          <div className={styles.secretPanel} role="alert">
-            <div>
-              <ShieldCheck size={18} aria-hidden="true" />
-              <span>
-                <strong>请现在复制令牌</strong>
-                <small>完整令牌只显示这一次。关闭后知萃无法再次找回。</small>
-              </span>
-            </div>
-            <code>{oneTimeToken}</code>
-            <div className={styles.secretActions}>
-              <button type="button" onClick={() => void runCopy('token', oneTimeToken)}>
-                {copied === 'token' ? <Check size={15} /> : <Clipboard size={15} />}
-                {copied === 'token' ? '已复制' : '复制令牌'}
-              </button>
-              <button type="button" onClick={() => setOneTimeToken(null)}>我已保存，关闭</button>
-            </div>
-          </div>
-        )}
 
-        <div className={styles.formRow}>
-          <label>
-            <span>连接名称</span>
-            <input value={patName} maxLength={80} onChange={(event) => setPatName(event.target.value)} />
-          </label>
-          <label>
-            <span>有效期</span>
-            <select value={expiryDays} onChange={(event) => setExpiryDays(Number(event.target.value))}>
-              <option value={30}>30 天</option>
-              <option value={60}>60 天</option>
-              <option value={90}>90 天</option>
-            </select>
-          </label>
-        </div>
 
-        <fieldset className={styles.scopeFieldset}>
-          <legend>选择权限</legend>
-          <p>从最小权限开始；以后需要更多能力时可新建令牌。</p>
-          <div className={styles.scopeGrid}>
-            {availableScopes.map((scope) => {
-              const selected = selectedScopes.includes(scope.id);
-              return (
-                <label key={scope.id} className={selected ? styles.scopeSelected : ''}>
-                  <input
-                    type="checkbox"
-                    checked={selected}
-                    onChange={() => toggleScope(scope.id)}
-                  />
-                  <span>
-                    <strong>{scope.title}</strong>
-                    <small>{scope.description}</small>
-                    <code>{scope.id}</code>
-                  </span>
-                </label>
-              );
-            })}
-          </div>
-        </fieldset>
-        {riskySyncSelected && (
-          <p className={styles.warningText}>
-            同步和写入仍只会在你或 Agent 明确调用时发生，不会自动同步、离线排队或连续风控重试。
-          </p>
-        )}
-        <div className={styles.formActions}>
-          <button type="button" disabled={creating || loading} onClick={() => void submitPat()}>
-            {creating ? <Loader2 size={16} /> : <KeyRound size={16} />}
-            创建 PAT
-          </button>
-        </div>
-      </section></details>}
-
-      {!interfaceDisabled && <section className={styles.card} aria-labelledby="connections-title">
-        <header className={styles.cardHeader}>
-          <span className={styles.cardIcon}><ShieldCheck size={19} /></span>
-          <div>
-            <h3 id="connections-title">已授权连接</h3>
-            <p>只显示令牌前缀、权限和使用时间；完整令牌不会从服务端返回。</p>
-          </div>
-          <button
-            type="button"
-            className={styles.iconButton}
-            aria-label="刷新连接"
-            disabled={loading}
-            onClick={() => void loadAccessData()}
-          >
-            {loading ? <Loader2 size={16} /> : <RefreshCw size={16} />}
-          </button>
-        </header>
-        {error && errorContext === 'connections' && (
-          <p className={styles.inlineError} role="alert">{error}</p>
-        )}
-
-        {activeCredentials.length === 0 && activeDevices.length === 0 ? (
-          <p className={styles.emptyState}>{loading ? '正在读取连接…' : '还没有已授权的 Agent 连接。'}</p>
-        ) : (
-          <div className={styles.connectionList}>
-            {activeCredentials.map((credential) => (
-              <ConnectionRow
-                key={credential.id}
-                title={credential.name}
-                subtitle={`PAT · ${agentCredentialPrefix(credential)} · ${formatDate(credential.last_used_at)}`}
-                scopes={credential.scopes}
-                scopeMap={scopeMap}
-                disabled={revokingId === credential.id}
-                onRevoke={() => setPendingRevokeId(credential.id)}
-              />
-            ))}
-            {activeDevices.map((device) => (
-              <ConnectionRow
-                key={device.id}
-                title={device.name}
-                subtitle={`${device.client_type || '本地设备'} · ${formatDate(device.last_used_at)}`}
-                scopes={device.scopes}
-                scopeMap={scopeMap}
-                disabled={revokingId === device.id}
-                onRevoke={() => setPendingRevokeId(device.id)}
-              />
-            ))}
-          </div>
-        )}
-        <dialog
-          open={Boolean(pendingRevokeId)}
-          className={styles.confirmDialog}
-          role="alertdialog"
-          aria-labelledby="agent-revoke-title"
-          aria-describedby="agent-revoke-description"
-        >
-          <strong id="agent-revoke-title">吊销这个 Agent 连接？</strong>
-          <p id="agent-revoke-description">
-            {pendingCredential?.name || pendingDevice?.name || '该连接'} 的新请求会立即失效，其他连接不受影响。
-          </p>
-          <div className={styles.confirmDialogActions}>
-            <button type="button" disabled={Boolean(revokingId)} onClick={() => setPendingRevokeId('')}>取消</button>
-            <button
-              type="button"
-              className={styles.dangerAction}
-              disabled={Boolean(revokingId) || (!pendingCredential && !pendingDevice)}
-              onClick={() => {
-                if (pendingCredential) void revokeConnection('credential', pendingCredential.id);
-                else if (pendingDevice) void revokeConnection('device', pendingDevice.id);
-              }}
-            >
-              {revokingId ? <Loader2 size={15} /> : <Unplug size={15} />}
-              确认吊销
-            </button>
-          </div>
-        </dialog>
-      </section>}
 
       {!interfaceDisabled && <section className={styles.card} aria-labelledby="calls-title">
         <header className={styles.cardHeader}>

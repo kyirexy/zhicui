@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.agent_interface.profiles import profile_input_schema
+
 import hashlib
 import json
 import re
@@ -672,7 +674,7 @@ def claim_run(db: Session, *, run_id: str) -> tuple[ProductActionRun, str] | Non
     row = db.query(ProductActionRun).filter(
         ProductActionRun.id == run_id,
     ).with_for_update().first()
-    if row is None or row.cancellation_requested or row.status in TERMINAL_STATUSES:
+    if row is None or row.cancellation_requested or row.status in TERMINAL_STATUSES or not action_is_enabled(row.action_id):
         db.rollback()
         return None
     lease_expired = row.lease_expires_at is None or (_aware(row.lease_expires_at) or now) <= now
@@ -765,6 +767,8 @@ def get_run(db: Session, *, run_id: str, user_id: str) -> ProductActionRun | Non
         ProductActionRun.id == run_id,
         ProductActionRun.user_id == user_id,
     ).first()
+    if run is not None and not action_is_enabled(run.action_id):
+        return None
     if run is not None:
         reconcile_external_run(db, run)
     return run
@@ -1279,7 +1283,7 @@ def invoke(
             details={"action_id": definition.id}, http_status=409,
         )
     require_scopes(principal, definition)
-    payload = _validate_input(dict(definition.input_schema), raw_input)
+    payload = _validate_input(profile_input_schema(definition.id, dict(definition.input_schema)), raw_input)
     payload_hash = normalized_input_hash(payload)
     clean_idempotency = str(idempotency_key or "").strip()[:160] or None
     if definition.idempotency == IdempotencyStrategy.REQUIRED and not clean_idempotency:

@@ -5,8 +5,8 @@ pipeline {
     parameters {
         choice(
             name: 'AGENT_RELEASE_MODE',
-            choices: ['dark', 'stable'],
-            description: 'Agent 发布阶段。首次开放及每个待晋级提交先选 dark，证据通过后对同一提交选 stable。'
+            choices: ['dark', 'core', 'stable'],
+            description: '先完成同提交 dark 与恢复演练；core 开放已保存资料和文稿问答，stable 要求全部能力就绪。'
         )
     }
 
@@ -28,8 +28,8 @@ pipeline {
         stage('部署到服务器') {
             steps {
                 script {
-                    if (!(params.AGENT_RELEASE_MODE in ['dark', 'stable'])) {
-                        error('AGENT_RELEASE_MODE 只能是 dark 或 stable')
+                    if (!(params.AGENT_RELEASE_MODE in ['dark', 'core', 'stable'])) {
+                        error('AGENT_RELEASE_MODE 只能是 dark、core 或 stable')
                     }
                     currentBuild.description = "Agent ${params.AGENT_RELEASE_MODE}"
                 }
@@ -45,12 +45,12 @@ pipeline {
                 ]) {
                     withEnv([
                         "AGENT_RELEASE_MODE=${params.AGENT_RELEASE_MODE}",
-                        "SMOKE_REQUIRE_AGENT_INTERFACE=${params.AGENT_RELEASE_MODE == 'stable' ? '1' : '0'}"
+                        "SMOKE_REQUIRE_AGENT_INTERFACE=${params.AGENT_RELEASE_MODE == 'dark' ? '0' : '1'}"
                     ]) {
                         // 只在 shell 运行时展开 Credentials Binding 变量，避免秘密进入 Groovy 字符串。
                         sh label: "Agent ${params.AGENT_RELEASE_MODE} 发布", script: '''
                             set -eu
-                            test "$AGENT_RELEASE_MODE" = dark || test "$AGENT_RELEASE_MODE" = stable
+                            test "$AGENT_RELEASE_MODE" = dark || test "$AGENT_RELEASE_MODE" = core || test "$AGENT_RELEASE_MODE" = stable
                             test -n "$SMOKE_LOGIN_EMAIL"
                             test -r "$SMOKE_PASSWORD_FILE"
                             test -s "$SMOKE_PASSWORD_FILE"

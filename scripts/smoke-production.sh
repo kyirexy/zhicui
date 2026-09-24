@@ -16,6 +16,17 @@ TARGET_COMMIT="${SMOKE_TARGET_COMMIT:-}"
 SOURCE_ID="${SMOKE_SOURCE_ID:-}"
 SENTINEL_TOKEN="ZHICUI-SMOKE-94731"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+AGENT_PROFILE="${SMOKE_AGENT_PROFILE:-full}"
+case "$AGENT_PROFILE" in
+  full) DEFAULT_AGENT_MANIFEST="$SCRIPT_DIR/../backend/app/agent_interface/stable_capabilities_v1.json" ;;
+  core) DEFAULT_AGENT_MANIFEST="$SCRIPT_DIR/../backend/app/agent_interface/core_capabilities_v1.json" ;;
+  *) printf 'SMOKE_AGENT_PROFILE 必须为 core 或 full\n' >&2; exit 2 ;;
+esac
+AGENT_CAPABILITY_MANIFEST="${SMOKE_AGENT_CAPABILITY_MANIFEST:-$DEFAULT_AGENT_MANIFEST}"
+if [[ "$AGENT_PROFILE" == core && ( "$REQUIRE_AUTH" != 1 || "$REQUIRE_SSE" != 1 || "$REQUIRE_AGENT_INTERFACE" != 1 ) ]]; then
+  printf 'Core 发布必须执行登录、真实 AI SSE 和 Agent 接口全链路验收\n' >&2
+  exit 2
+fi
 
 case "$BASE_URL" in
   https://*) ;;
@@ -30,6 +41,10 @@ for command_name in curl python3 sha256sum mktemp; do
     exit 2
   }
 done
+[[ -r "$AGENT_CAPABILITY_MANIFEST" && -s "$AGENT_CAPABILITY_MANIFEST" ]] || {
+  printf 'Agent 指定验收清单不可读或为空\n' >&2; exit 2
+}
+AGENT_CAPABILITY_MANIFEST_SHA256="$(sha256sum "$AGENT_CAPABILITY_MANIFEST" | awk '{print $1}')"
 [[ "$SSE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || {
   printf 'SMOKE_SSE_TIMEOUT_SECONDS 必须是正整数\n' >&2
   exit 2
@@ -76,13 +91,13 @@ write_evidence() {
     # 0700。仅当调用方给的是尚不存在的私有目录时才创建它。
     [[ -d "$evidence_dir" ]] || install -d -m 0700 "$evidence_dir"
     python3 - "$RESULTS_FILE" "$EVIDENCE_FILE" "$BASE_URL" "$STARTED_AT" "$exit_status" \
-      "$DEPLOYMENT_ID" "$TARGET_COMMIT" <<'PY'
+      "$DEPLOYMENT_ID" "$TARGET_COMMIT" "$AGENT_PROFILE" "$AGENT_CAPABILITY_MANIFEST_SHA256" <<'PY'
 import json
 import os
 import sys
 from datetime import datetime, timezone
 
-source, target, base_url, started_at, exit_status, deployment_id, target_commit = sys.argv[1:]
+source, target, base_url, started_at, exit_status, deployment_id, target_commit, agent_profile, agent_manifest_sha256 = sys.argv[1:]
 checks = []
 if os.path.exists(source):
     with open(source, encoding="utf-8") as handle:
@@ -94,6 +109,8 @@ payload = {
     "operation": "production_smoke",
     "deployment_id": deployment_id or None,
     "target_commit": target_commit or None,
+    "agent_release_profile": agent_profile,
+    "agent_capability_manifest_sha256": agent_manifest_sha256,
     "base_url": base_url,
     "started_at": started_at,
     "finished_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -146,7 +163,11 @@ code="$(request GET /api/readiness '' "$BODY" "$HEADERS")"
 [[ "$code" == 200 ]] || fatal 'readiness' "HTTP $code（关键依赖未就绪）"
 assert_json "$BODY" 'p.get("success") is True and p.get("data", {}).get("status") == "ready" and "creator_connectors" in p.get("data", {}).get("checks", {}) and "backup" in p.get("data", {}).get("checks", {})' 'readiness' || fatal 'readiness' '依赖或连接器摘要不完整'
 if [[ "$REQUIRE_AGENT_INTERFACE" == 1 ]]; then
+  if [[ "$AGENT_PROFILE" == core ]]; then
+    assert_json "$BODY" 'p.get("data", {}).get("checks", {}).get("agent_interface", {}).get("status") == "ready" and p.get("data", {}).get("checks", {}).get("agent_product_features", {}).get("status") == "ready" and p.get("data", {}).get("checks", {}).get("agent_automation_runtime", {}).get("status") == "not_required"' 'Agent Core readiness' || fatal 'Agent Core readiness' 'Core 接口、现有文稿问答依赖或明确发布边界不匹配'
+  else
   assert_json "$BODY" 'p.get("data", {}).get("checks", {}).get("agent_interface", {}).get("status") == "ready" and p.get("data", {}).get("checks", {}).get("agent_product_features", {}).get("status") == "ready" and p.get("data", {}).get("checks", {}).get("agent_automation_runtime", {}).get("status") == "ready"' 'Agent Stable readiness' || fatal 'Agent Stable readiness' 'Agent 接口、完整产品依赖或自动摘要运行器未就绪'
+  fi
 fi
 pass 'readiness' '数据库、AI、队列、连接器和备份闸门通过'
 
@@ -379,6 +400,8 @@ PY
     SMOKE_AGENT_THREAD_ID="$THREAD_ID" \
     SMOKE_AGENT_SOURCE_ID="$SOURCE_ID" \
     SMOKE_AGENT_ASK_TIMEOUT_SECONDS="$SSE_TIMEOUT_SECONDS" \
+    SMOKE_AGENT_PROFILE="$AGENT_PROFILE" \
+    SMOKE_AGENT_CAPABILITY_MANIFEST="$AGENT_CAPABILITY_MANIFEST" \
     SMOKE_REQUIRE_AGENT_RUNTIME_SENTINELS=1 \
     SMOKE_REQUIRE_AGENT_ASK_SENTINEL=1 \
       bash "$SCRIPT_DIR/smoke-agent-interface.sh" \

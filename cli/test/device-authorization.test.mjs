@@ -15,9 +15,59 @@ function tokens() {
     expires_in: 900, scopes: ['library:read'] };
 }
 
+test('core device defaults intersect advertised scopes without granting write capabilities', async (t) => {
+  const directory = await temporaryDirectory();
+  let requested;
+  const server = await startServer(async (request, response) => {
+    if (request.url.endsWith('/capabilities')) {
+      assert.equal(request.headers.authorization, undefined);
+      return json(response, 200, envelope({ release_profile: 'core', scopes: [
+        { id: 'account:read' }, { id: 'library:read' }, { id: 'ask:read' },
+        { id: 'ask:run' }, { id: 'plan:write' },
+      ] }));
+    }
+    if (request.url.endsWith('/auth/device')) {
+      requested = (await readJsonBody(request)).scopes;
+      return json(response, 200, envelope(startPayload(server.url)));
+    }
+    return json(response, 200, envelope({ ...tokens(), scopes: requested }));
+  });
+  t.after(server.close);
+  const result = await runCli(['auth', 'login', '--jsonl', '--no-open', '--non-interactive', '--timeout', '3s'], {
+    env: credentialEnv(directory, server.url),
+  });
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(requested, ['account:read', 'library:read', 'ask:read']);
+  const events = result.stdout.trim().split('\n').map(JSON.parse);
+  assert.deepEqual(events[0].scopes, requested);
+});
+
+test('explicit device scopes are submitted unchanged and unsupported profiles fail closed', async (t) => {
+  const directory = await temporaryDirectory();
+  let starts = 0;
+  const server = await startServer(async (request, response) => {
+    if (request.url.endsWith('/capabilities')) return json(response, 200, envelope({ release_profile: 'unknown', scopes: [] }));
+    if (request.url.endsWith('/auth/device')) {
+      starts++;
+      assert.deepEqual((await readJsonBody(request)).scopes, ['library:read', 'ask:run']);
+      return json(response, 200, envelope(startPayload(server.url)));
+    }
+    return json(response, 200, envelope(tokens()));
+  });
+  t.after(server.close);
+  const env = credentialEnv(directory, server.url);
+  const invalid = await runCli(['auth', 'login', '--json', '--no-open', '--non-interactive'], { env });
+  assert.equal(invalid.code, 7);
+  assert.equal(starts, 0);
+  const explicit = await runCli(['auth', 'login', '--json', '--no-open', '--non-interactive', '--scopes', 'library:read,ask:run', '--timeout', '3s'], { env });
+  assert.equal(explicit.code, 0, explicit.stderr);
+  assert.equal(starts, 1);
+});
+
 test('device JSONL emits only safe authorization fields and one terminal success', async (t) => {
   const directory = await temporaryDirectory();
   const server = await startServer(async (request, response) => {
+    if (request.url.endsWith('/capabilities')) return json(response, 200, envelope({ actions: [] }));
     if (request.url.endsWith('/auth/device')) return json(response, 200, envelope(startPayload(server.url)));
     assert.equal((await readJsonBody(request)).device_code, 'machine_code_never_public');
     return json(response, 200, envelope(tokens()));
@@ -42,7 +92,8 @@ test('device JSONL emits only safe authorization fields and one terminal success
 test('device authorization rejects another origin before emitting a URL or polling', async (t) => {
   const directory = await temporaryDirectory();
   let calls = 0;
-  const server = await startServer((_request, response) => {
+  const server = await startServer((request, response) => {
+    if (request.url.endsWith('/capabilities')) return json(response, 200, envelope({ actions: [] }));
     calls++;
     json(response, 200, envelope(startPayload('https://untrusted.invalid')));
   });
@@ -84,6 +135,7 @@ test('canceling the independent authorization process preserves existing credent
   const directory = await temporaryDirectory();
   let polls = 0;
   const server = await startServer((request, response) => {
+    if (request.url.endsWith('/capabilities')) return json(response, 200, envelope({ actions: [] }));
     if (request.url.endsWith('/auth/device')) return json(response, 200, envelope(startPayload(server.url)));
     polls++;
     return json(response, 200, envelope(tokens()));

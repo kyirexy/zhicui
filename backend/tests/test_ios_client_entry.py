@@ -5,7 +5,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from app.api.routes import RegisterRequest
+from app.api.auth_routes import RegisterRequest
 from app.api.privacy_account_routes import PasswordReverificationRequest
 from app.services.privacy_account_service import normalize_client_type
 

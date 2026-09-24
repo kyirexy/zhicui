@@ -49,11 +49,15 @@ class DeployDarkPreflightExecutionTests(unittest.TestCase):
                 raise AssertionError(f"真实部署函数缺失：{name}")
             functions.append(match.group(0))
         cls.functions = "\n".join(functions)
-        start = cls.source.index('if [[ "$AGENT_RELEASE_MODE" == dark ]]; then')
-        end = cls.source.index(
-            '\nif [[ "$AGENT_RELEASE_MODE" == stable ]]; then', start
+        # 只截取真实 kill-switch 分支；后续 schema gate 同时支持 core/stable，
+        # 不再用旧版 stable 专属条件作为结束标记。
+        preflight = re.search(
+            r'(?ms)^if \[\[ "\$AGENT_RELEASE_MODE" == dark \]\]; then\n.*?^fi\n',
+            cls.source,
         )
-        cls.preflight = cls.source[start:end]
+        if preflight is None:
+            raise AssertionError("真实 Agent kill-switch preflight 分支缺失")
+        cls.preflight = preflight.group(0)
 
     def run_fixture(self, *, cleanup: bool = False, **overrides: str):
         defaults = {
@@ -79,6 +83,8 @@ class DeployDarkPreflightExecutionTests(unittest.TestCase):
 set -Eeuo pipefail
 AGENT_KILL_SWITCH_HELPER='/fixture/agent-kill-switch'
 AGENT_RELEASE_MODE="$FIXTURE_MODE"
+AGENT_CAPABILITY_PROFILE=full
+[[ "$AGENT_RELEASE_MODE" != core ]] || AGENT_CAPABILITY_PROFILE=core
 RESTARTED=0
 WRITTEN=0
 event() { printf '%s\n' "$*" >> "$FIXTURE_TRACE"; }
@@ -243,14 +249,26 @@ curl() {
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(events.count("restart-backend"), 1)
 
-    def test_stable_preflight_still_requires_disabled_runtime(self):
-        result, events = self.run_fixture(MODE="stable")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn("restart-backend", events)
-        self.assertTrue(any("Stable 从已验证" in event for event in events))
-        result, events = self.run_fixture(MODE="stable", CAP_STATUS="404", CAP_BODY="{}")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse(any(event.startswith("gate:") for event in events))
+    def test_core_and_stable_preflight_require_verified_disabled_runtime(self):
+        for mode in ("core", "stable"):
+            with self.subTest(mode=mode, runtime="verified-disabled"):
+                result, events = self.run_fixture(MODE=mode)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(events[:2], ["verify-dark", "capabilities"])
+                self.assertNotIn("write-dark", events)
+                self.assertNotIn("restart-backend", events)
+                self.assertTrue(any(event.startswith("gate:agent_kill_switch_preflight:pass:") for event in events))
+            for runtime, overrides in (
+                ("unverified", {"VERIFY": "1"}),
+                ("absent", {"CAP_STATUS": "404", "CAP_BODY": "{}"}),
+                ("enabled", {"CAP_STATUS": "200", "CAP_BODY": '{"data":{"feature_enabled":true}}'}),
+            ):
+                with self.subTest(mode=mode, runtime=runtime):
+                    result, events = self.run_fixture(MODE=mode, **overrides)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(any(event.startswith("gate:") for event in events))
+                    self.assertNotIn("write-dark", events)
+                    self.assertNotIn("restart-backend", events)
 
 
 if __name__ == "__main__":

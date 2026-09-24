@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.agent_interface.profiles import profile_name
+
 import re
 import secrets
 import uuid
@@ -705,6 +707,8 @@ def ask_thread_get(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def ask_turn_start(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    if profile_name() == "core" and payload.get("web_scope", "video_only") != "video_only":
+        raise ActionHandlerError("INVALID_INPUT", "基础接入仅支持已有资料问答")
     thread = agent_service.get_thread(
         ctx.db, _text(payload, "thread_id", required=True, maximum=64), ctx.user.id
     )
@@ -723,6 +727,9 @@ def ask_turn_start(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
         )
     except ValueError as exc:
         raise ActionHandlerError("INVALID_INPUT", str(exc)) from exc
+    # 旧 full 请求可能复用 client_turn_id；不能借幂等恢复重新提交联网任务。
+    if profile_name() == "core" and turn.web_scope != "video_only":
+        raise ActionHandlerError("INVALID_INPUT", "该历史问题包含联网研究，请基于已有资料重新提问")
     ctx.run.external_type = "agent_turn"
     ctx.run.external_id = turn.id
     ctx.db.commit()
@@ -860,8 +867,11 @@ def ask_turn_cancel(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def ask_turn_retry(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    original = _owned_turn(ctx, payload)
+    if profile_name() == "core" and original.web_scope != "video_only":
+        raise ActionHandlerError("INVALID_INPUT", "基础接入不能重试联网研究，请基于已有资料重新提问")
     try:
-        turn = agent_runtime_service.retry_turn(ctx.db, _owned_turn(ctx, payload))
+        turn = agent_runtime_service.retry_turn(ctx.db, original)
     except ValueError as exc:
         raise ActionHandlerError("RESOURCE_CONFLICT", str(exc)) from exc
     agent_runtime_worker.runner.submit(turn.id)

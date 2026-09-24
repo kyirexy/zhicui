@@ -213,6 +213,9 @@ class WindowsDpapiCredentialStore implements CredentialStore {
       throw error;
     }
     const script = [
+      // Node 管道固定 UTF-8；不能依赖父进程/Windows 控制台代码页。
+      '[Console]::InputEncoding=[Text.UTF8Encoding]::new($false);',
+      '[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);',
       'Add-Type -AssemblyName System.Security;',
       '$cipher=[Console]::In.ReadToEnd().Trim();',
       '$bytes=[Convert]::FromBase64String($cipher);',
@@ -227,6 +230,8 @@ class WindowsDpapiCredentialStore implements CredentialStore {
 
   async save(profile: string, credential: StoredCredential): Promise<void> {
     const script = [
+      '[Console]::InputEncoding=[Text.UTF8Encoding]::new($false);',
+      '[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);',
       'Add-Type -AssemblyName System.Security;',
       '$plain=[Console]::In.ReadToEnd();',
       '$bytes=[Text.Encoding]::UTF8.GetBytes($plain);',

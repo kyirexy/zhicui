@@ -17,6 +17,15 @@
 .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
 .actions .primary { background: var(--accent-brand); border-color: var(--accent-brand); color: #fff; }
 .hint { margin: 14px 0 0; color: var(--foreground-secondary); font-size: .8125rem; line-height: 1.6; }
+.hint a { color: var(--accent-brand); text-underline-offset: 3px; }
+.browserSteps { display: grid; gap: 14px; margin: 22px 0; padding: 0; list-style: none; }
+.browserSteps li { display: flex; align-items: start; gap: 12px; }
+.browserSteps li > span { display: grid; place-items: center; flex: 0 0 26px; height: 26px; border-radius: 50%; color: var(--accent-brand); background: color-mix(in srgb, var(--accent-brand) 8%, var(--card-bg)); font-size: .75rem; font-variant-numeric: tabular-nums; }
+.browserSteps strong { font-size: .875rem; font-weight: 650; }
+.browserSteps p { margin: 3px 0 0; color: var(--foreground-muted); font-size: .75rem; line-height: 1.6; }
+.command { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; padding: 5px 6px 5px 12px; border: 1px solid var(--card-border); border-radius: 9px; background: var(--background-secondary); }
+.command code { font-size: .8125rem; overflow-wrap: anywhere; }
+.command button { min-height: 40px; padding: 8px 10px; font-size: .75rem; }
 .spinner { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 560px) { .panel { padding: 18px 16px; } .steps { gap: 12px; flex-direction: column; margin: 20px 0; } .actions > button, .actions > a { flex: 1 1 100%; } .choices > button { flex: 1; } }

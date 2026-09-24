@@ -16,7 +16,12 @@ const AUTHORIZATION_TIMEOUT_MS = 10 * 60_000;
 const AGENT_DEVICE_SCOPES = [
   'library:read', 'library:write', 'ask:run', 'knowledge:read', 'knowledge:write',
   'plan:read', 'plan:write', 'creator:sync', 'local:invoke',
+  'account:read', 'creator:read', 'ask:read', 'models:read',
 ] as const;
+const CORE_AGENT_SCOPES = new Set([
+  'account:read', 'library:read', 'creator:read', 'ask:read', 'ask:run',
+  'knowledge:read', 'knowledge:write', 'plan:read', 'plan:write', 'models:read',
+]);
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -91,6 +96,33 @@ function parseCliPayload(stdout: string): UnknownRecord {
     }
     return {};
   }
+}
+
+/** 仅接受当前服务明确公开的权限；能力未知时不使用历史默认权限授权。 */
+export function resolveAgentAuthorizationScopes(payload: UnknownRecord): {
+  releaseProfile: 'core' | 'full';
+  scopes: string[];
+} {
+  const data = record(payload.data ?? payload);
+  const releaseProfile = data.release_profile;
+  if (payload.status === 'failed' || data.feature_enabled !== true
+    || (releaseProfile !== 'core' && releaseProfile !== 'full')
+    || !Array.isArray(data.scopes) || data.scopes.length > 100) {
+    throw new Error('无法确认当前开放的能力，请刷新 Agent 接入后重试');
+  }
+  const allowed = new Set<string>();
+  for (const item of data.scopes) {
+    const id = record(item).id;
+    if (typeof id !== 'string' || !/^[a-z][a-z0-9_-]{0,39}:[a-z][a-z0-9_-]{0,39}$/.test(id)
+      || /(?:admin|shell|database|cookie|jwt|api[_-]?key)/i.test(id) || allowed.has(id)
+      || (releaseProfile === 'core' && !CORE_AGENT_SCOPES.has(id))) {
+      throw new Error('服务返回的授权权限无法验证，请稍后重试');
+    }
+    allowed.add(id);
+  }
+  const scopes = AGENT_DEVICE_SCOPES.filter((scope) => allowed.has(scope));
+  if (!scopes.length) throw new Error('当前服务没有开放可连接的权限，请稍后重试');
+  return { releaseProfile, scopes };
 }
 
 function normalizeCliResult(
@@ -325,10 +357,27 @@ export class DesktopAgentIntegration {
     if (this.authorization) return { success: false, client, operation: 'authorize', code: 'AUTHORIZATION_BUSY', message: '已有授权正在等待确认' };
     const current = { client, id: authorizationId, cancelled: false, child: null as ChildProcess | null };
     this.authorization = current;
-    this.notifyAuthorization({ client, authorization_id: current.id, status: 'starting', message: '正在创建官方设备授权请求' });
+    this.notifyAuthorization({ client, authorization_id: current.id, status: 'starting', message: '正在确认当前开放的能力与权限' });
+    const environment = { ...process.env };
     try {
+      const capabilities = await this.execute([this.getCliEntry(), 'capabilities', '--public', '--json', '--non-interactive'], {
+        environment,
+        onChild: (child) => { current.child = child; if (current.cancelled) child.kill(); },
+      });
+      if (current.cancelled || this.authorization !== current) return { success: false, client, operation: 'authorize', code: 'AUTHORIZATION_CANCELLED', message: '已停止等待授权' };
+      let selection: ReturnType<typeof resolveAgentAuthorizationScopes>;
+      try {
+        if (capabilities.exitCode !== 0 || capabilities.timedOut) throw new Error('暂时无法读取当前开放的能力，请检查服务后重试');
+        selection = resolveAgentAuthorizationScopes(parseCliPayload(capabilities.stdout));
+      } catch (error) {
+        const message = safeMessage(error instanceof Error ? error.message : '', '暂时无法确认授权权限，请稍后重试');
+        const code = 'AGENT_CAPABILITIES_UNAVAILABLE';
+        this.notifyAuthorization({ client, authorization_id: current.id, status: 'error', code, message });
+        return { success: false, client, operation: 'authorize', code, message };
+      }
       const result = await this.execute([this.getCliEntry(), 'auth', 'login', '--jsonl', '--no-open', '--non-interactive', '--timeout', '10m',
-        '--scopes', AGENT_DEVICE_SCOPES.join(',')], {
+        '--scopes', selection.scopes.join(',')], {
+        environment,
         timeoutMs: AUTHORIZATION_TIMEOUT_MS + 5_000,
         onChild: (child) => { current.child = child; if (current.cancelled) child.kill(); },
         onEvent: (event) => {
@@ -337,6 +386,7 @@ export class DesktopAgentIntegration {
           if (!/^[A-Za-z0-9-]{4,32}$/.test(code)) return;
           const expires = typeof event.expires_at === 'string' && Number.isFinite(Date.parse(event.expires_at)) ? event.expires_at : undefined;
           this.notifyAuthorization({ client, authorization_id: current.id, status: 'waiting', user_code: code, expires_at: expires,
+            scopes: selection.scopes, release_profile: selection.releaseProfile,
             message: '请在当前页面核对账号与权限，并主动确认授权' });
         },
       });
@@ -352,6 +402,7 @@ export class DesktopAgentIntegration {
         return { success: false, client, operation: 'authorize', code, message };
       }
       const checked = await this.execute([this.getCliEntry(), 'agent', 'doctor', '--client', client, '--json', '--non-interactive'], {
+        environment,
         onChild: (child) => { current.child = child; if (current.cancelled) child.kill(); },
       });
       if (current.cancelled || this.authorization !== current) return { success: false, client, operation: 'authorize', code: 'AUTHORIZATION_CANCELLED', message: '已停止等待授权' };
@@ -394,9 +445,9 @@ export class DesktopAgentIntegration {
     };
   }
 
-  private execute(args: string[], options: { timeoutMs?: number; onEvent?: (event: UnknownRecord) => void; onChild?: (child: ChildProcess) => void } = {}): Promise<CliProcessResult> {
+  private execute(args: string[], options: { timeoutMs?: number; environment?: NodeJS.ProcessEnv; onEvent?: (event: UnknownRecord) => void; onChild?: (child: ChildProcess) => void } = {}): Promise<CliProcessResult> {
     return new Promise((resolve) => {
-      const childEnvironment = { ...process.env, ELECTRON_RUN_AS_NODE: '1', NO_COLOR: '1' };
+      const childEnvironment = { ...(options.environment ?? process.env), ELECTRON_RUN_AS_NODE: '1', NO_COLOR: '1' };
       // 桌面接入必须注册当前安装包，不能沿用外部终端给 CLI 设置的替代入口。
       delete (childEnvironment as NodeJS.ProcessEnv).ZHICUI_CLI_EXECUTABLE;
       const child = execFile(

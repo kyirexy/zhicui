@@ -13,6 +13,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   DesktopAgentIntegration,
+  resolveAgentAuthorizationScopes,
   resolveBundledCliEntry,
 } from '../dist/agent-integration.js';
 import {
@@ -31,6 +32,18 @@ import { validateDesktopAgentIntegrationRequest } from '../dist/security.js';
 
 const scriptDirectory = fileURLToPath(new URL('.', import.meta.url));
 const desktopRoot = resolve(scriptDirectory, '..');
+const fullScopes = ['library:read', 'library:write', 'ask:run', 'knowledge:read', 'knowledge:write', 'plan:read', 'plan:write', 'creator:sync', 'local:invoke', 'account:read', 'creator:read', 'ask:read', 'models:read'];
+const coreScopes = fullScopes.filter(scope => !['library:write', 'creator:sync', 'local:invoke'].includes(scope));
+const publicCapabilities = (profile, scopes) => ({ feature_enabled: true, release_profile: profile, scopes: scopes.map(id => ({ id })) });
+assert.deepEqual(resolveAgentAuthorizationScopes(publicCapabilities('core', coreScopes)), { releaseProfile: 'core', scopes: coreScopes });
+assert.deepEqual(resolveAgentAuthorizationScopes(publicCapabilities('full', fullScopes)), { releaseProfile: 'full', scopes: fullScopes });
+for (const invalid of [
+  {}, publicCapabilities('future', coreScopes), publicCapabilities('core', []),
+  publicCapabilities('core', ['local:invoke']), publicCapabilities('full', ['admin:all']),
+  publicCapabilities('full', ['library:read', 'library:read']),
+  { ...publicCapabilities('core', coreScopes), feature_enabled: false },
+  { ...publicCapabilities('core', coreScopes), scopes: ['library:read'] },
+]) assert.throws(() => resolveAgentAuthorizationScopes(invalid));
 
 assert.deepEqual(
   validateDesktopAgentIntegrationRequest({ client: 'codex', operation: 'setup' }),
@@ -92,7 +105,7 @@ try {
   const fakeCli = join(temporary, 'fake-cli.cjs');
   const fakeState = join(temporary, 'fake-state.json');
   const fakeCalls = join(temporary, 'fake-calls.jsonl');
-  const initialState = { configured: false, authenticated: false, cloud_available: true, mcp_healthy: true, auth_mode: 'success' };
+  const initialState = { configured: false, authenticated: false, cloud_available: true, mcp_healthy: true, auth_mode: 'success', release_profile: 'full' };
   await writeFile(fakeState, JSON.stringify(initialState));
   await writeFile(fakeCli, [
     "const fs = require('node:fs');",
@@ -106,7 +119,12 @@ try {
     "const client = args[args.indexOf('--client') + 1] || 'codex';",
     "const operation = args[1] || 'status';",
     "const write = (value) => process.stdout.write(JSON.stringify(value) + '\\n');",
-    "if (args[0] === 'auth') {",
+    "if (args[0] === 'capabilities') {",
+    `  const fullScopes = ${JSON.stringify(fullScopes)};`,
+    `  const coreScopes = ${JSON.stringify(coreScopes)};`,
+    "  if (state.capabilities_failure) { write({ status: 'failed', error: { code: 'INTERFACE_DISABLED' } }); process.exitCode=7; }",
+    "  else write({ feature_enabled: true, release_profile: state.release_profile, scopes: (state.scope_override || (state.release_profile === 'core' ? coreScopes : fullScopes)).map(id => ({ id })) });",
+    "} else if (args[0] === 'auth') {",
     "  write({event:'device_authorization',status:'waiting_for_user',user_code:'TEST-1234',expires_at:'2099-01-01T00:00:00Z',verification_url:'https://luxai.cn/agent-access',device_code:'SHOULD_NOT_LEAVE_PROCESS',access_token:'FAKE_SECRET_ACCESS',terminal:false});",
     "  setTimeout(() => {",
     "    if (state.auth_mode === 'error') { write({event:'error',status:'failed',error:{code:'INTERFACE_DISABLED',message:'Agent 接口尚未启用 device_code=FAKE_SECRET_DEVICE'},terminal:true}); process.exitCode=7; return; }",
@@ -157,8 +175,27 @@ try {
   assert.equal((await integration.status()).authorization, undefined, '已完成授权不重放旧设备码');
   assert.deepEqual(authorizationEvents.map((event) => event.status), ['starting', 'waiting', 'success']);
   assert.equal(authorizationEvents[1].user_code, 'TEST-1234');
+  assert.deepEqual(authorizationEvents[1].scopes, fullScopes);
+  assert.equal(authorizationEvents[1].release_profile, 'full');
   assert.ok(authorizationEvents.every((event) => event.authorization_id === completedId));
   assert.doesNotMatch(JSON.stringify(authorizationEvents), /SHOULD_NOT|FAKE_SECRET|device_code|access_token|verification_url/);
+  await writeFile(fakeState, JSON.stringify({ ...initialState, configured: true, release_profile: 'core' }));
+  authorizationEvents.length = 0;
+  assert.equal((await integration.run({ client: 'codex', operation: 'authorize', authorization_id: randomUUID() })).success, true);
+  assert.deepEqual(authorizationEvents.find(event => event.status === 'waiting').scopes, coreScopes);
+  assert.equal(authorizationEvents.find(event => event.status === 'waiting').release_profile, 'core');
+  const callsBeforeFailures = (await readFile(fakeCalls, 'utf8')).trim().split('\n').map(line => JSON.parse(line)).filter(args => args[0] === 'auth').length;
+  for (const invalid of [
+    { release_profile: 'unknown' }, { capabilities_failure: true },
+    { release_profile: 'core', scope_override: [] },
+    { release_profile: 'core', scope_override: ['local:invoke'] },
+  ]) {
+    await writeFile(fakeState, JSON.stringify({ ...initialState, configured: true, ...invalid }));
+    const result = await integration.run({ client: 'codex', operation: 'authorize', authorization_id: randomUUID() });
+    assert.equal(result.success, false);
+    assert.equal(result.code, 'AGENT_CAPABILITIES_UNAVAILABLE');
+  }
+  assert.equal((await readFile(fakeCalls, 'utf8')).trim().split('\n').map(line => JSON.parse(line)).filter(args => args[0] === 'auth').length, callsBeforeFailures, '无法确认能力时不得创建授权请求');
   await writeFile(fakeState, JSON.stringify({ ...initialState, configured: true, authenticated: true, cloud_available: false }));
   const cloudClosed = await integration.status();
   assert.equal(cloudClosed.clients[0].configured, true);
@@ -210,8 +247,10 @@ try {
   assert.equal(calls.filter((args) => args[1] === 'reconcile').length, 1, '重复启动检查合并，不并发修改配置');
   assert.deepEqual(calls.find((args) => args[1] === 'reconcile'), ['agent', 'reconcile', '--client', 'all', '--json', '--non-interactive']);
   assert.ok(calls.filter((args) => args[0] === 'auth').every((args) => args.includes('--no-open') && args.includes('--jsonl')));
-  for (const args of calls.filter((item) => item[0] === 'auth')) {
-    assert.deepEqual(args[args.indexOf('--scopes') + 1].split(','), ['library:read', 'library:write', 'ask:run', 'knowledge:read', 'knowledge:write', 'plan:read', 'plan:write', 'creator:sync', 'local:invoke']);
+  assert.ok(calls.filter(args => args[0] === 'capabilities').every(args => args.join(' ') === 'capabilities --public --json --non-interactive'));
+  const authorizationCalls = calls.filter(item => item[0] === 'auth');
+  for (const [index, args] of authorizationCalls.entries()) {
+    assert.deepEqual(args[args.indexOf('--scopes') + 1].split(','), index === 1 ? coreScopes : fullScopes);
   }
   assert.ok(calls.every((args) => !args.includes('logout')), '取消授权不应注销已经保存的 CLI 账号');
 

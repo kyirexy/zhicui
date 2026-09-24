@@ -16,7 +16,7 @@ import { useVideoAnalysis } from '@/lib/hooks/VideoAnalysisContext';
 import { useCreatorSync } from '@/lib/hooks/CreatorSyncContext';
 import { isNativeMobileApp } from '@/lib/douyinNative';
 import QRModal from '@/components/QRModal';
-import { PRODUCT_DESTINATIONS, isProductDestinationActive } from '@/lib/productNavigation';
+import { AGENT_ACCESS_DESTINATION, PRODUCT_DESTINATIONS, isProductDestinationActive } from '@/lib/productNavigation';
 import styles from './MarketingHeader.module.css';
 
 export default function AppHeader() {
@@ -84,6 +84,7 @@ export default function AppHeader() {
                   <span>{user.username || user.email}</span>
                   {user.is_admin && <small>管理员</small>}
                 </span>
+                <Link href="/agent-access" className={styles.adminLink}>Agent 接入</Link>
                 {user.is_admin && (
                   <Link href="/admin" className={styles.adminLink}>
                     <GearSix size={16} weight="light" aria-hidden="true" />
@@ -145,7 +146,7 @@ export default function AppHeader() {
       </a>
 
       <nav className="flex items-center gap-1" aria-label="产品导航">
-        {PRODUCT_DESTINATIONS.map(({ id, href, label }) => {
+        {[...PRODUCT_DESTINATIONS, AGENT_ACCESS_DESTINATION].map(({ id, href, label }) => {
           const active = isProductDestinationActive(id, pathname || '/');
           return (
           <Link

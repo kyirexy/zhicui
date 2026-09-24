@@ -13,6 +13,9 @@ EVIDENCE_ROOT="${DEPLOY_EVIDENCE_DIR:-/var/lib/zhicui-deployments}"
 BACKUP_STATUS_FILE="${BACKUP_STATUS_FILE:-/var/lib/zhicui-backups/latest.json}"
 LOCK_FILE="${DEPLOY_LOCK_FILE:-/tmp/zhicui-deploy.lock}"
 AGENT_RELEASE_MODE="${AGENT_RELEASE_MODE:-dark}"
+AGENT_CAPABILITY_PROFILE='full'
+AGENT_CAPABILITY_MANIFEST_PATH=''
+AGENT_CAPABILITY_MANIFEST_SHA256=''
 AGENT_KILL_SWITCH_FILE="/etc/zhicui/agent-interface.env"
 AGENT_KILL_SWITCH_HELPER="/usr/local/lib/zhicui-deploy/agent-interface-kill-switch.sh"
 RELEASE_EVIDENCE_HELPER="/usr/local/lib/zhicui-deploy/release-evidence-store.py"
@@ -69,13 +72,14 @@ for command_name in flock git npm node curl python3 python3.12 timeout cmp diff 
 done
 case "$AGENT_RELEASE_MODE" in
   dark|stable) ;;
-  *) err 'AGENT_RELEASE_MODE 只能是 dark 或 stable' ;;
+  core) AGENT_CAPABILITY_PROFILE='core' ;;
+  *) err 'AGENT_RELEASE_MODE 只能是 dark、core 或 stable' ;;
 esac
 [[ "$PYPI_INDEX_URL" =~ ^https://[^[:space:]]+/simple/?$ ]] ||
   err 'ZHICUI_PYPI_INDEX_URL 必须是 HTTPS simple 索引'
 [[ "$PIP_NETWORK_TIMEOUT" =~ ^[1-9][0-9]*$ && "$PIP_NETWORK_RETRIES" =~ ^[1-9][0-9]*$ ]] ||
   err 'pip 超时与重试次数必须是正整数'
-if [[ "$AGENT_RELEASE_MODE" == stable && "${SMOKE_REQUIRE_AGENT_INTERFACE:-1}" != 1 ]]; then
+if [[ "$AGENT_RELEASE_MODE" != dark && "${SMOKE_REQUIRE_AGENT_INTERFACE:-1}" != 1 ]]; then
   err 'Stable 发布不得跳过 Agent Action/PAT/MCP 冒烟'
 fi
 [[ "$APP_DIR" == /opt/zhicui && "$RUNTIME_ROOT" == /opt/zhicui-runtime ]] ||
@@ -280,10 +284,10 @@ probe_agent_interface() {
     curl -sS --max-time 8 -o "$body" -w '%{http_code}' \
       http://127.0.0.1:8000/api/agent-interface/v1/capabilities
   )" || { rm -f -- "$body"; return 1; }
-  if python3 - "$expected" "$status" "$body" <<'PY'
+  if python3 - "$expected" "$status" "$body" "$AGENT_CAPABILITY_PROFILE" <<'PY'
 import json, sys
 
-expected, status, path = sys.argv[1:]
+expected, status, path, profile = sys.argv[1:]
 try:
     payload = json.load(open(path, encoding="utf-8"))
 except (OSError, ValueError):
@@ -292,7 +296,8 @@ error = payload.get("error") if isinstance(payload, dict) else None
 error_code = error.get("code") if isinstance(error, dict) else None
 data = payload.get("data") if isinstance(payload, dict) else None
 if expected == "enabled":
-    ok = status == "200" and isinstance(data, dict) and data.get("feature_enabled") is True
+    ok = (status == "200" and isinstance(data, dict) and data.get("feature_enabled") is True
+          and data.get("release_profile") == profile)
 elif expected == "disabled":
     ok = status == "503" and error_code == "INTERFACE_DISABLED"
 elif expected == "absent-or-disabled":
@@ -432,7 +437,8 @@ write_evidence() {
       "$BACKUP_SIZE_BYTES" "$BACKUP_METADATA_SHA256" "$BACKUP_STATUS_EVIDENCE_SHA256" \
       "$SMOKE_EVIDENCE_NAME" "$SMOKE_EVIDENCE_SHA256" \
       "$AGENT_SCHEMA_DARK_EVIDENCE" "$AGENT_SCHEMA_DARK_EVIDENCE_SHA256" \
-      "$AGENT_SCHEMA_REHEARSAL_EVIDENCE" "$AGENT_SCHEMA_REHEARSAL_EVIDENCE_SHA256" <<'PY'
+      "$AGENT_SCHEMA_REHEARSAL_EVIDENCE" "$AGENT_SCHEMA_REHEARSAL_EVIDENCE_SHA256" \
+      "$AGENT_CAPABILITY_PROFILE" "$AGENT_CAPABILITY_MANIFEST_SHA256" <<'PY'
 import json, os, sys
 from datetime import datetime, timezone
 (source, deploy_id, started_at, exit_status, previous_commit, target_commit,
@@ -441,7 +447,7 @@ from datetime import datetime, timezone
  backup_size_bytes, backup_metadata_sha256, backup_status_evidence_sha256,
  smoke_evidence_name, smoke_evidence_sha256, dark_evidence_name,
  dark_evidence_sha256, rehearsal_evidence_name,
- rehearsal_evidence_sha256) = sys.argv[1:]
+ rehearsal_evidence_sha256, agent_release_profile, agent_capability_manifest_sha256) = sys.argv[1:]
 checks = []
 if os.path.exists(source):
     for line in open(source, encoding="utf-8"):
@@ -469,6 +475,8 @@ payload = {
               backup_metadata_sha256, backup_status_evidence_sha256)) else None),
     "rollback": rollback,
     "agent_release_mode": agent_release_mode,
+    "agent_release_profile": agent_release_profile,
+    "agent_capability_manifest_sha256": agent_capability_manifest_sha256 or None,
     "previous_agent_schema_fingerprint": previous_agent_schema_fingerprint or None,
     "target_agent_schema_fingerprint": target_agent_schema_fingerprint or None,
     "smoke_evidence": ({"name": smoke_evidence_name, "sha256": smoke_evidence_sha256}
@@ -587,6 +595,11 @@ if values.get("PUBLIC_APP_URL", "").rstrip("/") != "https://luxai.cn":
     errors.append("PUBLIC_APP_URL 必须为 https://luxai.cn")
 if "AGENT_INTERFACE_ENABLED" in values:
     errors.append("AGENT_INTERFACE_ENABLED 禁止写入共享 backend/.env；必须使用独立 kill-switch")
+if "AGENT_INTERFACE_PROFILE" in values:
+    errors.append("AGENT_INTERFACE_PROFILE 禁止写入共享 backend/.env；能力范围由独立 kill-switch 管理")
+if release_mode == "core":
+    if values.get("AGENT_INTERFACE_USER_ALLOWLIST", "").strip() or values.get("AGENT_INTERFACE_ACTION_ALLOWLIST", "").strip():
+        errors.append("Core 使用固定版本化能力清单，不得另设灰度列表改变实测范围")
 if release_mode == "stable":
     if values.get("AGENT_AUTOMATION_ENABLED", "").lower() != "true":
         errors.append("Stable 发布要求 AGENT_AUTOMATION_ENABLED=true")
@@ -647,7 +660,7 @@ if errors: raise SystemExit("；".join(errors))
 PY
 record_gate production_env pass "CORS、限流、监控、备份模式、Agent Automation 与独立秘密配置通过"
 
-for helper_action in dark stable verify-dark verify-stable; do
+for helper_action in dark stable core verify-dark verify-stable verify-core; do
   sudo -n -l "$AGENT_KILL_SWITCH_HELPER" "$helper_action" >/dev/null 2>&1 ||
     err "缺少 Agent kill-switch $helper_action 权限；请先执行 preinstall-production-assets.sh"
 done
@@ -677,7 +690,7 @@ else
   record_gate agent_kill_switch_preflight pass 'Stable 从已验证的 dark=false 与关闭态接口进入'
 fi
 
-if [[ "$AGENT_RELEASE_MODE" == stable ]]; then
+if [[ "$AGENT_RELEASE_MODE" != dark ]]; then
   PREVIOUS_AGENT_SCHEMA_FINGERPRINT="$(verify_agent_schema "$PREVIOUS_RUNTIME")" ||
     err 'Agent Stable 数据库结构前置条件未满足'
   DARK_EVIDENCE_RESULT="$(verify_agent_schema_dark_baseline \
@@ -772,7 +785,7 @@ log '获取目标提交并创建不可变 worktree'
 git fetch --prune origin master
 TARGET_COMMIT="$(git rev-parse origin/master)"
 [[ "$TARGET_COMMIT" =~ ^[0-9a-f]{40}$ ]] || err '无法解析 origin/master'
-if [[ "$AGENT_RELEASE_MODE" == stable ]]; then
+if [[ "$AGENT_RELEASE_MODE" != dark ]]; then
   [[ "$PREVIOUS_RUNTIME_COMMIT" == "$TARGET_COMMIT" ]] ||
     err 'Stable 只允许晋级当前已完成 dark 验收的同一 Git 提交；请先对目标提交执行 dark'
   REHEARSAL_EVIDENCE_RESULT="$(verify_agent_schema_rehearsal \
@@ -832,6 +845,14 @@ ensure_disk_room_for_release() {
 ensure_disk_room_for_release
 git worktree add --detach "$RELEASE_DIR" "$TARGET_COMMIT"
 WORKTREE_CREATED=1
+if [[ "$AGENT_CAPABILITY_PROFILE" == core ]]; then
+  AGENT_CAPABILITY_MANIFEST_PATH="$RELEASE_DIR/backend/app/agent_interface/core_capabilities_v1.json"
+else
+  AGENT_CAPABILITY_MANIFEST_PATH="$RELEASE_DIR/backend/app/agent_interface/stable_capabilities_v1.json"
+fi
+[[ -s "$AGENT_CAPABILITY_MANIFEST_PATH" ]] || err '目标提交缺少对应范围的版本化能力清单'
+AGENT_CAPABILITY_MANIFEST_SHA256="$(sha256sum "$AGENT_CAPABILITY_MANIFEST_PATH" | cut -d ' ' -f1)"
+record_gate agent_capability_profile pass "$AGENT_CAPABILITY_PROFILE@$AGENT_CAPABILITY_MANIFEST_SHA256"
 if ! timeout 120s git -C "$RELEASE_DIR" -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 submodule update --init --recursive; then
   warn '可选集成子模块未能在 120 秒内更新；主应用继续，sidecar 保持已安装版本'
 fi
@@ -991,14 +1012,14 @@ sudo systemctl stop "$(frontend_unit "$PREVIOUS_FRONTEND_COLOR")" >/dev/null 2>&
 
 TARGET_AGENT_SCHEMA_FINGERPRINT="$(verify_agent_schema "$RELEASE_DIR")" ||
   err '目标 runtime 的 Agent PostgreSQL 结构校验失败'
-if [[ "$AGENT_RELEASE_MODE" == stable ]]; then
+if [[ "$AGENT_RELEASE_MODE" != dark ]]; then
   [[ "$TARGET_AGENT_SCHEMA_FINGERPRINT" == "$PREVIOUS_AGENT_SCHEMA_FINGERPRINT" ]] ||
     err 'Stable 启动改变了 dark 已验收的 Agent PostgreSQL 结构；拒绝开放接口'
 fi
 record_gate agent_schema_target pass \
   "$TARGET_AGENT_SCHEMA_FINGERPRINT（8 张表的列、非空、主键、唯一约束、索引和外键通过）"
-if [[ "$AGENT_RELEASE_MODE" == stable ]]; then
-  sudo -n "$AGENT_KILL_SWITCH_HELPER" verify-stable >/dev/null ||
+if [[ "$AGENT_RELEASE_MODE" != dark ]]; then
+  sudo -n "$AGENT_KILL_SWITCH_HELPER" "verify-$AGENT_RELEASE_MODE" >/dev/null ||
     err 'Stable 目标运行态 kill-switch 并非 true'
   probe_agent_interface enabled ||
     err 'Stable 目标运行态未公开有效 capabilities'
@@ -1029,7 +1050,9 @@ SMOKE_DEPLOYMENT_ID="$DEPLOY_ID" \
 SMOKE_TARGET_COMMIT="$TARGET_COMMIT" \
 SMOKE_REQUIRE_AUTHENTICATED="${SMOKE_REQUIRE_AUTHENTICATED:-1}" \
 SMOKE_REQUIRE_AGENT_SSE="${SMOKE_REQUIRE_AGENT_SSE:-1}" \
-SMOKE_REQUIRE_AGENT_INTERFACE="$([[ "$AGENT_RELEASE_MODE" == stable ]] && printf 1 || printf 0)" \
+SMOKE_REQUIRE_AGENT_INTERFACE="$([[ "$AGENT_RELEASE_MODE" != dark ]] && printf 1 || printf 0)" \
+SMOKE_AGENT_PROFILE="$AGENT_CAPABILITY_PROFILE" \
+SMOKE_AGENT_CAPABILITY_MANIFEST="$AGENT_CAPABILITY_MANIFEST_PATH" \
 SMOKE_LOGIN_EMAIL="${SMOKE_LOGIN_EMAIL:-}" \
 SMOKE_PASSWORD_FILE="${SMOKE_PASSWORD_FILE:-}" \
 SMOKE_SOURCE_ID="$SMOKE_SOURCE_ID" \
@@ -1043,7 +1066,7 @@ record_gate smoke_fixture_cleanup pass '隔离资料与残留会话已清理'
 
 sudo -n "$AGENT_KILL_SWITCH_HELPER" "verify-$AGENT_RELEASE_MODE" >/dev/null ||
   err '完成发布前 Agent kill-switch 状态发生漂移'
-if [[ "$AGENT_RELEASE_MODE" == stable ]]; then
+if [[ "$AGENT_RELEASE_MODE" != dark ]]; then
   probe_agent_interface enabled || err '完成发布前 Stable Agent 接口状态发生漂移'
 else
   probe_agent_interface disabled || err '完成发布前 dark Agent 接口状态发生漂移'

@@ -28,10 +28,19 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const clientGateActive = desktopResolved && policy.browserClientGate;
   useEffect(() => {
     if (!desktopResolved || !policy.browserClientGate) return;
+    // 旧设置链接继续进入独立的授权管理页；其他客户端页面保持门禁。
+    const params = new URLSearchParams(window.location.search);
+    if (pathname === '/settings' && params.get('section') === 'agent') {
+      params.delete('section');
+      const query = params.toString();
+      router.replace(`/agent-access${query ? `?${query}` : ''}`);
+      return;
+    }
     router.replace('/#download');
   }, [
     desktopResolved,
     policy.browserClientGate,
+    pathname,
     router,
   ]);
 

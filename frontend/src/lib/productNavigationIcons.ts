@@ -4,6 +4,7 @@ import {
   Clapperboard,
   House,
   Link2,
+  Plug,
   Sparkles,
   UserRound,
   Video,
@@ -18,6 +19,7 @@ export const PRODUCT_NAVIGATION_ICONS: Record<ProductDestinationId, LucideIcon> 
   creators: UserRound,
   harness: Sparkles,
   studio: Clapperboard,
+  'agent-access': Plug,
   knowledge: BookOpenText,
   plans: CalendarCheck,
 };

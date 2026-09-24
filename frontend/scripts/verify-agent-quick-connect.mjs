@@ -15,11 +15,11 @@ const errors = [];
 const fixtureUser = { id: 'agent-ui-fixture', email: 'fixture@example.invalid', username: '接入验收', is_active: true, is_admin: false, email_verified: true, agent_profile_key: 'fixture-profile', created_at: '2026-09-01T00:00:00Z' };
 const fixtureToken = `fixture.${Buffer.from(JSON.stringify({ sub: fixtureUser.id, exp: Math.floor(Date.now() / 1000) + 3600 })).toString('base64url')}.fixture`;
 
-async function scenario(name, { disabled = false, desktop = true, legacy = false, resume = false, cancelRetry = false } = {}) {
-  const context = await browser.newContext({ viewport: { width: desktop ? 1440 : 390, height: 1000 }, permissions: ['clipboard-read', 'clipboard-write'] });
+async function scenario(name, { disabled = false, desktop = true, nativeMobile = !desktop, legacy = false, resume = false, cancelRetry = false, pat = false, profile = 'full' } = {}) {
+  const context = await browser.newContext({ viewport: { width: desktop || !nativeMobile ? 1440 : 390, height: 1000 }, permissions: ['clipboard-read', 'clipboard-write'], bypassCSP: true });
   const page = await context.newPage();
   page.on('pageerror', error => errors.push(`${name}: ${error.message}`));
-  await context.addInitScript(({ desktop, legacy, disabled, resume, fixtureToken }) => {
+  await context.addInitScript(({ desktop, nativeMobile, legacy, disabled, resume, fixtureToken }) => {
     localStorage.setItem('zhicui_token', fixtureToken);
     const state = window.__agentFixture = { configured: resume, authorized: false, calls: [], listeners: new Set(), pending: null, copied: '', activeId: resume ? '90f2d2a8-9b24-4336-9ac5-3e5f10c587fc' : null, activeClient: resume ? 'claude' : 'codex' };
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async value => { state.copied = value; } } });
@@ -31,9 +31,11 @@ async function scenario(name, { disabled = false, desktop = true, legacy = false
       state.pending = null;
     };
     if (!desktop) {
-      window.androidBridge = {};
-      window.CapacitorCustomPlatform = { name: 'android' };
-      window.Capacitor = { isNativePlatform: () => true, getPlatform: () => 'android', Plugins: {} };
+      if (nativeMobile) {
+        window.androidBridge = {};
+        window.CapacitorCustomPlatform = { name: 'android' };
+        window.Capacitor = { isNativePlatform: () => true, getPlatform: () => 'android', Plugins: {} };
+      }
       return;
     }
     const current = () => ({ client: 'codex', installed: true, configured: state.configured, managed: state.configured,
@@ -66,14 +68,19 @@ async function scenario(name, { disabled = false, desktop = true, legacy = false
       if (String(key).startsWith('on')) return () => () => {};
       return async () => ({ success: true, status: 'idle' });
     } });
-  }, { desktop, legacy, disabled, resume, fixtureToken });
+  }, { desktop, nativeMobile, legacy, disabled, resume, fixtureToken });
   await context.route('**/*', async route => {
     const url = new URL(route.request().url());
     if (url.pathname.startsWith('/api/')) {
       if (url.pathname.startsWith('/api/agent-interface/')) {
         if (disabled) return route.fulfill({ status: 503, json: { status: 'failed', error: { code: 'INTERFACE_DISABLED', message: '尚未开放' }, data: null } });
         let data = { items: [] };
-        if (url.pathname.endsWith('/capabilities')) data = { actions: [], scopes: [{ id: 'library:read', title: '读取资料', description: '查看视频资料' }], user_hash: 'fixture-profile' };
+        if (url.pathname.endsWith('/capabilities')) data = { release_profile: profile, limitations: [], feature_enabled: true, actions: [], scopes: [{ id: 'library:read', title: '读取资料', description: '查看视频资料' }], user_hash: 'fixture-profile' };
+        if (url.pathname.endsWith('/credentials/pat')) {
+          const input = route.request().postDataJSON();
+          assert.deepEqual(input.scopes, ['library:read']);
+          data = { token: 'zhc_pat_fixture_not_a_real_token', credential: { id: 'pat-fixture', type: 'pat', name: input.name, token_prefix: 'zhc_pat_fixture', scopes: input.scopes, created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 86400000).toISOString(), revoked_at: null, last_used_at: null } };
+        }
         if (url.pathname.endsWith('/auth/device/request')) data = { client_name: '知萃桌面连接', client_type: 'cli', scopes: ['library:read', 'ask:run', 'local:invoke'], expires_at: '2026-09-15T00:00:00Z' };
         if (url.pathname.endsWith('/auth/device/approve')) {
           const approve = route.request().postDataJSON().approve;
@@ -89,12 +96,31 @@ async function scenario(name, { disabled = false, desktop = true, legacy = false
     return route.continue();
   });
   await page.goto(`${base}/settings?section=agent`, { waitUntil: 'domcontentloaded', timeout: 90000 });
+  await page.waitForURL('**/agent-access');
   await page.getByRole('heading', { name: '连接你的 AI Agent', exact: true }).waitFor();
   const panel = page.locator('section[aria-labelledby="quick-agent-title"]');
+  const patPanel = page.locator('#personal-access-token');
+  await patPanel.getByRole('heading', { name: '个人访问令牌 PAT', exact: true }).waitFor();
+  if (profile === 'core') await page.getByText('基础接入 · 已保存资料、文稿问答、知识与计划', { exact: true }).waitFor();
+  if (disabled) {
+    await page.getByText('当前环境的 Agent 接口尚未启用', { exact: true }).waitFor();
+    assert.equal(await patPanel.getByRole('button', { name: '创建个人访问令牌', exact: true }).isDisabled(), true);
+  } else if (pat) {
+    await patPanel.getByRole('button', { name: '创建个人访问令牌', exact: true }).click();
+    await patPanel.getByText('请现在复制令牌', { exact: true }).waitFor();
+    assert.equal(await patPanel.getByRole('button', { name: '创建个人访问令牌', exact: true }).isDisabled(), true);
+    await patPanel.getByRole('button', { name: '我已保存，关闭', exact: true }).click();
+    assert.equal(await patPanel.getByText('zhc_pat_fixture_not_a_real_token', { exact: true }).count(), 0);
+    await page.getByRole('heading', { name: '已授权连接', exact: true }).waitFor();
+  }
   if (!desktop) {
-    await panel.getByRole('link', { name: '下载电脑客户端' }).waitFor();
-    await panel.getByRole('button', { name: '复制给 Agent 的提示词' }).click();
+    await panel.getByRole('link', { name: '下载知萃电脑客户端' }).waitFor();
+    await panel.getByRole('button', { name: '复制接入提示词' }).click();
     assert.match(await page.evaluate(() => window.__agentFixture.copied), /先检查当前会话/);
+    if (profile === 'core') {
+      assert.match(await page.evaluate(() => window.__agentFixture.copied), /基础接入不支持平台同步/);
+      assert.match(await panel.locator('code').innerText(), /--scopes account:read,library:read,ask:read,ask:run/);
+    }
     assert.equal(await panel.locator('button', { hasText: '安装到' }).count(), 0);
   } else if (resume) {
     await page.getByRole('heading', { name: '确认连接权限' }).waitFor();
@@ -130,7 +156,7 @@ async function scenario(name, { disabled = false, desktop = true, legacy = false
   assert.equal(await page.locator('[data-nextjs-dialog]').count(), 0);
   const overflow = await panel.evaluate(element => element.scrollWidth > element.clientWidth + 1);
   assert.equal(overflow, false, `${name}: 接入面板不得横向溢出`);
-  await panel.screenshot({ path: `${output}/${name}.png` });
+  await page.screenshot({ path: `${output}/${name}.png`, fullPage: true });
   results.push({ name, passed: true, calls: await page.evaluate(() => window.__agentFixture.calls) });
   await context.close();
 }
@@ -142,6 +168,8 @@ try {
   await scenario('legacy-client', { legacy: true });
   await scenario('restore-authorization', { resume: true });
   await scenario('mobile-help', { desktop: false });
+  await scenario('browser-pat', { desktop: false, nativeMobile: false, pat: true });
+  await scenario('browser-core-pat', { desktop: false, nativeMobile: false, pat: true, profile: 'core' });
   assert.deepEqual(errors, []);
   await writeFile(`${output}/browser-report.json`, JSON.stringify({ results, errors, realPlatformAccess: false }, null, 2));
   console.log(JSON.stringify({ passed: results.length, errors }));

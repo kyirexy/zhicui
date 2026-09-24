@@ -13,6 +13,24 @@ import {
 import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+test('public capabilities works without loading or sending an existing credential', async (t) => {
+  const directory = await temporaryDirectory();
+  const advertised = { release_profile: 'core', feature_enabled: true, scopes: [{ id: 'library:read' }], limitations: ['只使用已有资料'], actions: [action('library.list')] };
+  const server = await startServer((request, response) => {
+    assert.equal(request.headers.authorization, undefined);
+    assert.equal(request.url, '/api/agent-interface/v1/capabilities');
+    json(response, 200, envelope(advertised));
+  });
+  t.after(server.close);
+  const env = credentialEnv(directory, server.url);
+  await writeFile(env.ZHICUI_CREDENTIALS_FILE, 'intentionally-corrupted-unused-profile');
+  const result = await runCli(['capabilities', '--public', '--json', '--non-interactive'], { env });
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), advertised);
+  const missingFlag = await runCli(['capabilities', '--json'], { env });
+  assert.equal(missingFlag.code, 2);
+});
+
 test('PAT stdin, domain invoke and idempotency header form a clean JSON flow', async (t) => {
   const directory = await temporaryDirectory();
   let idempotency = null;
@@ -330,6 +348,7 @@ test('device login requests only the server v1 ordinary-user scopes', async (t) 
   let requestedScopes = null;
   const server = await startServer(async (request, response) => {
     const url = new URL(request.url, 'http://localhost');
+    if (url.pathname.endsWith('/capabilities')) return json(response, 200, envelope({ actions: [] }));
     if (url.pathname.endsWith('/auth/device')) {
       requestedScopes = (await readJsonBody(request)).scopes;
       json(response, 200, envelope({

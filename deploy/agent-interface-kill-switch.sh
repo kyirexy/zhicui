@@ -13,7 +13,7 @@ fail() {
 }
 
 verify_file() {
-  local expected="${1:-}" line_count assignment mode owner
+  local expected="${1:-}" line_count assignment profile_line profile='full' mode owner
   [[ -d "$STATE_DIR" && ! -L "$STATE_DIR" ]] || fail '状态目录不存在或不是受控目录'
   [[ -f "$STATE_FILE" && ! -L "$STATE_FILE" ]] || fail '状态文件不存在或不是普通文件'
   owner="$(stat -c '%u:%g' "$STATE_FILE")"
@@ -21,11 +21,19 @@ verify_file() {
   [[ "$owner" == '0:0' ]] || fail '状态文件必须归 root 所有'
   [[ "$mode" == '600' ]] || fail '状态文件权限必须为 0600'
   line_count="$(grep -Ev '^[[:space:]]*(#|$)' "$STATE_FILE" | wc -l | tr -d '[:space:]')"
-  [[ "$line_count" == 1 ]] || fail '状态文件只能包含一个有效配置项'
-  assignment="$(grep -Ev '^[[:space:]]*(#|$)' "$STATE_FILE")"
+  [[ "$line_count" == 1 || "$line_count" == 2 ]] || fail '状态文件只能包含启用状态与明确的能力范围'
+  assignment="$(grep '^AGENT_INTERFACE_ENABLED=' "$STATE_FILE")"
+  profile_line="$(grep '^AGENT_INTERFACE_PROFILE=' "$STATE_FILE" || true)"
+  if [[ "$line_count" == 2 ]]; then
+    case "$profile_line" in
+      AGENT_INTERFACE_PROFILE=full) profile='full' ;;
+      AGENT_INTERFACE_PROFILE=core) profile='core' ;;
+      *) fail '状态文件的能力范围无效' ;;
+    esac
+  fi
   case "$assignment" in
-    AGENT_INTERFACE_ENABLED=false) current='dark' ;;
-    AGENT_INTERFACE_ENABLED=true) current='stable' ;;
+    AGENT_INTERFACE_ENABLED=false) [[ "$profile" == full ]] || fail '关闭态不接受能力范围覆盖'; current='dark' ;;
+    AGENT_INTERFACE_ENABLED=true) [[ "$profile" == core ]] && current='core' || current='stable' ;;
     *) fail '状态文件包含未知或无效配置' ;;
   esac
   if [[ -n "$expected" && "$current" != "$expected" ]]; then
@@ -35,11 +43,12 @@ verify_file() {
 }
 
 write_mode() {
-  local requested="$1" enabled temporary
+  local requested="$1" enabled temporary profile='full'
   case "$requested" in
     dark) enabled='false' ;;
     stable) enabled='true' ;;
-    *) fail '写入模式只能是 dark 或 stable' ;;
+    core) enabled='true'; profile='core' ;;
+    *) fail '写入模式只能是 dark、core 或 stable' ;;
   esac
   install -d -o root -g root -m 0755 "$STATE_DIR"
   [[ ! -L "$STATE_DIR" ]] || fail '拒绝写入符号链接目录'
@@ -48,8 +57,8 @@ write_mode() {
   fi
   temporary="$(mktemp "$STATE_DIR/.agent-interface.env.XXXXXX")"
   trap 'rm -f -- "$temporary"' RETURN
-  printf '# Managed by deploy/agent-interface-kill-switch.sh; do not edit.\nAGENT_INTERFACE_ENABLED=%s\n' \
-    "$enabled" >"$temporary"
+  printf '# Managed by deploy/agent-interface-kill-switch.sh; do not edit.\nAGENT_INTERFACE_ENABLED=%s\nAGENT_INTERFACE_PROFILE=%s\n' \
+    "$enabled" "$profile" >"$temporary"
   chown root:root "$temporary"
   chmod 0600 "$temporary"
   mv -fT -- "$temporary" "$STATE_FILE"
@@ -59,9 +68,10 @@ write_mode() {
 
 [[ "${EUID:-$(id -u)}" -eq 0 ]] || fail '必须以 root 身份运行'
 case "${1:-}" in
-  dark|stable) write_mode "$1" ;;
+  dark|stable|core) write_mode "$1" ;;
   verify) verify_file ;;
   verify-dark) verify_file dark ;;
   verify-stable) verify_file stable ;;
-  *) fail '用法：agent-interface-kill-switch.sh dark|stable|verify|verify-dark|verify-stable' ;;
+  verify-core) verify_file core ;;
+  *) fail '用法：agent-interface-kill-switch.sh dark|stable|core|verify|verify-dark|verify-stable|verify-core' ;;
 esac

@@ -5,6 +5,7 @@ export type ProductDestinationId =
   | 'creators'
   | 'harness'
   | 'studio'
+  | 'agent-access'
   | 'knowledge'
   | 'plans';
 
@@ -87,6 +88,15 @@ const STUDIO_DESTINATION: ProductDestination = {
   group: 'workspace',
 };
 
+export const AGENT_ACCESS_DESTINATION: ProductDestination = {
+  id: 'agent-access',
+  href: '/agent-access',
+  label: 'Agent 接入',
+  mobileLabel: 'Agent',
+  description: '连接 AI 工具并管理个人访问令牌',
+  group: 'workspace',
+};
+
 /** 桌面端左侧导航容纳独立解析和博主入口；移动端继续保持五个主 Tab。 */
 export const DESKTOP_PRODUCT_DESTINATIONS: ProductDestination[] = PRODUCT_DESTINATIONS.flatMap(
   (destination) => {
@@ -94,7 +104,7 @@ export const DESKTOP_PRODUCT_DESTINATIONS: ProductDestination[] = PRODUCT_DESTIN
       return [destination, SINGLE_LINK_EXTRACT_DESTINATION, CREATOR_DESTINATION];
     }
     if (destination.id === 'plans') {
-      return [destination, STUDIO_DESTINATION];
+      return [destination, STUDIO_DESTINATION, AGENT_ACCESS_DESTINATION];
     }
     return [destination];
   },
@@ -111,6 +121,7 @@ export function isProductDestinationActive(
   if (destination === 'library') return pathname.startsWith('/library');
   if (destination === 'harness') return pathname.startsWith('/harness');
   if (destination === 'studio') return pathname.startsWith('/studio');
+  if (destination === 'agent-access') return pathname === '/agent-access';
   return pathname.startsWith('/notes');
 }
 

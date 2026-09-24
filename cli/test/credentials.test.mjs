@@ -25,6 +25,7 @@ function fakeCredential() {
   return {
     kind: 'pat',
     access_token: 'fake-local-only-no-real-token',
+    token_prefix: 'zhc_pa…',
     created_at: new Date().toISOString(),
     scopes: ['library:read', '中文测试'],
   };

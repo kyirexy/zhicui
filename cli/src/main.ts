@@ -108,6 +108,7 @@ function helpPayload(): Record<string, unknown> {
       'run wait|resume|get|cancel <run_id>',
       'run actions',
       'run describe <action_id>',
+      'capabilities --public',
       'mcp serve --stdio',
       'agent setup|doctor|status|update|reconcile|uninstall [--client all|codex|claude]',
       'account export --output <new-file.zip>  # password via no-echo stdin',
@@ -225,7 +226,7 @@ async function authCommand(
 
   const scopes = scopesValue
     ? scopesValue.split(',').map((value) => value.trim()).filter(Boolean)
-    : DEFAULT_DEVICE_SCOPES;
+    : await client.defaultDeviceScopes(DEFAULT_DEVICE_SCOPES);
   const authorizationSession = await credentials.beginDeviceAuthorization();
   const started = await client.startDeviceAuthorization(scopes);
   const deviceCode = typeof started.device_code === 'string' ? started.device_code : '';
@@ -844,7 +845,7 @@ export async function runCli(argv: string[]): Promise<number> {
       writer.result({ name: '@zhicui/cli', version: CLI_VERSION });
       return EXIT_CODES.success;
     }
-    if (!USER_COMMAND_DOMAINS.includes(domain as (typeof USER_COMMAND_DOMAINS)[number])) {
+    if (domain !== 'capabilities' && !USER_COMMAND_DOMAINS.includes(domain as (typeof USER_COMMAND_DOMAINS)[number])) {
       throw usageError(`未知命令域：${domain}`);
     }
     if (command.includes('--help') || command.includes('-h')) {
@@ -868,7 +869,11 @@ export async function runCli(argv: string[]): Promise<number> {
     }
     const credentials = new CredentialManager(options.profile, options.apiUrl);
     const client = clientFor(options, credentials);
-    if (domain === 'auth') await authCommand(command, options, writer, credentials, client);
+    if (domain === 'capabilities') {
+      if (!takeFlag(command, '--public') || command.length) throw usageError('用法：zhicui capabilities --public');
+      writer.result(await client.publicCapabilities());
+    }
+    else if (domain === 'auth') await authCommand(command, options, writer, credentials, client);
     else if (domain === 'run') await runCommand(command, options, writer, client);
     else if (domain === 'mcp') {
       const subcommand = command.shift();

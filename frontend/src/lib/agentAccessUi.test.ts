@@ -97,6 +97,42 @@ test('Agent API 的列表结构不携带 token，创建结果单独声明一次�
   assert.match(api, /INTERFACE_DISABLED/);
 });
 
+test('PAT 创建在首屏连接区始终可见，服务关闭时只禁用创建而不隐藏入口', () => {
+  const component = read('components/AgentAccessSettingsCard.tsx');
+  const patPosition = component.indexOf('id="personal-access-token"');
+  assert.ok(patPosition > component.indexOf('<AgentQuickConnect'));
+  assert.ok(patPosition < component.indexOf('aria-labelledby="device-authorization-title"'));
+  assert.doesNotMatch(component, /高级接入：个人访问令牌/);
+  assert.match(component, /disabled=\{creating \|\| loading \|\| interfaceDisabled \|\| Boolean\(oneTimeToken\)\}/);
+  assert.match(component, /当前环境的 Agent 接口尚未启用/);
+  assert.doesNotMatch(component, /localStorage\.setItem|sessionStorage\.setItem|console\.log/);
+});
+
+test('独立授权页与旧设置入口衔接，网页不再只能下载客户端', () => {
+  const page = read('app/agent-access/page.tsx');
+  const settings = read('app/settings/page.tsx');
+  const quickConnect = read('components/AgentQuickConnect.tsx');
+  const guard = read('components/AuthGuard.tsx');
+  assert.match(page, /AgentAccessSettingsCard/);
+  assert.match(settings, /router\.push\('\/agent-access'\)/);
+  assert.match(guard, /pathname === '\/settings' && params\.get\('section'\) === 'agent'/);
+  assert.match(quickConnect, /<code>\{loginCommand\}<\/code>/);
+  assert.match(quickConnect, /输入设备授权码/);
+});
+
+test('基础接入遵循服务端能力范围，提示词和授权命令不申请同步下载权限', () => {
+  const component = read('components/AgentAccessSettingsCard.tsx');
+  const quickConnect = read('components/AgentQuickConnect.tsx');
+  const prompt = read('lib/agentQuickConnect.ts');
+  assert.match(component, /capabilities\?\.release_profile === 'core'/);
+  assert.match(component, /capabilities \? capabilities\.scopes : FALLBACK_SCOPES/);
+  assert.match(component, /基础接入 · 已保存资料、文稿问答、知识与计划/);
+  assert.match(quickConnect, /coreAccess \? AGENT_CORE_HANDOFF_PROMPT/);
+  const command = prompt.match(/CORE_AGENT_LOGIN_COMMAND = '([^']+)'/)?.[1] || '';
+  assert.match(command, /ask:run/);
+  assert.doesNotMatch(command, /creator:sync|library:write|analysis:|local:invoke/);
+});
+
 test('桌面网页登录交接保留不透明 Agent 账号标识并立即绑定', () => {
   const runtime = read('lib/desktopRuntime.ts');
   const auth = read('lib/hooks/AuthContext.tsx');

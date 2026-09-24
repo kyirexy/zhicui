@@ -257,6 +257,26 @@ export class AgentApiClient {
     return record(envelope.data ?? payload);
   }
 
+  async publicCapabilities(): Promise<RecordValue> {
+    const payload = await this.request('/api/agent-interface/v1/capabilities', { authenticated: false });
+    const envelope = normalizeEnvelope(payload);
+    throwEnvelopeError(envelope);
+    return record(envelope.data);
+  }
+
+  async defaultDeviceScopes(readonlyDefaults: readonly string[]): Promise<string[]> {
+    const data = await this.publicCapabilities();
+    // 旧版完整接口没有发布档位字段；保持已有只读默认值。
+    if (!data.release_profile && !Array.isArray(data.scopes)) return [...readonlyDefaults];
+    if (!['core', 'full'].includes(stringValue(data.release_profile, 'full')) || !Array.isArray(data.scopes)) {
+      throw new CliError('REMOTE_FAILURE', '知萃接入权限清单无效');
+    }
+    const allowed = new Set(data.scopes.map((scope) => stringValue(record(scope).id)).filter(Boolean));
+    const scopes = readonlyDefaults.filter((scope) => allowed.has(scope));
+    if (!scopes.length) throw new CliError('ACTION_NOT_AVAILABLE', '当前接入档位没有可授权的只读能力');
+    return scopes;
+  }
+
   async serviceHealth(): Promise<boolean> {
     const health = record(await this.request('/api/health', { authenticated: false }));
     return health.success !== false && Object.keys(health).length > 0;

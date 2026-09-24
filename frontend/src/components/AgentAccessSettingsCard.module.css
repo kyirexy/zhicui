@@ -51,16 +51,88 @@
   min-width: 0;
 }
 
-.heroCopy h2,
+.heroCopy h1,
 .cardHeader h3 {
   margin: 0;
   color: var(--foreground);
   text-wrap: balance;
 }
 
-.heroCopy h2 {
-  font-size: 1rem;
+.heroCopy h1 {
+  font-size: 1.25rem;
   font-weight: 700;
+}
+
+.connectGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 18px;
+}
+
+.connectGrid > * { min-width: 0; }
+.capabilityHint { margin: -4px 0 0; color: var(--foreground-muted); font-size: .8125rem; line-height: 1.65; }
+.patCard { padding: 24px; }
+.patCard .cardHeader h3 { font-size: 1.1rem; }
+.patCard .cardHeader p { font-size: .8125rem; }
+.patCard .formRow { margin-top: 22px; }
+.patCard .scopeGrid { grid-template-columns: 1fr; }
+.patCard .formActions { justify-content: flex-start; }
+
+.scopePicker {
+  margin-top: 18px;
+  border-block: 1px solid var(--card-border);
+}
+
+.scopePicker summary {
+  padding-block: 14px;
+  min-height: 44px;
+  cursor: pointer;
+  color: var(--foreground);
+  font-size: .8125rem;
+  font-weight: 650;
+}
+
+.scopePicker summary span {
+  margin-left: 8px;
+  color: var(--foreground-muted);
+  font-size: .75rem;
+  font-weight: 400;
+}
+
+.scopePicker summary:focus-visible {
+  outline: 2px solid var(--accent-brand);
+  outline-offset: 3px;
+}
+
+.scopePicker .scopeFieldset { margin-top: 10px; padding-bottom: 14px; }
+.selectedScopes { color: var(--foreground-secondary); font-size: .75rem; line-height: 1.6; }
+
+.serviceBanner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  background: var(--background-secondary);
+  color: var(--foreground-secondary);
+  font-size: .8125rem;
+}
+
+.serviceBanner p { margin: 4px 0 0; font-size: .75rem; line-height: 1.6; }
+.serviceBanner button { display: inline-flex; min-height: 44px; align-items: center; gap: 6px; padding-inline: 12px; border: 1px solid var(--card-border); border-radius: 8px; background: var(--card-bg); cursor: pointer; }
+.serviceBanner button:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 3px; }
+
+@media (max-width: 1080px) {
+  .connectGrid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 560px) {
+  .patCard { padding: 18px 16px; }
+  .scopePicker summary span { display: block; margin: 6px 0 0; }
 }
 
 .heroCopy p,

@@ -13,6 +13,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.agent_interface.contracts import ALL_SCOPE_IDS
+from app.agent_interface.profiles import allowed_scope_ids
 from app.core.config import settings
 from app.models.agent_interface import AgentCredential, AgentDeviceAuthorization
 from app.models.user import User
@@ -73,6 +74,9 @@ def normalize_scopes(scopes: list[str] | tuple[str, ...] | set[str]) -> list[str
         raise CredentialError("INVALID_SCOPE", f"未知权限范围：{', '.join(invalid[:5])}")
     if not normalized:
         raise CredentialError("INVALID_SCOPE", "请至少选择一个权限范围")
+    excluded = set(normalized) - allowed_scope_ids()
+    if excluded:
+        raise CredentialError("SCOPE_UNAVAILABLE", "当前接入范围尚未开放这些权限：" + ", ".join(sorted(excluded)))
     return normalized
 
 
@@ -245,6 +249,8 @@ def approve_device_authorization(
         raise CredentialError("DEVICE_CODE_EXPIRED", "设备授权码已过期")
     if row.status != "pending":
         raise CredentialError("DEVICE_CODE_USED", "设备授权请求已处理")
+    if approve:
+        normalize_scopes(row.requested_scopes)
     row.status = "approved" if approve else "denied"
     row.approved_user_id = user_id if approve else None
     row.approved_at = utcnow()
@@ -311,6 +317,7 @@ def poll_device_authorization(
             "ROLLOUT_RESTRICTED", "Agent 接口尚未向当前账号开放",
         )
 
+    clean_scopes = normalize_scopes(row.requested_scopes)
     credential = AgentCredential(
         user_id=row.approved_user_id,
         kind="access",
@@ -319,7 +326,7 @@ def poll_device_authorization(
         token_hash="pending",
         token_prefix="pending",
         refresh_hash="pending",
-        scopes_json=json.dumps(row.requested_scopes, separators=(",", ":")),
+        scopes_json=json.dumps(clean_scopes, separators=(",", ":")),
         expires_at=now + timedelta(minutes=ACCESS_TTL_MINUTES),
         refresh_expires_at=now + timedelta(days=REFRESH_TTL_DAYS),
     )
@@ -377,6 +384,7 @@ def rotate_refresh_token(db: Session, refresh_token: str) -> dict[str, Any]:
         )
     if not row.refresh_expires_at or (_aware(row.refresh_expires_at) or now) <= now:
         raise CredentialError("REFRESH_TOKEN_EXPIRED", "刷新凭证已过期，请重新授权")
+    normalize_scopes(row.scopes)
     access_token = _new_token("access", row.id)
     next_refresh = _new_token("refresh", row.id)
     row.token_hash = token_hash(access_token)

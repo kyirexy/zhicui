@@ -270,6 +270,8 @@ export interface DesktopAgentAuthorizationStatus {
   status: 'starting' | 'waiting' | 'success' | 'cancelled' | 'error';
   user_code?: string;
   expires_at?: string;
+  scopes?: string[];
+  release_profile?: 'core' | 'full';
   message: string;
   code?: string;
 }

@@ -62,3 +62,14 @@ test('创作工坊的桌面选中态只认 /studio 前缀', () => {
   assert.equal(isDesktopProductDestinationActive('library', '/studio'), false);
   assert.equal(isDesktopProductDestinationActive('plans', '/studio'), false);
 });
+
+test('Agent 接入是独立桌面入口，与知萃 AI 和设置互不混淆', () => {
+  const destination = DESKTOP_PRODUCT_DESTINATIONS.find((item) => item.id === 'agent-access');
+  assert.equal(destination?.href, '/agent-access');
+  assert.equal(destination?.label, 'Agent 接入');
+  assert.equal(isDesktopProductDestinationActive('agent-access', '/agent-access'), true);
+  assert.equal(isDesktopProductDestinationActive('harness', '/agent-access'), false);
+  assert.equal(isDesktopProductDestinationActive('knowledge', '/agent-access'), false);
+  assert.equal(isDesktopProductDestinationActive('agent-access', '/harness'), false);
+  assert.equal(isDesktopProductDestinationActive('agent-access', '/settings'), false);
+});

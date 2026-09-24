@@ -1,0 +1,10 @@
+.workspace {
+  width: 100%;
+  max-width: 1320px;
+  margin-inline: auto;
+  padding-bottom: 40px;
+}
+
+@media (max-width: 640px) {
+  .workspace { padding-bottom: 24px; }
+}

@@ -44,13 +44,18 @@ class ReleaseReproducibilityContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn(
-            "find /var/lib/zhicui-downloads -type d -exec chmod 0755 {} +",
+            "find /var/lib/zhicui-downloads -type d -exec chmod 2775 {} +",
             preinstall,
         )
         self.assertIn(
             "find /var/lib/zhicui-downloads -type f -exec chmod 0644 {} +",
             preinstall,
         )
+        # setgid 仅应用到公开安装包目录，不能放宽应用环境或备份目录。
+        setgid_commands = re.findall(r"^find\s+\S+[^\n]*chmod\s+2775[^\n]*$", preinstall, re.MULTILINE)
+        self.assertEqual(setgid_commands, [
+            "find /var/lib/zhicui-downloads -type d -exec chmod 2775 {} +",
+        ])
 
     def test_mutable_windows_feeds_override_immutable_prefix_cache(self) -> None:
         nginx = (ROOT / "deploy" / "nginx-windows-updates.conf").read_text(

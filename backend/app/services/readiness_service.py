@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.agent_interface.profiles import profile_name
 from app.models.agent_runtime import AgentTurn
 from app.models.creator_sync import ACTIVE_CREATOR_RUN_STATUSES, CreatorSyncRun
 from app.services import (
@@ -64,7 +65,7 @@ def _check_ai_config(db: Session) -> dict[str, Any]:
     llm_ready = bool(llm.get("model") and llm.get("api_key_masked"))
     asr_ready = bool(asr.get("model") and asr.get("api_key_masked"))
     return {
-        "status": "ready" if llm_ready and asr_ready else "not_ready",
+        "status": "ready" if llm_ready and (asr_ready or (settings.AGENT_INTERFACE_ENABLED and profile_name() == "core")) else "not_ready",
         "llm_configured": llm_ready,
         "asr_configured": asr_ready,
     }
@@ -80,6 +81,8 @@ def _check_agent_interface() -> dict[str, Any]:
     """
     if not settings.AGENT_INTERFACE_ENABLED:
         return {"status": "disabled", "enabled": False}
+    if profile_name() == "invalid":
+        return {"status": "not_ready", "enabled": True, "error_code": "agent_interface_profile_invalid"}
     pepper = str(settings.AGENT_TOKEN_PEPPER or "").encode("utf-8")
     jwt_secret = str(settings.JWT_SECRET or "").encode("utf-8")
     strong = len(pepper) >= 32 and len(set(pepper)) >= 16
@@ -90,22 +93,25 @@ def _check_agent_interface() -> dict[str, Any]:
     except (TypeError, ValueError):
         automation_poll_seconds = 0
     automation_poll_valid = 5 <= automation_poll_seconds <= 300
+    automation_required = profile_name() == "full"
     if not strong:
         error_code = "agent_token_pepper_weak"
     elif not independent:
         error_code = "agent_token_pepper_not_independent"
-    elif not automation_enabled:
+    elif automation_required and not automation_enabled:
         error_code = "agent_automation_disabled"
-    elif not automation_poll_valid:
+    elif automation_required and not automation_poll_valid:
         error_code = "agent_automation_poll_invalid"
     else:
         error_code = None
-    ready = strong and independent and automation_enabled and automation_poll_valid
+    ready = strong and independent and (not automation_required or (automation_enabled and automation_poll_valid))
     return {
         "status": "ready" if ready else "not_ready",
         "enabled": True,
         "independent_credential_pepper": strong and independent,
         "automation_enabled": automation_enabled,
+        "automation_required": automation_required,
+        "release_profile": profile_name(),
         "automation_poll_seconds": automation_poll_seconds,
         "error_code": error_code,
     }
@@ -229,6 +235,20 @@ def _check_agent_product_features(
 
     if not settings.AGENT_INTERFACE_ENABLED:
         return {"status": "disabled", "enabled": False}
+    if profile_name() == "core":
+        try:
+            database_ready = _check_database(db).get("status") == "ready"
+            model_ready = _check_ai_config(db).get("status") == "ready"
+        except Exception:
+            database_ready = model_ready = False
+        ready = database_ready and model_ready
+        return {
+            "status": "ready" if ready else "not_ready", "enabled": True,
+            "release_profile": "core", "database_ready": database_ready,
+            "answer_model_ready": model_ready,
+            "excluded_features": ["platform_sync", "transcription", "video_analysis", "automation", "email", "local_bridge"],
+            "error_code": None if ready else "agent_core_dependencies_unavailable",
+        }
     try:
         creator = settings_service.get_creator_sync_config(db)
         creator_platforms = {
@@ -278,6 +298,8 @@ def _check_agent_automation_runtime() -> dict[str, Any]:
 
     if not settings.AGENT_INTERFACE_ENABLED:
         return {"status": "disabled", "enabled": False}
+    if profile_name() == "core":
+        return {"status": "not_required", "enabled": False, "release_profile": "core"}
     try:
         runner = automation_runner.runner.status()
         enabled = bool(runner.get("enabled"))
@@ -359,6 +381,8 @@ def _fresh_connector_probe(value: Any) -> dict[str, Any]:
 
 
 def _check_connectors(db: Session) -> dict[str, Any]:
+    if settings.AGENT_INTERFACE_ENABLED and profile_name() == "core":
+        return {"status": "not_required", "enabled": False, "release_profile": "core", "platforms": {}, "catalog": {}}
     config = settings_service.get_creator_sync_config(db)
     if not config.get("enabled"):
         return {

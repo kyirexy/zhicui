@@ -7,9 +7,19 @@ umask 077
 BASE_URL="${SMOKE_BASE_URL:-https://luxai.cn}"
 BROWSER_TOKEN_FILE="${SMOKE_BROWSER_TOKEN_FILE:-}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-CAPABILITY_MANIFEST="${SMOKE_AGENT_CAPABILITY_MANIFEST:-$SCRIPT_DIR/../backend/app/agent_interface/stable_capabilities_v1.json}"
+AGENT_PROFILE="${SMOKE_AGENT_PROFILE:-full}"
+case "$AGENT_PROFILE" in
+  full) DEFAULT_MANIFEST="$SCRIPT_DIR/../backend/app/agent_interface/stable_capabilities_v1.json" ;;
+  core) DEFAULT_MANIFEST="$SCRIPT_DIR/../backend/app/agent_interface/core_capabilities_v1.json" ;;
+  *) printf 'SMOKE_AGENT_PROFILE 必须为 core 或 full\n' >&2; exit 2 ;;
+esac
+CAPABILITY_MANIFEST="${SMOKE_AGENT_CAPABILITY_MANIFEST:-$DEFAULT_MANIFEST}"
 REQUIRE_RUNTIME_SENTINELS="${SMOKE_REQUIRE_AGENT_RUNTIME_SENTINELS:-1}"
 REQUIRE_ASK_SENTINEL="${SMOKE_REQUIRE_AGENT_ASK_SENTINEL:-0}"
+if [[ "$AGENT_PROFILE" == core && ( "$REQUIRE_RUNTIME_SENTINELS" != 1 || "$REQUIRE_ASK_SENTINEL" != 1 ) ]]; then
+  printf 'Core 发布必须验证真实已有文稿问答和运行时边界，不允许关闭哨兵\n' >&2
+  exit 2
+fi
 ASK_THREAD_ID="${SMOKE_AGENT_THREAD_ID:-}"
 ASK_SOURCE_ID="${SMOKE_AGENT_SOURCE_ID:-}"
 ASK_TIMEOUT_SECONDS="${SMOKE_AGENT_ASK_TIMEOUT_SECONDS:-120}"
@@ -211,7 +221,7 @@ http_with_token() {
 
 verify_full_capabilities() {
   local response_file="$1"
-  python3 - "$response_file" "$CAPABILITY_MANIFEST" <<'PY'
+  python3 - "$response_file" "$CAPABILITY_MANIFEST" "$AGENT_PROFILE" <<'PY'
 import hashlib
 import json
 import sys
@@ -219,6 +229,9 @@ import sys
 response = json.load(open(sys.argv[1], encoding="utf-8"))
 manifest = json.load(open(sys.argv[2], encoding="utf-8"))
 data = response.get("data") or {}
+profile = sys.argv[3]
+if data.get("release_profile", "full") != profile or manifest.get("release_profile", "full") != profile:
+    raise SystemExit("Agent 发布档位与验收清单不一致")
 actions = data.get("actions")
 scopes = data.get("scopes")
 if response.get("status") != "succeeded" or data.get("interface_version") != manifest.get("interface_version"):
@@ -228,6 +241,8 @@ if not isinstance(actions, list) or not isinstance(scopes, list):
 scope_ids = [str(item.get("id") or "") for item in scopes if isinstance(item, dict)]
 if len(scope_ids) != manifest.get("scope_count") or len(scope_ids) != len(set(scope_ids)):
     raise SystemExit("Stable scope 清单数量或唯一性不匹配")
+if profile == "core" and sorted(scope_ids) != sorted(manifest.get("scope_ids") or []):
+    raise SystemExit("Core scope 精确清单不匹配")
 if len(actions) != manifest.get("action_count"):
     raise SystemExit(f"Stable Action 数量不匹配：{len(actions)}")
 cloud = [item for item in actions if item.get("execution_location") == "cloud"]
@@ -239,6 +254,8 @@ if sum(bool(item.get("available")) for item in cloud) != manifest.get("available
 if sum(not bool(item.get("available")) for item in local) != manifest.get("unavailable_local_windows_action_count"):
     raise SystemExit("本机 Action 的服务端不可用边界不匹配")
 ids = [str(item.get("id") or "") for item in actions]
+if profile == "core" and sorted(ids) != sorted(manifest.get("action_ids") or []):
+    raise SystemExit("Core Action 精确清单不匹配")
 if len(ids) != len(set(ids)):
     raise SystemExit("Action ID 不唯一")
 for action_id in ids:
@@ -321,7 +338,7 @@ if len(actual) != manifest.get("remote_mcp_tool_count"):
 PY
 
 if [[ "$REQUIRE_RUNTIME_SENTINELS" == 1 ]]; then
-  python3 - "$WORK_DIR/full-capabilities.response" "$REQUIRE_ASK_SENTINEL" <<'PY' || fail 'Stable 运行时哨兵与 Action Schema 不匹配'
+  python3 - "$WORK_DIR/full-capabilities.response" "$REQUIRE_ASK_SENTINEL" "$AGENT_PROFILE" <<'PY' || fail 'Stable 运行时哨兵与 Action Schema 不匹配'
 import json
 import sys
 
@@ -344,18 +361,18 @@ def require_read(action_id):
     ):
         raise SystemExit(f"{action_id} 不是可用的云端同步只读 Action")
 
-for action_id in (
-    "analysis.catalog",
-    "automation.status",
-    "models.list",
-    "models.selection.get",
-):
+profile = sys.argv[3]
+required_reads = ("library.list", "library.get", "creator.list", "knowledge.list", "plan.list", "plan.overview", "models.list", "models.custom.list") if profile == "core" else (
+    "analysis.catalog", "automation.status", "models.list", "models.selection.get",
+)
+for action_id in required_reads:
     require_read(action_id)
 
-analysis_schema = actions["analysis.catalog"]["input_schema"]
-trigger = (analysis_schema.get("properties") or {}).get("trigger") or {}
-if "agent" not in (trigger.get("enum") or []):
-    raise SystemExit("analysis.catalog 不接受 agent trigger")
+if profile == "full":
+    analysis_schema = actions["analysis.catalog"]["input_schema"]
+    trigger = (analysis_schema.get("properties") or {}).get("trigger") or {}
+    if "agent" not in (trigger.get("enum") or []):
+        raise SystemExit("analysis.catalog 不接受 agent trigger")
 
 if sys.argv[2] == "1":
     turn = actions.get("ask.turn.start") or {}
@@ -371,8 +388,13 @@ if sys.argv[2] == "1":
     ):
         raise SystemExit("ask.turn.start 的 Stable Schema 无效")
     require_read("ask.thread.get")
+    if profile == "core" and (turn_schema.get("properties", {}).get("web_scope", {}).get("enum") != ["video_only"]):
+        raise SystemExit("Core 问答范围不是唯一 video_only")
 PY
 
+  if [[ "$AGENT_PROFILE" == core ]]; then
+    python3 "$SCRIPT_DIR/smoke-agent-core.py" "$BASE_URL" "$BROWSER_TOKEN_FILE" "$FULL_PAT_FILE" "$ASK_SOURCE_ID" "$ASK_THREAD_ID" || fail 'Core 现有资料或排除能力边界未通过'
+  else
   printf '{"input":{"trigger":"agent"}}\n' >"$WORK_DIR/runtime-analysis.json"
   code="$(http_with_token "$FULL_PAT_FILE" POST /api/agent-interface/v1/actions/analysis.catalog/invoke "$WORK_DIR/runtime-analysis.json" "$WORK_DIR/runtime-analysis.response")"
   [[ "$code" == 200 ]] || fail "analysis.catalog 运行时哨兵返回 HTTP $code"
@@ -450,6 +472,7 @@ if (
 ):
     raise SystemExit("模型目录为空、当前模型不可用或输出包含密钥字段")
 PY
+  fi
 
   if [[ "$REQUIRE_ASK_SENTINEL" == 1 ]]; then
     ASK_SENTINEL_TOKEN="ZHICUI-SMOKE-94731"
@@ -503,6 +526,31 @@ PY
     ASK_RUN_ID="${ask_ids[0]:-}"
     ASK_TURN_ID="${ask_ids[1]:-}"
     [[ -n "$ASK_RUN_ID" && -n "$ASK_TURN_ID" ]] || fail 'ask.turn.start 缺少 Run 或 Turn ID'
+
+    if [[ "$AGENT_PROFILE" == core ]]; then
+      code="$(curl -sS -N --max-time "$ASK_TIMEOUT_SECONDS" -o "$WORK_DIR/runtime-ask.sse" -D "$WORK_DIR/runtime-ask.headers" -w '%{http_code}' \
+        -H "Authorization: Bearer $(<"$FULL_PAT_FILE")" -H 'Accept: text/event-stream' \
+        "$BASE_URL/api/agent-interface/v1/runs/$ASK_RUN_ID/events?after=0")" || fail 'Core 真实问答 SSE 未完整结束'
+      [[ "$code" == 200 ]] || fail "Core 真实问答 SSE 返回 HTTP $code"
+      python3 - "$WORK_DIR/runtime-ask.sse" "$WORK_DIR/runtime-ask.headers" <<'PY' || fail 'Core 真实问答 SSE 缺少文字增量或唯一终态'
+import json, sys
+from pathlib import Path
+headers = Path(sys.argv[2]).read_text(encoding="utf-8").lower()
+if "content-type: text/event-stream" not in headers:
+    raise SystemExit("不是 SSE 响应")
+items = []
+for block in Path(sys.argv[1]).read_text(encoding="utf-8").replace("\r\n", "\n").split("\n\n"):
+    data = "\n".join(line[5:].lstrip() for line in block.splitlines() if line.startswith("data:"))
+    if data:
+        items.append(json.loads(data))
+sequences = [item.get("sequence") for item in items]
+if (not sequences or any(not isinstance(value, int) for value in sequences)
+        or sequences != sorted(set(sequences))
+        or sum(bool(item.get("terminal")) for item in items) != 1
+        or not any(item.get("type") == "external.turn.answer.delta" and str((item.get("data") or {}).get("delta") or "").strip() for item in items)):
+    raise SystemExit("SSE 缺少有序文字增量或唯一终态")
+PY
+    fi
 
     ask_deadline=$(( $(date +%s) + ASK_TIMEOUT_SECONDS ))
     while true; do
@@ -712,4 +760,8 @@ if error.get("code") not in {"CREDENTIAL_REVOKED", "INVALID_CREDENTIAL"}:
     raise SystemExit("吊销错误码无效")
 PY
 
-printf 'Agent Action/PAT/MCP Stable smoke passed\n'
+if [[ "$AGENT_PROFILE" == core ]]; then
+  printf 'Agent Action/PAT/MCP Core smoke passed\n'
+else
+  printf 'Agent Action/PAT/MCP Stable smoke passed\n'
+fi

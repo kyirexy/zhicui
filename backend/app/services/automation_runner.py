@@ -7,6 +7,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
 from app.core.config import settings
+from app.agent_interface.profiles import profile_name
 from app.core.database import SessionLocal
 from app.core.request_context import reset_request_context, set_request_context
 from app.models.agent_automation import AgentAutomationRun
@@ -25,7 +26,7 @@ class AutomationRunner:
         self._last_error = ""
 
     def start(self) -> None:
-        if not settings.AGENT_AUTOMATION_ENABLED:
+        if not settings.AGENT_AUTOMATION_ENABLED or profile_name() != "full":
             return
         with self._lock:
             if self._thread and self._thread.is_alive():
@@ -165,7 +166,7 @@ class AutomationRunner:
     def status(self) -> dict[str, Any]:
         thread = self._thread
         return {
-            "enabled": bool(settings.AGENT_AUTOMATION_ENABLED),
+            "enabled": bool(settings.AGENT_AUTOMATION_ENABLED) and profile_name() == "full",
             "running": bool(thread and thread.is_alive()),
             "poll_seconds": max(
                 5,

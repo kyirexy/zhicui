@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.agent_interface.profiles import allowed_scope_ids, profile_metadata, profile_name
+
 import hashlib
 import json
 import time
@@ -163,6 +165,8 @@ _MCP_RUN_TOOLS: dict[str, dict[str, Any]] = {
 
 
 def _ensure_enabled() -> None:
+    if profile_name() == "invalid":
+        raise ProductActionError("INTERFACE_PROFILE_INVALID", "Agent 接入范围配置无效", http_status=503)
     if not settings.AGENT_INTERFACE_ENABLED:
         raise ProductActionError(
             "INTERFACE_DISABLED",
@@ -204,6 +208,8 @@ def _require_run_access(
     if principal.credential is not None and row.credential_id != principal.credential.id:
         raise ProductActionError("RUN_NOT_FOUND", "运行不存在", http_status=404)
     definition = registry.get(row.action_id)
+    if definition is None or not action_is_enabled(row.action_id):
+        raise ProductActionError("RUN_NOT_FOUND", "运行不属于当前开放范围", http_status=404)
     if definition is not None and not set(definition.scopes).issubset(principal.scopes):
         raise ProductActionError("RUN_NOT_FOUND", "运行不存在", http_status=404)
 
@@ -363,7 +369,8 @@ def capabilities(
                 "feature_enabled": True,
                 "user_hash": agent_user_hash(principal.user.id) if principal is not None else None,
                 "actions": [item.model_dump(mode="json") for item in actions],
-                "scopes": list(SCOPES),
+                "scopes": [item for item in SCOPES if item["id"] in allowed_scope_ids()],
+                **profile_metadata(),
                 "transports": {
                     "http": f"{str(request.base_url).rstrip('/')}/api/agent-interface/v1",
                     "mcp": f"{str(request.base_url).rstrip('/')}/mcp",

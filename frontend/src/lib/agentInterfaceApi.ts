@@ -51,6 +51,8 @@ export interface AgentActionDefinition {
 
 export interface AgentCapabilities {
   interface_version: string;
+  release_profile?: 'core' | 'full';
+  limitations?: string[];
   actions: AgentActionDefinition[];
   scopes: AgentScopeDefinition[];
   transports: {

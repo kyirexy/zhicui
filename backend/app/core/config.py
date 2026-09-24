@@ -4,6 +4,7 @@ Reads from environment variables with sensible defaults for local development.
 """
 
 import os
+from typing import Literal
 from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings
@@ -110,6 +111,8 @@ class Settings(BaseSettings):
     # deploying a database migration.  A reviewed rollout enables it
     # explicitly per environment.
     AGENT_INTERFACE_ENABLED: bool = False
+    # core 仅发布已保存资料与问答能力；非法值阻止启动，不能静默放开 full。
+    AGENT_INTERFACE_PROFILE: Literal["full", "core"] = "full"
     # Optional comma-separated rollout gates.  Empty means every ordinary user /
     # every reviewed Registry Action after the global interface switch is on.
     # A staged rollout should set immutable user IDs and a narrow Action list;

@@ -61,6 +61,17 @@ test('Agent browser authorization requires login without opening client settings
   assert.equal(resolveClientAuthPolicy('/settings', runtime).browserClientGate, true);
 });
 
+test('Agent 接入和 PAT 管理可在普通浏览器登录后使用，其他工作区仍要求客户端', () => {
+  const runtime = { desktop: false, nativeAndroid: false, development: false };
+  const management = resolveClientAuthPolicy('/agent-access', runtime);
+  assert.equal(management.publicRoute, false);
+  assert.equal(management.browserClientGate, false);
+  assert.equal(management.clientOnlyRoute, false);
+  for (const path of ['/library', '/harness', '/notes', '/plans', '/settings']) {
+    assert.equal(resolveClientAuthPolicy(path, runtime).browserClientGate, true);
+  }
+});
+
 test('法律、支持、平台限制与下载入口在所有客户端无需登录', () => {
   for (const pathname of [
     '/legal/terms',

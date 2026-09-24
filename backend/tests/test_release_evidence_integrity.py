@@ -70,6 +70,29 @@ class ReleaseEvidenceIntegrityTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def test_core_requires_profile_and_committed_manifest_identity(self) -> None:
+        digest = "c" * 64
+        deployment = {"agent_release_mode": "core", "agent_release_profile": "core",
+                      "agent_capability_manifest_sha256": digest}
+        smoke = {"agent_release_profile": "core", "agent_capability_manifest_sha256": digest}
+        with mock.patch.object(self.helper, "_capability_manifest_sha256", return_value=digest) as read_manifest:
+            self.helper._verify_capability_profile(deployment, smoke, self.COMMIT)
+            read_manifest.assert_called_once_with(self.COMMIT, "core")
+        for bad_smoke in (
+            {}, {**smoke, "agent_release_profile": "full"},
+            {**smoke, "agent_capability_manifest_sha256": "d" * 64},
+        ):
+            with self.subTest(smoke=bad_smoke), self.assertRaises(self.helper.EvidenceError):
+                self.helper._verify_capability_profile(deployment, bad_smoke, self.COMMIT)
+        with mock.patch.object(self.helper, "_capability_manifest_sha256", return_value="e" * 64):
+            with self.assertRaises(self.helper.EvidenceError):
+                self.helper._verify_capability_profile(deployment, smoke, self.COMMIT)
+
+    def test_core_cannot_reuse_legacy_full_evidence_without_profile(self) -> None:
+        with self.assertRaises(self.helper.EvidenceError):
+            self.helper._verify_capability_profile({"agent_release_mode": "core"}, {}, self.COMMIT)
+        self.helper._verify_capability_profile({"agent_release_mode": "dark"}, {}, self.COMMIT)
+
     @staticmethod
     def _gates() -> list[dict[str, str]]:
         return [

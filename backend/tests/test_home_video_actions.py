@@ -15,8 +15,10 @@ from app.api.home_video_routes import router
 from app.core.auth import get_current_user
 from app.core.database import Base, get_db
 from app.models.douyin_local_library_item import DouyinLocalLibraryItem
+from app.models.creator_sync import CreatorSource, CreatorSourceItem, CreatorSyncRun
 from app.models.home_video_preference import HomeVideoPreference
 from app.models.knowledge_entry import KnowledgeEntry
+from app.models.library_hidden_item import LibraryHiddenItem
 from app.models.note import Note
 from app.models.user import User
 from app.models.video_source_ledger import VideoSourceLedger
@@ -29,7 +31,8 @@ class HomeVideoActionsTests(unittest.TestCase):
         self.engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
         event.listen(self.engine, "connect", lambda connection, _: connection.execute("PRAGMA foreign_keys=ON"))
         Base.metadata.create_all(self.engine, tables=[User.__table__, Note.__table__, KnowledgeEntry.__table__,
-            HomeVideoPreference.__table__, DouyinLocalLibraryItem.__table__, VideoSourceLedger.__table__])
+            HomeVideoPreference.__table__, LibraryHiddenItem.__table__, DouyinLocalLibraryItem.__table__, VideoSourceLedger.__table__,
+            CreatorSource.__table__, CreatorSyncRun.__table__, CreatorSourceItem.__table__])
         self.db = sessionmaker(bind=self.engine, expire_on_commit=False)()
         self.owner = User(id="owner", email="home-owner@example.invalid", hashed_password="x")
         self.other = User(id="other", email="home-other@example.invalid", hashed_password="x")

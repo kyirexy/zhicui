@@ -15,6 +15,8 @@ from sqlalchemy.pool import StaticPool
 from app.core.database import Base
 from app.models.note import Note
 from app.models.library_sync import LibrarySyncRun
+from app.models.home_video_preference import HomeVideoPreference
+from app.models.knowledge_entry import KnowledgeEntry
 from app.models.plan import Plan
 from app.models.user import User
 from app.models.video_source_ledger import VideoSourceLedger
@@ -35,7 +37,7 @@ class PlatformLibraryImportTests(unittest.TestCase):
         )
         Base.metadata.create_all(
             self.engine,
-            tables=[User.__table__, Note.__table__, Plan.__table__, LibrarySyncRun.__table__, VideoSourceLedger.__table__],
+            tables=[User.__table__, Note.__table__, Plan.__table__, LibrarySyncRun.__table__, VideoSourceLedger.__table__, KnowledgeEntry.__table__, HomeVideoPreference.__table__],
         )
         self.Session = sessionmaker(bind=self.engine)
         self.db = self.Session()

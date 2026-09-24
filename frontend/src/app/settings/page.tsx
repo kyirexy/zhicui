@@ -31,7 +31,6 @@ import {
 import AppUpdateSettingsCard from '@/components/AppUpdateSettingsCard';
 import AccountDataSettingsCard from '@/components/AccountDataSettingsCard';
 import AgentSourceLimitSettingsCard from '@/components/AgentSourceLimitSettingsCard';
-import AgentAccessSettingsCard from '@/components/AgentAccessSettingsCard';
 import AutoSyncSettingsCard from '@/components/AutoSyncSettingsCard';
 import DesktopMediaSettingsCard from '@/components/DesktopMediaSettingsCard';
 import LocalDataSettingsCard from '@/components/LocalDataSettingsCard';
@@ -170,6 +169,13 @@ function SettingsWorkspace() {
   }, []);
 
   useEffect(() => {
+    if (sectionParam === 'agent') {
+      const params = new URLSearchParams(window.location.search);
+      params.delete('section');
+      const query = params.toString();
+      router.replace(`/agent-access${query ? `?${query}` : ''}`, { scroll: false });
+      return;
+    }
     if (sectionParam === 'models') {
       router.replace('/settings?section=ai', { scroll: false });
       return;
@@ -198,6 +204,10 @@ function SettingsWorkspace() {
 
   const selectSection = (id: SettingsSectionId) => {
     setQuery('');
+    if (id === 'agent') {
+      router.push('/agent-access');
+      return;
+    }
     router.replace(`/settings?section=${id}`, { scroll: false });
   };
 
@@ -442,14 +452,7 @@ function SettingsWorkspace() {
             )}
 
             {activeSection.id === 'agent' && (
-              nativeAndroid === null
-                ? <div className={styles.loading}>正在读取设备能力…</div>
-                : <AgentAccessSettingsCard
-                    key={user?.id || 'signed-out'}
-                    isDesktop={isDesktop}
-                    nativeAndroid={nativeAndroid}
-                    nativeIOS={nativeMobile && !nativeAndroid}
-                  />
+              <Link href="/agent-access" className={styles.backLink}>前往 Agent 接入与个人访问令牌</Link>
             )}
 
             {activeSection.id === 'about' && (

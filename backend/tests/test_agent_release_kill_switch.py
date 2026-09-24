@@ -93,8 +93,8 @@ class AgentReleaseKillSwitchContractTests(unittest.TestCase):
         switch_marker = 'atomic_runtime_switch "$RELEASE_DIR"'
         activation_marker = 'set_agent_kill_switch "$AGENT_RELEASE_MODE"'
         restart_marker = "sudo systemctl restart videocapsule-backend"
-        switch_block = deploy.index("log '原子切换 runtime 并启动目标版本'")
-        switch_at = deploy.index(switch_marker, switch_block)
+        # 校验实际发布命令的顺序，不依赖蓝绿发布的提示文案。
+        switch_at = deploy.index(switch_marker)
         activation_at = deploy.index(activation_marker, switch_at)
         restart_at = deploy.index(restart_marker, activation_at)
         self.assertLess(switch_at, activation_at)
@@ -151,13 +151,13 @@ class AgentReleaseKillSwitchContractTests(unittest.TestCase):
         jenkins = (ROOT / "Jenkinsfile").read_text(encoding="utf-8")
         for marker in (
             "name: 'AGENT_RELEASE_MODE'",
-            "choices: ['dark', 'stable']",
+            "choices: ['dark', 'core', 'stable']",
             "credentialsId: 'zhicui-production-smoke-email'",
             "credentialsId: 'zhicui-production-smoke-password-file'",
             'AGENT_RELEASE_MODE="$AGENT_RELEASE_MODE"',
             'SMOKE_LOGIN_EMAIL="$SMOKE_LOGIN_EMAIL"',
             'SMOKE_PASSWORD_FILE="$SMOKE_PASSWORD_FILE"',
-            "SMOKE_REQUIRE_AGENT_INTERFACE=${params.AGENT_RELEASE_MODE == 'stable' ? '1' : '0'}",
+            "SMOKE_REQUIRE_AGENT_INTERFACE=${params.AGENT_RELEASE_MODE == 'dark' ? '0' : '1'}",
         ):
             self.assertIn(marker, jenkins)
         self.assertNotIn("bash /opt/zhicui/deploy/deploy.sh", jenkins)
@@ -167,9 +167,22 @@ class AgentReleaseKillSwitchContractTests(unittest.TestCase):
     def test_jenkins_has_only_fixed_helper_commands(self) -> None:
         sudoers = (DEPLOY / "jenkins-videocapsule.sudoers").read_text(encoding="utf-8")
         helper = "/usr/local/lib/zhicui-deploy/agent-interface-kill-switch.sh"
-        for action in ("dark", "stable", "verify-dark", "verify-stable"):
+        for action in ("dark", "core", "stable", "verify-dark", "verify-core", "verify-stable"):
             self.assertIn(f"{helper} {action}", sudoers)
         self.assertNotIn(f"{helper} *", sudoers)
+
+    def test_core_has_explicit_profile_and_preserves_promotion_guards(self) -> None:
+        helper = (DEPLOY / "agent-interface-kill-switch.sh").read_text(encoding="utf-8")
+        deploy = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+        self.assertIn("AGENT_INTERFACE_PROFILE=%s", helper)
+        self.assertIn("verify-core", helper)
+        self.assertIn('if [[ "$AGENT_RELEASE_MODE" != dark ]]; then', deploy)
+        self.assertIn('"$AGENT_SCHEMA_REHEARSAL_EVIDENCE_SHA256"', deploy)
+        self.assertIn('SMOKE_AGENT_PROFILE="$AGENT_CAPABILITY_PROFILE"', deploy)
+        self.assertIn('SMOKE_AGENT_CAPABILITY_MANIFEST="$AGENT_CAPABILITY_MANIFEST_PATH"', deploy)
+        self.assertIn('"agent_capability_manifest_sha256": agent_capability_manifest_sha256', deploy)
+        self.assertIn('if release_mode == "stable":', deploy)
+        self.assertIn('VIDEO_ANALYSIS_ENABLED=true', deploy)
 
 
 if __name__ == "__main__":

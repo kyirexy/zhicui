@@ -28,6 +28,7 @@ BACKUP_ROOT = Path("/var/backups/zhicui")
 BACKUP_STATUS_FILE = Path("/var/lib/zhicui-backups/latest.json")
 RUNTIME_RELEASE_ROOT = Path("/opt/zhicui-runtime/releases")
 RUNTIME_CURRENT = Path("/opt/zhicui-runtime/current")
+APP_CHECKOUT = Path("/opt/zhicui")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 FINGERPRINT_RE = re.compile(r"agent-schema-v1:[0-9a-f]{64}")
@@ -287,6 +288,35 @@ def _validate_smoke(
     return started, finished
 
 
+def _capability_manifest_sha256(commit: str, profile: str) -> str:
+    if not COMMIT_RE.fullmatch(commit) or profile not in {"full", "core"}:
+        raise EvidenceError("能力清单身份无效")
+    filename = "core_capabilities_v1.json" if profile == "core" else "stable_capabilities_v1.json"
+    result = subprocess.run(
+        ["/usr/bin/git", "-c", f"safe.directory={APP_CHECKOUT}", "-C", str(APP_CHECKOUT),
+         "show", f"{commit}:backend/app/agent_interface/{filename}"],
+        capture_output=True, timeout=15, check=False,
+    )
+    if result.returncode != 0 or not result.stdout:
+        raise EvidenceError("目标 Git 提交中的能力清单不可读")
+    return hashlib.sha256(result.stdout).hexdigest()
+
+
+def _verify_capability_profile(payload: dict[str, Any], smoke: dict[str, Any], commit: str) -> None:
+    mode = payload.get("agent_release_mode")
+    expected = "core" if mode == "core" else "full"
+    # 历史 dark/full 证据仍可用于回溯；新 core 必须具备完整范围与字节哈希。
+    if mode != "core" and "agent_release_profile" not in payload:
+        return
+    digest = str(payload.get("agent_capability_manifest_sha256") or "")
+    if (payload.get("agent_release_profile") != expected
+            or smoke.get("agent_release_profile") != expected
+            or not SHA256_RE.fullmatch(digest)
+            or smoke.get("agent_capability_manifest_sha256") != digest
+            or _capability_manifest_sha256(commit, expected) != digest):
+        raise EvidenceError("发布、冒烟与目标提交的能力范围或清单哈希不一致")
+
+
 def _validate_deployment(payload: dict[str, Any], *, successful_only: bool) -> None:
     deploy_id = str(payload.get("deployment_id") or "")
     commit = str(payload.get("target_commit") or "")
@@ -303,7 +333,7 @@ def _validate_deployment(payload: dict[str, Any], *, successful_only: bool) -> N
         if successful_only:
             raise EvidenceError("部署证据不是成功状态")
         return
-    if mode not in {"dark", "stable"} or not COMMIT_RE.fullmatch(commit):
+    if mode not in {"dark", "core", "stable"} or not COMMIT_RE.fullmatch(commit):
         raise EvidenceError("成功部署缺少固定模式或完整提交")
     if not FINGERPRINT_RE.fullmatch(str(payload.get("target_agent_schema_fingerprint") or "")):
         raise EvidenceError("成功部署缺少真实版本化 Agent schema 指纹")
@@ -317,6 +347,7 @@ def _validate_deployment(payload: dict[str, Any], *, successful_only: bool) -> N
         raise EvidenceError("smoke 证据 SHA-256 无效")
     smoke, _ = _load_verified(smoke_name, smoke_sha)
     smoke_started, smoke_finished = _validate_smoke(smoke, deploy_id=deploy_id, commit=commit)
+    _verify_capability_profile(payload, smoke, commit)
     if smoke_started < started or smoke_finished > finished:
         raise EvidenceError("smoke 时间不在本次部署证据窗口内")
     required = {
@@ -338,12 +369,14 @@ def _validate_deployment(payload: dict[str, Any], *, successful_only: bool) -> N
         "agent_kill_switch_final",
         "deployment",
     }
-    if mode == "stable":
+    if mode in {"stable", "core"}:
         required.add("agent_schema_rehearsal")
+    if "agent_release_profile" in payload:
+        required.add("agent_capability_profile")
     gates = _gate_map(payload)
     if not all(gates.get(name) == "pass" for name in required):
         raise EvidenceError("部署证据缺少成功的 Stable 必需门禁")
-    if mode == "stable":
+    if mode in {"stable", "core"}:
         dark_ref = payload.get("dark_evidence")
         rehearsal_ref = payload.get("rehearsal_evidence")
         for field, reference in (("dark_evidence", dark_ref), ("rehearsal_evidence", rehearsal_ref)):

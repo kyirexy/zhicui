@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.media_reference import platform_from_source_url, sanitized_source_meta
 from app.models.note import Note
-from app.services import note_service
+from app.services import library_sync_service, note_service
 
 
 def _source_identity(source_url: str) -> tuple[str, str] | None:
@@ -225,6 +225,13 @@ def find_reusable_note(
     if not _cover(meta.get("cover_url")) and cover:
         meta["cover_url"] = cover
         meta_changed = True
+    if fresh:
+        from app.services.agent_video_link_service import _public_share_url
+
+        share = _public_share_url(fresh.get("public_share_url") or fresh.get("source_url"))
+        if platform == "douyin" and share and meta.get("public_share_url") != share:
+            meta["public_share_url"] = share
+            meta_changed = True
     if meta_changed:
         payload["source_meta"] = meta
         reusable.ai_summary = json.dumps(payload, ensure_ascii=False)
@@ -233,3 +240,49 @@ def find_reusable_note(
         db.commit()
         db.refresh(reusable)
     return reusable
+
+
+def prepare_download_note(
+    db: Session, *, user_id: str, video_info: dict[str, Any], source_url: str,
+) -> Note | None:
+    """真实作品元数据读取成功就保存资料；语音识别失败也仍可下载原视频。"""
+    from app.services.agent_video_link_service import _public_share_url
+
+    platform = str(video_info.get("platform") or "")
+    video_id = str(video_info.get("video_id") or "")
+    canonical = str(video_info.get("source_url") or source_url)
+    if platform == "douyin" and re.fullmatch(r"\d{8,32}", video_id):
+        canonical = f"https://www.douyin.com/video/{video_id}"
+    elif platform == "bilibili" and re.fullmatch(r"BV[0-9A-Za-z]{10}", video_id):
+        canonical = f"https://www.bilibili.com/video/{video_id}"
+    else:
+        return None
+    # 分 P 没有独立文件身份，不能把别的分 P 下载成第一集。
+    if platform == "bilibili" and parse_qs(urlsplit(source_url).query).get("p", ["1"]) != ["1"]:
+        return None
+    info = {**video_info, "source_url": canonical}
+    meta = {
+        "source_kind": "single-link", "platform": platform, "source_url": canonical,
+        "source_mode": "import", "media_type": "video", "transcript_source": "pending",
+        "speech_ready": False, "cover_url": str(video_info.get("cover_url") or video_info.get("thumbnail") or ""),
+        "author_name": str(video_info.get("author_name") or video_info.get("author") or ""),
+    }
+    if platform == "douyin" and (share := _public_share_url(source_url)):
+        meta["public_share_url"] = share
+    with library_sync_service.import_lease(db, user_id=user_id, platform=platform, video_id=video_id):
+        note = note_service.get_note_by_video_id(db, video_id, user_id)
+        if note is None or not _same_source(note, platform, video_id):
+            return note_service.create_transcript_note(db, video_info=info, transcript="", source_meta=meta, user_id=user_id)
+        payload = _payload(note)
+        previous = sanitized_source_meta(payload.get("source_meta"))
+        # 不回退已有文稿与分析状态，只补充读取上下文和元数据。
+        for key in ("source_kind", "source_mode", "transcript_source", "speech_ready"):
+            if key in previous:
+                meta[key] = previous[key]
+        payload["source_meta"] = {**previous, **{key: value for key, value in meta.items() if value not in (None, "")}}
+        note.ai_summary = json.dumps(payload, ensure_ascii=False)
+        if not _missing_title(info.get("title"), video_id):
+            note.video_title = str(info["title"])[:512]
+        db.commit()
+        db.refresh(note)
+        return note

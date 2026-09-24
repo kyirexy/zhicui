@@ -7,12 +7,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.core.rate_limit import RateLimitMiddleware, RatePolicy, SlidingWindowLimiter, limiter
+from app.core.rate_limit import POLICIES, RateLimitMiddleware, RatePolicy, SlidingWindowLimiter, _matches, limiter
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.models.application_error_log import ApplicationErrorLog
 from app.models.creator_sync import CreatorCatalogQualityRun, CreatorSyncRun
@@ -21,6 +21,20 @@ from app.services import operational_alert_service, readiness_service
 
 
 class ProductionReadinessTests(unittest.TestCase):
+    def test_video_download_limit_does_not_throttle_library_reads(self) -> None:
+        policy = next(item for item in POLICIES if item.name == "note_video_download")
+        def request(path):
+            return Request({"type": "http", "method": "GET", "path": path, "headers": []})
+        self.assertTrue(_matches(policy, request("/api/notes/owned-note/video/download")))
+        self.assertFalse(_matches(policy, request("/api/notes/owned-note")))
+        self.assertFalse(_matches(policy, request("/api/notes")))
+        self.assertEqual(policy.principal, "user")
+        local = SlidingWindowLimiter()
+        for index in range(6):
+            self.assertTrue(local.check(policy, "user:a", now=100 + index)[0])
+        self.assertFalse(local.check(policy, "user:a", now=106)[0])
+        self.assertTrue(local.check(policy, "user:b", now=106)[0])
+
     def test_stable_production_template_enables_agent_dependencies(self) -> None:
         production_env = (
             Path(__file__).resolve().parents[2]

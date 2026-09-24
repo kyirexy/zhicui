@@ -28,6 +28,7 @@ import {
 import ContentChat from '@/components/ContentChat';
 import { useWebBuildActivity } from '@/lib/hooks/useWebBuildActivity';
 import DesktopMediaVideoPlayer from '@/components/DesktopMediaVideoPlayer';
+import VideoDownloadButton from '@/components/VideoDownloadButton';
 import { buildBilibiliEmbedUrl } from '@/lib/singleLinkImport';
 import { isNoAudioResult, libraryExtractionErrorMessage } from '@/lib/libraryExtractionOutcome';
 import DouyinGalleryViewer from '@/components/DouyinGalleryViewer';
@@ -409,6 +410,10 @@ export default function VideoKnowledgeWorkspace() {
               <p>{item.caption}</p>
             )}
           </div>
+
+          {note?.id && !isGallery && ['douyin', 'bilibili'].includes(item.platform || 'douyin') ? (
+            <VideoDownloadButton noteId={note.id} title={item.title} />
+          ) : null}
 
           <div className="video-knowledge-meta">
             <div className="video-knowledge-author">

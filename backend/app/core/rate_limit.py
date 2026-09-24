@@ -74,6 +74,7 @@ POLICIES: tuple[RatePolicy, ...] = (
     RatePolicy("agent_generate", "POST", "/api/agent/threads/", 30, 60 * 60, "user"),
     RatePolicy("douyin_sync", "POST", "/api/library/douyin/collect", 6, 60 * 60, "user"),
     RatePolicy("creator_sync", "POST", "/api/creator-sources/", 12, 60 * 60, "user"),
+    RatePolicy("note_video_download", "GET", "/api/notes", 6, 60, "user"),
 )
 
 
@@ -189,6 +190,8 @@ def _matches(policy: RatePolicy, request: Request) -> bool:
         return path.startswith(policy.path_prefix) and path.endswith(("/messages", "/messages/stream"))
     if policy.name == "creator_sync":
         return path.startswith(policy.path_prefix) and path.endswith("/runs")
+    if policy.name == "note_video_download":
+        return path.startswith(policy.path_prefix + "/") and path.endswith("/video/download")
     return path == policy.path_prefix or path.startswith(policy.path_prefix + "/")
 
 

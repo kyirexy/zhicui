@@ -197,8 +197,7 @@ export function ExtractionProvider({ children }: { children: ReactNode }) {
 
           if (event.step === 'error') {
             setError(event.message);
-            setPreviewVideo(null);
-            setTranscript('');
+            // 保留本次已读取的资料与文稿，转写失败时仍可下载原视频。
             // Simulate error step locally just for display.
             const idx = upsertStep('error');
             steps[idx] = { ...steps[idx], status: 'error', message: event.message };
@@ -234,15 +233,11 @@ export function ExtractionProvider({ children }: { children: ReactNode }) {
 
       if (!result.success && !controller.signal.aborted) {
         setError(result.error || '提取失败');
-        setPreviewVideo(null);
-        setTranscript('');
         setIsLoading(false);
       }
     } catch (e: unknown) {
       if (!controller.signal.aborted) {
         setError(e instanceof Error ? e.message : '网络错误');
-        setPreviewVideo(null);
-        setTranscript('');
         setIsLoading(false);
       }
     } finally {

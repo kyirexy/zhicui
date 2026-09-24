@@ -13,6 +13,7 @@ import {
   StackSimple,
 } from '@phosphor-icons/react';
 import InputBar from '@/components/InputBar';
+import VideoDownloadButton from '@/components/VideoDownloadButton';
 import { useExtraction } from '@/lib/hooks/ExtractionContext';
 import { buildBilibiliEmbedUrl, buildVideoDetailHref, shouldOpenExtractedVideo } from '@/lib/singleLinkImport';
 import styles from './SingleLinkExtract.module.css';
@@ -133,13 +134,13 @@ export default function SingleLinkExtractPage() {
           <p>单条内容入口</p>
           <h1>导入这一条视频，直接看原视频和完整文稿</h1>
           <p>
-            粘贴链接后，知萃会整理完整文稿与总结。完成后自动打开这条视频的资料页，可以播放原视频、查看文稿并继续提问。
+            粘贴链接后，知萃会整理完整文稿与总结。完成后自动打开这条视频的资料页，可以播放和下载原视频、查看文稿并继续提问。
           </p>
         </div>
         <ul className={styles.guarantees} aria-label="处理说明">
           <li><CheckCircle size={17} weight="fill" aria-hidden="true" />只处理当前链接</li>
           <li><CheckCircle size={17} weight="fill" aria-hidden="true" />完成后直接打开原视频</li>
-          <li><CheckCircle size={17} weight="fill" aria-hidden="true" />不永久保存视频文件</li>
+          <li><CheckCircle size={17} weight="fill" aria-hidden="true" />支持下载原视频到本机</li>
         </ul>
       </header>
 
@@ -220,6 +221,9 @@ export default function SingleLinkExtractPage() {
             <h2 id="single-link-video-title">{previewVideo.title}</h2>
             {previewVideo.author_name ? <span>{previewVideo.author_name}</span> : null}
             <a href={previewVideo.source_url} target="_blank" rel="noreferrer">打开原页面 <ArrowSquareOut size={14} /></a>
+            {!isLoading && previewVideo.note_id && ['douyin', 'bilibili'].includes(previewVideo.platform) ? (
+              <VideoDownloadButton noteId={previewVideo.note_id} title={previewVideo.title} />
+            ) : null}
           </div>
         </section>
       ) : null}

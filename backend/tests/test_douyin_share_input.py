@@ -73,6 +73,11 @@ class _FakeSession:
 
 
 class DouyinShareInputTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # 本文件的路由单测使用 MagicMock DB；持久化预览由独立真实 SQLite 测试覆盖。
+        prepare = patch.object(routes.single_video_reuse_service, "prepare_download_note", return_value=None)
+        prepare.start()
+        self.addCleanup(prepare.stop)
     def test_share_message_extracts_only_supported_url(self) -> None:
         self.assertEqual(video_extractor.normalize_share_url(SHARE_TEXT), SHARE_URL)
         self.assertEqual(video_extractor._detect_platform(SHARE_TEXT), "douyin")
@@ -472,7 +477,7 @@ class DouyinShareInputTests(unittest.TestCase):
                 "get_by_user",
                 return_value=binding,
             ),
-            patch.object(routes.douyin_library, "get_item", return_value=None) as manifest,
+            patch.object(routes.douyin_library, "get_item", return_value={"aweme_id": AWEME_ID, "title": "已绑定的真实作品", "media_type": "video"}) as manifest,
             patch.object(routes.douyin_library, "resolve_item_metadata", return_value=None),
             patch.object(routes.douyin_library, "public_media_url", return_value="/signed-media"),
             patch.object(routes.douyin_library, "public_cover_url", return_value="/signed-cover"),

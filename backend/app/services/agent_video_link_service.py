@@ -9,6 +9,7 @@ import socket
 import subprocess
 import tempfile
 import time
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,11 +17,12 @@ from typing import Any, Callable, Iterator
 from urllib.parse import parse_qs, urljoin, urlsplit
 
 import urllib3
+import requests
 from sqlalchemy.orm import Session
 
 from app.core.media_reference import stable_note_source
 from app.models.note import Note
-from app.services import library_sync_service, note_service, platform_library_service, settings_service, video_extractor
+from app.services import douyin_library, library_sync_service, note_service, platform_library_service, settings_service, video_extractor
 
 
 MAX_MEDIA_BYTES = 512 * 1024 * 1024
@@ -38,12 +40,30 @@ _HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
     "Accept-Encoding": "identity",
 }
+_WEB_DOWNLOAD_LIMIT = threading.BoundedSemaphore(4)
+_WEB_DOWNLOAD_USERS: set[str] = set()
+_WEB_DOWNLOAD_LOCK = threading.Lock()
 
 
 class VideoLinkError(ValueError):
     def __init__(self, code: str, message: str, *, status: int = 422, retryable: bool = False):
         super().__init__(message)
         self.code, self.http_status, self.retryable = code, status, retryable
+
+
+@contextmanager
+def user_download_slot(user_id: str) -> Iterator[None]:
+    """单工作进程最多 4 个下载、每用户 1 个；覆盖准备和文件发送全生命周期。"""
+    with _WEB_DOWNLOAD_LOCK:
+        if user_id in _WEB_DOWNLOAD_USERS or not _WEB_DOWNLOAD_LIMIT.acquire(blocking=False):
+            raise VideoLinkError("DOWNLOAD_BUSY", "已有视频正在下载，请稍后再试", status=429, retryable=True)
+        _WEB_DOWNLOAD_USERS.add(user_id)
+    try:
+        yield
+    finally:
+        with _WEB_DOWNLOAD_LOCK:
+            _WEB_DOWNLOAD_USERS.discard(user_id)
+            _WEB_DOWNLOAD_LIMIT.release()
 
 
 def _target(value: str, domains: tuple[str, ...], *, resolve: bool = True) -> tuple[Any, str]:
@@ -336,6 +356,67 @@ def prepared_media(note: Note) -> Iterator[Path]:
         if target.stat().st_size > MAX_MEDIA_BYTES:
             raise VideoLinkError("MEDIA_TOO_LARGE", "视频超过 512 MB 下载限制", status=413)
         yield target
+
+
+@contextmanager
+def prepared_user_media(note: Note, *, session_scope: str = "") -> Iterator[Path]:
+    """Web 用户的绑定流；本机没有作品时再尝试同一资料的公开来源一次。"""
+    if not session_scope or platform_library_service.media_platform(note) != "douyin":
+        with prepared_media(note) as path:
+            yield path
+        return
+    video_id = str(note.video_id)
+    if not re.fullmatch(r"\d{8,32}", video_id):
+        raise VideoLinkError("INVALID_MEDIA", "视频资料标识无效")
+    # URL 与 scope 均由服务器配置/当前用户绑定构造，不能接受客户端任意媒体地址。
+    url = douyin_library.companion_media_url(video_id)
+    parsed = urlsplit(url)
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "::1"} or parsed.username or parsed.password:
+        raise VideoLinkError("UNSAFE_MEDIA_TARGET", "本机视频连接器配置无效", status=503)
+    fallback = False
+    with tempfile.TemporaryDirectory(prefix="zhicui-web-media-") as directory:
+        root = Path(directory)
+        track = root / "source.bin"
+        deadline = time.monotonic() + MAX_DOWNLOAD_SECONDS
+        try:
+            with requests.Session() as session:
+                session.trust_env = False
+                with session.get(url, headers=douyin_library.companion_headers(session_scope), stream=True, allow_redirects=False, timeout=(8, 20)) as response:
+                    if response.status_code in {404, 410}:
+                        fallback = True
+                    elif response.status_code in {401, 403, 412, 429}:
+                        raise VideoLinkError("PLATFORM_AUTH_REQUIRED", "请在客户端重新连接抖音并完成平台验证后重试", status=409)
+                    elif response.status_code != 200:
+                        raise VideoLinkError("PLATFORM_UNAVAILABLE", "已绑定的视频暂时无法读取，请稍后重试", status=502, retryable=True)
+                    else:
+                        try:
+                            length = int(response.headers.get("Content-Length") or 0)
+                        except ValueError:
+                            raise VideoLinkError("INVALID_MEDIA", "平台视频长度无效", status=502) from None
+                        if length < 0 or length > MAX_MEDIA_BYTES:
+                            raise VideoLinkError("MEDIA_TOO_LARGE", "视频超过 512 MB 下载限制", status=413)
+                        written = 0
+                        with track.open("wb") as output:
+                            for chunk in response.iter_content(256 * 1024):
+                                if time.monotonic() > deadline:
+                                    raise VideoLinkError("MEDIA_TIMEOUT", "视频下载超时", status=504, retryable=True)
+                                written += len(chunk)
+                                if written > MAX_MEDIA_BYTES:
+                                    raise VideoLinkError("MEDIA_TOO_LARGE", "视频超过 512 MB 下载限制", status=413)
+                                output.write(chunk)
+                        if not written or (length and written != length):
+                            raise VideoLinkError("INVALID_MEDIA", "视频下载不完整，请稍后重试", status=502)
+            if not fallback:
+                target = root / "video.mp4"
+                _remux([track], target)
+                if target.stat().st_size > MAX_MEDIA_BYTES:
+                    raise VideoLinkError("MEDIA_TOO_LARGE", "视频超过 512 MB 下载限制", status=413)
+                yield target
+                return
+        except requests.RequestException:
+            raise VideoLinkError("PLATFORM_UNAVAILABLE", "视频连接器暂时不可用，请稍后重试", status=502, retryable=True) from None
+    with prepared_media(note) as path:
+        yield path
 
 
 def transcribe_note(db: Session, *, user_id: str, note_id: str, check_active: Callable[[], None] | None = None) -> dict[str, Any]:

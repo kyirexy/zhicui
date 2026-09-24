@@ -95,6 +95,7 @@ import { importPlatformBatches, platformImportBatchBody, platformFromImportInput
 import { bilibiliSubmissionKey, importBilibiliJobs } from './bilibiliImportJobs';
 import type { PlatformSyncSnapshot } from './platformSyncSnapshot';
 import { readStoredToken, sessionFetch } from './authSession';
+import { readVideoDownload, type VideoDownloadProgress } from './videoDownload';
 export type { ApiResponse };
 
 // In Capacitor/static-export mode, NEXT_PUBLIC_API_URL is set explicitly
@@ -356,6 +357,7 @@ export async function listMyFeedback(
 
 /** Metadata carried by intermediate SSE progress events. */
 export interface ExtractionVideoPreview {
+  note_id?: string;
   title: string;
   video_id: string;
   platform: string;
@@ -514,6 +516,21 @@ export async function listNotes(
 
 export async function getNote(id: string): Promise<ApiResponse<NoteDetail>> {
   return request<NoteDetail>(`/api/notes/${id}`);
+}
+
+/** 凭证只放请求头；视频经本站鉴权与校验，不跳转到上游签名地址。 */
+export async function downloadNoteVideo(
+  noteId: string,
+  signal?: AbortSignal,
+  onProgress?: (progress: VideoDownloadProgress) => void,
+): Promise<Blob> {
+  const response = await sessionFetch(`${API_BASE}/api/notes/${encodeURIComponent(noteId)}/video/download`, {
+    headers: authHeaders({ Accept: 'video/mp4' }),
+    redirect: 'error',
+    cache: 'no-store',
+    signal,
+  });
+  return readVideoDownload(response, onProgress, signal);
 }
 
 export async function askNote(

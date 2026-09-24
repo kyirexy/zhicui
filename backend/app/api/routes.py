@@ -13,13 +13,14 @@ import time
 import traceback
 import uuid
 import wave
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib.parse import urljoin, urlparse
 
 import requests as http_requests
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Query, Request, Response
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -39,6 +40,7 @@ from app.models.user import (
     count_users,
 )
 from app.services import (
+    agent_video_link_service,
     ai_juicer,
     activity_service,
     audit_service,
@@ -81,6 +83,20 @@ router = APIRouter()
 _COVER_MAX_BYTES = 8 * 1024 * 1024
 
 
+class _TemporaryVideoResponse(FileResponse):
+    """正常、断连、Range 错误均释放临时文件及并发槽。"""
+
+    def __init__(self, *args, cleanup: ExitStack, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._cleanup = cleanup
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._cleanup.close()
+
+
 def _safe_extraction_video_preview(
     video_info: dict[str, Any],
     *,
@@ -88,7 +104,7 @@ def _safe_extraction_video_preview(
     platform: str,
 ) -> dict[str, str]:
     """Return only transient fields required by the in-progress preview UI."""
-    return {
+    preview = {
         "title": str(video_info.get("title") or "未知标题"),
         "video_id": str(video_info.get("video_id") or ""),
         "platform": platform,
@@ -107,6 +123,9 @@ def _safe_extraction_video_preview(
         ),
         "author_name": str(video_info.get("author_name") or video_info.get("author") or ""),
     }
+    if isinstance(video_info.get("note_id"), str) and video_info["note_id"]:
+        preview["note_id"] = video_info["note_id"]
+    return preview
 
 
 def _safe_video_parse_error(exc: Exception) -> str:
@@ -114,6 +133,62 @@ def _safe_video_parse_error(exc: Exception) -> str:
     if isinstance(exc, (video_extractor.VideoExtractionError, NotImplementedError)):
         return str(exc)
     return "视频链接暂时无法解析，请检查链接是否正确，稍后重试。"
+
+
+def _safe_transcript_error(exc: Exception, *, bound: bool = False) -> str:
+    """保留语音服务的安全诊断，不能把 ASR 或无音频误报成平台视频故障。"""
+    if isinstance(exc, video_extractor.NoAudioError):
+        return "无音频"
+    if isinstance(exc, video_extractor.CloudAsrError):
+        return exc.public_message
+    if isinstance(exc, agent_video_link_service.VideoLinkError):
+        return str(exc)
+    if bound:
+        return "绑定账号的视频暂时无法读取，请在客户端重新连接抖音后重试。"
+    return "文字提取暂未完成，请稍后重试。"
+
+
+def _transcribe_bound_video(
+    *, media_url: str, headers: dict[str, str] | None, source_url: str,
+    video_info: dict[str, Any], asr_config: dict[str, Any],
+) -> str:
+    """旧绑定流失效时，仅通过原公开分享链接恢复一次同一作品。"""
+    try:
+        return video_extractor.extract_media_url_transcript(
+            media_url, asr_config["api_key"], asr_config["api_base_url"],
+            asr_config["model"], request_headers=headers,
+        )
+    except http_requests.HTTPError as exc:
+        # 404/410 是本机下载器缺少作品或旧缓存过期；登录、验证、限流不重试。
+        if exc.response is None or exc.response.status_code not in {404, 410}:
+            raise
+        response_url = str(getattr(exc.response, "url", "") or "")
+        if response_url and response_url != media_url:
+            raise
+    refreshed = video_extractor.parse_video_info(source_url)
+    if str(refreshed.get("video_id") or "") != str(video_info.get("video_id") or ""):
+        raise agent_video_link_service.VideoLinkError("INVALID_MEDIA", "分享链接返回了不同的视频，请重新复制原作品链接", status=409)
+    if str(refreshed.get("platform") or "") != "douyin":
+        raise agent_video_link_service.VideoLinkError("INVALID_MEDIA", "视频来源平台不一致", status=409)
+    # 只复制可信的平台解析结果；绑定 scope 不传给公开平台或 ASR 请求。
+    video_info.update(refreshed)
+    logging.getLogger("uvicorn.error.extraction").info("single_video_public_recovery video_id=%s", video_info["video_id"])
+    return video_extractor.extract_transcript(
+        source_url, asr_config["api_key"], asr_config["api_base_url"],
+        asr_config["model"], video_info=video_info,
+    )
+
+
+def _save_single_video_no_audio(db: Session, *, user_id: str, video_info: dict[str, Any]) -> dict[str, Any]:
+    """无语音是内容状态，保存原视频供查看下载，不生成虚假的 AI 总结。"""
+    note = note_service.get_note(db, str(video_info.get("note_id") or ""), user_id)
+    if note is None:
+        return {"transcript_status": "no_audio", "transcript_notice": "无音频", "plan_id": None}
+    payload = platform_library_service._load_payload(note)
+    payload["source_meta"] = {**platform_library_service._source_meta(note), "transcript_status": "no_audio", "speech_ready": False}
+    note.ai_summary = json.dumps(payload, ensure_ascii=False)
+    db.commit()
+    return {**note.to_dict(), "transcript_status": "no_audio", "transcript_notice": "无音频", "plan_id": None}
 
 
 def _recover_bound_douyin_video(
@@ -158,6 +233,18 @@ def _recover_bound_douyin_video(
             )
         except douyin_library.DouyinLibraryError:
             pass
+    if not manifest_item:
+        # 绑定存在并不表示下载器真的有该作品；缓存未命中时最多读一次原分享页。
+        # 不能仅凭 URL 中的 ID 合成“已找到”元数据，更不能将其持久化为已导入。
+        if not share_text:
+            return None
+        try:
+            refreshed = video_extractor.parse_video_info(share_text)
+        except Exception:
+            return None
+        if str(refreshed.get("video_id") or "") != aweme_id or str(refreshed.get("platform") or "") != "douyin":
+            return None
+        return refreshed, "", {}
     if str((manifest_item or {}).get("media_type") or "video") == "gallery":
         return None
 
@@ -842,16 +929,36 @@ def _save_generated_note(
         "source_mode": "import",
         **existing_source_meta,
     }
+    # 规范作品页用于持久身份；公开分享短链另存为读取上下文，绝不保留签名媒体 URL。
+    share_url = agent_video_link_service._public_share_url(
+        video_info.get("public_share_url") or video_info.get("source_url")
+    )
+    if platform == "douyin" and share_url:
+        ai_result["source_meta"]["public_share_url"] = share_url
     durable_video_info = dict(video_info)
     durable_video_info.pop("preview_media_url", None)
     durable_video_info.pop("preview_cover_url", None)
-    note = note_service.create_note(
-        db,
-        durable_video_info,
-        transcript,
-        ai_result,
-        user_id,
-    )
+    note = note_service.get_note(db, str(video_info["note_id"]), user_id) if video_info.get("note_id") else None
+    if note is not None and note.video_id == str(video_info.get("video_id")):
+        previous_meta = platform_library_service._source_meta(note)
+        updated_meta = {**previous_meta, **{key: value for key, value in ai_result["source_meta"].items() if value not in (None, "")}}
+        # 补解析已有收藏/喜欢只更新内容，不能把它从原平台资料库搬成“链接导入”。
+        for key in ("source_kind", "source_mode", "source_modes", "source_synced_at", "source_item_id", "recorded_at"):
+            if key in previous_meta:
+                updated_meta[key] = previous_meta[key]
+        ai_result["source_meta"] = {**updated_meta, "transcript_status": "ready", "speech_ready": True, "transcript_source": "single-link-asr"}
+        if not single_video_reuse_service._missing_title(video_info.get("title"), note.video_id):
+            note.video_title = str(video_info["title"])[:512]
+        note.transcript_raw = transcript
+        note.ai_summary = json.dumps(ai_result, ensure_ascii=False)
+        note.ai_initialized = True
+        note.card_type = ai_result.get("card_type", "general")
+        note.pitfall_rating = int(ai_result.get("pitfall_rating", 3))
+        note.seo_title = note_service.generate_seo_title(note.video_title)
+        db.commit()
+        db.refresh(note)
+    else:
+        note = note_service.create_note(db, durable_video_info, transcript, ai_result, user_id)
 
     plan_id: str | None = None
     plan = ai_result.get("plan")
@@ -1099,6 +1206,8 @@ def extract(
             video_info, sidecar_media_url, sidecar_media_headers = recovery
         video_info.setdefault("source_url", source_url)
         video_info.setdefault("platform", platform)
+        if platform == "douyin":
+            video_info["public_share_url"] = agent_video_link_service._public_share_url(source_url)
         reused = _reuse_single_video_result(
             db, user_id=current_user.id,
             source_url=(f"https://www.douyin.com/video/{video_info.get('video_id', '')}"
@@ -1109,6 +1218,12 @@ def extract(
         if reused is not None:
             return _ok(reused)
 
+        prepared_note = single_video_reuse_service.prepare_download_note(
+            db, user_id=current_user.id, video_info=video_info, source_url=source_url,
+        )
+        if prepared_note is not None:
+            video_info["note_id"] = prepared_note.id
+
         # 2. Extract transcript (with fallback)
         transcript = None
 
@@ -1116,19 +1231,15 @@ def extract(
         asr_cfg = settings_service.get_asr_config(db)
         if sidecar_media_url:
             try:
-                transcript = video_extractor.extract_media_url_transcript(
-                    sidecar_media_url,
-                    asr_cfg["api_key"],
-                    asr_cfg["api_base_url"],
-                    asr_cfg["model"],
-                    request_headers=sidecar_media_headers,
+                transcript = _transcribe_bound_video(
+                    media_url=sidecar_media_url, headers=sidecar_media_headers,
+                    source_url=source_url, video_info=video_info, asr_config=asr_cfg,
                 )
-            except Exception:
+            except video_extractor.NoAudioError:
+                return _ok(_save_single_video_no_audio(db, user_id=current_user.id, video_info=video_info))
+            except Exception as exc:
                 traceback.print_exc()
-                return _err(
-                    "已通过绑定账号找到该作品，但视频流暂时无法读取。"
-                    "请稍后重试，暂时不要连续解析。"
-                )
+                return _err(_safe_transcript_error(exc, bound=True))
         elif asr_cfg["api_key"]:
             try:
                 transcript = video_extractor.extract_transcript(
@@ -1138,11 +1249,13 @@ def extract(
                     asr_cfg["model"],
                     video_info=video_info,
                 )
-            except Exception:
+            except video_extractor.NoAudioError:
+                return _ok(_save_single_video_no_audio(db, user_id=current_user.id, video_info=video_info))
+            except Exception as exc:
                 traceback.print_exc()
                 if platform == "douyin":
                     # 新链路已在同一份音频上尝试兜底，禁止再次下载整段视频。
-                    return _err("文字提取暂未完成，请稍后重试。")
+                    return _err(_safe_transcript_error(exc))
                 # Fall through to local ASR
 
         # Fallback: local yt-dlp + faster-whisper
@@ -1377,9 +1490,11 @@ def extract_stream(
                     if recovery is None:
                         raise
                     video_info, sidecar_media_url, sidecar_media_headers = recovery
-                    recovered_from_binding = True
+                    recovered_from_binding = bool(sidecar_media_url)
                 video_info.setdefault("source_url", source_url)
                 video_info.setdefault("platform", platform)
+                if platform == "douyin":
+                    video_info["public_share_url"] = agent_video_link_service._public_share_url(source_url)
                 reused = _reuse_single_video_result(
                     db, user_id=current_user.id,
                     source_url=(f"https://www.douyin.com/video/{video_info.get('video_id', '')}"
@@ -1390,6 +1505,11 @@ def extract_stream(
                 if reused is not None:
                     yield _event("done", "导入完成", "done", reused)
                     return
+                prepared_note = single_video_reuse_service.prepare_download_note(
+                    db, user_id=current_user.id, video_info=video_info, source_url=source_url,
+                )
+                if prepared_note is not None:
+                    video_info["note_id"] = prepared_note.id
                 yield _progress(
                     "parse",
                     (
@@ -1448,12 +1568,9 @@ def extract_stream(
                             "provider": "douyin-sidecar",
                         },
                     )
-                    transcript = video_extractor.extract_media_url_transcript(
-                        sidecar_media_url,
-                        asr_cfg["api_key"],
-                        asr_cfg["api_base_url"],
-                        asr_cfg["model"],
-                        request_headers=sidecar_media_headers,
+                    transcript = _transcribe_bound_video(
+                        media_url=sidecar_media_url, headers=sidecar_media_headers,
+                        source_url=source_url, video_info=video_info, asr_config=asr_cfg,
                     )
                     yield _progress(
                         "transcribe",
@@ -1469,12 +1586,13 @@ def extract_stream(
                             "transcript_chars": len(transcript or ""),
                         },
                     )
-                except Exception:
+                except video_extractor.NoAudioError:
+                    result = _save_single_video_no_audio(db, user_id=current_user.id, video_info=video_info)
+                    yield _event("done", "无音频，视频资料已保存，可下载原视频", "done", result)
+                    return
+                except Exception as exc:
                     traceback.print_exc()
-                    message = (
-                        "已通过绑定账号找到该作品，但视频流暂时无法读取。"
-                        "请稍后重试，暂时不要连续解析。"
-                    )
+                    message = _safe_transcript_error(exc, bound=True)
                     yield _progress(
                         "transcribe",
                         message,
@@ -1539,10 +1657,14 @@ def extract_stream(
                                 "level": "warning",
                             },
                         )
-                except Exception:
+                except video_extractor.NoAudioError:
+                    result = _save_single_video_no_audio(db, user_id=current_user.id, video_info=video_info)
+                    yield _event("done", "无音频，视频资料已保存，可下载原视频", "done", result)
+                    return
+                except Exception as exc:
                     traceback.print_exc()
                     if platform == "douyin":
-                        message = "文字提取暂未完成，请稍后重试。"
+                        message = _safe_transcript_error(exc)
                         yield _progress("transcribe", message, "error")
                         yield _progress("error", message, "error")
                         return
@@ -4073,6 +4195,46 @@ def list_notes(
         "per_page": per_page,
         "total_pages": total_pages,
     })
+
+
+@router.get("/api/notes/{note_id}/video/download")
+def download_note_video(
+    note_id: str = Path(..., min_length=1, max_length=64),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+):
+    """网页登录用户下载自己的原视频；不接受客户端提交的媒体 URL。"""
+    cleanup = ExitStack()
+    try:
+        user_id = current_user.id
+        note = agent_video_link_service.owned_note(db, user_id=user_id, note_id=note_id)
+        cleanup.enter_context(agent_video_link_service.user_download_slot(user_id))
+        snapshot = agent_video_link_service.media_snapshot(note)
+        binding = douyin_binding_service.get_by_user(db, user_id) if platform_library_service.media_platform(note) == "douyin" else None
+        session_scope = str(binding.session_scope) if binding is not None and binding.status == "connected" and int(binding.cookie_count or 0) > 0 else ""
+        db.commit()
+        video_path = cleanup.enter_context(agent_video_link_service.prepared_user_media(snapshot, session_scope=session_scope))
+        # 网络等待后重新验证归属和账号状态，禁用或删除立即生效。
+        db.expire_all()
+        active_user = get_user_by_id(db, user_id)
+        if active_user is None or not active_user.is_active:
+            raise agent_video_link_service.VideoLinkError("AUTHENTICATION_REQUIRED", "账号不存在或已被禁用", status=401)
+        agent_video_link_service.owned_note(db, user_id=user_id, note_id=note_id)
+        if session_scope:
+            active_binding = douyin_binding_service.get_by_user(db, user_id)
+            if active_binding is None or active_binding.status != "connected" or active_binding.session_scope != session_scope or int(active_binding.cookie_count or 0) <= 0:
+                raise agent_video_link_service.VideoLinkError("PLATFORM_AUTH_REQUIRED", "平台连接已变更，请重新下载", status=409)
+        return _TemporaryVideoResponse(
+            video_path, media_type="video/mp4", filename="zhicui-video.mp4",
+            cleanup=cleanup,
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache", "X-Content-Type-Options": "nosniff"},
+        )
+    except agent_video_link_service.VideoLinkError as exc:
+        cleanup.close()
+        return JSONResponse({**_err(str(exc)), "code": exc.code}, status_code=exc.http_status)
+    except Exception:
+        cleanup.close()
+        return JSONResponse({**_err("视频下载暂时失败，请稍后重试"), "code": "MEDIA_DOWNLOAD_FAILED"}, status_code=502)
 
 
 @router.get("/api/notes/{note_id}")

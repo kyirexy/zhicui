@@ -128,6 +128,7 @@
     "GET /api/library/sync-runs",
     "GET /api/notes",
     "GET /api/notes/{note_id}",
+    "GET /api/notes/{note_id}/video/download",
     "GET /api/plans",
     "GET /api/plans/overview",
     "GET /api/plans/review",

@@ -5,17 +5,17 @@
   "platform": "windows",
   "architecture": "x64",
   "artifact_kind": "unsigned",
-  "version": "1.1.14",
-  "source_commit": "fda37ac47f84e9d029d9b669e4bf6d4625e7cc09",
-  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.14-x64.exe",
-  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.14-x64.exe",
-  "size_bytes": 93669493,
-  "sha256": "9f1698fdfb0a35e6083380630d5cccaf4e0b017b3bdcab3296a0ce530e9ce1e8",
-  "published_at": "2026-09-23T03:53:19.2908818Z",
+  "version": "1.1.15",
+  "source_commit": "f2f1d5c57b8828949203eb900d895ff4181ed12a",
+  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.15-x64.exe",
+  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.15-x64.exe",
+  "size_bytes": 93670642,
+  "sha256": "5e71b27c06b492fb423e1e4ddcc9e2d017420fafdb601331cb0781e8fecb3ed5",
+  "published_at": "2026-09-24T03:33:21.3188619Z",
   "notes": [
-    "回顾直接定位待解析视频，减少列表扫描和失败重试。",
-    "同步窗口保持可见，支持系统默认浏览器并优化后台读取。",
-    "下载与语音转写分阶段显示，静音内容自动跳过。"
+    "新增独立 Agent 接入，可管理个人访问令牌与设备授权。",
+    "内置 CLI 1.0.2，支持读取资料、文稿问答、知识与计划。",
+    "修复 Windows 凭据保存和授权范围协商。"
   ],
   "code_signed": false,
   "release_status": "beta_download"

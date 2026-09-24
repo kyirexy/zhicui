@@ -138,7 +138,7 @@ async function credentialWriterPresent(gate: string, preserveUnknownEmpty = fals
   return false;
 }
 
-async function withOwnedCredentialGate<T>(
+export async function withOwnedCredentialGate<T>(
   gate: string,
   operation: () => Promise<T>,
   timeoutMs = FILE_OPERATION_TIMEOUT_MS,

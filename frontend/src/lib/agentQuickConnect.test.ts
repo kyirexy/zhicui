@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AGENT_HANDOFF_PROMPT, agentConnectionStep } from './agentQuickConnect.ts';
+import { AGENT_CORE_HANDOFF_PROMPT, AGENT_HANDOFF_PROMPT, CORE_AGENT_LOGIN_COMMAND, agentConnectionStep } from './agentQuickConnect.ts';
 
 const base = { loading: false, interfaceDisabled: false, supportsAuthorization: true };
 
@@ -36,4 +36,23 @@ test('提示词要求真实工具发现和用户授权，不依赖公开npm安�
   assert.match(AGENT_HANDOFF_PROMPT, /先检查当前会话/);
   assert.match(AGENT_HANDOFF_PROMPT, /由我在知萃客户端确认/);
   assert.doesNotMatch(AGENT_HANDOFF_PROMPT, /npm install|npx |cli-acceptance|Bearer\s+/);
+});
+
+test('基础接入提示词允许指定公开链接操作，并要求先取得写入权限', () => {
+  for (const action of ['library.import_link', 'library.transcript.generate', 'library.media.download']) {
+    assert.ok(AGENT_CORE_HANDOFF_PROMPT.includes(action));
+  }
+  assert.match(AGENT_CORE_HANDOFF_PROMPT, /抖音、B站公开链接/);
+  assert.match(AGENT_CORE_HANDOFF_PROMPT, /只处理我明确指定的公开链接/);
+  assert.match(AGENT_CORE_HANDOFF_PROMPT, /操作前检查可用能力，并确认已获得 library:write 授权/);
+  assert.match(AGENT_CORE_HANDOFF_PROMPT, /不要自动扩大默认权限/);
+  assert.match(AGENT_CORE_HANDOFF_PROMPT, /先查询任务进度/);
+  assert.doesNotMatch(AGENT_CORE_HANDOFF_PROMPT, /不支持平台同步、链接导入、视频下载、文稿提取|先在知萃客户端完成提取/);
+});
+
+test('基础接入默认命令不包含写入权限，平台批量同步和本机自动化仍未开放', () => {
+  assert.equal(CORE_AGENT_LOGIN_COMMAND, 'zhicui auth login --scopes account:read,library:read,ask:read,ask:run');
+  assert.match(AGENT_CORE_HANDOFF_PROMPT, /请先只读查看我的资料/);
+  assert.match(AGENT_CORE_HANDOFF_PROMPT, /仍不开放平台账号批量同步、本机桥接（bridge）或视觉自动化/);
+  assert.match(AGENT_CORE_HANDOFF_PROMPT, /不要读取或展示密码、Cookie、JWT、访问令牌或 API Key/);
 });

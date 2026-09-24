@@ -11,7 +11,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 EXCLUDED_ACTIONS = (
-    "library.import_link", "library.transcript.generate", "creator.sync.start",
+    "library.transcript.batch", "creator.sync.start",
     "analysis.catalog", "automation.status", "local.status", "models.selection.get",
     "account.email.status",
 )
@@ -46,7 +46,7 @@ def main() -> None:
             raise SystemExit(label)
 
     def invoke(action: str, payload=None):
-        status, result = call(f"/api/agent-interface/v1/actions/{action}/invoke", {"input": payload or {}})
+        status, result = call(f"/api/agent-interface/v1/actions/{action}/invoke", {"input": payload or {}, "idempotency_key": "core-smoke-" + uuid.uuid4().hex})
         require(status == 200 and result.get("status") == "succeeded", f"Core {action} 运行时调用失败")
         return (result.get("data") or {}).get("result")
 
@@ -54,6 +54,13 @@ def main() -> None:
     require(isinstance(library, dict) and isinstance(library.get("items"), list), "Core 资料列表契约无效")
     source = invoke("library.get", {"note_id": source_id})
     require(isinstance(source, dict) and "ZHICUI-SMOKE-94731" in str(source.get("transcript_raw") or ""), "Core 固定资料缺少现有文稿哨兵")
+    transcript = invoke("library.transcript.generate", {"note_id": source_id, "operation": "transcript"})
+    require(isinstance(transcript, dict) and transcript.get("already_existed") is True and "ZHICUI-SMOKE-94731" in str(transcript.get("transcript_raw") or ""), "Core 单条文稿未复用已有资料")
+    for action in ("library.import_link", "library.transcript.generate", "library.media.download"):
+        status, _ = call(f"/api/agent-interface/v1/actions/{action}")
+        require(status == 200, f"Core 显式链接能力未开放：{action}")
+    status, result = call(f"/api/agent-interface/v1/library/{uuid.uuid4()}/media")
+    require(status == 404 and (result.get("error") or {}).get("code") == "RESOURCE_NOT_FOUND", "Core 下载未限制在已有本人资料")
     for action in ("creator.list", "knowledge.list", "plan.list", "plan.overview", "models.list", "models.custom.list"):
         result = invoke(action)
         require(isinstance(result, (dict, list)), f"Core {action} 输出契约无效")

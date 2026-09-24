@@ -65,7 +65,7 @@ def _check_ai_config(db: Session) -> dict[str, Any]:
     llm_ready = bool(llm.get("model") and llm.get("api_key_masked"))
     asr_ready = bool(asr.get("model") and asr.get("api_key_masked"))
     return {
-        "status": "ready" if llm_ready and (asr_ready or (settings.AGENT_INTERFACE_ENABLED and profile_name() == "core")) else "not_ready",
+        "status": "ready" if llm_ready and asr_ready else "not_ready",
         "llm_configured": llm_ready,
         "asr_configured": asr_ready,
     }
@@ -246,7 +246,7 @@ def _check_agent_product_features(
             "status": "ready" if ready else "not_ready", "enabled": True,
             "release_profile": "core", "database_ready": database_ready,
             "answer_model_ready": model_ready,
-            "excluded_features": ["platform_sync", "transcription", "video_analysis", "automation", "email", "local_bridge"],
+            "excluded_features": ["platform_sync", "video_analysis", "automation", "email", "local_bridge"],
             "error_code": None if ready else "agent_core_dependencies_unavailable",
         }
     try:

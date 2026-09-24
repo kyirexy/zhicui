@@ -8,13 +8,15 @@ import hashlib
 import json
 import time
 import uuid
+from contextlib import ExitStack
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 
 from app.agent_interface.contracts import (
     ALL_SCOPE_IDS,
@@ -32,7 +34,7 @@ from app.core.database import SessionLocal, get_db
 from app.core.agent_identity import agent_user_hash
 from app.models.agent_interface import AgentCredential, ProductActionRun
 from app.models.user import User, get_user_by_id
-from app.services import auth_service
+from app.services import auth_service, agent_video_link_service
 from app.services.agent_credential_service import (
     AgentPrincipal,
     CredentialError,
@@ -52,6 +54,7 @@ from app.services.product_action_registry import registry
 from app.services.product_action_run_service import (
     ProductActionError,
     approve_confirmation,
+    consume_rate_limit,
     get_confirmation,
     get_run,
     invoke,
@@ -379,6 +382,57 @@ def capabilities(
         )
     except Exception as exc:
         return _error_response("capabilities.list", request_id, exc)
+
+
+@router.get("/library/{note_id}/media", include_in_schema=False)
+def download_library_media(
+    note_id: str,
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+):
+    """PAT 专用视频下载：固定同源路径，不向调用方返回上游签名地址。"""
+    action_id, request_id = "library.media.download", _request_id(request)
+    cleanup = ExitStack()
+    try:
+        _ensure_enabled()
+        principal = _principal_from_credentials(credentials, db)
+        assert principal is not None
+        definition = registry.get(action_id)
+        if definition is None or not action_is_enabled(action_id) or not definition.secure_direct or definition.mcp_exposed:
+            raise ProductActionError("ACTION_NOT_FOUND", "视频下载尚未开放", http_status=404)
+        require_scopes(principal, definition)
+        consume_rate_limit(db, principal=principal, definition=definition)
+        if not 1 <= len(note_id) <= 64:
+            raise ProductActionError("INVALID_INPUT", "视频资料标识无效", http_status=422)
+        note = agent_video_link_service.owned_note(db, user_id=principal.user.id, note_id=note_id)
+        snapshot = agent_video_link_service.media_snapshot(note)
+        assert principal.credential is not None
+        credential_id, user_id = principal.credential.id, principal.user.id
+        db.commit()
+        path = cleanup.enter_context(agent_video_link_service.prepared_media(snapshot))
+        # 大文件准备后复查令牌，撤销授权立即生效。
+        _ensure_enabled()
+        if not action_is_enabled(action_id):
+            raise ProductActionError("ACTION_NOT_FOUND", "视频下载尚未开放", http_status=404)
+        db.expire_all()
+        require_active_credential(db, credential_id=credential_id, user_id=user_id)
+        return FileResponse(
+            path, media_type="video/mp4", filename="zhicui-video.mp4",
+            background=BackgroundTask(cleanup.close),
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache", "X-Content-Type-Options": "nosniff", "X-Zhicui-Action": action_id, "X-Request-Id": request_id},
+        )
+    except agent_video_link_service.VideoLinkError as exc:
+        cleanup.close()
+        return _error_response(action_id, request_id, ProductActionError(exc.code, str(exc), http_status=exc.http_status, retryable=exc.retryable))
+    except (ProductActionError, CredentialError) as exc:
+        cleanup.close()
+        if isinstance(exc, CredentialError) and exc.code == "AUTHENTICATION_REQUIRED":
+            exc = ProductActionError(exc.code, str(exc), http_status=401)
+        return _error_response(action_id, request_id, exc)
+    except Exception:
+        cleanup.close()
+        return _error_response(action_id, request_id, ProductActionError("MEDIA_DOWNLOAD_FAILED", "视频下载暂时失败，请稍后重试", http_status=502, retryable=True))
 
 
 @router.get("/actions/{action_id}")

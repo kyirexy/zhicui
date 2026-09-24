@@ -2,13 +2,13 @@
   "schema_version": 1,
   "interface_version": "v1",
   "release_profile": "core",
-  "action_count": 38,
-  "cloud_action_count": 38,
+  "action_count": 41,
+  "cloud_action_count": 41,
   "local_windows_action_count": 0,
-  "available_cloud_action_count": 38,
+  "available_cloud_action_count": 41,
   "unavailable_local_windows_action_count": 0,
-  "remote_mcp_tool_count": 41,
-  "scope_count": 10,
+  "remote_mcp_tool_count": 43,
+  "scope_count": 11,
   "scope_ids": [
     "account:read",
     "ask:read",
@@ -17,6 +17,7 @@
     "knowledge:read",
     "knowledge:write",
     "library:read",
+    "library:write",
     "models:read",
     "plan:read",
     "plan:write"
@@ -44,7 +45,10 @@
     "knowledge.remove",
     "knowledge.update",
     "library.get",
+    "library.import_link",
     "library.list",
+    "library.media.download",
+    "library.transcript.generate",
     "models.custom.list",
     "models.list",
     "plan.create",
@@ -61,5 +65,5 @@
     "plan.task.update",
     "plan.update"
   ],
-  "descriptor_sha256": "9d8cb8e4cd3ae41da75ab23c0cfe49c60746c12cf197fc878420460f456b276a"
+  "descriptor_sha256": "d62ad88e69a7e563c81589416d282563751a3987e85fbeb5e0c5124ecaa4af70"
 }

@@ -14,7 +14,7 @@ import styles from './AgentDeviceAuthorizationCard.module.css';
 
 const SCOPE_LABELS: Record<string, string> = {
   'account:read': '读取账号', 'account:manage': '管理账号',
-  'library:read': '读取资料库', 'library:write': '整理资料库',
+  'library:read': '读取资料库', 'library:write': '整理资料库（导入公开链接、提取文稿和下载视频）',
   'creator:read': '读取博主', 'creator:sync': '同步博主',
   'ask:read': '读取对话', 'ask:run': '运行问答',
   'knowledge:read': '读取知识', 'knowledge:write': '整理知识',

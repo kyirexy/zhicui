@@ -18,6 +18,7 @@ from app.models.user import User
 from app.models.video_analysis import VideoAnalysisRun
 from app.services import (
     ai_juicer,
+    agent_video_link_service,
     agent_runtime_service,
     agent_runtime_worker,
     agent_service,
@@ -192,19 +193,26 @@ def library_get(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def library_import_link(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
-    """Import one cloud-readable link without accepting ephemeral media URLs.
-
-    Douyin account collection remains a local Windows capability.  The cloud
-    importer deliberately accepts only the platforms already supported by
-    ``platform_library_service`` (currently Bilibili and Xiaohongshu).
-    """
+    """仅导入用户指定的公开链接；抖音/B站文稿另由显式提取 Action 发起。"""
     try:
+        value = _text(payload, "url", required=True, maximum=2_000)
+        platform = agent_video_link_service.video_extractor._detect_platform(value)
+        if platform in {"douyin", "bilibili"}:
+            if _text(payload, "source_mode", maximum=16) not in {"", "import"}:
+                raise ActionHandlerError("INVALID_INPUT", "分享链接导入不能冒充点赞或收藏记录")
+            return agent_video_link_service.import_link(ctx.db, user_id=ctx.user.id, value=value)
+        if profile_name() == "core":
+            raise ActionHandlerError("UNSUPPORTED_PLATFORM", "此入口只支持抖音和 B站的公开视频链接")
         return platform_library_service.import_one(
             ctx.db,
             user_id=ctx.user.id,
-            value=_text(payload, "url", required=True, maximum=2_000),
+            value=value,
             source_mode=_text(payload, "source_mode", maximum=16) or None,
         )
+    except agent_video_link_service.VideoLinkError as exc:
+        raise ActionHandlerError(exc.code, str(exc), retryable=exc.retryable) from None
+    except ActionHandlerError:
+        raise
     except ValueError as exc:
         raise ActionHandlerError("INVALID_INPUT", str(exc)) from exc
     except Exception as exc:
@@ -351,6 +359,40 @@ def library_sync_start(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
 
 def library_transcript_generate(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
     try:
+        note_id = _text(payload, "note_id", maximum=64)
+        aweme_id = _text(payload, "aweme_id", maximum=128)
+        if bool(note_id) == bool(aweme_id):
+            raise ActionHandlerError("INVALID_INPUT", "note_id 与 aweme_id 必须且只能提供一个")
+        operation = _text(payload, "operation", maximum=16) or "transcript"
+        if note_id or profile_name() == "core":
+            if operation != "transcript":
+                raise ActionHandlerError("INVALID_INPUT", "此入口只支持文稿提取")
+            if not note_id:
+                note = note_service.get_note_by_video_id(ctx.db, aweme_id, ctx.user.id)
+                if note is None:
+                    raise ActionHandlerError("RESOURCE_NOT_FOUND", "视频资料不存在，请先导入链接")
+                note_id = note.id
+            def check_active() -> None:
+                from app.core.config import settings
+                from app.services.agent_credential_service import CredentialError, require_active_credential
+                from app.services.agent_rollout_service import action_is_enabled
+
+                ctx.db.expire_all()
+                ctx.db.refresh(ctx.run)
+                if ctx.run.cancellation_requested:
+                    raise ActionHandlerError("RUN_CANCELED", "运行已取消")
+                if not settings.AGENT_INTERFACE_ENABLED or not action_is_enabled(ctx.run.action_id):
+                    raise ActionHandlerError("ACTION_UNAVAILABLE", "该能力已暂停")
+                if not ctx.user.is_active:
+                    raise ActionHandlerError("INVALID_CREDENTIAL", "账号已停用")
+                if ctx.credential is not None:
+                    try:
+                        require_active_credential(ctx.db, credential_id=ctx.credential.id, user_id=ctx.user.id)
+                    except CredentialError as exc:
+                        raise ActionHandlerError(exc.code, str(exc)) from None
+                ctx.db.commit()
+
+            return agent_video_link_service.transcribe_note(ctx.db, user_id=ctx.user.id, note_id=note_id, check_active=check_active)
         return library_extraction_service.extract_library_item(
             user_id=ctx.user.id,
             aweme_id=_public_id(payload, "aweme_id"),
@@ -359,6 +401,10 @@ def library_transcript_generate(ctx: Any, payload: dict[str, Any]) -> dict[str, 
             # the public Action; the trusted desktop bridge owns that channel.
             ephemeral_media_url="",
         )
+    except agent_video_link_service.VideoLinkError as exc:
+        raise ActionHandlerError(exc.code, str(exc), retryable=exc.retryable) from None
+    except ActionHandlerError:
+        raise
     except ValueError as exc:
         raise ActionHandlerError("INVALID_INPUT", str(exc)) from exc
     except douyin_library.DouyinLibraryError as exc:

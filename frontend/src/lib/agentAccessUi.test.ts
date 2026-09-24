@@ -120,14 +120,22 @@ test('独立授权页与旧设置入口衔接，网页不再只能下载客户�
   assert.match(quickConnect, /输入设备授权码/);
 });
 
-test('基础接入遵循服务端能力范围，提示词和授权命令不申请同步下载权限', () => {
+test('基础接入提示公开链接能力和按需写入授权，默认权限保持不变', () => {
   const component = read('components/AgentAccessSettingsCard.tsx');
   const quickConnect = read('components/AgentQuickConnect.tsx');
   const prompt = read('lib/agentQuickConnect.ts');
   assert.match(component, /capabilities\?\.release_profile === 'core'/);
   assert.match(component, /capabilities \? capabilities\.scopes : FALLBACK_SCOPES/);
-  assert.match(component, /基础接入 · 已保存资料、文稿问答、知识与计划/);
+  assert.match(component, /基础接入 · 公开链接提取、资料问答、知识与计划/);
+  assert.match(component, /默认只读查看资料/);
+  assert.match(component, /获得“整理资料（library:write）”授权后/);
+  assert.match(component, /你指定的抖音\/B站公开链接导入资料、提取文稿和下载视频/);
+  assert.match(component, /暂不开放平台账号批量同步、本机桥接或视觉自动化/);
+  assert.match(component, /useState<string\[\]>\(\['library:read'\]\)/);
+  assert.doesNotMatch(component, /平台同步、视频下载和新文稿提取请先在知萃客户端完成/);
   assert.match(quickConnect, /coreAccess \? AGENT_CORE_HANDOFF_PROMPT/);
+  assert.match(quickConnect, /导入链接、提取文稿和下载视频前，按需追加 library:write 授权/);
+  assert.match(read('components/AgentDeviceAuthorizationCard.tsx'), /整理资料库（导入公开链接、提取文稿和下载视频）/);
   const command = prompt.match(/CORE_AGENT_LOGIN_COMMAND = '([^']+)'/)?.[1] || '';
   assert.match(command, /ask:run/);
   assert.doesNotMatch(command, /creator:sync|library:write|analysis:|local:invoke/);

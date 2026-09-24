@@ -67,7 +67,7 @@ const FALLBACK_SCOPES: AgentScopeDefinition[] = [
   { id: 'knowledge:write', title: '整理知识', description: '保存和更新你的知识内容。' },
   { id: 'local:invoke', title: '使用本机同步', description: '由桌面客户端执行你发起的视频同步。' },
   { id: 'creator:sync', title: '手动同步博主', description: '只在 Agent 明确调用时启动一次同步。' },
-  { id: 'library:write', title: '整理资料', description: '导入链接、提取文稿并修改资料。' },
+  { id: 'library:write', title: '整理资料', description: '按你指定的抖音/B站公开链接导入资料、提取文稿、下载视频并修改资料。' },
 ];
 
 const LOCAL_MCP_SETUP_COMMAND = 'zhicui agent setup --client all';
@@ -596,7 +596,7 @@ export default function AgentAccessSettingsCard({
         <div className={styles.heroCopy}>
           <h1 id="agent-access-title">Agent 接入</h1>
           <p>
-            {coreAccess ? '基础接入 · 已保存资料、文稿问答、知识与计划' : '让 Codex、Claude Code 和本地工具直接使用你的视频、文稿与知识。'}
+            {coreAccess ? '基础接入 · 公开链接提取、资料问答、知识与计划' : '让 Codex、Claude Code 和本地工具直接使用你的视频、文稿与知识。'}
           </p>
         </div>
         <span className={styles.platformBadge}>
@@ -604,7 +604,7 @@ export default function AgentAccessSettingsCard({
         </span>
       </section>
 
-      {coreAccess && <p className={styles.capabilityHint}>连接后可使用已保存的资料；平台同步、视频下载和新文稿提取请先在知萃客户端完成。</p>}
+      {coreAccess && <p className={styles.capabilityHint}>默认只读查看资料。获得“整理资料（library:write）”授权后，可按你指定的抖音/B站公开链接导入资料、提取文稿和下载视频；暂不开放平台账号批量同步、本机桥接或视觉自动化。</p>}
 
       {interfaceDisabled && (
         <div className={styles.serviceBanner} role="status">

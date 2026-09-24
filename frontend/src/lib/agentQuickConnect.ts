@@ -50,5 +50,6 @@ export const CORE_AGENT_LOGIN_COMMAND = 'zhicui auth login --scopes account:read
 export const AGENT_CORE_HANDOFF_PROMPT = `请帮我连接知萃的基础接入能力。先检查当前会话能否发现知萃 MCP 工具，并读取可用能力与已授权权限。
 已有知萃 CLI 时，运行 ${CORE_AGENT_LOGIN_COMMAND}，由我在浏览器中核对并确认授权。也可以在 https://luxai.cn/agent-access 创建按需授权的个人访问令牌；不要让我把令牌粘贴进聊天。
 目前可以读取知萃已保存的资料和文稿，基于已有文稿问答，并在获得相应权限后整理知识和计划。请先只读查看我的资料，等我指定内容后再问答或写入。
-当前基础接入不支持平台同步、链接导入、视频下载、文稿提取或本机操作。不要尝试这些操作，也不要宣称它们已连接；遇到尚无文稿的视频，请让我先在知萃客户端完成提取。
+基础接入已开放抖音、B站公开链接的导入、文稿提取和视频下载，对应 library.import_link、library.transcript.generate、library.media.download。只处理我明确指定的公开链接；操作前检查可用能力，并确认已获得 library:write 授权。缺少权限时，引导我在浏览器授权页按需追加授权，或创建包含该权限的个人访问令牌；不要自动扩大默认权限。
+文稿提取尚未完成时先查询任务进度，不要声称已取得文稿或视频文件。当前基础接入仍不开放平台账号批量同步、本机桥接（bridge）或视觉自动化，不要尝试调用这些能力。
 不要读取或展示密码、Cookie、JWT、访问令牌或 API Key。`;

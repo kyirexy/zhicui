@@ -38,8 +38,8 @@ zhicui creator works <source_id> --per-page 50 --json
 # 选定目录中的作品提取文稿；也可 --operation recent_transcript --limit 20（支持 20/50/100）
 zhicui creator sync <source_id> --operation selected_transcript --item-ids '["<item_id>"]' --idempotency-key creator-transcript-001 --wait --timeout 20m --json
 
-# 云端分享链接导入当前支持 B站和小红书，查看可供问答的资料 ID
-zhicui library import "<B站或小红书分享链接>" --idempotency-key import-001 --wait --timeout 20m --json
+# 云端导入抖音或 B站的指定公开视频链接，查看可供问答的资料 ID
+zhicui library import "<抖音或B站视频链接>" --idempotency-key import-001 --wait --timeout 20m --json
 zhicui ask sources --scope all_ready --json
 
 # 先选择文稿创建会话；单视频放一个 source_id，多视频放多个
@@ -62,7 +62,29 @@ zhicui plan task-complete <plan_id> <task_id> true --idempotency-key task-comple
 
 每次新操作换一个幂等键；网络中断后重试同一次操作沿用原键和原输入。长任务的顶层 `run_id` 用于 `zhicui run get|wait|resume`；`creator_run.id` 是博主同步记录，只用于 `creator status|sync-items|retry|cancel`。`run resume <run_id> --after <sequence> --jsonl` 可续读事件。等待超时会返回退出码 8，后台任务仍可通过已有 `run_id` 查询，不必重复提交。
 
-昨天新同步的资料可用 `zhicui ask sources --scope yesterday --timezone Asia/Shanghai --json` 查看，再用 `ask create --source-scope yesterday --timezone Asia/Shanghai --idempotency-key yesterday-thread-001` 创建会话。该范围依赖已完成的手动同步记录，不等同于平台真实点赞时间。抖音通过博主同步或桌面本机同步进入资料库；`library import` 当前不支持抖音单链接导入。
+昨天新同步的资料可用 `zhicui ask sources --scope yesterday --timezone Asia/Shanghai --json` 查看，再用 `ask create --source-scope yesterday --timezone Asia/Shanghai --idempotency-key yesterday-thread-001` 创建会话。该范围依赖已完成的手动同步记录，不等同于平台真实点赞时间。抖音可以导入指定公开视频链接，也可通过已开放的博主同步或桌面本机同步进入资料库。
+
+## 将视频交给本地 Hypit
+
+1.0.4 新增 `library prepare`：导入链接、提取文稿、下载原视频，最后写入可交给 Hypit 的素材目录。它只使用当前知萃用户的资料和授权，需要 `library:read`、`library:write`；旧只读 PAT 不会自动增加权限。服务端公开能力和当前授权决定命令是否可用，基础接入不会因此开启批量同步等其他能力。
+
+```powershell
+# 父目录须已存在，输出目录必须是新目录
+zhicui library prepare 'https://v.douyin.com/<分享ID>/' --output 'D:\hypit-projects\references\my-video' --timeout 20m --jsonl
+
+# 超时或等待确认后，使用同一链接、同一目录继续原 Run
+zhicui library prepare 'https://v.douyin.com/<分享ID>/' --output 'D:\hypit-projects\references\my-video' --resume --timeout 20m --jsonl
+
+# 已有资料可单独下载，或以资料 ID 提取文稿
+zhicui library transcript --note-id '<note_id>' --wait --timeout 20m --json
+zhicui library download '<note_id>' --output 'D:\hypit-projects\references\source.mp4' --timeout 20m --jsonl
+```
+
+目录包含 `source.mp4`、`transcript.txt` 和 `manifest.json`；无音频时不会伪造文稿，清单标记 `no_audio`。`.zhicui-prepare.json` 只保存链接、资料 ID 和恢复进度，不含凭据或平台临时媒体地址。`--jsonl` 输出导入、文稿提取、下载字节数和唯一完成事件。恢复会核对素材 SHA-256，已经完成的导入和文稿不重复执行。
+
+下载固定经过知萃鉴权端点，拒绝任何 HTTP 重定向，不向平台发送 PAT。支持 MP4，当前服务端上限 512MB；先写同目录临时文件，再以独占硬链接发布完整文件，目标已存在时绝不覆盖。请使用支持硬链接的本地磁盘（例如 Windows NTFS）。正常失败或超时会清理临时下载文件；进程被强行结束后，`--resume` 只在确认原进程已退出时自动回收任务锁，不按等待时间抢占运行中的任务。已完整落盘但尚未标记完成的文件，只有与发布前记录的 SHA-256 完全匹配时才会被继续使用。
+
+这一步准备真实参考视频和文稿，不会自动产生 Hypit 新视频，也不会配置或购买视频生成模型。
 
 详细画面解析先用 `analysis catalog` 查看方案，`analysis prepare --note-ids '["<note_id>"]' --idempotency-key analysis-prepare-001` 准备报价；计费或破坏性动作若返回 `CONFIRMATION_REQUIRED`，在知萃界面批准本次确认后，沿用原输入和幂等键，并添加 `--confirmation-id <confirmation_id>`。CLI 不跳过计费或删除确认。
 

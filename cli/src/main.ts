@@ -21,6 +21,8 @@ import {
 import { CliError, EXIT_CODES, normalizeUnknownError, usageError } from './errors.js';
 import { buildActionInput, readSecretFromStdin, readSecretsFromStdin } from './input.js';
 import { RestrictedLocalAdapter } from './local-adapter.js';
+import { downloadLibraryFile } from './media-download.js';
+import { prepareLibraryMedia } from './library-prepare.js';
 import { StdioMcpServer } from './mcp-server.js';
 import { ProtocolWriter } from './output.js';
 import type {
@@ -98,17 +100,21 @@ function clientFor(options: GlobalOptions, credentials: CredentialManager): Agen
 }
 
 function helpPayload(): Record<string, unknown> {
+  const domains = domainHelp();
+  domains.library.push('prepare');
   return {
     name: '@zhicui/cli',
     version: CLI_VERSION,
     usage: 'zhicui <domain> <command> [options]',
-    domains: domainHelp(),
+    domains,
     generic: [
       'run <action_id>',
       'run wait|resume|get|cancel <run_id>',
       'run actions',
       'run describe <action_id>',
       'capabilities --public',
+      'library download <note_id> --output <new-file.mp4>',
+      'library prepare <url> --output <new-directory> [--resume]',
       'mcp serve --stdio',
       'agent setup|doctor|status|update|reconcile|uninstall [--client all|codex|claude]',
       'account export --output <new-file.zip>  # password via no-echo stdin',
@@ -601,6 +607,47 @@ async function domainCommand(
     analysis: 'catalog',
   };
   const verb = args.shift() || defaults[domain] || 'list';
+  if (domain === 'library' && verb === 'prepare') {
+    const output = takeValue(args, '--output');
+    const resume = takeFlag(args, '--resume');
+    const url = args.shift();
+    if (!url || !output || args.length) {
+      throw usageError('用法：zhicui library prepare <抖音或B站链接> --output <新目录> [--resume]');
+    }
+    let sequence = 0;
+    const result = await prepareLibraryMedia(client, { url, output, resume, timeoutMs: options.timeoutMs,
+      idempotencyKey: options.idempotencyKey }, (stage, data) => {
+      if (options.jsonl) writer.event({ sequence: ++sequence, event: `prepare.${stage}`, status: 'running', data });
+      else writer.diagnostic(`视频准备：${stage}${typeof data.bytes === 'number' ? ` ${(data.bytes / 1024 / 1024).toFixed(1)} MB` : ''}`);
+    });
+    if (options.jsonl) writer.event({ sequence: ++sequence, event: 'prepare.completed', terminal: true, status: 'succeeded', data: result });
+    else writer.result(result);
+    return;
+  }
+  if (domain === 'library' && verb === 'download') {
+    const output = takeValue(args, '--output');
+    const noteId = args.shift();
+    if (!noteId || !output || args.length) {
+      throw usageError('用法：zhicui library download <note_id> --output <新文件.mp4>');
+    }
+    let lastProgress = 0;
+    let sequence = 0;
+    const downloaded = await downloadLibraryFile(client, noteId, output, (bytes, totalBytes) => {
+      if (Date.now() - lastProgress < 1_000 && bytes !== totalBytes) return;
+      lastProgress = Date.now();
+      if (options.jsonl) writer.event({
+        sequence: ++sequence, event: 'download.progress', status: 'running',
+        data: { bytes, total_bytes: totalBytes },
+      });
+      else writer.diagnostic(`视频下载：${(bytes / 1024 / 1024).toFixed(1)} MB${totalBytes ? ` / ${(totalBytes / 1024 / 1024).toFixed(1)} MB` : ''}`);
+    });
+    const result = { action: 'library.media.download', status: 'succeeded', note_id: noteId, ...downloaded };
+    if (options.jsonl) writer.event({
+      sequence: ++sequence, event: 'download.completed', terminal: true, status: 'succeeded', data: result,
+    });
+    else writer.result(result);
+    return;
+  }
   if (domain === 'account' && verb === 'export') {
     const outputValue = takeValue(args, '--output');
     if (!outputValue) throw usageError('用法：zhicui account export --output <新文件.zip>');
@@ -851,15 +898,24 @@ export async function runCli(argv: string[]): Promise<number> {
     if (command.includes('--help') || command.includes('-h')) {
       const verb = command.find((item) => !['--help', '-h'].includes(item));
       const entries = domainAliasEntries().filter(([key]) =>
-        key.startsWith(`${domain}.`) && (!verb || key === `${domain}.${verb}`),
+        key !== 'library.download' && key.startsWith(`${domain}.`) && (!verb || key === `${domain}.${verb}`),
       );
       writer.result({
         domain,
-        commands: entries.map(([key, alias]) => ({
+        commands: [...entries.map(([key, alias]) => ({
           command: `zhicui ${key.replace('.', ' ')} ${(alias.positionalKeys || []).map((value) => `<${value}>`).join(' ')}`.trim(),
           action: alias.candidates[0],
           named_inputs: alias.namedInputKeys || [],
-        })),
+        })), ...(domain === 'library' && (!verb || verb === 'download') ? [{
+          command: 'zhicui library download <note_id> --output <new-file.mp4>',
+          endpoint: 'GET /api/agent-interface/v1/library/{note_id}/media',
+          scopes: ['library:read'],
+          description: '流式下载到新文件；不覆盖、不跟随跳转，完成后返回大小和 SHA-256。',
+        }] : []), ...(domain === 'library' && (!verb || verb === 'prepare') ? [{
+          command: 'zhicui library prepare <url> --output <new-directory> [--resume]',
+          scopes: ['library:read', 'library:write'],
+          description: '导入、提取文稿、下载视频并写入素材清单；--resume 接续原目录中的任务。',
+        }] : [])],
         schema: '登录后可运行 zhicui run describe <action_id> --json 查看参数、权限和确认要求。',
         input: '命名参数使用 --field-name；数组/对象传入 JSON，或通过 stdin 输入完整 JSON 对象。',
         async: '长任务可加 --wait 或 --jsonl；重试同一操作时使用相同 --idempotency-key。',

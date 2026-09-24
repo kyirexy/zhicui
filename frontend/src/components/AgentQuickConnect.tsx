@@ -76,7 +76,7 @@ export default function AgentQuickConnect({ desktop, bridgeAvailable, overview, 
         <ol className={styles.browserSteps}>
           <li><span>1</span><div><strong>在终端发起连接</strong><p>已有知萃 CLI，运行下面的命令。</p></div></li>
           <li><span>2</span><div><strong>在浏览器确认权限</strong><p>登录当前账号，核对请求方后允许连接。</p></div></li>
-          <li><span>3</span><div><strong>{coreAccess ? '选取已保存的资料开始问答' : '把内容交给 Agent'}</strong><p>凭证保存在本机，以后可直接调用已授权的能力。</p></div></li>
+          <li><span>3</span><div><strong>{coreAccess ? '选择资料问答，或指定公开链接提取' : '把内容交给 Agent'}</strong><p>{coreAccess ? '默认先读取资料；导入链接、提取文稿和下载视频前，按需追加 library:write 授权。' : '凭证保存在本机，以后可直接调用已授权的能力。'}</p></div></li>
         </ol>
         <div className={styles.command}>
           <code>{loginCommand}</code>

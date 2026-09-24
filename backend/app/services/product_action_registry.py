@@ -63,6 +63,11 @@ _VIDEO_ANALYSIS_ERROR_CODES = (
     "INSUFFICIENT_CREDITS",
     "VIDEO_ANALYSIS_FAILED",
 )
+_LINK_MEDIA_ERROR_CODES = (
+    "UNSUPPORTED_PLATFORM", "UNSUPPORTED_VIDEO_PART", "PLATFORM_AUTH_REQUIRED",
+    "PLATFORM_UNAVAILABLE", "UNSAFE_MEDIA_TARGET", "MEDIA_TIMEOUT",
+    "MEDIA_TOO_LARGE", "INVALID_MEDIA", "MEDIA_PROCESSING_FAILED",
+)
 
 
 @dataclass(frozen=True)
@@ -499,7 +504,7 @@ _CORE_DEFINITIONS: tuple[ProductActionDefinition, ...] = (
     ),
     ProductActionDefinition(
         id="library.import_link", title="导入分享链接",
-        description="解析并导入用户明确提供的一条 B站或小红书链接；抖音账号采集仍由 Windows 客户端执行。",
+        description="解析并导入用户明确提供的一条抖音或B站公开链接；不自动同步账号列表。",
         scopes=("library:write",), handler_name="library_import_link",
         input_schema=_object({
             "url": {"type": "string", "minLength": 1, "maxLength": 2000},
@@ -507,7 +512,16 @@ _CORE_DEFINITIONS: tuple[ProductActionDefinition, ...] = (
         }, ["url"]),
         risk=(RiskLevel.WRITE,), idempotency=IdempotencyStrategy.REQUIRED,
         rate_limit_per_minute=4,
-        error_codes=("LINK_IMPORT_FAILED",),
+        error_codes=("LINK_IMPORT_FAILED", *_LINK_MEDIA_ERROR_CODES),
+    ),
+    ProductActionDefinition(
+        id="library.media.download", title="下载视频文件",
+        description="通过鉴权直连下载当前用户资料的原视频文件；不返回临时媒体地址。",
+        scopes=("library:read",), handler_name=None,
+        input_schema=_object({"note_id": {"type": "string", "minLength": 1, "maxLength": 64}}, ["note_id"]),
+        available=True, secure_direct=True, mcp_exposed=False,
+        rate_limit_per_minute=4,
+        error_codes=("SECURE_TRANSPORT_REQUIRED", "MEDIA_UNAVAILABLE", "MEDIA_DOWNLOAD_FAILED", *_LINK_MEDIA_ERROR_CODES),
     ),
     ProductActionDefinition(
         id="library.remove", title="删除资料",
@@ -847,18 +861,19 @@ _CORE_DEFINITIONS: tuple[ProductActionDefinition, ...] = (
     ),
     ProductActionDefinition(
         id="library.transcript.generate", title="生成完整文稿",
-        description="为当前用户的一条已同步抖音资料生成文稿或完成后续整理；不接收临时媒体地址。",
+        description="为当前用户的一条视频资料提取文稿；note_id 与旧 aweme_id 必须且只能填写一个，不接收临时媒体地址。",
         scopes=("library:write",), handler_name="library_transcript_generate",
         input_schema=_object({
+            "note_id": {"type": "string", "minLength": 1, "maxLength": 64},
             "aweme_id": {
                 "type": "string", "minLength": 1, "maxLength": 128,
                 "pattern": "^[A-Za-z0-9_-]+$",
             },
             "operation": {"type": "string", "enum": ["transcript", "ai", "full"]},
-        }, ["aweme_id"]),
+        }),
         risk=(RiskLevel.WRITE,), idempotency=IdempotencyStrategy.REQUIRED,
         rate_limit_per_minute=4,
-        error_codes=("TRANSCRIPT_GENERATION_FAILED", *_DOUYIN_CONNECTOR_ERROR_CODES),
+        error_codes=("TRANSCRIPT_GENERATION_FAILED", "ASR_NOT_CONFIGURED", *_LINK_MEDIA_ERROR_CODES, *_DOUYIN_CONNECTOR_ERROR_CODES),
     ),
     _read(
         "library.hidden.list", "读取已隐藏资料",

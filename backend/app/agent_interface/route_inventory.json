@@ -71,6 +71,7 @@
     "GET /api/agent-interface/v1/confirmations/{confirmation_id}",
     "GET /api/agent-interface/v1/credentials",
     "GET /api/agent-interface/v1/devices",
+    "GET /api/agent-interface/v1/library/{note_id}/media",
     "GET /api/agent-interface/v1/recent-calls",
     "GET /api/agent-interface/v1/runs/{run_id}",
     "GET /api/agent-interface/v1/runs/{run_id}/events",

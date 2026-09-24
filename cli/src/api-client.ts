@@ -362,6 +362,7 @@ export class AgentApiClient {
     actionId: string,
     input: JsonObject,
     idempotencyKey?: string,
+    preserveFailureEnvelope = false,
   ): Promise<AgentEnvelope> {
     const confirmationId = typeof input.confirmation_id === 'string'
       ? input.confirmation_id
@@ -380,8 +381,105 @@ export class AgentApiClient {
       },
     );
     const envelope = normalizeEnvelope(payload);
-    throwEnvelopeError(envelope);
+    if (!preserveFailureEnvelope) throwEnvelopeError(envelope);
     return envelope;
+  }
+
+  /** 只从知萃鉴权端点接收媒体，绝不把 Bearer 或媒体跳转地址交给下载器。 */
+  async downloadLibraryMedia(
+    noteId: string,
+    writeChunk: (chunk: Uint8Array) => Promise<void>,
+    onProgress?: (bytes: number, totalBytes: number | null) => void,
+  ): Promise<{ bytes: number; content_type: string }> {
+    if (!/^[A-Za-z0-9_-]{1,128}$/u.test(noteId)) {
+      throw new CliError('INVALID_INPUT', '资料 ID 格式无效');
+    }
+    let credential = await this.currentCredential();
+    if (!credential) throw new CliError('AUTH_REQUIRED', '尚未授权，请先运行 zhicui auth login');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.options.timeoutMs);
+    timer.unref?.();
+    const maxBytes = 1024 * 1024 * 1024;
+    try {
+      let response: Response | undefined;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        response = await fetch(this.path(`/api/agent-interface/v1/library/${encodeURIComponent(noteId)}/media`), {
+          method: 'GET',
+          headers: {
+            Accept: 'video/mp4, application/octet-stream, application/json',
+            Authorization: `Bearer ${credential.access_token}`,
+            'User-Agent': `@zhicui/cli/${CLIENT_VERSION}`,
+          },
+          signal: controller.signal,
+          redirect: 'error',
+        });
+        if (response.status !== 401 || !credential.refresh_token || attempt !== 0) break;
+        await response.body?.cancel();
+        credential = await this.refreshSerialized(credential);
+      }
+      if (!response) throw new CliError('REMOTE_FAILURE', '知萃未返回媒体响应');
+      if (!response.ok) {
+        // 下载错误可能包含平台临时 URL；不向 stdout/stderr 透传远端文本或 details。
+        const payload = record(await response.json().catch(() => null));
+        const remoteError = record(payload.error ?? payload.detail);
+        const fallback = response.status === 401 ? 'AUTH_REQUIRED'
+          : response.status === 403 ? 'SCOPE_DENIED'
+            : response.status === 404 ? 'NOT_FOUND'
+              : response.status === 429 ? 'RATE_LIMITED' : 'MEDIA_UNAVAILABLE';
+        const rawCode = stringValue(remoteError.code);
+        const code = /^[A-Z][A-Z0-9_]{0,63}$/u.test(rawCode) ? rawCode : fallback;
+        const messages: Record<string, string> = {
+          AUTH_REQUIRED: '下载需要有效授权，请重新登录',
+          SCOPE_DENIED: '下载需要 library:read 权限',
+          NOT_FOUND: '未找到当前用户的这条视频资料',
+          RATE_LIMITED: '下载请求过于频繁，请稍后重试',
+          MEDIA_TOO_LARGE: '视频超过下载大小限制',
+          PLATFORM_AUTH_REQUIRED: '平台要求重新授权，请在知萃中连接平台后重试',
+          INTERFACE_DISABLED: '当前知萃 Agent 接口未开放',
+        };
+        throw new CliError(code, messages[code] || '知萃暂时无法提供这条视频的媒体文件，请查看资料状态后重试');
+      }
+      const contentType = (response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase();
+      if (!['video/mp4', 'application/octet-stream'].includes(contentType) || !response.body) {
+        throw new CliError('MEDIA_INVALID', '下载没有返回 MP4 视频');
+      }
+      const length = response.headers.get('content-length');
+      const totalBytes = length === null ? null : Number(length);
+      if (totalBytes !== null && (!/^\d+$/u.test(length!) || !Number.isSafeInteger(totalBytes) || totalBytes < 1)) {
+        throw new CliError('MEDIA_INVALID', '视频大小信息无效');
+      }
+      if (totalBytes !== null && totalBytes > maxBytes) {
+        throw new CliError('MEDIA_TOO_LARGE', '视频超过 1GB 下载上限');
+      }
+      const reader = response.body.getReader();
+      let bytes = 0;
+      let header = Buffer.alloc(0);
+      while (true) {
+        const next = await reader.read();
+        if (next.done) break;
+        bytes += next.value.byteLength;
+        if (bytes > maxBytes) throw new CliError('MEDIA_TOO_LARGE', '视频超过 1GB 下载上限');
+        if (header.byteLength < 12) {
+          header = Buffer.concat([header, next.value.subarray(0, 12 - header.byteLength)]);
+        }
+        await writeChunk(next.value);
+        onProgress?.(bytes, totalBytes);
+      }
+      if (bytes < 12 || header.toString('ascii', 4, 8) !== 'ftyp') {
+        throw new CliError('MEDIA_INVALID', '下载内容不是有效的 MP4 文件');
+      }
+      if (totalBytes !== null && bytes !== totalBytes) {
+        throw new CliError('MEDIA_INCOMPLETE', '视频下载不完整，请重试');
+      }
+      return { bytes, content_type: contentType };
+    } catch (error) {
+      if (error instanceof CliError) throw error;
+      if (controller.signal.aborted) throw new CliError('TIMEOUT', '视频下载超时，请重试');
+      throw new CliError('REMOTE_FAILURE', '视频下载连接中断或返回了不允许的跳转，请重试');
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+    }
   }
 
   async secureAccountExport(password: string): Promise<Uint8Array> {

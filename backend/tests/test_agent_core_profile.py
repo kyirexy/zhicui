@@ -63,13 +63,13 @@ class CoreProfileTests(unittest.TestCase):
         tools = self.client.post("/mcp", headers=self.pat(), json={
             "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {},
         }).json()["result"]["tools"]
-        self.assertEqual({tool["name"] for tool in tools}, CORE_ACTION_IDS | {"run.get", "run.events", "run.cancel"})
+        self.assertEqual({tool["name"] for tool in tools}, (CORE_ACTION_IDS - {"library.media.download"}) | {"run.get", "run.events", "run.cancel"})
         self.assertEqual(manifest["remote_mcp_tool_count"], len(tools))
 
     def test_excluded_actions_cannot_be_called_by_full_scope_legacy_pat(self):
         with patch.object(settings, "AGENT_INTERFACE_PROFILE", "full"):
             headers = self.pat(sorted(ALL_SCOPE_IDS))
-        for action in ("creator.resolve", "creator.sync.start", "library.import_link", "library.transcript.generate", "analysis.catalog", "local.capabilities.get", "automation.list"):
+        for action in ("creator.resolve", "creator.sync.start", "library.transcript.batch", "analysis.catalog", "local.capabilities.get", "automation.list"):
             with self.subTest(action=action):
                 response = self.client.get(f"/api/agent-interface/v1/actions/{action}")
                 self.assertEqual(response.status_code, 404)
@@ -83,7 +83,7 @@ class CoreProfileTests(unittest.TestCase):
         with self.Session() as db:
             principal = AgentPrincipal(self.user, None, ALL_SCOPE_IDS, "test")
             for definition in registry.all():
-                if definition.secure_direct:
+                if definition.secure_direct and definition.id not in CORE_ACTION_IDS:
                     with self.assertRaises(ProductActionError) as caught:
                         secure_definition(principal, definition.id, db)
                     self.assertEqual(caught.exception.code, "ACTION_NOT_FOUND")
@@ -112,6 +112,36 @@ class CoreProfileTests(unittest.TestCase):
             self.assertEqual(readiness._check_agent_interface()["status"], "not_ready")
         with self.assertRaises(ValidationError):
             Settings(_env_file=None, AGENT_INTERFACE_PROFILE="misspelled")
+
+    def test_existing_readonly_pat_does_not_gain_link_write_scope(self):
+        headers = self.pat(["library:read"])
+        for action, payload in (
+            ("library.import_link", {"url": "https://www.douyin.com/video/7659724478275947822"}),
+            ("library.transcript.generate", {"note_id": "not-owned"}),
+        ):
+            response = self.client.post(
+                f"/api/agent-interface/v1/actions/{action}/invoke", headers=headers,
+                json={"input": payload, "idempotency_key": "readonly-" + action},
+            )
+            self.assertEqual(response.status_code, 403, response.text)
+            self.assertEqual(response.json()["error"]["code"], "SCOPE_DENIED")
+
+    def test_core_transcript_cannot_enable_legacy_ai_operation(self):
+        schema = registry.get("library.transcript.generate").descriptor().input_schema
+        self.assertEqual(schema["properties"]["operation"]["enum"], ["transcript"])
+        response = self.client.post(
+            "/api/agent-interface/v1/actions/library.transcript.generate/invoke",
+            headers=self.pat(["library:write"]),
+            json={"input": {"note_id": "not-owned", "operation": "full"}, "idempotency_key": "no-full-extraction"},
+        )
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(response.json()["error"]["code"], "INVALID_INPUT")
+
+    def test_core_readiness_requires_transcription_configuration(self):
+        with patch.object(readiness.settings_service, "get_llm_config_masked", return_value={"model": "configured", "api_key_masked": "***"}), patch.object(readiness.settings_service, "get_asr_config_masked", return_value={"model": "configured", "api_key_masked": ""}):
+            result = readiness._check_ai_config(Mock())
+            self.assertEqual(result["status"], "not_ready")
+            self.assertFalse(result["asr_configured"])
 
     def test_existing_material_is_readable_but_other_users_material_is_not(self):
         headers = self.pat(["library:read"])

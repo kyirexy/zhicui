@@ -31,4 +31,30 @@ zhicui library download <note_id> --output D:\videos\source.mp4 --timeout 10m --
 - CLI 新增 11 项测试通过，覆盖重定向拒绝、无覆盖、哈希恢复、杀进程恢复、权限不足及无音频。
 - CLI 全套 111 项中 108 项首遍通过，3 项既有进程探测测试遇本机启动超时；保持原阈值单独重跑后 3 项全部通过。
 - 服务器使用真实抖音来源进行下载预检，得到 5,948,588 字节 MP4。预检不使用用户 Cookie 或令牌，不写用户资料库。
-- 正式发布仍使用同提交 dark、加密备份恢复双启动、core 晋级与真实鉴权冒烟；正式结果另行记录，不能以本地验证代替。
+- 正式发布使用同提交 dark、加密备份恢复双启动、core 晋级与真实鉴权冒烟；实际发布结果见下，不能以本地验证代替。
+
+## 正式发布记录
+
+Web / API 已发布提交 `9200eabe447ba408aeb6594a5606ca5905107e77`，当前 runtime 为
+`manual-agent-core-9200eab-20260924T073950`。dark、同备份恢复双启动和 core 晋级的全部发布闸门通过，
+`verify-core` 与公网健康检查成功。公开范围为 core，不代表完整 Stable 已开放。
+
+服务器证据保存在 `/var/lib/zhicui-deployments/`：
+
+| 阶段 | 证据文件 | SHA-256 |
+| --- | --- | --- |
+| dark | `jenkins-zhicui-deploy-306.json` | `3d011de86d8574cff615a8071461f3709487d1f1966f7be3bd6756aa25e7f601` |
+| 同备份恢复双启动 | `agent-schema-rehearsal-20260924T073949Z-9200eabe447b.json` | `5c1c85c4273a5c96f8b7fb4b9ba063d383a845169e47b5529ff8a56c2f698246` |
+| core | `manual-agent-core-9200eab-20260924T073950.json` | `fad4e66b969c7cf2020c8f8506b80fc3766530311c326fb540b8585ebcf2e789` |
+
+专用发布冒烟账号的密码租约已恢复原哈希，临时明文已删除，未发现并发改密。没有替用户扩大已有令牌权限。
+
+本机全局 CLI 已从本地审计 tarball 安装为 `1.0.4`。npm registry 中该版本仍返回 404，
+因此本记录不宣称 npm 包已经公开发布；其他设备不能据此假定 `npm install @zhicui/cli@1.0.4` 可用。
+
+## 用户素材链路验收状态
+
+使用用户原 PAT 实际运行 `library prepare` 返回 `SCOPE_DENIED`，符合旧令牌不自动增加
+`library:write` 的预期。新的设备授权已发起，等待用户在正常授权页面确认。
+用户账号下的链接导入、文稿提取、视频下载以及 Hypit 素材交接仍待端到端验证，
+不得将发布冒烟、服务器下载预检或本地模板语法检查记为该链路完成，也尚未生成复刻成片。

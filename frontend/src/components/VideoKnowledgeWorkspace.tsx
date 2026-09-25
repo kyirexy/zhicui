@@ -378,6 +378,7 @@ export default function VideoKnowledgeWorkspace() {
               <DesktopMediaVideoPlayer
                 key={`${item.platform || 'video'}:${item.aweme_id}`}
                 awemeId={item.aweme_id}
+                noteId={note?.id}
                 mediaUrl={item.media_url}
                 coverUrl={item.cover_proxy_url || item.cover_url}
                 title={item.title}

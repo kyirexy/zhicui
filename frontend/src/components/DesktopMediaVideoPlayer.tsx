@@ -13,6 +13,7 @@ import {
 } from '@phosphor-icons/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import LibraryCoverImage from '@/components/LibraryCoverImage';
+import { desktopMediaCapability, desktopMediaDownloadError } from '@/lib/desktopMediaDownload';
 import {
   supportsDesktopMediaLibrary,
   type DesktopMediaAsset,
@@ -26,6 +27,7 @@ interface DesktopMediaVideoPlayerProps {
   coverUrl: string;
   title: string;
   sourceUrl: string;
+  noteId?: string;
   onRefreshMedia: () => Promise<string | void> | string | void;
 }
 
@@ -51,6 +53,7 @@ export default function DesktopMediaVideoPlayer({
   coverUrl,
   title,
   sourceUrl,
+  noteId,
   onRefreshMedia,
 }: DesktopMediaVideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -71,6 +74,8 @@ export default function DesktopMediaVideoPlayer({
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [choosingDownload, setChoosingDownload] = useState(false);
   const [mediaOrientation, setMediaOrientation] = useState<MediaOrientation>('unknown');
+  const legacyDownloadSupported = !noteId && typeof window !== 'undefined'
+    && Boolean(desktopMediaCapability(mediaUrl, awemeId, 'media', window.location.origin));
 
   const applyMediaGeometry = useCallback((width: number, height: number) => {
     if (!width || !height) return;
@@ -147,29 +152,37 @@ export default function DesktopMediaVideoPlayer({
 
   const saveToLocal = useCallback(async () => {
     const bridge = window.zhicuiDesktop;
-    if (!supportsDesktopMediaLibrary(bridge)) return;
+    if (!supportsDesktopMediaLibrary(bridge) || !legacyDownloadSupported) return;
     setConfirmingRemove(false);
-    const nextAsset = await bridge.saveMedia({
-      awemeId,
-      title,
-      mediaUrl,
-      coverUrl: coverUrl || undefined,
-    });
-    applyAsset(nextAsset);
-  }, [applyAsset, awemeId, coverUrl, mediaUrl, title]);
+    try {
+      const freshUrl = await onRefreshMedia();
+      const downloadUrl = desktopMediaCapability(freshUrl || mediaUrl, awemeId, 'media', window.location.origin);
+      if (!downloadUrl) throw new Error('视频地址无效');
+      const nextAsset = await bridge.saveMedia({
+        awemeId, title, mediaUrl: downloadUrl,
+        coverUrl: desktopMediaCapability(coverUrl, awemeId, 'cover', window.location.origin),
+      });
+      applyAsset(nextAsset);
+    } catch (error) {
+      applyAsset({ awemeId, status: 'error', error: desktopMediaDownloadError(error) });
+    }
+  }, [applyAsset, awemeId, coverUrl, legacyDownloadSupported, mediaUrl, onRefreshMedia, title]);
 
   const downloadToFolder = useCallback(async () => {
     const bridge = window.zhicuiDesktop;
-    if (!supportsDesktopMediaLibrary(bridge) || choosingDownload) return;
+    if (!supportsDesktopMediaLibrary(bridge) || !legacyDownloadSupported || choosingDownload) return;
     setConfirmingRemove(false);
     setChoosingDownload(true);
     try {
       if (typeof bridge.downloadMedia === 'function') {
+        const freshUrl = await onRefreshMedia();
+        const downloadUrl = desktopMediaCapability(freshUrl || mediaUrl, awemeId, 'media', window.location.origin);
+        if (!downloadUrl) throw new Error('视频地址无效');
         const result = await bridge.downloadMedia({
           awemeId,
           title,
-          mediaUrl,
-          coverUrl: coverUrl || undefined,
+          mediaUrl: downloadUrl,
+          coverUrl: desktopMediaCapability(coverUrl, awemeId, 'cover', window.location.origin),
         });
         if (result.canceled) return;
         if (result.directory) {
@@ -185,14 +198,12 @@ export default function DesktopMediaVideoPlayer({
       applyAsset({
         awemeId,
         status: 'error',
-        error: downloadError instanceof Error
-          ? downloadError.message
-          : '视频下载失败，请重试',
+        error: desktopMediaDownloadError(downloadError),
       });
     } finally {
       setChoosingDownload(false);
     }
-  }, [applyAsset, awemeId, choosingDownload, coverUrl, mediaUrl, saveToLocal, title]);
+  }, [applyAsset, awemeId, choosingDownload, coverUrl, legacyDownloadSupported, mediaUrl, onRefreshMedia, saveToLocal, title]);
 
   const playResolvedUrl = (value: string) => {
     setActiveMediaUrl(value);
@@ -220,6 +231,7 @@ export default function DesktopMediaVideoPlayer({
     setFailed(false);
     if (
       desktopSupported
+      && legacyDownloadSupported
       && settings?.autoSaveOnPlay
       && asset.status !== 'cached'
       && asset.status !== 'downloading'
@@ -425,7 +437,7 @@ export default function DesktopMediaVideoPlayer({
         )}
       </div>
 
-      {desktopSupported && (
+      {desktopSupported && (legacyDownloadSupported || asset.status === 'cached' || asset.status === 'downloading') && (
         <section className={styles.localBar} aria-label="本地视频状态">
           {asset.status === 'downloading' ? (
             <>
@@ -509,7 +521,7 @@ export default function DesktopMediaVideoPlayer({
                 </strong>
                 <span>
                   {asset.status === 'error'
-                    ? asset.error || '可以重新尝试保存'
+                    ? desktopMediaDownloadError(asset.error)
                     : settings?.autoSaveOnPlay
                       ? '首次播放后会在后台保存到本机'
                       : '视频不会自动占用本机空间'}

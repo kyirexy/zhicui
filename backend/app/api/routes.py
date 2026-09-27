@@ -20,7 +20,8 @@ from urllib.parse import urljoin, urlparse
 
 import requests as http_requests
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Query, Request, Response
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from app.api.media_response import TemporaryVideoResponse as _TemporaryVideoResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -81,20 +82,6 @@ from app.services.wechat_extractor import extract_wechat_article
 router = APIRouter()
 
 _COVER_MAX_BYTES = 8 * 1024 * 1024
-
-
-class _TemporaryVideoResponse(FileResponse):
-    """正常、断连、Range 错误均释放临时文件及并发槽。"""
-
-    def __init__(self, *args, cleanup: ExitStack, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._cleanup = cleanup
-
-    async def __call__(self, scope, receive, send):
-        try:
-            await super().__call__(scope, receive, send)
-        finally:
-            self._cleanup.close()
 
 
 def _safe_extraction_video_preview(
@@ -4210,20 +4197,11 @@ def download_note_video(
         note = agent_video_link_service.owned_note(db, user_id=user_id, note_id=note_id)
         cleanup.enter_context(agent_video_link_service.user_download_slot(user_id))
         snapshot = agent_video_link_service.media_snapshot(note)
-        binding = douyin_binding_service.get_by_user(db, user_id) if platform_library_service.media_platform(note) == "douyin" else None
-        session_scope = str(binding.session_scope) if binding is not None and binding.status == "connected" and int(binding.cookie_count or 0) > 0 else ""
+        session_scope = agent_video_link_service.user_media_scope(db, user_id=user_id, note=note)
         db.commit()
         video_path = cleanup.enter_context(agent_video_link_service.prepared_user_media(snapshot, session_scope=session_scope))
         # 网络等待后重新验证归属和账号状态，禁用或删除立即生效。
-        db.expire_all()
-        active_user = get_user_by_id(db, user_id)
-        if active_user is None or not active_user.is_active:
-            raise agent_video_link_service.VideoLinkError("AUTHENTICATION_REQUIRED", "账号不存在或已被禁用", status=401)
-        agent_video_link_service.owned_note(db, user_id=user_id, note_id=note_id)
-        if session_scope:
-            active_binding = douyin_binding_service.get_by_user(db, user_id)
-            if active_binding is None or active_binding.status != "connected" or active_binding.session_scope != session_scope or int(active_binding.cookie_count or 0) <= 0:
-                raise agent_video_link_service.VideoLinkError("PLATFORM_AUTH_REQUIRED", "平台连接已变更，请重新下载", status=409)
+        agent_video_link_service.assert_user_media_access(db, user_id=user_id, note_id=note_id, session_scope=session_scope)
         return _TemporaryVideoResponse(
             video_path, media_type="video/mp4", filename="zhicui-video.mp4",
             cleanup=cleanup,

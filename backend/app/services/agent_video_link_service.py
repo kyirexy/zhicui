@@ -22,7 +22,8 @@ from sqlalchemy.orm import Session
 
 from app.core.media_reference import stable_note_source
 from app.models.note import Note
-from app.services import douyin_library, library_sync_service, note_service, platform_library_service, settings_service, video_extractor
+from app.models.user import User
+from app.services import douyin_binding_service, douyin_library, library_sync_service, note_service, platform_library_service, settings_service, video_extractor
 
 
 MAX_MEDIA_BYTES = 512 * 1024 * 1024
@@ -56,7 +57,7 @@ def user_download_slot(user_id: str) -> Iterator[None]:
     """单工作进程最多 4 个下载、每用户 1 个；覆盖准备和文件发送全生命周期。"""
     with _WEB_DOWNLOAD_LOCK:
         if user_id in _WEB_DOWNLOAD_USERS or not _WEB_DOWNLOAD_LIMIT.acquire(blocking=False):
-            raise VideoLinkError("DOWNLOAD_BUSY", "已有视频正在下载，请稍后再试", status=429, retryable=True)
+            raise VideoLinkError("RATE_LIMITED", "已有视频正在下载，请稍后再试", status=429, retryable=True)
         _WEB_DOWNLOAD_USERS.add(user_id)
     try:
         yield
@@ -360,7 +361,7 @@ def prepared_media(note: Note) -> Iterator[Path]:
 
 @contextmanager
 def prepared_user_media(note: Note, *, session_scope: str = "") -> Iterator[Path]:
-    """Web 用户的绑定流；本机没有作品时再尝试同一资料的公开来源一次。"""
+    """用户的绑定流；本机没有作品时再尝试同一资料的公开来源一次。"""
     if not session_scope or platform_library_service.media_platform(note) != "douyin":
         with prepared_media(note) as path:
             yield path
@@ -419,6 +420,25 @@ def prepared_user_media(note: Note, *, session_scope: str = "") -> Iterator[Path
         yield path
 
 
+def user_media_scope(db: Session, *, user_id: str, note: Note) -> str:
+    """仅从资料所有者的绑定读取 scope，不接受 CLI 或网页传入的 scope。"""
+    if note.user_id != user_id:
+        raise VideoLinkError("RESOURCE_NOT_FOUND", "视频资料不存在", status=404)
+    binding = douyin_binding_service.get_by_user(db, user_id) if platform_library_service.media_platform(note) == "douyin" else None
+    return str(binding.session_scope) if binding is not None and binding.status == "connected" and int(binding.cookie_count or 0) > 0 else ""
+
+
+def assert_user_media_access(db: Session, *, user_id: str, note_id: str, session_scope: str) -> None:
+    """耗时操作后重新确认账号、资料归属和原绑定仍有效。"""
+    db.expire_all()
+    user = db.get(User, user_id)
+    if user is None or not user.is_active:
+        raise VideoLinkError("AUTHENTICATION_REQUIRED", "账号不存在或已被禁用", status=401)
+    note = owned_note(db, user_id=user_id, note_id=note_id)
+    if session_scope and user_media_scope(db, user_id=user_id, note=note) != session_scope:
+        raise VideoLinkError("PLATFORM_AUTH_REQUIRED", "平台连接已变更，请重新下载或提取", status=409)
+
+
 def transcribe_note(db: Session, *, user_id: str, note_id: str, check_active: Callable[[], None] | None = None) -> dict[str, Any]:
     if check_active:
         check_active()
@@ -439,11 +459,13 @@ def transcribe_note(db: Session, *, user_id: str, note_id: str, check_active: Ca
         if not config.get("api_key"):
             raise VideoLinkError("ASR_NOT_CONFIGURED", "知萃语音识别服务尚未配置", status=503)
         snapshot = media_snapshot(note)
+        session_scope = user_media_scope(db, user_id=user_id, note=note)
         db.commit()
         try:
-            with prepared_media(snapshot) as media:
+            with user_download_slot(user_id), prepared_user_media(snapshot, session_scope=session_scope) as media:
                 if check_active:
                     check_active()
+                assert_user_media_access(db, user_id=user_id, note_id=note_id, session_scope=session_scope)
                 audio = media.with_suffix(".mp3")
                 command = [video_extractor._get_ffmpeg_path(), "-nostdin", "-y", "-loglevel", "error", "-protocol_whitelist", "file,pipe", "-i", str(media), "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k", str(audio)]
                 try:
@@ -458,6 +480,7 @@ def transcribe_note(db: Session, *, user_id: str, note_id: str, check_active: Ca
                     raise video_extractor.NoAudioError("silent_audio")
                 if check_active:
                     check_active()
+                assert_user_media_access(db, user_id=user_id, note_id=note_id, session_scope=session_scope)
                 try:
                     transcript = video_extractor._asr_audio_file(str(audio), config["api_key"], config.get("api_base_url"), config.get("model"))
                 except Exception:
@@ -467,6 +490,7 @@ def transcribe_note(db: Session, *, user_id: str, note_id: str, check_active: Ca
         except video_extractor.NoAudioError:
             if check_active:
                 check_active()
+            assert_user_media_access(db, user_id=user_id, note_id=note_id, session_scope=session_scope)
             payload = platform_library_service._load_payload(note)
             payload["source_meta"] = {**platform_library_service._source_meta(note), "transcript_status": "no_audio", "speech_ready": False}
             note.ai_summary = json.dumps(payload, ensure_ascii=False)
@@ -474,6 +498,7 @@ def transcribe_note(db: Session, *, user_id: str, note_id: str, check_active: Ca
             return {**note.to_dict(), "state": "no_audio", "transcript_status": "no_audio", "transcript_notice": "无音频", "already_existed": False}
         if check_active:
             check_active()
+        assert_user_media_access(db, user_id=user_id, note_id=note_id, session_scope=session_scope)
         payload = platform_library_service._load_payload(note)
         payload["source_meta"] = {**platform_library_service._source_meta(note), "transcript_status": "ready", "transcript_source": "cloud-asr", "speech_ready": True}
         note.transcript_raw = transcript.strip()

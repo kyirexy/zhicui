@@ -12,11 +12,11 @@ from contextlib import ExitStack
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+from app.api.media_response import TemporaryVideoResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
-from starlette.background import BackgroundTask
 
 from app.agent_interface.contracts import (
     ALL_SCOPE_IDS,
@@ -406,20 +406,23 @@ def download_library_media(
         if not 1 <= len(note_id) <= 64:
             raise ProductActionError("INVALID_INPUT", "视频资料标识无效", http_status=422)
         note = agent_video_link_service.owned_note(db, user_id=principal.user.id, note_id=note_id)
+        cleanup.enter_context(agent_video_link_service.user_download_slot(principal.user.id))
         snapshot = agent_video_link_service.media_snapshot(note)
+        session_scope = agent_video_link_service.user_media_scope(db, user_id=principal.user.id, note=note)
         assert principal.credential is not None
         credential_id, user_id = principal.credential.id, principal.user.id
         db.commit()
-        path = cleanup.enter_context(agent_video_link_service.prepared_media(snapshot))
+        path = cleanup.enter_context(agent_video_link_service.prepared_user_media(snapshot, session_scope=session_scope))
         # 大文件准备后复查令牌，撤销授权立即生效。
         _ensure_enabled()
         if not action_is_enabled(action_id):
             raise ProductActionError("ACTION_NOT_FOUND", "视频下载尚未开放", http_status=404)
         db.expire_all()
         require_active_credential(db, credential_id=credential_id, user_id=user_id)
-        return FileResponse(
+        agent_video_link_service.assert_user_media_access(db, user_id=user_id, note_id=note_id, session_scope=session_scope)
+        return TemporaryVideoResponse(
             path, media_type="video/mp4", filename="zhicui-video.mp4",
-            background=BackgroundTask(cleanup.close),
+            cleanup=cleanup,
             headers={"Cache-Control": "no-store", "Pragma": "no-cache", "X-Content-Type-Options": "nosniff", "X-Zhicui-Action": action_id, "X-Request-Id": request_id},
         )
     except agent_video_link_service.VideoLinkError as exc:

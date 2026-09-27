@@ -45,7 +45,7 @@ node scripts/smoke-agent-cli.mjs
 
 ## Core / Full 发布证据
 
-`SMOKE_AGENT_PROFILE` 必须与公开 capabilities 的 `release_profile` 一致，默认是 `full`。Core 是明确的 38 个 Action / 10 个 scope：使用已保存资料和已有文稿进行问答、知识整理和计划，读取已存博主与模型信息。Core 不开放新同步/转写、详细视频分析、自动摘要、邮件、本机动作、模型密钥修改；这些动作的 descriptor、直接调用和 MCP 调用都必须拒绝。
+`SMOKE_AGENT_PROFILE` 必须与公开 capabilities 的 `release_profile` 一致，默认是 `full`。Core 是明确的 41 个 Action / 11 个 scope：支持指定公开视频链接导入、单条文稿提取、鉴权视频下载，以及基于已有资料的问答、知识整理和计划，读取已存博主与模型信息。Core 不开放平台批量同步、详细视频分析、自动摘要、邮件、本机动作、模型密钥修改；这些未开放动作的 descriptor、直接调用和 MCP 调用都必须拒绝。
 
 `scripts/smoke-agent-interface.sh` 在 Core 使用独立 `core_capabilities_v1.json`，按精确 scope/action IDs 和 descriptor SHA-256 对账，保留 PAT 全生命周期、MCP 和管理端边界。Core 必須开启两个哨兵，实际调用现有资料/知识/计划/模型读取，验证排除动作和权限；并执行 `ask.turn.start`、真实 `text/event-stream` 增量、唯一终态、最终固定哨兵答案与原文引用。Full 保留原有解析目录、自动摘要/邮件运行器、模型目录及真实问答的全部检查。
 

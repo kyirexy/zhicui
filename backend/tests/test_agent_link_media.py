@@ -13,13 +13,16 @@ from unittest.mock import MagicMock, patch
 from app.core.config import settings
 from app.models.note import Note
 from app.models.user import User
+from app.models.douyin_account_binding import DouyinAccountBinding
 from app.services import agent_video_link_service as media, note_service, product_action_handlers
 from app.services.agent_credential_service import issue_pat, revoke_credential
 from tests.test_agent_interface_routes import AgentInterfaceRouteTests
 
 
 class AgentMediaRouteTests(unittest.TestCase):
-    setUp = AgentInterfaceRouteTests.setUp
+    def setUp(self):
+        AgentInterfaceRouteTests.setUp(self)
+        DouyinAccountBinding.__table__.create(self.engine, checkfirst=True)
     tearDown = AgentInterfaceRouteTests.tearDown
 
     def _pat(self, scopes):
@@ -34,6 +37,96 @@ class AgentMediaRouteTests(unittest.TestCase):
             transcript=transcript,
             source_meta={"platform": "douyin", "source_kind": media.SOURCE_KIND, "media_type": "video"},
         )
+
+    def _binding(self):
+        with self.Session() as db:
+            binding = media.douyin_binding_service.get_or_create(db, self.user_id)
+            binding.status, binding.cookie_count = "connected", 1
+            db.commit()
+            return binding.session_scope
+
+    def test_cli_uses_only_owner_binding_and_cleans_invalid_range(self):
+        scope = self._binding()
+        with self.Session() as db:
+            note_id = self._note(db).id
+        _, token = self._pat(["library:read"])
+        paths = []
+        @contextmanager
+        def fake_media(note, *, session_scope):
+            self.assertEqual(session_scope, scope)
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "video.mp4"
+                path.write_bytes(b"\0\0\0\x18ftypmp42-video")
+                paths.append(path)
+                yield path
+        with patch.object(media, "prepared_user_media", side_effect=fake_media):
+            response = self.client.get(f"/api/agent-interface/v1/library/{note_id}/media", headers={"Authorization": f"Bearer {token}", "Range": "bytes=bad"})
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(paths[0].exists())
+        with media.user_download_slot(self.user_id):
+            pass
+
+    def test_binding_change_and_note_deletion_during_download_block_bytes(self):
+        scope = self._binding()
+        _, token = self._pat(["library:read"])
+        for mutation, status in [("binding", 409), ("note", 404)]:
+            with self.subTest(mutation=mutation):
+                with self.Session() as db:
+                    binding = media.douyin_binding_service.get_by_user(db, self.user_id)
+                    binding.status = "connected"
+                    db.commit()
+                    note_id = self._note(db).id
+                paths = []
+                @contextmanager
+                def fake_media(note, *, session_scope):
+                    self.assertEqual(session_scope, scope)
+                    with self.Session() as db:
+                        if mutation == "binding":
+                            media.douyin_binding_service.get_by_user(db, self.user_id).status = "disconnected"
+                        else:
+                            db.delete(db.get(Note, note_id))
+                        db.commit()
+                    with tempfile.TemporaryDirectory() as directory:
+                        path = Path(directory) / "video.mp4"
+                        path.write_bytes(b"must-not-return")
+                        paths.append(path)
+                        yield path
+                with patch.object(media, "prepared_user_media", side_effect=fake_media):
+                    response = self.client.get(f"/api/agent-interface/v1/library/{note_id}/media", headers={"Authorization": f"Bearer {token}"})
+                self.assertEqual(response.status_code, status, response.text)
+                self.assertNotIn("must-not-return", response.text)
+                self.assertFalse(paths[0].exists())
+
+    def test_web_and_cli_downloads_share_per_user_limit(self):
+        with self.Session() as db:
+            note_id = self._note(db).id
+        _, token = self._pat(["library:read"])
+        with media.user_download_slot(self.user_id), patch.object(media, "prepared_user_media") as prepare:
+            response = self.client.get(f"/api/agent-interface/v1/library/{note_id}/media", headers={"Authorization": f"Bearer {token}"})
+            self.assertEqual(response.status_code, 429)
+            prepare.assert_not_called()
+
+    def test_transcribe_checks_binding_again_before_persisting_paid_asr_result(self):
+        scope = self._binding()
+        @contextmanager
+        def fake_media(note, *, session_scope):
+            self.assertEqual(session_scope, scope)
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "video.mp4"
+                path.write_bytes(b"video")
+                yield path
+        def asr(*args):
+            with self.Session() as db:
+                media.douyin_binding_service.get_by_user(db, self.user_id).status = "disconnected"
+                db.commit()
+            return "不要保存撤销绑定后的文稿"
+        with self.Session() as db, patch.object(media.settings_service, "get_asr_config", return_value={"api_key": "fixture"}), patch.object(media, "prepared_user_media", side_effect=fake_media), patch.object(media.subprocess, "run", return_value=SimpleNamespace(returncode=0)), patch.object(media.video_extractor, "_audio_is_digital_silence", return_value=False), patch.object(media.video_extractor, "_asr_audio_file", side_effect=asr):
+            note = self._note(db)
+            with self.assertRaises(media.VideoLinkError) as raised:
+                media.transcribe_note(db, user_id=self.user_id, note_id=note.id)
+            self.assertEqual(raised.exception.code, "PLATFORM_AUTH_REQUIRED")
+            db.refresh(note)
+            self.assertFalse(note.transcript_raw)
 
     def test_authentication_scope_and_ownership_checked_before_network(self):
         with self.Session() as db:

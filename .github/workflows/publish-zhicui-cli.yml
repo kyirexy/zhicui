@@ -78,7 +78,9 @@ jobs:
           npm test
           pack_json="$(npm pack --dry-run --json)"
           node -e '
-            const report = JSON.parse(process.argv[1]);
+            const payload = JSON.parse(process.argv[1]);
+            // npm 12 按包名返回对象；旧版 npm 返回数组，两个格式使用同样的内容校验。
+            const report = Array.isArray(payload) ? payload : Object.values(payload);
             if (!Array.isArray(report) || report.length !== 1) process.exit(1);
             const entry = report[0];
             if (entry.name !== "@zhicui/cli" || entry.version !== require("./package.json").version) process.exit(1);

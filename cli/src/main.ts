@@ -1022,7 +1022,8 @@ async function recapCommand(args: string[], options: GlobalOptions, writer: Prot
   }
   const data = await refreshRecap(client, { day, platform, mode, timezone, limit, timeoutMs: options.timeoutMs }, (stage, info) => {
     writer.diagnostic(`${stage} · ${info.platform || day}${info.mode ? ` · ${info.mode}` : ''}${info.message ? ` · ${info.message}` : ''}`);
-    if (options.jsonl) writer.event({ sequence: ++sequence, event: stage, terminal: false, status: 'running', data: info });
+    if (options.jsonl) writer.event({ sequence: ++sequence, event: stage, terminal: false,
+      status: info.status === 'waiting_for_user' ? 'waiting_for_user' : 'running', data: info });
   });
   if (options.jsonl) writer.event({ sequence: ++sequence, event: 'recap.completed', terminal: true, status: 'succeeded', data });
   else writer.result(data);

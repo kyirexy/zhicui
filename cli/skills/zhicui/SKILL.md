@@ -20,7 +20,7 @@
 
 这种请求本身就是一次同步授权。每次都先同步，再读取回顾，不能只查询旧文稿后把空列表说成用户没点赞。
 
-- 首选已安装 CLI 1.0.11+：`zhicui recap yesterday --mode like --connect --json --timeout 5m`。今天改为 `today`；收藏用 `--mode collect`，两者用 `--mode all`；指定平台时加 `--platform douyin` 或 `--platform bilibili`。默认每个平台最近 50 条，不自发扩大为全量。
+- 首选已安装 CLI 1.0.12+：`zhicui recap yesterday --mode like --connect --json --timeout 5m`。今天改为 `today`；收藏用 `--mode collect`，两者用 `--mode all`；指定平台时加 `--platform douyin` 或 `--platform bilibili`。默认每个平台最近 50 条，不自发扩大为全量。页面短暂等待时继续查询同一任务，完成后自动保存并回顾，不重复提交；确需验证时提示用户在平台窗口完成。
 - 同步复用当前用户的桌面平台登录；缺少知萃授权时由用户在浏览器确认，平台登录或验证码仍由本人完成。不能改用其他用户的绑定。
 - 先根据返回的清单回答“看了什么”。若要求内容总结，再读取 `ready_note_ids` 的现有文稿；缺少文稿时使用公开的单条提取 Action，不要把目录标题写成全文观点。
 - `sync.completed=false` 时明确哪些来源失败；整个同步失败时不要把缓存结果宣称为最新。`WAITING_FOR_USER`、风控或任务忙时停止重复提交，按返回的平台和 Run ID 查询进度。

@@ -54,13 +54,45 @@ test('account switch after collection prevents saving and reading', async () => 
   assert.deepEqual(f.calls.map(c => c.id), ['local.platform.sync']);
 });
 
-test('waiting for verification stops without importing or retrying', async () => {
+test('waiting for verification keeps the same task and reports a bounded user wait', async () => {
   const f = fixture();
   let starts = 0;
-  f.local.invoke = async () => { starts++; return envelope({ run_id: 'local-wait', status: 'waiting_for_user', message: '请验证' }); };
-  await assert.rejects(f.run(), error => error.code === 'WAITING_FOR_USER' && error.details.run_id === 'local-wait');
+  f.local.invoke = async action => {
+    if (action.id === 'local.platform.sync') starts++;
+    return envelope({ run_id: 'local-wait', status: 'waiting_for_user', message: '请验证' });
+  };
+  await assert.rejects(f.run({ timeoutMs: 30 }), error => error.code === 'WAITING_FOR_USER'
+    && error.details.run_id === 'local-wait' && error.details.execution_location === 'local_windows');
   assert.equal(starts, 1);
   assert.equal(f.calls.length, 0);
+  assert.equal(f.progress.at(-1).data.status, 'waiting_for_user');
+});
+
+test('temporary page wait continues to success without starting another collection', async () => {
+  const f = fixture(), complete = f.local.invoke;
+  let starts = 0;
+  f.local.invoke = async (action, input) => {
+    if (action.id === 'local.platform.sync') {
+      starts++;
+      return envelope({ run_id: 'local-1', status: 'waiting_for_user', stage: 'waiting', message: '页面正在读取' });
+    }
+    assert.equal(action.id, 'local.platform.status');
+    return complete(action, input);
+  };
+  const data = await f.run();
+  assert.equal(starts, 1);
+  assert.equal(data.sync.completed, true);
+  assert.equal(f.progress.find(p => p.stage === 'sync.progress').data.status, 'waiting_for_user');
+  assert.equal(f.calls.filter(c => c.id === 'library.activity.record').length, 1);
+});
+
+test('desktop success progress without a final payload is polled until result exists', async () => {
+  const f = fixture(), complete = f.local.invoke;
+  f.local.invoke = async (action, input) => action.id === 'local.platform.sync'
+    ? envelope({ run_id: 'local-1', status: 'succeeded', stage: 'success', result: null })
+    : complete(action, input);
+  assert.equal((await f.run()).sync.completed, true);
+  assert.equal(f.calls[0].id, 'local.platform.status');
 });
 
 test('failed sync never returns cached recap and does not retry the other mode', async () => {
@@ -133,6 +165,10 @@ test('real CLI completes bridge collection, cloud recording and recap with one t
     calls.push(request.url);
     if (request.url.endsWith('/v1/actions/local.platform.sync/invoke')) {
       assert.equal(request.headers.authorization, 'Bearer fixture-bridge-only');
+      return json(response, 200, envelope({ run_id: 'local-real-process', status: 'waiting_for_user', stage: 'waiting', message: '等待页面加载' }));
+    }
+    if (request.url.endsWith('/v1/actions/local.platform.status/invoke')) {
+      assert.equal(request.headers.authorization, 'Bearer fixture-bridge-only');
       return json(response, 200, envelope({ run_id: 'local-real-process', status: 'succeeded', result: { success: true, items: [{ videoId: '7659724478275947822', title: '真实流程替身' }] } }));
     }
     assert.equal(request.headers.authorization, 'Bearer fixture-cloud-only');
@@ -151,7 +187,8 @@ test('real CLI completes bridge collection, cloud recording and recap with one t
   assert.equal(events.filter(e => e.terminal).length, 1);
   assert.equal(events.at(-1).event, 'recap.completed');
   assert.equal(events.at(-1).data.total, 1);
+  assert.equal(events.find(e => e.event === 'sync.progress').status, 'waiting_for_user');
   assert.deepEqual(events.map(e => e.sequence), events.map((_, index) => index + 1));
-  assert.deepEqual(calls.map(p => p.split('/').at(-2)), ['local.platform.sync', 'library.activity.record', 'library.recap.get']);
+  assert.deepEqual(calls.map(p => p.split('/').at(-2)), ['local.platform.sync', 'local.platform.status', 'library.activity.record', 'library.recap.get']);
   assert.doesNotMatch(result.stdout + result.stderr, /fixture-bridge-only|fixture-cloud-only/);
 });

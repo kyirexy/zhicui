@@ -81,7 +81,12 @@ export async function refreshRecap(
   let activeRun: JsonObject = {};
   const budget = () => {
     const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new CliError('TIMEOUT', '同步回顾超时；已保存资料会保留，请按返回的 Run ID 查询进度', { details: activeRun });
+    if (remaining <= 0) {
+      const waiting = activeRun.status === 'waiting_for_user' && activeRun.stage !== 'browser-open';
+      throw new CliError(waiting ? 'WAITING_FOR_USER' : 'TIMEOUT', waiting
+        ? '仍在等待平台页面读取或验证；请查看知萃打开的平台窗口，再按返回的 Run ID 查询同一任务'
+        : '同步回顾超时；已保存资料会保留，请按返回的 Run ID 查询进度', { details: activeRun });
+    }
     return remaining;
   };
   const callLocal = async (id: string, input: JsonObject): Promise<AgentEnvelope> => {
@@ -103,18 +108,19 @@ export async function refreshRecap(
         const started = await callLocal('local.platform.sync', { platform, mode, limit: options.limit });
         localRunId = text(started.run_id) || text(object(started.data).run_id);
         if (!localRunId) throw new CliError('INVALID_OUTPUT', '本机同步未返回运行标识');
-        activeRun = { run_id: localRunId, execution_location: 'local_windows', platform };
+        activeRun = { run_id: localRunId, execution_location: 'local_windows', platform, mode };
         let job = object(started.data), previous = '';
         while (!isTerminalStatus(text(job.status)) || (job.status === 'succeeded' && !job.result)) {
+          activeRun = { ...activeRun, status: text(job.status), stage: text(job.stage) };
           budget();
           const message = text(job.message);
-          if (message !== previous) {
-            progress('sync.progress', { platform, mode, run_id: localRunId, status: text(job.status), message });
-            previous = message;
+          const state = `${job.status}:${job.stage}:${message}`;
+          if (state !== previous) {
+            progress('sync.progress', { platform, mode, run_id: localRunId, status: text(job.status), stage: text(job.stage), message });
+            previous = state;
           }
-          if (job.status === 'waiting_for_user' && job.stage !== 'browser-open') {
-            throw new CliError('WAITING_FOR_USER', message || '请在知萃的平台窗口完成验证', { details: { platform, run_id: localRunId } });
-          }
+          // 平台窗口初次加载也会报告等待。保留进程并查询同一任务；若确需验证，
+          // 用户完成后自然接续，不重复采集，也不尝试代过验证或重试平台拒绝。
           await delay(Math.min(1000, budget()));
           const current = await callLocal('local.platform.status', { platform });
           job = object(current.data);

@@ -17,7 +17,7 @@ CLI 与服务端 Agent v1 必须通过生产门禁后一起发布。源码和 np
 
 ## 官网独立安装包
 
-用户已选择官网分发。`cli-web-v<版本>` 标签触发 `Build Zhicui CLI Website Package`，沿用 `npm-production` 受保护环境。该流程不向 npm 仓库发布、不关闭 2FA；完整测试、包内容白名单、SHA-256/SHA-512 和 GitHub 构建来源证明通过后才输出安装包。
+用户已选择官网分发。既有受保护环境允许的 `cli-v<版本>` 标签触发 `Build Zhicui CLI Website Package`，沿用 `npm-production` 审核。该流程不向 npm 仓库发布、不关闭 2FA；完整测试、包内容白名单、SHA-256/SHA-512 和 GitHub 构建来源证明通过后才输出安装包。暂未修复 npm 发布凭证时，取消同标签触发的 npm 发布任务，只批准官网包构建任务。
 
 发布者必须从成功运行下载产物，用 `gh attestation verify <tgz> --repo kyirexy/zhicui --signer-workflow kyirexy/zhicui/.github/workflows/publish-zhicui-cli-web.yml` 核验来源、提交与摘要；再将不可变版本包保存到 `/var/lib/zhicui-downloads/cli/`。已有版本不得覆盖为不同内容。`/cli.tgz` 只指向已核验版本，原子更新并禁用缓存。静态入口只需 `nginx -t` 和平滑 reload，不重启后端或改变 Agent 权限。
 

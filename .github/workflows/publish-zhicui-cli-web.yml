@@ -1,7 +1,7 @@
 name: Build Zhicui CLI Website Package
 on:
   push:
-    tags: ['cli-web-v*.*.*']
+    tags: ['cli-v*.*.*']
 permissions:
   contents: read
   id-token: write
@@ -32,7 +32,7 @@ jobs:
       - name: Verify source and install dependencies
         run: |
           set -euo pipefail
-          test "${GITHUB_REF_NAME}" = "cli-web-v$(node -p "require('./package.json').version")"
+          test "${GITHUB_REF_NAME}" = "cli-v$(node -p "require('./package.json').version")"
           git fetch --no-tags origin master
           git merge-base --is-ancestor "${GITHUB_SHA}" origin/master
           python -m pip install pydantic==2.13.4 pydantic-settings==2.14.2

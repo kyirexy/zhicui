@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { cp, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import { dirname, resolve } from 'node:path';
-import { action, credentialEnv, envelope, json, runCli, startServer, temporaryDirectory } from './helpers.mjs';
+import { action, credentialEnv, envelope, json, readJsonBody, runCli, startServer, temporaryDirectory } from './helpers.mjs';
 
 function fakeEnv(directory) {
   const fake = resolve('test', 'fake-agent-client.mjs');
@@ -20,6 +20,44 @@ function fakeEnv(directory) {
     FAKE_CODEX_STATE: resolve(directory, 'codex-state.json'),
     FAKE_CLAUDE_STATE: resolve(directory, 'claude-state.json'),
   };
+}
+
+for (const mode of ['existing', 'new', 'denied', 'offline']) {
+  test(`connect joins setup, consent and real MCP verification: ${mode}`, async (t) => {
+    const directory = await temporaryDirectory();
+    let starts = 0;
+    const secret = 'connect_test_secret';
+    const server = await startServer(async (req, res) => {
+      if (req.url.endsWith('/auth/device')) {
+        starts++;
+        assert.deepEqual((await readJsonBody(req)).scopes, ['account:read', 'library:read', 'ask:read', 'ask:run']);
+        return json(res, 200, envelope({device_code:'connect_device_secret',user_code:'LINK-TEST',verification_uri:server.url+'/verify',interval:1,expires_in:60}));
+      }
+      if (req.url.endsWith('/auth/device/token')) {
+        if (mode === 'denied') return json(res, 403, {error:{code:'ACCESS_DENIED',message:'用户拒绝授权'}});
+        return json(res, 200, envelope({access_token:secret,expires_in:900}));
+      }
+      if (mode === 'offline') return json(res, 503, {error:{code:'INTERFACE_DISABLED',message:'服务暂未开放'}});
+      assert.equal(req.headers.authorization, 'Bearer '+secret);
+      json(res, 200, envelope({actions:[action('library.media.resolve')]}));
+    });
+    t.after(server.close);
+    const env = {...fakeEnv(directory),...credentialEnv(directory,server.url),ZHICUI_PROFILE:'default'};
+    if (mode === 'existing' || mode === 'offline') await writeFile(env.ZHICUI_CREDENTIALS_FILE, JSON.stringify({kind:'pat',access_token:secret,created_at:new Date().toISOString(),server_origin:server.url}));
+    const result = await runCli(['connect','--no-open','--jsonl','--timeout','20s'],{env,processTimeoutMs:25000});
+    const events = result.stdout.trim().split('\n').map(JSON.parse);
+    assert.equal(events.filter(x=>x.terminal).length,1);
+    assert.equal(result.code===0,mode==='existing'||mode==='new',result.stdout+result.stderr);
+    assert.equal(starts,mode==='new'||mode==='denied'?1:0);
+    assert.doesNotMatch(result.stdout+result.stderr,/connect_test_secret|connect_device_secret/);
+    if(result.code===0) {
+      assert.equal(events.at(-1).data.ready,true);
+      assert.equal(events.at(-1).data.mcp_healthy,true);
+      const again=await runCli(['connect','--json','--no-open'],{env,processTimeoutMs:20000});
+      assert.equal(again.code,0,again.stdout+again.stderr);
+      assert.equal(JSON.parse(again.stdout).setup.codex.changed,false);
+    } else assert.equal(events.at(-1).status,'failed');
+  });
 }
 
 function runCliEntry(entry, args, options = {}) {

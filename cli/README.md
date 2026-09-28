@@ -1,5 +1,15 @@
 # @zhicui/cli
 
+## 从官网下载并接入（1.0.10 起）
+
+安装说明与经 CI 验收的安装包：https://luxai.cn/cli 。官网分发独立于 npm 官方仓库，仍使用 npm 安装客户端，不需要 npm 登录。
+
+```powershell
+npm install -g https://luxai.cn/cli.tgz; if ($LASTEXITCODE -eq 0) { zhicui connect }
+```
+
+已安装后只需 `zhicui connect`；Claude Code 用 `zhicui connect --client claude`。自动安装 MCP 与 Skill、复用有效授权或打开浏览器确认授权，再通过真实工具发现验证连接。默认接入使用 default 配置；其他命名 profile 继续用于单独 CLI 操作。重新连接 Agent 中的知萃 MCP 后生效。
+
 ## 快速下载（1.0.7 起）
 
 ```bash

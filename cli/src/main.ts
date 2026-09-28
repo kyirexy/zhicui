@@ -120,6 +120,7 @@ function helpPayload(): Record<string, unknown> {
       'library prepare <url-or-share-text> [--connect] [--output <new-directory>] [--resume]',
       'mcp serve --stdio',
       'agent setup|doctor|status|update|reconcile|uninstall [--client all|codex|claude]',
+      'connect [--client codex|claude|all] [--no-open] — 安装连接、确认授权并检查可用工具',
       'account export --output <new-file.zip>  # password via no-echo stdin',
       'account delete                          # password + phrase via no-echo stdin',
       'models custom-create --name <name> --provider-name <provider> --model <model> --api-base <url> [--select] [--disabled] [--confirmation-id <id>]  # 先批准，再用无回显 stdin 输入 API Key',
@@ -885,6 +886,7 @@ async function agentCommand(
   options: GlobalOptions,
   writer: ProtocolWriter,
   credentials: CredentialManager,
+  receiveResult?: (value: Record<string, unknown>) => void,
 ): Promise<void> {
   const command = args.shift() || 'status';
   const selection = clientSelection(takeValue(args, '--client'));
@@ -938,7 +940,7 @@ async function agentCommand(
     const configured = checks.every((check) => check.configured);
     const configurationReady = checks.every((check) => check.configuration_ready);
     const ready = checks.every((check) => check.ready);
-    writer.result({
+    const report = {
       ...configuration, checks, ok: ready, ready, configured, configuration_ready: configurationReady, authenticated,
       cloud_available: cloudAvailable, service_available: serviceAvailable, mcp_healthy: mcp.ok,
       code: ready ? 'READY' : !configurationReady ? checks.find((check) => !check.configuration_ready)?.code : errorCode || mcp.code,
@@ -950,8 +952,48 @@ async function agentCommand(
         ...await new RestrictedLocalAdapter().status(expectedUserHash),
         account_binding_verified: Boolean(expectedUserHash),
       },
-    });
+    };
+    if (receiveResult) receiveResult(report);
+    else writer.result(report);
   } else throw usageError(`未知 agent 命令：${command}`);
+}
+
+async function connectCommand(args: string[], options: GlobalOptions, writer: ProtocolWriter,
+  credentials: CredentialManager, client: AgentApiClient): Promise<void> {
+  const selection = clientSelection(takeValue(args, '--client') || 'codex');
+  const noOpen = takeFlag(args, '--no-open');
+  if (args.length) throw usageError(`多余参数：${args.join(' ')}`);
+  // MCP 的受管注册使用默认凭据；不把另一个 profile 的成功检查误报为默认连接成功。
+  if (options.profile !== 'default') throw usageError('一键接入使用默认配置，请用 --profile default；其他配置可继续单独使用 CLI');
+  let sequence = 0;
+  const stage = (name: string, message: string) => {
+    writer.diagnostic(message);
+    if (options.jsonl) writer.event({ sequence: ++sequence, event: `connect.${name}`, status: 'running', terminal: false });
+  };
+  stage('setup', '1/3 安装并检查 Agent 连接…');
+  const setup = await new AgentClientManager(options.timeoutMs).setup(selection);
+  for (const [name, value] of Object.entries(setup)) {
+    if (!(value as Record<string, unknown>).installed) {
+      throw new CliError('AGENT_NOT_INSTALLED', `请先安装 ${name === 'codex' ? 'Codex' : 'Claude Code'}，然后重新运行 zhicui connect`, { exitCode: EXIT_CODES.localUnavailable });
+    }
+  }
+  stage('authorization', '2/3 检查知萃授权…');
+  try { await client.capabilities(); }
+  catch (error) {
+    if (!(error instanceof CliError) || !PREPARE_AUTH_ERRORS.has(error.code)) throw error;
+    await authCommand(['login', '--scopes', 'account:read,library:read,ask:read,ask:run', ...(noOpen ? ['--no-open'] : [])], options, writer, credentials, client, {
+      event: value => { if (options.jsonl) writer.event({ ...value, sequence: ++sequence, terminal: false }); },
+      complete: () => writer.diagnostic('授权完成，继续检查。'),
+    });
+  }
+  stage('verify', '3/3 验证云端与 MCP 工具…');
+  let report: Record<string, unknown> = {};
+  await agentCommand(['doctor', '--client', selection], options, writer, credentials, value => { report = value; });
+  if (report.ready !== true) throw new CliError(String(report.code || 'AGENT_SETUP_FAILED'), '连接尚未就绪，请运行 zhicui agent doctor 查看具体原因');
+  writer.diagnostic('连接成功。回到 Agent 重新连接知萃 MCP，即可使用视频下载和问答。');
+  const result = { ...report, setup, next_command: 'zhicui download "视频链接"', reconnect_agent: true };
+  if (options.jsonl) writer.event({ sequence: ++sequence, event: 'connect.completed', terminal: true, status: 'succeeded', data: result as JsonObject });
+  else writer.result(result);
 }
 
 export async function runCli(argv: string[]): Promise<number> {
@@ -973,7 +1015,7 @@ export async function runCli(argv: string[]): Promise<number> {
       writer.result({ name: '@zhicui/cli', version: CLI_VERSION });
       return EXIT_CODES.success;
     }
-    if (!['capabilities', 'resolve', 'download'].includes(domain) && !USER_COMMAND_DOMAINS.includes(domain as (typeof USER_COMMAND_DOMAINS)[number])) {
+    if (!['capabilities', 'resolve', 'download', 'connect'].includes(domain) && !USER_COMMAND_DOMAINS.includes(domain as (typeof USER_COMMAND_DOMAINS)[number])) {
       throw usageError(`未知命令域：${domain}`);
     }
     if (command.includes('--help') || command.includes('-h')) {
@@ -1010,6 +1052,7 @@ export async function runCli(argv: string[]): Promise<number> {
       if (!takeFlag(command, '--public') || command.length) throw usageError('用法：zhicui capabilities --public');
       writer.result(await client.publicCapabilities());
     }
+    else if (domain === 'connect') await connectCommand(command, options, writer, credentials, client);
     else if (domain === 'resolve' || domain === 'download') await fastVideoCommand(domain, command, options, writer, client, credentials);
     else if (domain === 'auth') await authCommand(command, options, writer, credentials, client);
     else if (domain === 'run') await runCommand(command, options, writer, client);

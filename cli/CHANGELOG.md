@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.10
+
+- 新增 `zhicui connect`，串联 MCP/Skill 配置、按需浏览器授权和真实工具检查；有效凭据复用、拒绝授权不会误报成功，JSONL 只输出一个终态。
+- 增加由受保护 GitHub Actions 构建、审计并生成来源证明的官网安装包，提供 https://luxai.cn/cli 接入说明。
+
 ## 1.0.9
 
 - 发布审计兼容 npm 12 按包名返回的 pack JSON 格式，继续逐项检查版本、入口和允许发布的文件。

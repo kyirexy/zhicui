@@ -15,6 +15,12 @@ CLI 与服务端 Agent v1 必须通过生产门禁后一起发布。源码和 np
 
 发布身份由 npm trusted publishing 或仅发布环境可读的凭据注入；仓库不保存 `.npmrc`。发布 `latest` 前必须在干净临时目录完成包内容审计，并针对当前 Codex 与 Claude Code 真实版本验证安装、重复安装、MCP 工具发现、调用、卸载和配置恢复。
 
+## 官网独立安装包
+
+用户已选择官网分发。`cli-web-v<版本>` 标签触发 `Build Zhicui CLI Website Package`，沿用 `npm-production` 受保护环境。该流程不向 npm 仓库发布、不关闭 2FA；完整测试、包内容白名单、SHA-256/SHA-512 和 GitHub 构建来源证明通过后才输出安装包。
+
+发布者必须从成功运行下载产物，用 `gh attestation verify <tgz> --repo kyirexy/zhicui --signer-workflow kyirexy/zhicui/.github/workflows/publish-zhicui-cli-web.yml` 核验来源、提交与摘要；再将不可变版本包保存到 `/var/lib/zhicui-downloads/cli/`。已有版本不得覆盖为不同内容。`/cli.tgz` 只指向已核验版本，原子更新并禁用缓存。静态入口只需 `nginx -t` 和平滑 reload，不重启后端或改变 Agent 权限。
+
 ## Windows Stable
 
 桌面构建复制 `cli/dist/` 和 `cli/skills/` 到安装目录的固定 `resources/cli/`。Electron 主进程只允许执行固定形式：

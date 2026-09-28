@@ -221,8 +221,11 @@ test('stdio MCP merges a fixed local action only through a live loopback bridge'
     'zhicui_run_events',
     ...(supportsDesktop ? ['zhicui_local_update_check'] : []),
   ]);
-  assert.ok(messages[1]?.result, JSON.stringify(messages));
-  assert.equal(messages[1].result.isError, !supportsDesktop);
+  if (supportsDesktop) {
+    assert.equal(messages[1]?.result?.isError, false, JSON.stringify(messages));
+  } else {
+    assert.equal(messages[1]?.error?.data?.code, 'ACTION_NOT_AVAILABLE', JSON.stringify(messages));
+  }
   assert.equal(localCalls, supportsDesktop ? 1 : 0);
   assert.doesNotMatch(result.stdout, new RegExp(bridgeToken));
 });

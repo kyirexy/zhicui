@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.8
+
+- 修正 Linux 上不可用桌面工具的协议断言，验证工具不对外暴露且调用返回 ACTION_NOT_AVAILABLE；保留 1.0.7 的快捷下载与 Agent 接入能力。
+
 ## 1.0.7
 
 - 新增 `zhicui download <链接> [--connect]` 和 `zhicui resolve <链接>`：直接获取下载入口，不要求导入资料、提取文稿或写权限；复用系统凭证、流式原子下载、单一 JSONL 终态。

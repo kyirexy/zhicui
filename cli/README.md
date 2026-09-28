@@ -66,7 +66,17 @@ zhicui plan task-complete <plan_id> <task_id> true --idempotency-key task-comple
 
 ## 将视频交给本地 Hypit
 
-1.0.4 新增 `library prepare`：导入链接、提取文稿、下载原视频，最后写入可交给 Hypit 的素材目录。它只使用当前知萃用户的资料和授权，需要 `library:read`、`library:write`；旧只读 PAT 不会自动增加权限。服务端公开能力和当前授权决定命令是否可用，基础接入不会因此开启批量同步等其他能力。
+`library prepare` 串联导入链接、提取文稿、下载原视频，最后写入可交给 Hypit 的素材目录。1.0.5 起推荐在项目目录运行下面这一条命令，整段分享文字也可以直接粘贴：
+
+```powershell
+zhicui library prepare 'https://v.douyin.com/<分享ID>/' --connect --timeout 10m --jsonl
+```
+
+已有有效权限时直接开始；缺少权限时，`--connect` 会打开浏览器申请读取和整理资料，用户确认后原命令自动继续。凭证通过系统安全存储保存在本机，不需要复制 PAT。原 PAT 不会被扩权，确认后本机当前 profile 使用新设备授权；需要保留原 profile 时添加 `--profile video-workflow`。
+
+未指定输出目录时，素材保存在当前目录的 `zhicui-media/` 下，按服务、profile 和链接区分任务。再次执行同一条命令会校验并复用已完成步骤，无需手动加 `--resume`。仍可使用下面的显式目录模式；失败结果会给出完整恢复命令和结构化 `resume_argv`。
+
+它只使用当前知萃用户的资料和授权，需要 `library:read`、`library:write`。服务端公开能力和当前授权决定命令是否可用，基础接入不会因此开启批量同步等其他能力。
 
 基础接入可先执行 `zhicui auth login --scopes 'account:read,library:read,library:write'`，在知萃网页完成授权。CLI 下载和转写使用资料所有者已连接的抖音账号，读取流程与网页一致；平台连接失效时仍须在知萃中正常验证，新增 CLI 授权不会替代平台登录。
 

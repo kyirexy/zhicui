@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AGENT_CORE_HANDOFF_PROMPT, AGENT_HANDOFF_PROMPT, CORE_AGENT_LOGIN_COMMAND, agentConnectionStep } from './agentQuickConnect.ts';
+import { AGENT_CORE_HANDOFF_PROMPT, AGENT_HANDOFF_PROMPT, CORE_AGENT_LOGIN_COMMAND, VIDEO_AGENT_LOGIN_COMMAND, VIDEO_AGENT_HANDOFF_PROMPT, agentConnectionStep } from './agentQuickConnect.ts';
 
 const base = { loading: false, interfaceDisabled: false, supportsAuthorization: true };
 
@@ -51,8 +51,16 @@ test('基础接入提示词允许指定公开链接操作，并要求先取得�
 });
 
 test('基础接入默认命令不包含写入权限，平台批量同步和本机自动化仍未开放', () => {
-  assert.equal(CORE_AGENT_LOGIN_COMMAND, 'zhicui auth login --scopes account:read,library:read,ask:read,ask:run');
+  assert.equal(CORE_AGENT_LOGIN_COMMAND, "zhicui auth login --scopes 'account:read,library:read,ask:read,ask:run'");
   assert.match(AGENT_CORE_HANDOFF_PROMPT, /请先只读查看我的资料/);
   assert.match(AGENT_CORE_HANDOFF_PROMPT, /仍不开放平台账号批量同步、本机桥接（bridge）或视觉自动化/);
   assert.match(AGENT_CORE_HANDOFF_PROMPT, /不要读取或展示密码、Cookie、JWT、访问令牌或 API Key/);
+});
+
+test('视频连接单独申请所需权限，并用同一任务接续浏览器授权', () => {
+  assert.equal(VIDEO_AGENT_LOGIN_COMMAND, "zhicui auth login --scopes 'account:read,library:read,library:write'");
+  assert.doesNotMatch(CORE_AGENT_LOGIN_COMMAND, /library:write/);
+  assert.match(VIDEO_AGENT_HANDOFF_PROMPT, /--connect/);
+  assert.match(VIDEO_AGENT_HANDOFF_PROMPT, /未指定视频前不要运行提取/);
+  assert.match(VIDEO_AGENT_HANDOFF_PROMPT, /素材就绪不代表复刻视频已经生成/);
 });

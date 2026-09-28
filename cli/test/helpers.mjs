@@ -13,7 +13,7 @@ export async function temporaryDirectory(prefix = 'zhicui-cli-test-') {
 export async function runCli(args, options = {}) {
   return new Promise((resolveResult, reject) => {
     const child = spawn(process.execPath, [CLI_ENTRY, ...args], {
-      cwd: resolve('.'),
+      cwd: options.cwd || resolve('.'),
       env: { ...process.env, ...options.env },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,

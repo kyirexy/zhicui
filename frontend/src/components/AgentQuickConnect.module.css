@@ -27,6 +27,10 @@
 .command code { font-size: .8125rem; overflow-wrap: anywhere; }
 .command button { min-height: 40px; padding: 8px 10px; font-size: .75rem; }
 .spinner { animation: spin 1s linear infinite; }
+.manual { margin-top: 18px; border-top: 1px solid var(--card-border); padding-top: 12px; }
+.manual summary { cursor: pointer; min-height: 44px; align-content: center; font-size: .875rem; color: var(--foreground-secondary); }
+.manual summary:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 3px; }
+.manual .command { margin-top: 12px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 560px) { .panel { padding: 18px 16px; } .steps { gap: 12px; flex-direction: column; margin: 20px 0; } .actions > button, .actions > a { flex: 1 1 100%; } .choices > button { flex: 1; } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }

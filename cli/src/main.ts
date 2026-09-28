@@ -22,7 +22,8 @@ import { CliError, EXIT_CODES, normalizeUnknownError, usageError } from './error
 import { buildActionInput, readSecretFromStdin, readSecretsFromStdin } from './input.js';
 import { RestrictedLocalAdapter } from './local-adapter.js';
 import { downloadLibraryFile } from './media-download.js';
-import { prepareLibraryMedia } from './library-prepare.js';
+import { checkPrepareCapabilities, prepareLibraryMedia } from './library-prepare.js';
+import { normalizePrepareLink, prepareDestination, prepareProgressLabel, prepareRecovery, PREPARE_AUTH_ERRORS, VIDEO_PREPARE_SCOPES } from './prepare-flow.js';
 import { StdioMcpServer } from './mcp-server.js';
 import { ProtocolWriter } from './output.js';
 import type {
@@ -114,7 +115,7 @@ function helpPayload(): Record<string, unknown> {
       'run describe <action_id>',
       'capabilities --public',
       'library download <note_id> --output <new-file.mp4>',
-      'library prepare <url> --output <new-directory> [--resume]',
+      'library prepare <url-or-share-text> [--connect] [--output <new-directory>] [--resume]',
       'mcp serve --stdio',
       'agent setup|doctor|status|update|reconcile|uninstall [--client all|codex|claude]',
       'account export --output <new-file.zip>  # password via no-echo stdin',
@@ -169,6 +170,7 @@ async function authCommand(
   writer: ProtocolWriter,
   credentials: CredentialManager,
   client: AgentApiClient,
+  continuation?: { event: (value: JsonObject) => void; complete: (value: JsonObject) => void },
 ): Promise<void> {
   const command = args.shift() || 'status';
   if (command === 'status') {
@@ -263,11 +265,13 @@ async function authCommand(
     throw new CliError('REMOTE_FAILURE', '设备授权有效期无效');
   }
   const deadline = Date.now() + Math.min(serverExpiry, options.timeoutMs);
-  if (options.jsonl) writer.event({
+  const authorizationEvent: JsonObject = {
     sequence: 1, event: 'device_authorization', status: 'waiting_for_user', terminal: false,
     verification_url: verificationUrl, user_code: userCode,
     expires_at: new Date(deadline).toISOString(), interval_seconds: intervalMs / 1_000, scopes,
-  });
+  };
+  if (continuation) continuation.event(authorizationEvent);
+  else if (options.jsonl) writer.event(authorizationEvent);
   writer.diagnostic('请求方：知萃 CLI（当前命令行设备）');
   writer.diagnostic(`请求权限：${scopes.join(', ')}`);
   writer.diagnostic(`请在浏览器确认知萃授权，验证码：${userCode}`);
@@ -315,10 +319,11 @@ async function authCommand(
         authenticated: true,
         kind: 'device',
         expires_at: credential.expires_at || null,
-        scopes: credential.scopes,
+        scopes: credential.scopes || [],
         store: credentials.store.kind,
       };
-      if (options.jsonl) writer.event({
+      if (continuation) continuation.complete(publicResult);
+      else if (options.jsonl) writer.event({
         sequence: 2, event: 'authorization_complete', status: 'succeeded', terminal: true,
         ...publicResult,
       });
@@ -329,6 +334,11 @@ async function authCommand(
       if (normalized.code === 'AUTHORIZATION_PENDING') continue;
       if (normalized.code === 'SLOW_DOWN') {
         intervalMs += 2_000;
+        continue;
+      }
+      if (['HTTP_502', 'HTTP_503', 'HTTP_504', 'NETWORK_ERROR'].includes(normalized.code)) {
+        writer.diagnostic('连接暂时中断，正在等待授权服务恢复；无需重新打开授权页。');
+        intervalMs = Math.min(15_000, intervalMs + 2_000);
         continue;
       }
       throw error;
@@ -610,18 +620,43 @@ async function domainCommand(
   if (domain === 'library' && verb === 'prepare') {
     const output = takeValue(args, '--output');
     const resume = takeFlag(args, '--resume');
-    const url = args.shift();
-    if (!url || !output || args.length) {
-      throw usageError('用法：zhicui library prepare <抖音或B站链接> --output <新目录> [--resume]');
+    const connect = takeFlag(args, '--connect');
+    const noOpen = takeFlag(args, '--no-open');
+    const value = args.shift();
+    if (!value || args.length) {
+      throw usageError('用法：zhicui library prepare <链接或分享文字> [--connect] [--output <目录>] [--resume]');
     }
+    const url = normalizePrepareLink(value);
     let sequence = 0;
-    const result = await prepareLibraryMedia(client, { url, output, resume, timeoutMs: options.timeoutMs,
-      idempotencyKey: options.idempotencyKey }, (stage, data) => {
-      if (options.jsonl) writer.event({ sequence: ++sequence, event: `prepare.${stage}`, status: 'running', data });
-      else writer.diagnostic(`视频准备：${stage}${typeof data.bytes === 'number' ? ` ${(data.bytes / 1024 / 1024).toFixed(1)} MB` : ''}`);
-    });
-    if (options.jsonl) writer.event({ sequence: ++sequence, event: 'prepare.completed', terminal: true, status: 'succeeded', data: result });
-    else writer.result(result);
+    const progress = (stage: string, data: JsonObject) => {
+      const message = prepareProgressLabel(stage, data);
+      if (options.jsonl) writer.event({ sequence: ++sequence, event: `prepare.${stage}`, status: 'running', message, data });
+      else writer.diagnostic(message);
+    };
+    const destination = await prepareDestination(url, options.apiUrl, options.profile, output, resume);
+    try {
+      progress('check', {});
+      try { await checkPrepareCapabilities(client); }
+      catch (error) {
+        if (!connect || !(error instanceof CliError) || !PREPARE_AUTH_ERRORS.has(error.code)) throw error;
+        writer.diagnostic('准备视频需要读取和整理资料的权限。请在浏览器确认一次，完成后自动继续当前任务。');
+        await authCommand(['login', '--scopes', VIDEO_PREPARE_SCOPES.join(','), ...(noOpen ? ['--no-open'] : [])], options, writer, credentials, client, {
+          event: (event) => { if (options.jsonl) writer.event({ ...event, sequence: ++sequence, terminal: false }); },
+          complete: (data) => {
+            if (options.jsonl) writer.event({ sequence: ++sequence, event: 'authorization_complete', status: 'succeeded', terminal: false, ...data });
+            else writer.diagnostic('连接已完成，继续准备视频。');
+          },
+        });
+      }
+      if (destination.resume) writer.diagnostic('已找到原任务，校验并复用已完成的步骤。');
+      const result = await prepareLibraryMedia(client, { url, ...destination, timeoutMs: options.timeoutMs,
+        idempotencyKey: options.idempotencyKey }, progress);
+      if (options.jsonl) writer.event({ sequence: ++sequence, event: 'prepare.completed', terminal: true, status: 'succeeded', data: result });
+      else writer.result(result);
+    } catch (error) {
+      const saved = await stat(resolve(destination.output, '.zhicui-prepare.json')).then(() => true).catch(() => false);
+      throw prepareRecovery(normalizeUnknownError(error), { url, output: destination.output, resume: saved, profile: options.profile });
+    }
     return;
   }
   if (domain === 'library' && verb === 'download') {
@@ -912,7 +947,7 @@ export async function runCli(argv: string[]): Promise<number> {
           scopes: ['library:read'],
           description: '流式下载到新文件；不覆盖、不跟随跳转，完成后返回大小和 SHA-256。',
         }] : []), ...(domain === 'library' && (!verb || verb === 'prepare') ? [{
-          command: 'zhicui library prepare <url> --output <new-directory> [--resume]',
+          command: 'zhicui library prepare <url-or-share-text> [--connect] [--output <new-directory>] [--resume]',
           scopes: ['library:read', 'library:write'],
           description: '导入、提取文稿、下载视频并写入素材清单；--resume 接续原目录中的任务。',
         }] : [])],

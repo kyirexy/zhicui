@@ -434,7 +434,7 @@ export class AgentApiClient {
           NOT_FOUND: '未找到当前用户的这条视频资料',
           RATE_LIMITED: '下载请求过于频繁，请稍后重试',
           MEDIA_TOO_LARGE: '视频超过下载大小限制',
-          PLATFORM_AUTH_REQUIRED: '平台要求重新授权，请在知萃中连接平台后重试',
+          PLATFORM_AUTH_REQUIRED: '平台限制了这条视频的读取，请在知萃检查平台连接或完成验证；暂时不要连续重试',
           INTERFACE_DISABLED: '当前知萃 Agent 接口未开放',
         };
         throw new CliError(code, messages[code] || '知萃暂时无法提供这条视频的媒体文件，请查看资料状态后重试');

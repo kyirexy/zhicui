@@ -110,6 +110,11 @@ export async function prepareLibraryMedia(
     || !/(^|\.)(douyin\.com|iesdouyin\.com|bilibili\.com|b23\.tv)$/u.test(sourceUrl.hostname)) {
     throw usageError('仅支持 HTTPS 抖音或 B站公开视频链接');
   }
+  await checkPrepareCapabilities(client);
+  return prepareFiles(client, options, progress);
+}
+
+export async function checkPrepareCapabilities(client: AgentApiClient): Promise<void> {
   const capabilities = await client.capabilities();
   for (const actionId of ['library.import_link', 'library.transcript.generate', 'library.media.download']) {
     const action = capabilities.actions.find((entry) => entry.id === actionId);
@@ -122,6 +127,9 @@ export async function prepareLibraryMedia(
     }
     if (!action.available) throw new CliError('ACTION_NOT_AVAILABLE', '当前服务暂时无法准备视频素材');
   }
+}
+
+async function prepareFiles(client: AgentApiClient, options: { url: string; output: string; resume: boolean; timeoutMs: number; idempotencyKey?: string }, progress: Progress): Promise<JsonObject> {
   const directory = resolve(options.output);
   const statePath = resolve(directory, '.zhicui-prepare.json');
   let state: PrepareState;

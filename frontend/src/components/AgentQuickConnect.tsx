@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Check, Clipboard, Download, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
 import type { DesktopAgentClient, DesktopAgentIntegrationOverview, DesktopAgentOperation } from '@/lib/desktopRuntime';
-import { AGENT_CORE_HANDOFF_PROMPT, AGENT_HANDOFF_PROMPT, agentConnectionStep } from '@/lib/agentQuickConnect';
+import { AGENT_CORE_HANDOFF_PROMPT, AGENT_HANDOFF_PROMPT, VIDEO_AGENT_HANDOFF_PROMPT, VIDEO_AGENT_LOGIN_COMMAND, agentConnectionStep } from '@/lib/agentQuickConnect';
 import styles from './AgentQuickConnect.module.css';
 
 interface Props {
@@ -18,12 +18,15 @@ interface Props {
   commandCopied: boolean;
   onAction: (client: DesktopAgentClient, operation: DesktopAgentOperation) => void;
   onCopy: (text: string) => void;
-  onCopyCommand: () => void;
+  onCopyCommand: (command: string) => void;
   onManualAuthorization: () => void;
 }
 
 export default function AgentQuickConnect({ desktop, bridgeAvailable, overview, interfaceDisabled, releaseProfile, loginCommand, pending, copied, commandCopied, onAction, onCopy, onCopyCommand, onManualAuthorization }: Props) {
   const [selectedClient, setClient] = useState<DesktopAgentClient>('codex');
+  const [purpose, setPurpose] = useState<'ask' | 'video'>('ask');
+  const videoPurpose = !desktop && purpose === 'video';
+  const displayedCommand = videoPurpose ? VIDEO_AGENT_LOGIN_COMMAND : loginCommand;
   const pendingClient = pending.split(':')[0];
   const client = pendingClient === 'codex' || pendingClient === 'claude' ? pendingClient : selectedClient;
   const status = overview?.clients.find((item) => item.client === client);
@@ -34,7 +37,7 @@ export default function AgentQuickConnect({ desktop, bridgeAvailable, overview, 
   const canInstall = bridgeAvailable && overview?.cli_available === true;
   const needsUpdate = desktop && (!bridgeAvailable || (overview !== null && !supportsAuthorization));
   const coreAccess = releaseProfile === 'core';
-  const handoffPrompt = coreAccess ? AGENT_CORE_HANDOFF_PROMPT : overview?.setup_prompt || AGENT_HANDOFF_PROMPT;
+  const handoffPrompt = videoPurpose ? VIDEO_AGENT_HANDOFF_PROMPT : coreAccess ? AGENT_CORE_HANDOFF_PROMPT : overview?.setup_prompt || AGENT_HANDOFF_PROMPT;
 
   return (
     <section className={styles.panel} aria-labelledby="quick-agent-title">
@@ -73,19 +76,30 @@ export default function AgentQuickConnect({ desktop, bridgeAvailable, overview, 
         {needsUpdate ? <p className={styles.hint}>请在客户端的更新提示中安装新版，即可使用页内授权和自动维护连接。</p>
           : <p className={styles.hint}>连接组件和 Skill 随知萃更新。更新完成后，在 Agent 中重新连接一次即可。</p>}
       </> : <>
+        <div className={styles.choices} role="group" aria-label="选择使用方式">
+          <button type="button" aria-pressed={purpose === 'ask'} onClick={() => setPurpose('ask')}>用已有资料问答</button>
+          <button type="button" aria-pressed={purpose === 'video'} onClick={() => setPurpose('video')}>提取视频 · 交给 Hypit</button>
+        </div>
+        <p className={styles.hint}>{videoPurpose
+          ? '把下方提示词交给 Agent，再发视频链接。它会发起连接，授权后继续提取和下载。无需复制令牌。'
+          : '连接一次后，直接让 Agent 查找资料、分析文稿和继续追问。'}</p>
         <ol className={styles.browserSteps}>
-          <li><span>1</span><div><strong>在终端发起连接</strong><p>已有知萃 CLI，运行下面的命令。</p></div></li>
+          <li><span>1</span><div><strong>{videoPurpose ? '把视频链接交给 Agent' : '在终端发起连接'}</strong><p>{videoPurpose ? '抖音、B站链接或整段分享文字都可以。知萃 CLI 1.0.5 起支持自动接续授权。' : '已有知萃 CLI，运行下面的命令。'}</p></div></li>
           <li><span>2</span><div><strong>在浏览器确认权限</strong><p>登录当前账号，核对请求方后允许连接。</p></div></li>
-          <li><span>3</span><div><strong>{coreAccess ? '选择资料问答，或指定公开链接提取' : '把内容交给 Agent'}</strong><p>{coreAccess ? '默认先读取资料；导入链接、提取文稿和下载视频前，按需追加 library:write 授权。' : '凭证保存在本机，以后可直接调用已授权的能力。'}</p></div></li>
+          <li><span>3</span><div><strong>{videoPurpose ? '自动提取文稿、下载视频' : '选择资料，开始问答'}</strong><p>{videoPurpose ? '进度会持续显示；中断后保留已完成步骤。素材就绪后可继续交给 Hypit。' : '凭证保存在本机，以后可直接调用已授权的能力。'}</p></div></li>
         </ol>
-        <div className={styles.command}>
-          <code>{loginCommand}</code>
-          <button type="button" onClick={onCopyCommand} aria-label="复制 CLI 授权命令">{commandCopied ? <Check size={16} /> : <Clipboard size={16} />}{commandCopied ? '已复制' : '复制命令'}</button>
-        </div>
         <div className={styles.actions}>
-          <button type="button" className={styles.primary} disabled={interfaceDisabled} onClick={onManualAuthorization}><ShieldCheck size={17} />输入设备授权码</button>
-          <button type="button" onClick={() => onCopy(handoffPrompt)}>{copied ? <Check size={17} /> : <Clipboard size={17} />}{copied ? '已复制提示词' : '复制接入提示词'}</button>
+          <button type="button" className={styles.primary} disabled={interfaceDisabled} onClick={() => onCopy(handoffPrompt)}>{copied ? <Check size={17} /> : <Clipboard size={17} />}{copied ? '已复制提示词' : '复制给 Agent，开始连接'}</button>
+          <button type="button" disabled={interfaceDisabled} onClick={onManualAuthorization}><ShieldCheck size={17} />已有授权码</button>
         </div>
+        <details className={styles.manual}>
+          <summary>手动使用 CLI</summary>
+          <p className={styles.hint}>{videoPurpose ? '此连接申请读取和整理资料权限，导入与提取前会在浏览器中由你确认。' : '运行命令后会打开浏览器确认授权。'}</p>
+          <div className={styles.command}>
+            <code>{displayedCommand}</code>
+            <button type="button" onClick={() => onCopyCommand(displayedCommand)} aria-label="复制 CLI 授权命令">{commandCopied ? <Check size={16} /> : <Clipboard size={16} />}{commandCopied ? '已复制' : '复制命令'}</button>
+          </div>
+        </details>
         <p className={styles.hint}>还没有 CLI？<a href="/download">下载知萃电脑客户端</a>，在侧边栏「Agent 接入」中安装连接。</p>
       </>}
     </section>

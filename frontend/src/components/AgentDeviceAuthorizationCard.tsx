@@ -129,7 +129,7 @@ export default function AgentDeviceAuthorizationCard({ initialCode }: { initialC
         <h1 id={titleId}>{result === 'approved' ? '已允许连接' : result === 'denied' ? '已拒绝连接' : '允许这个 Agent 连接知萃？'}</h1>
         {result ? (
           <div role="status">
-            <p>{result === 'approved' ? '返回刚才的客户端或 Agent，等待它完成连接检查。' : '这次请求未获得访问权限，可以关闭此页面。'}</p>
+            <p>{result === 'approved' ? '授权结果会自动发送给刚才的客户端或 Agent，无需复制令牌。回到原来的任务即可查看后续进度。' : '这次请求未获得访问权限，可以关闭此页面。'}</p>
             <Link className={styles.link} href="/">返回知萃</Link>
           </div>
         ) : (

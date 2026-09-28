@@ -22,7 +22,8 @@
 
 ## 将用户指定的视频交给本地创作工具
 
-- 使用 `zhicui library prepare <抖音或B站视频链接> --output <新目录> --timeout 20m --jsonl`，获取真实视频、文稿与 `manifest.json`；需要 `library:read`、`library:write`。
+- CLI 1.0.5 起优先在目标项目目录使用 `zhicui library prepare '<链接或整段分享文字>' --connect --timeout 10m --jsonl`，获取视频、文稿与 `manifest.json`；缺少 `library:read`、`library:write` 时由用户在浏览器确认后接续原任务，不需要向聊天粘贴 PAT。
+- 未指定 `--output` 时素材保存在当前项目的 `zhicui-media`；相同 profile、服务和链接重复运行同一命令即可恢复。若明确指定 `--output <新目录>`，恢复时仍加 `--resume`。失败时优先使用返回的 `resume_argv`，不要自己拼接 Shell 命令。
 - 需要原视频而不重新提取时，使用 `zhicui library download <note_id> --output <新文件.mp4>`。这些固定命令不授权任意 Shell、文件删除或读取其他用户资料。
 - 已有只读 PAT 不会自行扩权；权限不足时请求用户在知萃授权中心选择相应权限，不复制桌面 JWT 或管理员令牌替代。
 - 保存返回的素材目录和 Run ID；超时或进程结束后用相同链接、目录和 `--resume` 继续。只有已经失败的任务会在用户明确恢复时发起下一次尝试。

@@ -45,7 +45,13 @@ export const AGENT_HANDOFF_PROMPT = `请帮我接入并使用知萃。先检查�
 连接后先只读查看可用能力和我的视频资料，告诉我可以分析哪些内容；只有可用能力明确包含同步、导入或解析，且我指定视频或博主后，才执行相应操作。文稿未准备好时先查询进度，不要声称已经能够提取。
 不要让我在聊天中粘贴密码、Cookie、JWT、访问令牌或 API Key。需要授权时，由我在知萃客户端确认。`;
 
-export const CORE_AGENT_LOGIN_COMMAND = 'zhicui auth login --scopes account:read,library:read,ask:read,ask:run';
+export const CORE_AGENT_LOGIN_COMMAND = "zhicui auth login --scopes 'account:read,library:read,ask:read,ask:run'";
+export const VIDEO_AGENT_LOGIN_COMMAND = "zhicui auth login --scopes 'account:read,library:read,library:write'";
+export const VIDEO_AGENT_HANDOFF_PROMPT = `请用知萃准备我接下来指定的抖音或 B站视频，并把素材交给本机 Hypit。
+先检查知萃 CLI 版本；1.0.5 及以上可使用 zhicui library prepare '<我提供的链接或分享文字>' --connect --jsonl --timeout 10m。从我的 Hypit 项目目录运行，素材会保存在其中的 zhicui-media 目录。
+如需授权，请让我在知萃浏览器页面确认；确认后当前任务自动继续，不要让我在聊天中粘贴 PAT、密码或 Cookie。未指定视频前不要运行提取。
+持续向我说明识别视频、提取文稿、下载视频的真实进度。中断后再次运行同一条命令即可继续；不要覆盖或删除原素材。遇到平台验证限制时保留进度并提示处理，不要连续重试。
+只有 source.mp4 和 manifest.json 实际生成且通过校验后，才告诉我素材就绪，再交给本机 Hypit。素材就绪不代表复刻视频已经生成。`;
 
 export const AGENT_CORE_HANDOFF_PROMPT = `请帮我连接知萃的基础接入能力。先检查当前会话能否发现知萃 MCP 工具，并读取可用能力与已授权权限。
 已有知萃 CLI 时，运行 ${CORE_AGENT_LOGIN_COMMAND}，由我在浏览器中核对并确认授权。也可以在 https://luxai.cn/agent-access 创建按需授权的个人访问令牌；不要让我把令牌粘贴进聊天。

@@ -626,7 +626,7 @@ export default function AgentAccessSettingsCard({
         commandCopied={copied === 'login'}
         onAction={(client, operation) => void runDesktopAction(client, operation)}
         onCopy={(text) => void runCopy('agent-prompt', text)}
-        onCopyCommand={() => void runCopy('login', loginCommand)}
+        onCopyCommand={(command) => void runCopy('login', command)}
         onManualAuthorization={() => setManualAuthorizationOpen(true)}
       />
 

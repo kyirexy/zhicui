@@ -10,6 +10,17 @@ npm install -g https://luxai.cn/cli.tgz; if ($LASTEXITCODE -eq 0) { zhicui conne
 
 已安装后只需 `zhicui connect`；Claude Code 用 `zhicui connect --client claude`。自动安装 MCP 与 Skill、复用有效授权或打开浏览器确认授权，再通过真实工具发现验证连接。默认接入使用 default 配置；其他命名 profile 继续用于单独 CLI 操作。重新连接 Agent 中的知萃 MCP 后生效。
 
+## 先同步再回顾（1.0.11 起）
+
+```powershell
+zhicui recap yesterday --connect --json --timeout 5m
+zhicui recap today --mode collect --platform douyin --connect --json --timeout 5m
+```
+
+每次先同步桌面客户端当前账号的最近清单、增量保存，再返回指定日期的喜欢/收藏。默认两个平台、喜欢、每个平台 50 条，`--mode all` 同时读取收藏；`--limit` 最多 100。已有文稿直接复用，清单查询不等待音频下载或转写。首次需要确认本机调用及整理资料权限，后续复用授权。
+
+需要知萃 Windows/Mac 客户端运行且登录同一账号，平台登录有效。同步失败、等待验证、账号不一致会明确返回，不能将旧缓存说成最新。回顾日期仍是首次同步日期；今天补发现的旧视频不会被回填到昨天。覆盖范围按本次条数报告，不宣称同步完整历史。
+
 ## 快速下载（1.0.7 起）
 
 ```bash

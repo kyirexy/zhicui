@@ -246,7 +246,9 @@ def _check_agent_product_features(
             "status": "ready" if ready else "not_ready", "enabled": True,
             "release_profile": "core", "database_ready": database_ready,
             "answer_model_ready": model_ready,
-            "excluded_features": ["platform_sync", "video_analysis", "automation", "email", "local_bridge"],
+            "excluded_features": ["cloud_platform_sync", "video_analysis", "automation", "email"],
+            "local_platform_sync": {"status": "client_required", "verified": False,
+                                    "requirements": ["same_account_desktop", "local:invoke", "platform_session"]},
             "error_code": None if ready else "agent_core_dependencies_unavailable",
         }
     try:

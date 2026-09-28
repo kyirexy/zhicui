@@ -113,6 +113,8 @@ def get_daily_recap(
     timezone_name: str = "Asia/Shanghai", limit: int = MAX_RECAP_ITEMS,
     reference_at: datetime | None = None,
     include_import_meta: bool = True,
+    source_mode: str | None = None,
+    platform_filter: str | None = None,
 ) -> dict[str, Any]:
     if not str(user_id or "").strip():
         raise ValueError("缺少回顾用户")
@@ -121,17 +123,19 @@ def get_daily_recap(
     chosen, start, end = day_window(
         target_date=target_date, timezone_name=timezone_name, reference_at=reference_at,
     )
+    if source_mode not in (None, "like", "collect") or platform_filter not in (None, "douyin", "bilibili"):
+        raise ValueError("回顾来源无效")
     hidden = select(LibraryHiddenItem.aweme_id).where(LibraryHiddenItem.user_id == user_id)
     ledgers = db.scalars(select(VideoSourceLedger).where(
         VideoSourceLedger.user_id == user_id,
-        VideoSourceLedger.source_mode.in_(_MODES),
+        VideoSourceLedger.source_mode.in_((source_mode,) if source_mode else _MODES),
         VideoSourceLedger.first_seen_at >= start,
         VideoSourceLedger.first_seen_at < end,
         VideoSourceLedger.video_id.not_in(hidden),
     )).all()
     grouped: dict[str, list[VideoSourceLedger]] = {}
     for row in ledgers:
-        if _platform(row.video_id):
+        if _platform(row.video_id) and (platform_filter is None or _platform(row.video_id) == platform_filter):
             grouped.setdefault(row.video_id, []).append(row)
     video_ids = list(grouped)
     snapshots: dict[str, DouyinLocalLibraryItem] = {}

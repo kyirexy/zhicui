@@ -230,6 +230,35 @@ test('stdio MCP merges a fixed local action only through a live loopback bridge'
   assert.doesNotMatch(result.stdout, new RegExp(bridgeToken));
 });
 
+test('cached local MCP tool cannot be invoked after its scope disappears', {
+  skip: !['win32', 'darwin'].includes(process.platform),
+}, async (t) => {
+  const directory = await temporaryDirectory();
+  let capabilities = 0, calls = 0;
+  const actionList = [action('local.update.check', { scopes: ['local:invoke'], execution_location: 'local_windows', available: false })];
+  const server = await startServer((request, response) => {
+    if (request.url.endsWith('/capabilities')) return json(response, 200, envelope({ actions: ++capabilities === 1 ? actionList : [], user_hash: 'a'.repeat(64) }));
+    calls++;
+    json(response, 200, envelope({}));
+  });
+  t.after(server.close);
+  const descriptor = resolve(directory, 'bridge.json');
+  await writeFile(descriptor, JSON.stringify({ api_version: 'v1', url: server.url, token: 'fake-local-token', user_hash: 'a'.repeat(64), expires_at: new Date(Date.now() + 60000).toISOString() }));
+  const env = { ...credentialEnv(directory, server.url), ZHICUI_DESKTOP_BRIDGE_DESCRIPTOR: descriptor };
+  assert.equal((await runCli(['auth', 'pat', '--non-interactive', '--json'], { env, input: 'fake-cloud-token' })).code, 0);
+  capabilities = 0;
+  const input = [
+    { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} },
+    { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'zhicui_local_update_check', arguments: {} } },
+  ].map(JSON.stringify).join('\n');
+  const output = await runCli(['mcp', 'serve', '--stdio'], { env, input });
+  const messages = output.stdout.trim().split('\n').map(JSON.parse);
+  assert.ok(messages[0].result.tools.some(tool => tool.name === 'zhicui_local_update_check'));
+  assert.equal(messages[1].result.isError, true);
+  assert.equal(JSON.parse(messages[1].result.content[0].text).error.code, 'SCOPE_DENIED');
+  assert.equal(calls, 0);
+});
+
 test('stdio MCP publishes trusted local schemas instead of drifting server schemas', {
   skip: !['win32', 'darwin'].includes(process.platform),
 }, async (t) => {

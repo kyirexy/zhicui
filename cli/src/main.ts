@@ -26,6 +26,7 @@ import { checkPrepareCapabilities, prepareLibraryMedia } from './library-prepare
 import { normalizePrepareLink, prepareDestination, prepareProgressLabel, prepareRecovery, PREPARE_AUTH_ERRORS, VIDEO_PREPARE_SCOPES } from './prepare-flow.js';
 import { StdioMcpServer } from './mcp-server.js';
 import { ProtocolWriter } from './output.js';
+import { checkRecapCapabilities, refreshRecap, RECAP_SCOPES } from './recap.js';
 import type {
   AgentActionDefinition,
   AgentEnvelope,
@@ -111,6 +112,7 @@ function helpPayload(): Record<string, unknown> {
     generic: [
       'download <url-or-share-text> [--output video.mp4] [--connect]',
       'resolve <url-or-share-text> [--refresh]',
+      'recap today|yesterday [--platform douyin|bilibili|all] [--mode like|collect|all] [--limit 50] [--connect] — 先同步，再回顾',
       'run <action_id>',
       'run wait|resume|get|cancel <run_id>',
       'run actions',
@@ -996,6 +998,36 @@ async function connectCommand(args: string[], options: GlobalOptions, writer: Pr
   else writer.result(result);
 }
 
+async function recapCommand(args: string[], options: GlobalOptions, writer: ProtocolWriter,
+  credentials: CredentialManager, client: AgentApiClient): Promise<void> {
+  const connect = takeFlag(args, '--connect');
+  const noOpen = takeFlag(args, '--no-open');
+  const platform = takeValue(args, '--platform') || 'all';
+  const mode = takeValue(args, '--mode') || 'like';
+  const timezone = takeValue(args, '--timezone') || 'Asia/Shanghai';
+  const limit = positiveInteger(takeValue(args, '--limit'), 50);
+  const day = args.shift() || 'yesterday';
+  if (args.length || !['today', 'yesterday'].includes(day) || !['douyin', 'bilibili', 'all'].includes(platform)
+      || !['like', 'collect', 'all'].includes(mode) || limit < 1 || limit > 100) {
+    throw usageError('用法：zhicui recap yesterday|today --platform douyin|bilibili|all --mode like|collect|all --limit 1–100');
+  }
+  let sequence = 0;
+  try { await checkRecapCapabilities(client); }
+  catch (error) {
+    if (!connect || !(error instanceof CliError) || !PREPARE_AUTH_ERRORS.has(error.code)) throw error;
+    await authCommand(['login', '--scopes', RECAP_SCOPES.join(','), ...(noOpen ? ['--no-open'] : [])], options, writer, credentials, client, {
+      event: event => { if (options.jsonl) writer.event({ ...event, sequence: ++sequence, terminal: false }); },
+      complete: () => writer.diagnostic('授权完成，开始同步回顾。'),
+    });
+  }
+  const data = await refreshRecap(client, { day, platform, mode, timezone, limit, timeoutMs: options.timeoutMs }, (stage, info) => {
+    writer.diagnostic(`${stage} · ${info.platform || day}${info.mode ? ` · ${info.mode}` : ''}${info.message ? ` · ${info.message}` : ''}`);
+    if (options.jsonl) writer.event({ sequence: ++sequence, event: stage, terminal: false, status: 'running', data: info });
+  });
+  if (options.jsonl) writer.event({ sequence: ++sequence, event: 'recap.completed', terminal: true, status: 'succeeded', data });
+  else writer.result(data);
+}
+
 export async function runCli(argv: string[]): Promise<number> {
   const machineHint = {
     json: argv.includes('--json'),
@@ -1015,7 +1047,7 @@ export async function runCli(argv: string[]): Promise<number> {
       writer.result({ name: '@zhicui/cli', version: CLI_VERSION });
       return EXIT_CODES.success;
     }
-    if (!['capabilities', 'resolve', 'download', 'connect'].includes(domain) && !USER_COMMAND_DOMAINS.includes(domain as (typeof USER_COMMAND_DOMAINS)[number])) {
+    if (!['capabilities', 'resolve', 'download', 'connect', 'recap'].includes(domain) && !USER_COMMAND_DOMAINS.includes(domain as (typeof USER_COMMAND_DOMAINS)[number])) {
       throw usageError(`未知命令域：${domain}`);
     }
     if (command.includes('--help') || command.includes('-h')) {
@@ -1053,6 +1085,7 @@ export async function runCli(argv: string[]): Promise<number> {
       writer.result(await client.publicCapabilities());
     }
     else if (domain === 'connect') await connectCommand(command, options, writer, credentials, client);
+    else if (domain === 'recap') await recapCommand(command, options, writer, credentials, client);
     else if (domain === 'resolve' || domain === 'download') await fastVideoCommand(domain, command, options, writer, client, credentials);
     else if (domain === 'auth') await authCommand(command, options, writer, credentials, client);
     else if (domain === 'run') await runCommand(command, options, writer, client);

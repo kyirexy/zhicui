@@ -290,6 +290,30 @@ def _unavailable(
 
 
 _CORE_DEFINITIONS: tuple[ProductActionDefinition, ...] = (
+    _read("library.recap.get", "读取每日喜欢收藏", "读取首次同步台账，包含尚无文稿的清单；不是平台真实点赞时间。", "library:read", "library_recap_get", _object({
+        "day": {"type": "string", "enum": ["today", "yesterday"]},
+        "timezone": {"type": "string", "minLength": 1, "maxLength": 64},
+        "mode": {"type": "string", "enum": ["like", "collect", "all"]},
+        "platform": {"type": "string", "enum": ["douyin", "bilibili", "all"]},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+    })),
+    ProductActionDefinition(
+        id="library.activity.record", title="保存本次平台清单",
+        description="保存用户明确同步的抖音或B站公开元数据，复用已有资料；不下载媒体、不转写、不推断点赞日期。",
+        scopes=("library:write", "local:invoke"), handler_name="library_activity_record",
+        risk=(RiskLevel.WRITE,), run_type=RunType.LONG_TASK,
+        idempotency=IdempotencyStrategy.REQUIRED, rate_limit_per_minute=12,
+        input_schema=_object({
+            "platform": {"type": "string", "enum": ["douyin", "bilibili"]},
+            "mode": {"type": "string", "enum": ["like", "collect"]},
+            "items": {"type": "array", "minItems": 1, "maxItems": 100, "items": _object({
+                "video_id": {"type": "string", "minLength": 5, "maxLength": 32, "pattern": "^[A-Za-z0-9]+$"},
+                "title": {"type": "string", "maxLength": 500},
+                "author_name": {"type": "string", "maxLength": 200},
+                "caption": {"type": "string", "maxLength": 2000},
+            }, ["video_id"])},
+        }, ["platform", "mode", "items"]),
+    ),
     _read("platform.binding.status", "平台绑定状态", "只读取当前知萃用户的平台绑定，不返回授权秘密。", "creator:read", "platform_binding_status", _object({"platform": {"type": "string", "enum": ["bilibili"]}}, ["platform"])),
     ProductActionDefinition(
         id="platform.binding.start", title="绑定平台账号", description="为当前用户发起 B站官方扫码授权，返回本人登录的网页入口。",

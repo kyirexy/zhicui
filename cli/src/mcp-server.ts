@@ -410,6 +410,9 @@ export class StdioMcpServer {
       if (action.execution_location === 'local_windows') {
         const capabilities = await this.client.capabilities();
         this.currentUserHash = capabilities.user_hash || null;
+        if (!capabilities.actions.some(current => current.id === action.id && current.execution_location === 'local_windows')) {
+          throw new CliError('SCOPE_DENIED', '当前授权已不能执行该本机操作，请重新获取工具列表');
+        }
         envelope = await this.local.invoke(
           action, args, 120_000, idempotencyKey, this.currentUserHash,
         );

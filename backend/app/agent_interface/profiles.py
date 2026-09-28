@@ -12,6 +12,8 @@ from app.core.config import settings
 # 固定清单不使用前缀匹配，新 Action 必须明确审核后才能进入 core。
 CORE_ACTION_IDS = frozenset({
     "account.me", "library.list", "library.get",
+    "library.activity.record", "library.recap.get",
+    "local.status", "local.platform.status", "local.platform.sync", "local.platform.login", "local.platform.cancel",
     "library.import_link", "library.transcript.generate", "library.media.download", "library.media.resolve",
     "creator.list", "creator.get", "creator.items.list",
     "ask.sources.list", "ask.sources.search",
@@ -27,11 +29,12 @@ CORE_ACTION_IDS = frozenset({
 CORE_SCOPE_IDS = frozenset({
     "account:read", "library:read", "library:write", "creator:read", "ask:read", "ask:run",
     "knowledge:read", "knowledge:write", "plan:read", "plan:write", "models:read",
+    "local:invoke",
 })
 CORE_LIMITATIONS = (
     "可导入明确指定的抖音、B站公开链接、提取文稿并下载视频，围绕文稿问答和整理知识与计划。",
-    "平台登录或验证限制会明确返回；暂不开放账号批量同步、画面解析、自动摘要和邮件。",
-    "暂不开放本机桥接及密码、API Key 等安全设置；问答仅使用已有资料。",
+    "可由用户明确发起本机抖音、B站喜欢收藏同步；需要同一账号的桌面客户端和本机调用授权。",
+    "平台验证需本人完成；暂不开放云端账号批量同步、画面解析、自动摘要、邮件及密码和 API Key 设置。",
 )
 
 

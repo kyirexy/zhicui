@@ -202,6 +202,22 @@ def library_media_resolve(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
         raise ActionHandlerError(exc.code, str(exc), retryable=exc.retryable) from None
 
 
+def library_activity_record(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    from app.services.agent_activity_service import record_snapshot
+    try:
+        return record_snapshot(ctx, payload)
+    except ValueError as exc:
+        raise ActionHandlerError("INVALID_INPUT", str(exc)) from exc
+
+
+def library_recap_get(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    from app.services.agent_activity_service import get_recap
+    try:
+        return get_recap(ctx.db, user_id=ctx.user.id, payload=payload)
+    except ValueError as exc:
+        raise ActionHandlerError("INVALID_INPUT", str(exc)) from exc
+
+
 def library_import_link(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
     """仅导入用户指定的公开链接；抖音/B站文稿另由显式提取 Action 发起。"""
     try:

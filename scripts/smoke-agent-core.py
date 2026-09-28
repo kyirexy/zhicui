@@ -12,7 +12,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 EXCLUDED_ACTIONS = (
     "library.transcript.batch", "creator.sync.start",
-    "analysis.catalog", "automation.status", "local.status", "models.selection.get",
+    "analysis.catalog", "automation.status", "local.media.delete", "models.selection.get",
     "account.email.status",
 )
 
@@ -56,7 +56,7 @@ def main() -> None:
     require(isinstance(source, dict) and "ZHICUI-SMOKE-94731" in str(source.get("transcript_raw") or ""), "Core 固定资料缺少现有文稿哨兵")
     transcript = invoke("library.transcript.generate", {"note_id": source_id, "operation": "transcript"})
     require(isinstance(transcript, dict) and transcript.get("already_existed") is True and "ZHICUI-SMOKE-94731" in str(transcript.get("transcript_raw") or ""), "Core 单条文稿未复用已有资料")
-    for action in ("library.import_link", "library.transcript.generate", "library.media.download"):
+    for action in ("library.import_link", "library.transcript.generate", "library.media.download", "library.activity.record", "local.platform.sync", "local.platform.status"):
         status, _ = call(f"/api/agent-interface/v1/actions/{action}")
         require(status == 200, f"Core 显式链接能力未开放：{action}")
     status, result = call(f"/api/agent-interface/v1/library/{uuid.uuid4()}/media")
@@ -80,7 +80,10 @@ def main() -> None:
         error = (tool.get("structuredContent") or {}).get("error") or {}
         require(status == 200 and tool.get("isError") is True and error.get("code") == "ACTION_NOT_FOUND", "Core 排除动作仍可通过 MCP 调用")
 
-    for scope in ("analysis:read", "automation:read", "local:invoke"):
+    recap = invoke("library.recap.get", {"day": "yesterday", "mode": "like"})
+    require(isinstance(recap, dict) and recap.get("time_basis") == "first_discovered" and isinstance(recap.get("items"), list), "Core 每日清单契约无效")
+
+    for scope in ("analysis:read", "automation:read", "models:write"):
         status, result = call("/api/agent-interface/v1/credentials/pat", {
             "name": "production-stable-capability-smoke", "scopes": [scope], "expires_in_days": 1,
         }, token=browser)

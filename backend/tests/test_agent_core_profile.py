@@ -63,7 +63,8 @@ class CoreProfileTests(unittest.TestCase):
         tools = self.client.post("/mcp", headers=self.pat(), json={
             "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {},
         }).json()["result"]["tools"]
-        self.assertEqual({tool["name"] for tool in tools}, (CORE_ACTION_IDS - {"library.media.download"}) | {"run.get", "run.events", "run.cancel"})
+        expected = {item["id"] for item in descriptors if item["available"] and item["execution_location"] == "cloud" and item["mcp_exposed"]}
+        self.assertEqual({tool["name"] for tool in tools}, expected | {"run.get", "run.events", "run.cancel"})
         self.assertEqual(manifest["remote_mcp_tool_count"], len(tools))
 
     def test_excluded_actions_cannot_be_called_by_full_scope_legacy_pat(self):
@@ -97,7 +98,7 @@ class CoreProfileTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 400, response.text)
                 self.assertEqual(response.json()["error"]["code"], "SCOPE_UNAVAILABLE")
         with self.Session() as db, patch.object(settings, "AGENT_INTERFACE_PROFILE", "full"):
-            _, _, code = create_device_authorization(db, client_name="legacy", client_type="cli", scopes=["local:invoke"])
+            _, _, code = create_device_authorization(db, client_name="legacy", client_type="cli", scopes=["automation:write"])
         with self.Session() as db, self.assertRaises(CredentialError) as caught:
             approve_device_authorization(db, user_id=self.user_id, user_code=code, approve=True)
         self.assertEqual(caught.exception.code, "SCOPE_UNAVAILABLE")
@@ -118,6 +119,7 @@ class CoreProfileTests(unittest.TestCase):
         for action, payload in (
             ("library.import_link", {"url": "https://www.douyin.com/video/7659724478275947822"}),
             ("library.transcript.generate", {"note_id": "not-owned"}),
+            ("library.activity.record", {"platform": "douyin", "mode": "like", "items": [{"video_id": "12345678", "title": "作品"}]}),
         ):
             response = self.client.post(
                 f"/api/agent-interface/v1/actions/{action}/invoke", headers=headers,
@@ -196,7 +198,9 @@ class CoreProfileTests(unittest.TestCase):
             result = readiness._check_agent_product_features(Mock())
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["release_profile"], "core")
-            self.assertIn("platform_sync", result["excluded_features"])
+            self.assertIn("cloud_platform_sync", result["excluded_features"])
+            self.assertEqual(result["local_platform_sync"]["status"], "client_required")
+            self.assertFalse(result["local_platform_sync"]["verified"])
             self.assertEqual(readiness._check_connectors(Mock())["status"], "not_required")
             self.assertEqual(readiness._check_agent_automation_runtime()["status"], "not_required")
             smtp.assert_not_called(); creator.assert_not_called()

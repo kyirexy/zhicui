@@ -12,7 +12,7 @@ from app.core.config import settings
 # 固定清单不使用前缀匹配，新 Action 必须明确审核后才能进入 core。
 CORE_ACTION_IDS = frozenset({
     "account.me", "library.list", "library.get",
-    "library.import_link", "library.transcript.generate", "library.media.download",
+    "library.import_link", "library.transcript.generate", "library.media.download", "library.media.resolve",
     "creator.list", "creator.get", "creator.items.list",
     "ask.sources.list", "ask.sources.search",
     "ask.thread.list", "ask.thread.get", "ask.thread.create",

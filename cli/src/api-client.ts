@@ -390,10 +390,16 @@ export class AgentApiClient {
     noteId: string,
     writeChunk: (chunk: Uint8Array) => Promise<void>,
     onProgress?: (bytes: number, totalBytes: number | null) => void,
+    fastMediaId?: string,
   ): Promise<{ bytes: number; content_type: string }> {
     if (!/^[A-Za-z0-9_-]{1,128}$/u.test(noteId)) {
       throw new CliError('INVALID_INPUT', '资料 ID 格式无效');
     }
+    if (fastMediaId !== undefined && !/^[A-Za-z0-9_=-]{32,12000}$/u.test(fastMediaId)) {
+      throw new CliError('INVALID_INPUT', '快速下载入口格式无效，请重新解析');
+    }
+    const mediaPath = fastMediaId ? `/api/agent-interface/v1/media/${encodeURIComponent(fastMediaId)}`
+      : `/api/agent-interface/v1/library/${encodeURIComponent(noteId)}/media`;
     let credential = await this.currentCredential();
     if (!credential) throw new CliError('AUTH_REQUIRED', '尚未授权，请先运行 zhicui auth login');
     const controller = new AbortController();
@@ -403,7 +409,7 @@ export class AgentApiClient {
     try {
       let response: Response | undefined;
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        response = await fetch(this.path(`/api/agent-interface/v1/library/${encodeURIComponent(noteId)}/media`), {
+        response = await fetch(this.path(mediaPath), {
           method: 'GET',
           headers: {
             Accept: 'video/mp4, application/octet-stream, application/json',
@@ -434,6 +440,7 @@ export class AgentApiClient {
           NOT_FOUND: '未找到当前用户的这条视频资料',
           RATE_LIMITED: '下载请求过于频繁，请稍后重试',
           MEDIA_TOO_LARGE: '视频超过下载大小限制',
+          MEDIA_EXPIRED: '下载入口已过期，请重新执行同一条 download 命令获取新入口',
           PLATFORM_AUTH_REQUIRED: '平台限制了这条视频的读取，请在知萃检查平台连接或完成验证；暂时不要连续重试',
           INTERFACE_DISABLED: '当前知萃 Agent 接口未开放',
         };

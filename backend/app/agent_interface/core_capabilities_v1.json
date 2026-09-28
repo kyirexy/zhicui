@@ -2,12 +2,12 @@
   "schema_version": 1,
   "interface_version": "v1",
   "release_profile": "core",
-  "action_count": 41,
-  "cloud_action_count": 41,
+  "action_count": 42,
+  "cloud_action_count": 42,
   "local_windows_action_count": 0,
-  "available_cloud_action_count": 41,
+  "available_cloud_action_count": 42,
   "unavailable_local_windows_action_count": 0,
-  "remote_mcp_tool_count": 43,
+  "remote_mcp_tool_count": 44,
   "scope_count": 11,
   "scope_ids": [
     "account:read",
@@ -48,6 +48,7 @@
     "library.import_link",
     "library.list",
     "library.media.download",
+    "library.media.resolve",
     "library.transcript.generate",
     "models.custom.list",
     "models.list",
@@ -65,5 +66,5 @@
     "plan.task.update",
     "plan.update"
   ],
-  "descriptor_sha256": "d62ad88e69a7e563c81589416d282563751a3987e85fbeb5e0c5124ecaa4af70"
+  "descriptor_sha256": "3525ed1652f6d2022a52d6919825387461aebf407f3d94d2a985035852bebf22"
 }

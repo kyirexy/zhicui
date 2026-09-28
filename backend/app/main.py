@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes import router
 from app.api.auth_routes import router as auth_router
+from app.api.fast_video_routes import router as fast_video_router
 from app.api.public_routes import router as public_router
 from app.api.desktop_login_routes import router as desktop_login_router
 from app.api.platform_connection_routes import router as platform_connection_router
@@ -424,6 +425,7 @@ def create_app() -> FastAPI:
     app.include_router(agent_interface_router)
     app.include_router(agent_secure_router)
     app.include_router(agent_mcp_router)
+    app.include_router(fast_video_router)
 
     # Create database tables on startup
     @app.on_event("startup")

@@ -1,5 +1,17 @@
 # @zhicui/cli
 
+## 快速下载（1.0.7 起）
+
+```bash
+zhicui download "抖音或 B站链接" --connect
+zhicui resolve "抖音或 B站链接" --json
+zhicui agent setup --client codex
+```
+
+只下载原视频时无需先导入资料或提取文稿。`--connect` 在缺少授权时打开浏览器，用户确认后接续同一条命令；仅申请 `library:read`。视频默认保存在当前目录，也可传 `--output video.mp4`。`resolve` 返回五分钟有效、绑定当前账号和凭证的下载入口；请求该同源路径时复用知萃 Bearer，不向平台发送凭证。
+
+Agent 通过 MCP 的 `library.media.resolve`（本地工具名 `zhicui_library_media_resolve`）直接发现此能力；要交付本地 MP4，调用上面的 `download` 命令。完整素材与文稿仍使用 `library prepare`。
+
 知萃普通用户能力的 Node 22 CLI 与本地 MCP 入口。它只调用版本化 Action 接口，不包含管理端、数据库、任意 Shell、Cookie、JWT、API Key 或内部视频研究工具。
 
 桌面客户端内置 CLI 和 Skill，可以在「Agent 接入」中安装到 Codex / Claude Code，再完成独立设备授权，无需安装 Node 或等待 npm 发布。独立 CLI 可从已审核的本地发行包安装；安装后执行：

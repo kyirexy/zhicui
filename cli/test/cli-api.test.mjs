@@ -148,7 +148,8 @@ test('timeout and local-unavailable use stable exit codes', async (t) => {
     { env },
   );
   assert.equal(local.code, 9);
-  assert.equal(JSON.parse(local.stdout).error.code, 'DESKTOP_BRIDGE_UNAVAILABLE');
+  assert.equal(JSON.parse(local.stdout).error.code,
+    ['win32', 'darwin'].includes(process.platform) ? 'DESKTOP_BRIDGE_UNAVAILABLE' : 'UNSUPPORTED_PLATFORM');
 });
 
 test('local aliases keep desktop inputs exact and never poll a local run through cloud APIs', {

@@ -50,7 +50,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install the Action schema dependency
-        run: python -m pip install pydantic==2.13.4
+        run: python -m pip install pydantic==2.13.4 pydantic-settings==2.14.2
 
       - name: Verify tag, package version, and main ancestry
         shell: bash

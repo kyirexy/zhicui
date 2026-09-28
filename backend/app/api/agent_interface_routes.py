@@ -384,6 +384,26 @@ def capabilities(
         return _error_response("capabilities.list", request_id, exc)
 
 
+@router.get('/media/{media_id}', include_in_schema=False)
+def download_fast_media(media_id: str, request: Request,
+    principal: AgentPrincipal = Depends(get_agent_principal), db: Session = Depends(get_db)):
+    from app.services import fast_video_service
+    action_id = 'library.media.resolve'
+    request_id = _request_id(request)
+    try:
+        definition = registry.get(action_id)
+        if definition is None or not action_is_enabled(action_id):
+            raise ProductActionError('ACTION_NOT_FOUND', '快速下载尚未开放', http_status=404)
+        require_scopes(principal, definition)
+        consume_rate_limit(db, principal=principal, definition=definition)
+        credential_id = principal.credential.id if principal.credential else None
+        return fast_video_service.stream_file(media_id, user_id=principal.user.id, credential_id=credential_id)
+    except agent_video_link_service.VideoLinkError as exc:
+        return _error_response(action_id, request_id, ProductActionError(exc.code, str(exc), http_status=exc.http_status, retryable=exc.retryable))
+    except ProductActionError as exc:
+        return _error_response(action_id, request_id, exc)
+
+
 @router.get("/library/{note_id}/media", include_in_schema=False)
 def download_library_media(
     note_id: str,

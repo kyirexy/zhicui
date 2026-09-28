@@ -192,6 +192,16 @@ def library_get(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
     return row.to_dict()
 
 
+def library_media_resolve(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    from app.services import fast_video_service
+    try:
+        return fast_video_service.resolve(_text(payload, 'url', required=True, maximum=2000),
+            user_id=ctx.user.id, credential_id=ctx.credential.id if ctx.credential else None,
+            refresh=bool(payload.get('refresh')))
+    except agent_video_link_service.VideoLinkError as exc:
+        raise ActionHandlerError(exc.code, str(exc), retryable=exc.retryable) from None
+
+
 def library_import_link(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
     """仅导入用户指定的公开链接；抖音/B站文稿另由显式提取 Action 发起。"""
     try:

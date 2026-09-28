@@ -515,6 +515,14 @@ _CORE_DEFINITIONS: tuple[ProductActionDefinition, ...] = (
         error_codes=("LINK_IMPORT_FAILED", *_LINK_MEDIA_ERROR_CODES),
     ),
     ProductActionDefinition(
+        id="library.media.resolve", title="快速获取视频下载入口",
+        description="解析用户明确提供的抖音或B站公开视频链接，立即返回五分钟有效且绑定当前授权的 media_id；无需导入资料、提取文稿或等待完整下载。用 zhicui download <链接> 保存视频。",
+        scopes=("library:read",), handler_name="library_media_resolve",
+        input_schema=_object({"url": {"type": "string", "minLength": 1, "maxLength": 2000}, "refresh": {"type": "boolean"}}, ["url"]),
+        rate_limit_per_minute=12,
+        error_codes=("MEDIA_EXPIRED", *_LINK_MEDIA_ERROR_CODES),
+    ),
+    ProductActionDefinition(
         id="library.media.download", title="下载视频文件",
         description="通过鉴权直连下载当前用户资料的原视频文件；不返回临时媒体地址。",
         scopes=("library:read",), handler_name=None,

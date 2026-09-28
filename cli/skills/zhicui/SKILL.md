@@ -22,6 +22,8 @@
 
 ## 将用户指定的视频交给本地创作工具
 
+- 只要视频文件时优先用 `zhicui download '<链接>' --connect --json`（CLI 1.0.7 起），默认保存在当前目录。不要先导入或提取文稿。仅需下载入口时用 `zhicui resolve '<链接>' --json`，或发现并调用 `library.media.resolve` / `zhicui_library_media_resolve` MCP 工具；只需 `library:read`。入口绑定当前凭证，五分钟有效，不要把 PAT 放入 URL。
+
 - CLI 1.0.5 起优先在目标项目目录使用 `zhicui library prepare '<链接或整段分享文字>' --connect --timeout 10m --jsonl`，获取视频、文稿与 `manifest.json`；缺少 `library:read`、`library:write` 时由用户在浏览器确认后接续原任务，不需要向聊天粘贴 PAT。
 - 未指定 `--output` 时素材保存在当前项目的 `zhicui-media`；相同 profile、服务和链接重复运行同一命令即可恢复。若明确指定 `--output <新目录>`，恢复时仍加 `--resume`。失败时优先使用返回的 `resume_argv`，不要自己拼接 Shell 命令。
 - 需要原视频而不重新提取时，使用 `zhicui library download <note_id> --output <新文件.mp4>`。这些固定命令不授权任意 Shell、文件删除或读取其他用户资料。

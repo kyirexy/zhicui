@@ -48,12 +48,14 @@ export const AGENT_HANDOFF_PROMPT = `请帮我接入并使用知萃。先检查�
 export const CORE_AGENT_LOGIN_COMMAND = "zhicui auth login --scopes 'account:read,library:read,ask:read,ask:run'";
 export const VIDEO_AGENT_LOGIN_COMMAND = "zhicui auth login --scopes 'account:read,library:read,library:write'";
 export const VIDEO_AGENT_HANDOFF_PROMPT = `请用知萃准备我接下来指定的抖音或 B站视频，并把素材交给本机 Hypit。
+如果只需要原视频，CLI 1.0.7 起优先运行 zhicui download '<链接>' --connect --json，一条命令直接下载，不先提取文稿；只需 library:read 权限。只想获取下载入口时用 zhicui resolve '<链接>' --json，或调用已发现的 library.media.resolve / zhicui_library_media_resolve MCP 工具。
 先检查知萃 CLI 版本；1.0.5 及以上可使用 zhicui library prepare '<我提供的链接或分享文字>' --connect --jsonl --timeout 10m。从我的 Hypit 项目目录运行，素材会保存在其中的 zhicui-media 目录。
 如需授权，请让我在知萃浏览器页面确认；确认后当前任务自动继续，不要让我在聊天中粘贴 PAT、密码或 Cookie。未指定视频前不要运行提取。
 持续向我说明识别视频、提取文稿、下载视频的真实进度。中断后再次运行同一条命令即可继续；不要覆盖或删除原素材。遇到平台验证限制时保留进度并提示处理，不要连续重试。
 只有 source.mp4 和 manifest.json 实际生成且通过校验后，才告诉我素材就绪，再交给本机 Hypit。素材就绪不代表复刻视频已经生成。`;
 
 export const AGENT_CORE_HANDOFF_PROMPT = `请帮我连接知萃的基础接入能力。先检查当前会话能否发现知萃 MCP 工具，并读取可用能力与已授权权限。
+只下载明确指定的公开视频时，可用 zhicui download '<链接>' --connect --json；快速入口能力为 library.media.resolve，只需 library:read，无需导入资料或提取文稿。
 已有知萃 CLI 时，运行 ${CORE_AGENT_LOGIN_COMMAND}，由我在浏览器中核对并确认授权。也可以在 https://luxai.cn/agent-access 创建按需授权的个人访问令牌；不要让我把令牌粘贴进聊天。
 目前可以读取知萃已保存的资料和文稿，基于已有文稿问答，并在获得相应权限后整理知识和计划。请先只读查看我的资料，等我指定内容后再问答或写入。
 基础接入已开放抖音、B站公开链接的导入、文稿提取和视频下载，对应 library.import_link、library.transcript.generate、library.media.download。只处理我明确指定的公开链接；操作前检查可用能力，并确认已获得 library:write 授权。缺少权限时，引导我在浏览器授权页按需追加授权，或创建包含该权限的个人访问令牌；不要自动扩大默认权限。

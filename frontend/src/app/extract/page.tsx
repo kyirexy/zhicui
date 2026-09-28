@@ -144,6 +144,8 @@ export default function SingleLinkExtractPage() {
         </ul>
       </header>
 
+      <Link href="/video-download" className={styles.batchLink} style={{ marginBottom: 20 }}>只需要视频文件？快速获取下载链接 <ArrowRight size={16} aria-hidden="true" /></Link>
+
       <section className={styles.workspace} aria-labelledby="single-link-start-title">
         <div className={styles.workspaceHeader}>
           <span className={styles.stepIndex} aria-hidden="true">01</span>

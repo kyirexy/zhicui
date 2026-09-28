@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.7
+
+- 新增 `zhicui download <链接> [--connect]` 和 `zhicui resolve <链接>`：直接获取下载入口，不要求导入资料、提取文稿或写权限；复用系统凭证、流式原子下载、单一 JSONL 终态。
+- MCP 新增 `library.media.resolve`（stdio 名称 `zhicui_library_media_resolve`），仅需 `library:read`，下载入口绑定账号与凭证并在五分钟后失效。
+
+- 补全 Linux 发布任务的 Action schema 依赖；桥接测试分别验证 Windows/Mac 可用路径和 Linux 不开放本机桥接的实际行为。
+
 ## 1.0.6
 
 - 保留 1.0.5 的完整使用流程改进。发布环境独立安装 npm，避免原地升级 npm 时缺失依赖；1.0.5 的失败发布标签保持不变。

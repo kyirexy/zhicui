@@ -215,14 +215,15 @@ test('stdio MCP merges a fixed local action only through a live loopback bridge'
   const result = await runCli(['mcp', 'serve', '--stdio'], { env, input });
   assert.equal(result.code, 0, result.stderr);
   const messages = result.stdout.trim().split(/\r?\n/u).map(JSON.parse);
+  const supportsDesktop = ['win32', 'darwin'].includes(process.platform);
   assert.deepEqual(messages[0].result.tools.map((tool) => tool.name), [
     'zhicui_run_get',
     'zhicui_run_events',
-    'zhicui_local_update_check',
+    ...(supportsDesktop ? ['zhicui_local_update_check'] : []),
   ]);
   assert.ok(messages[1]?.result, JSON.stringify(messages));
-  assert.equal(messages[1].result.isError, false);
-  assert.equal(localCalls, 1);
+  assert.equal(messages[1].result.isError, !supportsDesktop);
+  assert.equal(localCalls, supportsDesktop ? 1 : 0);
   assert.doesNotMatch(result.stdout, new RegExp(bridgeToken));
 });
 

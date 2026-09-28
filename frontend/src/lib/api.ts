@@ -533,6 +533,22 @@ export async function downloadNoteVideo(
   return readVideoDownload(response, onProgress, signal);
 }
 
+export interface FastVideoResult {
+  title: string; author: string; platform: string; video_id: string;
+  media_id: string; media_url: string; expires_in: number; cache_hit: boolean; resolve_ms: number;
+}
+
+export function resolveFastVideo(url: string, refresh = false, signal?: AbortSignal): Promise<ApiResponse<FastVideoResult>> {
+  return request<FastVideoResult>('/api/video/fast/resolve', { method: 'POST', body: JSON.stringify({ url, refresh }), signal });
+}
+
+export async function downloadFastVideo(mediaId: string, signal?: AbortSignal, onProgress?: (progress: VideoDownloadProgress) => void): Promise<Blob> {
+  const response = await sessionFetch(`${API_BASE}/api/video/fast/file/${encodeURIComponent(mediaId)}`, {
+    headers: authHeaders({ Accept: 'video/mp4' }), redirect: 'error', cache: 'no-store', signal,
+  });
+  return readVideoDownload(response, onProgress, signal);
+}
+
 export async function askNote(
   noteId: string,
   question: string,

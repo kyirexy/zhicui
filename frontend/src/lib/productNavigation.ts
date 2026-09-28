@@ -2,6 +2,7 @@ export type ProductDestinationId =
   | 'home'
   | 'library'
   | 'extract'
+  | 'video-download'
   | 'creators'
   | 'harness'
   | 'studio'
@@ -101,7 +102,10 @@ export const AGENT_ACCESS_DESTINATION: ProductDestination = {
 export const DESKTOP_PRODUCT_DESTINATIONS: ProductDestination[] = PRODUCT_DESTINATIONS.flatMap(
   (destination) => {
     if (destination.id === 'library') {
-      return [destination, SINGLE_LINK_EXTRACT_DESTINATION, CREATOR_DESTINATION];
+      return [destination, SINGLE_LINK_EXTRACT_DESTINATION, CREATOR_DESTINATION, {
+        id: 'video-download', href: '/video-download', label: '视频下载', mobileLabel: '下载',
+        description: '粘贴链接，快速获取原视频', group: 'knowledge-flow',
+      }];
     }
     if (destination.id === 'plans') {
       return [destination, STUDIO_DESTINATION, AGENT_ACCESS_DESTINATION];
@@ -117,6 +121,7 @@ export function isProductDestinationActive(
   if (destination === 'home') return pathname === '/';
   if (destination === 'plans') return pathname.startsWith('/plans');
   if (destination === 'extract') return pathname.startsWith('/extract');
+  if (destination === 'video-download') return pathname.startsWith('/video-download');
   if (destination === 'creators') return pathname.startsWith('/library/creators');
   if (destination === 'library') return pathname.startsWith('/library');
   if (destination === 'harness') return pathname.startsWith('/harness');

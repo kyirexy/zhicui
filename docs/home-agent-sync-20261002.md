@@ -15,4 +15,13 @@
 - TypeScript 和 Next.js 生产构建通过，生成 44 个页面。
 - 隔离浏览器使用真实生产构建与受控 API／桌面桥夹具，验证采集 → 保存 20/50 → 完成 50 条、喜欢数量 451 → 501、部分失败、分类顺序以及 1440/1024 像素布局；无页面运行时错误。不将夹具验证描述成真实平台采集。
 
-本地证据：`.artifacts/home-agent-sync-*.log`、`.artifacts/home-agent-sync-browser.json` 和对应截图。生产部署与公网验证结果在发布完成后补记。
+本地证据：`.artifacts/home-agent-sync-*.log`、`.artifacts/home-agent-sync-browser.json` 和对应截图。
+
+生产发布（北京时间 2026-10-02）：
+
+- 应用提交 `7b3798a6ca5c406d79dccb539524e2f18804b500`，Jenkins `313` 完成 dark 发布；同一加密备份的隔离恢复及双启动演练通过，临时数据库已清理。
+- 演练证据 `agent-schema-rehearsal-20261002T034047Z-7b3798a6ca5c.json`；正式 core 发布证据 `manual-home-sync-core-7b3798a.json`，状态 `succeeded`，无需回滚。Agent 接口最终验证为 `core`，专用冒烟账号临时密码已恢复。
+- 公网 build marker `7b3798a6ca5c-20261002034713`。health、readiness、权限边界、下载哈希、真实 AI SSE／引用、Action／PAT／MCP 验证全部通过。历史构建目录清理遇到跨账号文件权限警告，未影响本次运行版本及发布闸门。
+- 使用当前桌面客户端 1.1.16 和既有 CLI 1.0.12 的真实授权执行 `zhicui recap today --platform douyin --mode like --limit 1 --jsonl --timeout 3m`：完成本机读取、云端保存及回顾，复用 1 条、失败 0 条。此验证只读取前 1 条，不代表全量同步或精确点赞日期。
+- 正式库只读核验：新同步记录 `sync-a8dd274005d345b4ac7094153351af27` 为成功，已出现在首页读取的同步记录服务中；当前账号的 150 条 Agent 抖音喜欢记录全部进入客户端目录投影。没有重写原始日期或自动提取文稿。
+- 真实 CLI 记录证据为 `.artifacts/home-agent-sync-live-cli.jsonl`，正式数据只读核验为 `.artifacts/home-agent-sync-production.json`。当前浏览器控制通道不可用，客户端显示及自动刷新由前述生产构建的浏览器夹具验证，不声称已目视操作用户正在运行的原生窗口。

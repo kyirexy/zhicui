@@ -2,8 +2,8 @@ export type HomeChannelPlatform = 'douyin' | 'bilibili';
 export type HomeChannelMode = 'collect' | 'like' | 'post' | 'import';
 
 const PLATFORM_MODE_ORDER: Record<HomeChannelPlatform, readonly HomeChannelMode[]> = {
-  douyin: ['collect', 'like', 'post'],
-  bilibili: ['collect', 'like', 'import'],
+  douyin: ['like', 'collect', 'post'],
+  bilibili: ['like', 'collect', 'import'],
 };
 
 /**

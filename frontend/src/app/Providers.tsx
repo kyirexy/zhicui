@@ -7,6 +7,7 @@ import { VideoAnalysisProvider } from '@/lib/hooks/VideoAnalysisContext';
 import { CreatorSyncProvider } from '@/lib/hooks/CreatorSyncContext';
 import ClientErrorReporter from '@/components/ClientErrorReporter';
 import DesktopBuildBadge from '@/components/DesktopBuildBadge';
+import { LibrarySyncProvider } from '@/lib/hooks/LibrarySyncContext';
 
 export default function Providers({ children }: { children: React.ReactNode }) {
   return (
@@ -17,7 +18,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
         <VideoAnalysisProvider>
           <CreatorSyncProvider>
             <ExtractionProvider>
-              {children}
+              <LibrarySyncProvider>{children}</LibrarySyncProvider>
             </ExtractionProvider>
           </CreatorSyncProvider>
         </VideoAnalysisProvider>

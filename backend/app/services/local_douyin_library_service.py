@@ -472,6 +472,11 @@ def list_items(
         )
         item["can_extract"] = True
         result.append(item)
+    # CLI 保存的是同一账号的 Note + 来源台账。旧版 CLI 没有完整桌面快照，
+    # 仍应在目录中看到已保存的视频；已有优质快照优先，不能被缺失封面覆盖。
+    from app.services.agent_catalog_service import list_douyin_items
+    result.extend(item for item in list_douyin_items(db, user_id=user_id, source_mode=source_mode)
+                  if item["aweme_id"] not in emitted)
     return result
 
 
@@ -486,7 +491,9 @@ def get_item(db: Session, *, user_id: str, video_id: str) -> dict[str, Any] | No
         )
     ).scalar_one_or_none()
     if snapshot is None:
-        return None
+        from app.services.agent_catalog_service import list_douyin_items
+        items = list_douyin_items(db, user_id=user_id, video_id=clean_id)
+        return items[0] if items else None
     ledgers = db.execute(
         select(VideoSourceLedger)
         .where(
@@ -500,7 +507,9 @@ def get_item(db: Session, *, user_id: str, video_id: str) -> dict[str, Any] | No
     )]
     ledger = eligible[0] if eligible else None
     if ledger is None and not _is_displayable_snapshot(snapshot):
-        return None
+        from app.services.agent_catalog_service import list_douyin_items
+        items = list_douyin_items(db, user_id=user_id, video_id=clean_id)
+        return items[0] if items else None
     item = snapshot.to_library_item(
         source_mode=ledger.source_mode if ledger else "unknown",
         source_rank=ledger.source_rank if ledger else None,

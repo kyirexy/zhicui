@@ -66,6 +66,7 @@ def record_snapshot(ctx, payload):
             video_id = raw["video_id"]
             if video_id in hidden:
                 result["skipped"] += 1
+                library_sync_service.update_run_progress(db, sync, result)
                 continue
             note = note_service.get_note_by_video_id(db, video_id, user_id)
             created = note is None
@@ -118,6 +119,7 @@ def record_snapshot(ctx, payload):
                 if exc.code == "PLATFORM_AUTH_REQUIRED":
                     result["failed"] += len(items) - index - 1
                     break
+            library_sync_service.update_run_progress(db, sync, result)
             append_event(db, run=ctx.run, event_type="activity.recording", status="running",
                          data={"processed": index + 1, "total": len(items), "accepted": result["accepted"]})
         library_sync_service.finish_run(db, sync, result)

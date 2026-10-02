@@ -204,6 +204,23 @@ def finish_run(
     return current
 
 
+def update_run_progress(db: Session, run: LibrarySyncRun, result: dict[str, Any]) -> None:
+    """保存阶段的计数供客户端读取；只有原尝试可更新，不将采集成功当成落库完成。"""
+    attempt = getattr(run, "_sync_attempt", run.attempt_count)
+    current = db.scalar(select(LibrarySyncRun).where(
+        LibrarySyncRun.id == run.id, LibrarySyncRun.user_id == run.user_id,
+    ).with_for_update().execution_options(populate_existing=True))
+    if (current is None or current.status != "running" or current.finished_at is not None
+            or current.attempt_count != attempt or getattr(run, "_sync_duplicate_running", False)):
+        db.commit()
+        return
+    for key, field in (("accepted", "accepted"), ("created", "created"), ("reused", "reused"),
+                       ("skipped", "skipped"), ("ready", "ready"), ("failed", "failed_count")):
+        setattr(current, field, max(getattr(current, field), _count(result.get(key, 0), current.requested_count)))
+    current.updated_at = _utcnow()
+    db.commit()
+
+
 def list_runs(db: Session, *, user_id: str, limit: int = 20) -> list[dict[str, Any]]:
     rows = db.scalars(select(LibrarySyncRun).where(LibrarySyncRun.user_id == user_id)
                       .order_by(LibrarySyncRun.started_at.desc(), LibrarySyncRun.id.desc())

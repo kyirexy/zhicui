@@ -718,8 +718,8 @@ export async function getDouyinLibraryStatus(): Promise<ApiResponse<DouyinLibrar
   return request<DouyinLibraryStatus>('/api/library/douyin/status');
 }
 
-export async function listLibrarySyncRuns(limit = 20): Promise<ApiResponse<{ items: LibrarySyncRun[]; total: number }>> {
-  return request(`/api/library/sync-runs?limit=${Math.max(1, Math.min(20, limit))}`);
+export async function listLibrarySyncRuns(limit = 20, signal?: AbortSignal): Promise<ApiResponse<{ items: LibrarySyncRun[]; total: number }>> {
+  return request(`/api/library/sync-runs?limit=${Math.max(1, Math.min(20, limit))}`, { signal });
 }
 
 async function bilibiliJobRequest<T>(endpoint: string, options?: RequestInit, outerSignal?: AbortSignal): Promise<ApiResponse<T>> {

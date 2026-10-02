@@ -26,6 +26,7 @@ import {
   listPlatformLibraryItems,
 } from '@/lib/api';
 import LibraryCoverImage from '@/components/LibraryCoverImage';
+import HomeSyncActivity from '@/components/HomeSyncActivity';
 import DailyRecap, { type DailyRecapStatus } from '@/components/DailyRecap';
 import { HomeVideoActionCard, HomeVideoActionsLayer, useHomeVideoInteractions } from '@/components/HomeVideoActions';
 import { useHomeVideoActions } from '@/lib/hooks/useHomeVideoActions';
@@ -85,18 +86,18 @@ const CHANNEL_PLATFORMS: Array<{
     label: '抖音',
     description: '喜欢、收藏与自己的作品',
     modes: [
-      { key: 'collect', label: '收藏', empty: '还没有同步抖音收藏', Icon: Lockers },
       { key: 'like', label: '喜欢', empty: '还没有同步抖音喜欢', Icon: Heart },
+      { key: 'collect', label: '收藏', empty: '还没有同步抖音收藏', Icon: Lockers },
       { key: 'post', label: '作品', empty: '还没有同步自己的抖音作品', Icon: VideoCamera },
     ],
   },
   {
     key: 'bilibili',
     label: 'B站',
-    description: '收藏、喜欢与导入视频',
+    description: '喜欢、收藏与导入视频',
     modes: [
-      { key: 'collect', label: '收藏', empty: '还没有同步 B站收藏', Icon: Lockers },
       { key: 'like', label: '喜欢', empty: '还没有同步 B站喜欢', Icon: Heart },
+      { key: 'collect', label: '收藏', empty: '还没有同步 B站收藏', Icon: Lockers },
       { key: 'import', label: '导入', empty: '还没有导入 B站视频', Icon: VideoCamera },
     ],
   },
@@ -212,8 +213,8 @@ export default function WorkspaceActionHome() {
     () => emptyChannelRecord<number | null>(null),
   );
   const [activeModes, setActiveModes] = useState<Record<ChannelPlatform, ChannelMode>>({
-    douyin: 'collect',
-    bilibili: 'collect',
+    douyin: 'like',
+    bilibili: 'like',
   });
   const touchedModes = useRef<Set<ChannelPlatform>>(new Set());
   const loadedUserId = useRef<string | null>(null);
@@ -256,7 +257,7 @@ export default function WorkspaceActionHome() {
       setReadyCount(null);
       setChannelPreviews(emptyChannelRecord<ChannelPreview[]>([]));
       setChannelTotals(emptyChannelRecord<number | null>(null));
-      setActiveModes({ douyin: 'collect', bilibili: 'collect' });
+      setActiveModes({ douyin: 'like', bilibili: 'like' });
       setLoading(true);
     }
     const cached = readHomeCache(user.id);
@@ -293,7 +294,7 @@ export default function WorkspaceActionHome() {
           readyCount: nextReadyCount,
           channelPreviews: { ...nextPreviews },
           channelTotals: { ...nextTotals },
-          activeModes: previous?.activeModes || { douyin: 'collect', bilibili: 'collect' },
+          activeModes: previous?.activeModes || { douyin: 'like', bilibili: 'like' },
         },
       };
     };
@@ -616,6 +617,8 @@ export default function WorkspaceActionHome() {
           </div>
         </div>
       </section>
+
+      <HomeSyncActivity />
 
       <div className={styles.dailyCards} aria-label="每日视频分析">
         <DailyRecap kind="yesterday" launchToken={yesterdayRecapLaunch?.userId === user?.id ? yesterdayRecapLaunch?.token : 0} onStatusChange={setYesterdayStatus} videoActions={videoActions} videoInteractions={videoInteractions} />

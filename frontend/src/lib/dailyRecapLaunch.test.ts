@@ -168,6 +168,7 @@ function harness() {
         };
         if (name === '@/lib/dailyRecapProgress') return dailyProgress;
         if (name.endsWith('.module.css')) return { __esModule: true, default: new Proxy({}, { get: (_, key) => String(key) }) };
+        if (name === '@/components/HomeSyncActivity') return 'sync-activity';
         throw new Error(`未配置组件依赖：${name}`);
       },
     });

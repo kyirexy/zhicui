@@ -21,12 +21,13 @@ test('B站第三类只接收明确的导入来源', () => {
   );
 });
 
-test('没有内容时默认收藏，有内容时按稳定顺序选择首个真实分类', () => {
+test('喜欢优先，无内容时默认喜欢，只有其他来源时展示实际存在的分类', () => {
   assert.equal(firstPopulatedHomeMode('douyin', {
     collect: 0,
     like: 0,
     post: 0,
-  }), 'collect');
+  }), 'like');
+  assert.equal(firstPopulatedHomeMode('bilibili', { collect: 49, like: 20 }), 'like');
   assert.equal(firstPopulatedHomeMode('douyin', {
     collect: 0,
     like: 7,

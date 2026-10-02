@@ -14,7 +14,7 @@ from app.models.library_sync import LibrarySyncRun
 from app.models.media_extraction_outcome import MediaExtractionOutcome
 from app.models.note import Note
 from app.models.video_source_ledger import VideoSourceLedger
-from app.services import agent_activity_service as activity, daily_recap_service
+from app.services import agent_activity_service as activity, daily_recap_service, local_douyin_library_service, platform_library_service
 from app.services.product_action_registry import registry
 from app.services.product_action_run_service import ActionContext, ProductActionError, _validate_input
 
@@ -84,6 +84,47 @@ class AgentActivityTests(unittest.TestCase):
         saved = activity.record_snapshot(self.context(), self.payload())
         self.assertEqual(saved["skipped"], 1)
         self.assertEqual(self.db.query(Note).count(), 0)
+
+    def test_cli_douyin_snapshot_is_visible_in_home_catalog_without_transcription(self):
+        saved = activity.record_snapshot(self.context(), self.payload())
+        items = local_douyin_library_service.list_items(self.db, user_id=self.user.id, source_mode="like")
+        self.assertEqual([item["aweme_id"] for item in items], saved["video_ids"])
+        self.assertEqual(items[0]["provider"], "agent-sync")
+        self.assertIsNone(items[0]["source_rank"])
+        self.assertEqual(items[0]["cover_url"], "")
+        self.assertEqual(local_douyin_library_service.list_items(self.db, user_id=self.user.id, source_mode="collect"), [])
+        self.assertEqual(local_douyin_library_service.list_items(self.db, user_id=self.other.id, source_mode="like"), [])
+        detail = local_douyin_library_service.get_item(self.db, user_id=self.user.id, video_id=saved["video_ids"][0])
+        self.assertEqual(detail["title"], "真实作品标题")
+        self.assertEqual(self.db.query(Note).first().transcript_raw, "")
+
+    def test_bilibili_agent_catalog_retains_both_memberships_without_fake_ready_status(self):
+        payload = {"platform": "bilibili", "mode": "like", "items": [{"video_id": "BV1234567890", "title": "B站作品"}]}
+        first = activity.record_snapshot(self.context(), payload)
+        activity.record_snapshot(self.context(), {**payload, "mode": "collect"})
+        for mode in ("like", "collect"):
+            notes = platform_library_service.list_notes(self.db, user_id=self.user.id, platform="bilibili", source_mode=mode)
+            self.assertEqual([note.id for note in notes], [first["items"][0]["note_id"]])
+            item = platform_library_service.serialize_item(notes[0], include_note=False)
+            self.assertCountEqual(item["source_modes"], ["like", "collect"])
+            self.assertFalse(item["speech_ready"])
+            self.assertEqual(item["transcript_chars"], 0)
+        self.assertEqual(platform_library_service.list_notes(self.db, user_id=self.other.id, platform="bilibili"), [])
+
+    def test_cloud_sync_progress_is_observable_before_completion(self):
+        progress = []
+        original = activity.library_sync_service.update_run_progress
+        def record(db, sync, result):
+            original(db, sync, result)
+            progress.append(activity.library_sync_service.list_runs(db, user_id=self.user.id)[0])
+        payload = self.payload()
+        payload["items"].append({"video_id": "7659724478275947999", "title": "第二条"})
+        with patch.object(activity.library_sync_service, "update_run_progress", side_effect=record):
+            activity.record_snapshot(self.context(), payload)
+        self.assertEqual([item["accepted"] for item in progress], [1, 2])
+        self.assertTrue(all(item["status"] == "running" for item in progress))
+        self.assertEqual(progress[0]["pending_count"], 1)
+        self.assertEqual(activity.library_sync_service.list_runs(self.db, user_id=self.user.id)[0]["status"], "succeeded")
 
     def test_platform_refusal_stops_remaining_metadata_requests(self):
         payload = {"platform": "bilibili", "mode": "like", "items": [{"video_id": "BV1234567890"}, {"video_id": "BV1234567891"}]}

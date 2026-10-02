@@ -132,6 +132,9 @@ def _transcript_ready_for(note: Note) -> bool | None:
 
 
 def _source_meta(note: Note) -> dict[str, Any]:
+    catalog_meta = getattr(note, "_library_source_meta", None)
+    if isinstance(catalog_meta, dict):
+        return catalog_meta
     source_meta = _load_payload(note).get("source_meta")
     return source_meta if isinstance(source_meta, dict) else {}
 
@@ -513,7 +516,7 @@ def cover_target(db: Session, note_id: str) -> str:
     platform = str(meta.get("platform") or "").strip()
     if platform not in {"bilibili", "douyin"}:
         return ""
-    if platform == "bilibili" and meta.get("source_kind") != SOURCE_KIND:
+    if platform == "bilibili" and meta.get("source_kind") not in {SOURCE_KIND, "agent-link-import"}:
         return ""
     return str(meta.get("cover_url") or "").strip()
 
@@ -537,7 +540,7 @@ def _find_existing(
     candidates = query.all()
     for note in candidates:
         meta = _source_meta(note)
-        if meta.get("source_kind") == SOURCE_KIND and meta.get("platform") == platform:
+        if meta.get("source_kind") in {SOURCE_KIND, "agent-link-import"} and meta.get("platform") == platform:
             return note
     return None
 
@@ -1063,18 +1066,30 @@ def list_notes(
         .order_by(Note.created_at.desc(), Note.id.asc())
         .all()
     )
+    ledgers = video_source_ledger_service.list_by_video_ids(
+        db, user_id=user_id, video_ids=[note.video_id for note, _, _ in candidates],
+    )
     result = []
     for note, chars, ready in candidates:
         note._list_transcript_chars = chars  # type: ignore[attr-defined]
         note._list_transcript_ready = bool(ready)  # type: ignore[attr-defined]
-        meta = _source_meta(note)
-        if meta.get("source_kind") != SOURCE_KIND:
+        meta = _load_payload(note).get("source_meta") or {}
+        if not isinstance(meta, dict) or meta.get("source_kind") not in {SOURCE_KIND, "agent-link-import"}:
+            continue
+        if meta.get("platform") not in SUPPORTED_PLATFORMS:
             continue
         if platform != "all" and meta.get("platform") != platform:
             continue
+        memberships = [row.source_mode for row in ledgers.get(note.video_id, []) if row.source_mode in _ACCOUNT_SOURCE_MODES]
+        agent_catalog = meta.get("source_kind") == "agent-link-import" and bool(memberships)
+        meta = {**meta, "source_modes": _source_modes(meta.get("source_modes"), meta.get("source_mode"), memberships)}
+        if source_mode and source_mode in meta["source_modes"]:
+            meta["source_mode"] = source_mode
+        # 只用于列表投影，不改写用户摘要或已有可信来源排名。
+        note._library_source_meta = meta
         if source_mode and source_mode != str(meta.get("source_mode") or "import") and source_mode not in _source_modes(meta.get("source_modes")):
             continue
-        if meta.get("platform") == "bilibili" and not _is_complete_bilibili_note(
+        if not agent_catalog and meta.get("platform") == "bilibili" and not _is_complete_bilibili_note(
             note,
             transcript_ready=bool(ready),
         ):
@@ -1173,7 +1188,7 @@ def serialize_item(
 
 def get_import(db: Session, *, user_id: str, note_id: str) -> Note | None:
     note = note_service.get_note(db, note_id, user_id=user_id)
-    return note if note is not None and _source_meta(note).get("source_kind") == SOURCE_KIND else None
+    return note if note is not None and _source_meta(note).get("source_kind") in {SOURCE_KIND, "agent-link-import"} and media_platform(note) in SUPPORTED_PLATFORMS else None
 
 
 def get_workspace(

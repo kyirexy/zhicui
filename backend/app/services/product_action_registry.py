@@ -539,12 +539,12 @@ _CORE_DEFINITIONS: tuple[ProductActionDefinition, ...] = (
         error_codes=("LINK_IMPORT_FAILED", *_LINK_MEDIA_ERROR_CODES),
     ),
     ProductActionDefinition(
-        id="library.media.resolve", title="快速获取视频下载入口",
-        description="解析用户明确提供的抖音或B站公开视频链接，立即返回五分钟有效且绑定当前授权的 media_id；无需导入资料、提取文稿或等待完整下载。用 zhicui download <链接> 保存视频。",
+        id="library.media.resolve", title="快速获取视频或音频下载入口",
+        description="解析抖音或B站公开视频，返回五分钟有效且绑定当前授权的 media_id；不导入资料、不转录。kind=audio 提取原声 MP3（包含人声与配乐，不分离 BGM），无音轨返回 NO_AUDIO。CLI 用 zhicui audio <链接> 或 zhicui download <链接>。",
         scopes=("library:read",), handler_name="library_media_resolve",
-        input_schema=_object({"url": {"type": "string", "minLength": 1, "maxLength": 2000}, "refresh": {"type": "boolean"}}, ["url"]),
+        input_schema=_object({"url": {"type": "string", "minLength": 1, "maxLength": 2000}, "refresh": {"type": "boolean"}, "kind": {"type": "string", "enum": ["video", "audio"]}}, ["url"]),
         rate_limit_per_minute=12,
-        error_codes=("MEDIA_EXPIRED", *_LINK_MEDIA_ERROR_CODES),
+        error_codes=("MEDIA_EXPIRED", "NO_AUDIO", *_LINK_MEDIA_ERROR_CODES),
     ),
     ProductActionDefinition(
         id="library.media.download", title="下载视频文件",

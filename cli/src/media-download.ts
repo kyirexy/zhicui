@@ -12,9 +12,11 @@ export async function downloadLibraryFile(
   onProgress?: (bytes: number, totalBytes: number | null) => void,
   beforePublish?: (result: { bytes: number; sha256: string; content_type: string }) => Promise<void>,
   fastMediaId?: string,
+  kind: 'video' | 'audio' = 'video',
 ): Promise<{ output: string; bytes: number; sha256: string; content_type: string }> {
   const outputPath = resolve(output);
-  if (extname(outputPath).toLowerCase() !== '.mp4') throw usageError('下载目标必须是新的 .mp4 文件');
+  const extension = kind === 'audio' ? '.mp3' : '.mp4';
+  if (extname(outputPath).toLowerCase() !== extension) throw usageError(`下载目标必须是新的 ${extension} 文件`);
   if (!(await stat(dirname(outputPath)).catch(() => null))?.isDirectory()) {
     throw usageError('下载目标目录不存在，请先创建目录');
   }
@@ -29,7 +31,7 @@ export async function downloadLibraryFile(
     const downloaded = await client.downloadLibraryMedia(noteId, async (chunk) => {
       await handle.writeFile(chunk);
       digest.update(chunk);
-    }, onProgress, fastMediaId);
+    }, onProgress, fastMediaId, kind);
     await handle.sync();
     await handle.close();
     const result = { ...downloaded, sha256: digest.digest('hex') };

@@ -36,3 +36,36 @@ test('one short command downloads without import or ASR; resolve only returns an
   assert.equal(parses,2); assert.equal(downloads,1);
   assert.doesNotMatch(run.stdout+run.stderr,/zcpat_fast_fixture/);
 });
+
+
+test('audio is one authenticated command, validates MP3, and leaves no file for NO_AUDIO', async (t) => {
+  const directory=await temporaryDirectory();
+  const bytes=Buffer.concat([Buffer.from('ID3'),Buffer.alloc(100)]);
+  const mediaId='gAAAAAaudio_test_handle_'+'x'.repeat(40);
+  let mode='ok';
+  const server=await startServer(async (req,res) => {
+    if(req.url.endsWith('/capabilities')) return json(res,200,envelope({actions:[action('library.media.resolve',{scopes:['library:read']})]}));
+    assert.equal(req.headers.authorization,'Bearer zcpat_audio_fixture');
+    if(req.url.endsWith('/actions/library.media.resolve/invoke')) {
+      assert.equal((await readJsonBody(req)).input.kind,'audio');
+      return json(res,200,envelope({result:{media_id:mediaId,kind:'audio',title:'原声',video_id:'123456789',resolve_ms:320}}));
+    }
+    assert.equal(req.url,'/api/agent-interface/v1/media/'+mediaId);
+    if(mode==='none') return json(res,422,{error:{code:'NO_AUDIO',message:'private upstream details'}});
+    res.writeHead(200,{'Content-Type':'audio/mpeg'});res.end(mode==='html' ? Buffer.from('<html>error</html>') : bytes);
+  });t.after(server.close);
+  const env=credentialEnv(directory,server.url);
+  await runCli(['auth','pat','--non-interactive','--json'],{env,input:'zcpat_audio_fixture'});
+  const output=resolve(directory,'audio.mp3');
+  const success=await runCli(['audio','https://v.douyin.com/demo/','--output',output,'--json'],{env});
+  assert.equal(success.code,0,success.stderr);assert.deepEqual(await readFile(output),bytes);
+  assert.equal(JSON.parse(success.stdout).action,'audio.download');
+  for(mode of ['none','html']){
+    const failedOutput=resolve(directory,mode+'.mp3');
+    const failure=await runCli(['download','https://v.douyin.com/demo/','--audio','--output',failedOutput,'--json'],{env});
+    assert.notEqual(failure.code,0);
+    assert.match(failure.stdout,mode==='none'?/NO_AUDIO/:/MEDIA_INVALID/);
+    assert.doesNotMatch(failure.stdout+failure.stderr,/private upstream|zcpat_audio_fixture/);
+    await assert.rejects(readFile(failedOutput),{code:'ENOENT'});
+  }
+});

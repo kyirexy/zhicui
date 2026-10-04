@@ -397,10 +397,18 @@ def download_fast_media(media_id: str, request: Request,
         require_scopes(principal, definition)
         consume_rate_limit(db, principal=principal, definition=definition)
         credential_id = principal.credential.id if principal.credential else None
-        return fast_video_service.stream_file(media_id, user_id=principal.user.id, credential_id=credential_id)
+        user_id = principal.user.id
+        def recheck():
+            _ensure_enabled()
+            if not action_is_enabled(action_id):
+                raise ProductActionError('ACTION_NOT_FOUND', '快速下载尚未开放', http_status=404)
+            db.expire_all()
+            if credential_id:
+                require_active_credential(db, credential_id=credential_id, user_id=user_id)
+        return fast_video_service.stream_file(media_id, user_id=user_id, credential_id=credential_id, after_prepare=recheck)
     except agent_video_link_service.VideoLinkError as exc:
         return _error_response(action_id, request_id, ProductActionError(exc.code, str(exc), http_status=exc.http_status, retryable=exc.retryable))
-    except ProductActionError as exc:
+    except (ProductActionError, CredentialError) as exc:
         return _error_response(action_id, request_id, exc)
 
 

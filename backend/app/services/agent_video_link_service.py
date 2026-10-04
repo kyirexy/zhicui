@@ -264,8 +264,8 @@ def media_snapshot(note: Note) -> Any:
     return SimpleNamespace(video_id=note.video_id, video_url=note.video_url, ai_summary=note.ai_summary)
 
 
-def _download(url: str, path: Path, *, platform: str, budget: list[int], deadline: float) -> None:
-    with _get(url, domains=_MEDIA_DOMAINS[platform], referer=f"https://www.{'douyin.com' if platform == 'douyin' else 'bilibili.com'}/", deadline=deadline) as response:
+def _download(url: str, path: Path, *, platform: str, budget: list[int], deadline: float, domains: tuple[str, ...] | None = None) -> None:
+    with _get(url, domains=domains or _MEDIA_DOMAINS[platform], referer=f"https://www.{'douyin.com' if platform == 'douyin' else 'bilibili.com'}/", deadline=deadline) as response:
         content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
         if content_type not in {"video/mp4", "video/x-flv", "video/flv", "audio/mp4", "application/octet-stream", "binary/octet-stream", "video/quicktime"}:
             raise VideoLinkError("INVALID_MEDIA", "平台未返回有效的视频文件", status=502)

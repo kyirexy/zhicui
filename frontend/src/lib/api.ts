@@ -535,18 +535,18 @@ export async function downloadNoteVideo(
 
 export interface FastVideoResult {
   title: string; author: string; platform: string; video_id: string;
-  media_id: string; media_url: string; expires_in: number; cache_hit: boolean; resolve_ms: number;
+  media_id: string; media_url?: string; kind?: 'video' | 'audio'; expires_in: number; cache_hit: boolean; resolve_ms: number;
 }
 
-export function resolveFastVideo(url: string, refresh = false, signal?: AbortSignal): Promise<ApiResponse<FastVideoResult>> {
-  return request<FastVideoResult>('/api/video/fast/resolve', { method: 'POST', body: JSON.stringify({ url, refresh }), signal });
+export function resolveFastVideo(url: string, refresh = false, signal?: AbortSignal, kind: 'video' | 'audio' = 'video'): Promise<ApiResponse<FastVideoResult>> {
+  return request<FastVideoResult>('/api/video/fast/resolve', { method: 'POST', body: JSON.stringify({ url, refresh, kind }), signal });
 }
 
-export async function downloadFastVideo(mediaId: string, signal?: AbortSignal, onProgress?: (progress: VideoDownloadProgress) => void): Promise<Blob> {
+export async function downloadFastVideo(mediaId: string, signal?: AbortSignal, onProgress?: (progress: VideoDownloadProgress) => void, kind: 'video' | 'audio' = 'video'): Promise<Blob> {
   const response = await sessionFetch(`${API_BASE}/api/video/fast/file/${encodeURIComponent(mediaId)}`, {
-    headers: authHeaders({ Accept: 'video/mp4' }), redirect: 'error', cache: 'no-store', signal,
+    headers: authHeaders({ Accept: kind === 'audio' ? 'audio/mpeg' : 'video/mp4' }), redirect: 'error', cache: 'no-store', signal,
   });
-  return readVideoDownload(response, onProgress, signal);
+  return readVideoDownload(response, onProgress, signal, kind);
 }
 
 export async function askNote(

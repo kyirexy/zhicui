@@ -73,3 +73,13 @@ test('produces portable MP4 filenames from source titles', () => {
   assert.equal(videoDownloadFilename(''), '知萃视频.mp4');
   assert.ok(videoDownloadFilename('视'.repeat(200)).length <= 104);
 });
+
+
+test('音频下载校验 MP3，保留无音频提示，拒绝伪装的错误页', async () => {
+  const mp3=new Uint8Array([73,68,51,...Array(30).fill(0)]);
+  const blob=await readVideoDownload(new Response(mp3,{headers:{'Content-Type':'audio/mpeg'}}),undefined,undefined,'audio');
+  assert.equal(blob.type,'audio/mpeg');
+  assert.equal(blob.size,mp3.length);
+  await assert.rejects(readVideoDownload(new Response('<html>error</html>',{headers:{'Content-Type':'audio/mpeg'}}),undefined,undefined,'audio'),/校验失败/);
+  await assert.rejects(readVideoDownload(new Response(JSON.stringify({error:'无音频'}),{status:422}),undefined,undefined,'audio'),/无音频/);
+});

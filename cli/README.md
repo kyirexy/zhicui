@@ -205,3 +205,11 @@ zhicui agent uninstall --client all --json
 - `ZHICUI_DESKTOP_BRIDGE_DESCRIPTOR`：受信桌面桥描述文件位置；不接受远端地址。
 
 发布包不包含凭据。npm 正式发布与 Windows Authenticode 由发布流水线注入身份，源码不保存发布令牌或证书。
+
+## 原声音频
+
+```sh
+zhicui audio "抖音或B站视频链接" --output 原声.mp3 --json
+```
+
+无需先导入或转录，复用 `library:read` 授权。原声包含人声和配乐，不是音乐分离；没有音轨会返回 `NO_AUDIO`，不会保存错误文件。

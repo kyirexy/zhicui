@@ -33,6 +33,12 @@
 4. 多视频提问前确认选中的视频文稿已就绪；回答引用知萃返回的来源信息，不把模型推断写成原文事实。
 5. 本机能力不可用时，返回结构化原因并建议启动/登录知萃 Windows 客户端；不要回退到 Shell 或浏览器自动化。
 
+## 音频提取与下载
+
+- CLI 1.0.13+：`zhicui audio "视频链接" --output 原声.mp3 --json`；也可用 `zhicui download "视频链接" --audio`。沿用现有 library:read 授权，不需要另发 Key。
+- 获取入口用 `zhicui resolve "视频链接" --audio --json`，MCP 调用 `library.media.resolve` 时传 `kind:"audio"`。下载入口仍绑定当前用户及凭证。
+- MP3 包含原视频中的人声、音乐和音效，不能称为纯 BGM 或人声分离。平台要求验证时停止重复提交；无音轨返回 `NO_AUDIO / 无音频`，不保存空文件。解析只获取入口，真正提取时需要读取原媒体。
+
 ## 将用户指定的视频交给本地创作工具
 
 - 只要视频文件时优先用 `zhicui download '<链接>' --connect --json`（CLI 1.0.7 起），默认保存在当前目录。不要先导入或提取文稿。仅需下载入口时用 `zhicui resolve '<链接>' --json`，或发现并调用 `library.media.resolve` / `zhicui_library_media_resolve` MCP 工具；只需 `library:read`。入口绑定当前凭证，五分钟有效，不要把 PAT 放入 URL。

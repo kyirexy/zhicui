@@ -111,6 +111,7 @@ function helpPayload(): Record<string, unknown> {
     domains,
     generic: [
       'download <url-or-share-text> [--output video.mp4] [--connect]',
+      'audio <url-or-share-text> [--output audio.mp3] [--connect] — 提取原声，不分离背景音乐',
       'resolve <url-or-share-text> [--refresh]',
       'recap today|yesterday [--platform douyin|bilibili|all] [--mode like|collect|all] [--limit 50] [--connect] — 先同步，再回顾',
       'run <action_id>',
@@ -615,39 +616,42 @@ async function fastVideoCommand(domain: string, args: string[], options: GlobalO
   const output = takeValue(args, '--output');
   const connect = takeFlag(args, '--connect');
   const refresh = takeFlag(args, '--refresh');
+  const audioFlag = takeFlag(args, '--audio');
+  const kind = domain === 'audio' || audioFlag ? 'audio' : 'video';
   const linkOnly = takeFlag(args, '--link') || domain === 'resolve';
   const value = args.shift();
-  if (!value || args.length) throw usageError('用法：zhicui download <链接> [--output 视频.mp4] [--connect]；只取入口：zhicui resolve <链接>');
+  if (!value || args.length) throw usageError('用法：zhicui download <链接> [--output 视频.mp4]；提取音频：zhicui audio <链接> [--output 原声.mp3]');
   const url = normalizePrepareLink(value);
   let envelope: AgentEnvelope;
-  writer.diagnostic('正在获取视频下载入口，不提取文稿…');
-  try { envelope = await client.invoke('library.media.resolve', { url, refresh }); }
+  writer.diagnostic(kind === 'audio' ? '正在获取原声音频入口，不提取文稿…' : '正在获取视频下载入口，不提取文稿…');
+  try { envelope = await client.invoke('library.media.resolve', { url, refresh, ...(kind === 'audio' ? {kind} : {}) }); }
   catch (error) {
     if (!connect || !(error instanceof CliError) || !PREPARE_AUTH_ERRORS.has(error.code)) throw error;
     await authCommand(['login', '--scopes', 'library:read'], options, writer, credentials, client, {
       event: (event) => { if (options.jsonl) writer.event({ ...event, sequence: ++sequence, terminal: false }); },
       complete: () => writer.diagnostic('授权完成，继续获取视频。'),
     });
-    envelope = await client.invoke('library.media.resolve', { url, refresh });
+    envelope = await client.invoke('library.media.resolve', { url, refresh, ...(kind === 'audio' ? {kind} : {}) });
   }
   const wrapper = envelope.data as JsonObject;
   const data = (wrapper?.result || wrapper) as JsonObject;
   if (!data || typeof data.media_id !== 'string') throw new CliError('REMOTE_FAILURE', '服务未返回有效下载入口');
+  if (kind === 'audio' && data.kind !== 'audio') throw new CliError('ACTION_NOT_AVAILABLE', '当前服务器还不支持音频提取，请更新知萃服务');
   if (linkOnly) {
     complete({ ...data, download_path: `/api/agent-interface/v1/media/${encodeURIComponent(data.media_id)}`,
-      authorization: 'Bearer（复用当前知萃凭证）', next_command: ['zhicui', 'download', url] });
+      authorization: 'Bearer（复用当前知萃凭证）', next_command: ['zhicui', kind === 'audio' ? 'audio' : 'download', url] });
     return;
   }
-  writer.diagnostic(`入口已就绪（${data.resolve_ms} ms），开始下载视频…`);
-  const file = output || `zhicui-${String(data.video_id || Date.now()).replace(/[^A-Za-z0-9_-]/gu, '')}.mp4`;
+  writer.diagnostic(`入口已就绪（${data.resolve_ms} ms），${kind === 'audio' ? '正在提取原声 MP3，包含人声与配乐…' : '开始下载视频…'}`);
+  const file = output || `zhicui-${String(data.video_id || Date.now()).replace(/[^A-Za-z0-9_-]/gu, '')}.${kind === 'audio' ? 'mp3' : 'mp4'}`;
   let last = 0;
   const result = await downloadLibraryFile(client, 'fast', file, (bytes, total) => {
     if (Date.now() - last < 500 && bytes !== total) return;
     last = Date.now();
     if (options.jsonl) writer.event({ sequence: ++sequence, event: 'download.progress', status: 'running', data: { bytes, total_bytes: total } });
     writer.diagnostic(`已下载 ${(bytes / 1048576).toFixed(1)} MB${total ? ` / ${(total / 1048576).toFixed(1)} MB` : ''}`);
-  }, undefined, data.media_id);
-  complete({ action: 'video.download', status: 'succeeded', title: data.title, resolve_ms: data.resolve_ms, ...result });
+  }, undefined, data.media_id, kind);
+  complete({ action: kind === 'audio' ? 'audio.download' : 'video.download', status: 'succeeded', kind, title: data.title, resolve_ms: data.resolve_ms, ...result });
 }
 
 async function domainCommand(
@@ -1048,7 +1052,7 @@ export async function runCli(argv: string[]): Promise<number> {
       writer.result({ name: '@zhicui/cli', version: CLI_VERSION });
       return EXIT_CODES.success;
     }
-    if (!['capabilities', 'resolve', 'download', 'connect', 'recap'].includes(domain) && !USER_COMMAND_DOMAINS.includes(domain as (typeof USER_COMMAND_DOMAINS)[number])) {
+    if (!['capabilities', 'resolve', 'download', 'audio', 'connect', 'recap'].includes(domain) && !USER_COMMAND_DOMAINS.includes(domain as (typeof USER_COMMAND_DOMAINS)[number])) {
       throw usageError(`未知命令域：${domain}`);
     }
     if (command.includes('--help') || command.includes('-h')) {
@@ -1058,7 +1062,7 @@ export async function runCli(argv: string[]): Promise<number> {
       );
       writer.result({
         domain,
-        commands: [...entries.map(([key, alias]) => ({
+        commands: [...(['audio', 'download', 'resolve'].includes(domain) ? [{command: `zhicui ${domain} <链接> [--audio] [--output ${domain === 'audio' ? '原声.mp3' : '视频.mp4'}] [--connect]`, description: 'audio 提取原声 MP3，包含人声与配乐；--link 只取入口，--refresh 刷新地址。'}] : []), ...entries.map(([key, alias]) => ({
           command: `zhicui ${key.replace('.', ' ')} ${(alias.positionalKeys || []).map((value) => `<${value}>`).join(' ')}`.trim(),
           action: alias.candidates[0],
           named_inputs: alias.namedInputKeys || [],
@@ -1087,7 +1091,7 @@ export async function runCli(argv: string[]): Promise<number> {
     }
     else if (domain === 'connect') await connectCommand(command, options, writer, credentials, client);
     else if (domain === 'recap') await recapCommand(command, options, writer, credentials, client);
-    else if (domain === 'resolve' || domain === 'download') await fastVideoCommand(domain, command, options, writer, client, credentials);
+    else if (domain === 'resolve' || domain === 'download' || domain === 'audio') await fastVideoCommand(domain, command, options, writer, client, credentials);
     else if (domain === 'auth') await authCommand(command, options, writer, credentials, client);
     else if (domain === 'run') await runCommand(command, options, writer, client);
     else if (domain === 'mcp') {

@@ -391,6 +391,7 @@ export class AgentApiClient {
     writeChunk: (chunk: Uint8Array) => Promise<void>,
     onProgress?: (bytes: number, totalBytes: number | null) => void,
     fastMediaId?: string,
+    kind: 'video' | 'audio' = 'video',
   ): Promise<{ bytes: number; content_type: string }> {
     if (!/^[A-Za-z0-9_-]{1,128}$/u.test(noteId)) {
       throw new CliError('INVALID_INPUT', '资料 ID 格式无效');
@@ -412,7 +413,7 @@ export class AgentApiClient {
         response = await fetch(this.path(mediaPath), {
           method: 'GET',
           headers: {
-            Accept: 'video/mp4, application/octet-stream, application/json',
+            Accept: kind === 'audio' ? 'audio/mpeg, application/json' : 'video/mp4, application/octet-stream, application/json',
             Authorization: `Bearer ${credential.access_token}`,
             'User-Agent': `@zhicui/cli/${CLIENT_VERSION}`,
           },
@@ -441,14 +442,16 @@ export class AgentApiClient {
           RATE_LIMITED: '下载请求过于频繁，请稍后重试',
           MEDIA_TOO_LARGE: '视频超过下载大小限制',
           MEDIA_EXPIRED: '下载入口已过期，请重新执行同一条 download 命令获取新入口',
+          NO_AUDIO: '无音频',
+          MEDIA_PROCESSING_FAILED: '音频提取未完成，请稍后重试',
           PLATFORM_AUTH_REQUIRED: '平台限制了这条视频的读取，请在知萃检查平台连接或完成验证；暂时不要连续重试',
           INTERFACE_DISABLED: '当前知萃 Agent 接口未开放',
         };
         throw new CliError(code, messages[code] || '知萃暂时无法提供这条视频的媒体文件，请查看资料状态后重试');
       }
       const contentType = (response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase();
-      if (!['video/mp4', 'application/octet-stream'].includes(contentType) || !response.body) {
-        throw new CliError('MEDIA_INVALID', '下载没有返回 MP4 视频');
+      if (!(kind === 'audio' ? ['audio/mpeg'] : ['video/mp4', 'application/octet-stream']).includes(contentType) || !response.body) {
+        throw new CliError('MEDIA_INVALID', kind === 'audio' ? '下载没有返回 MP3 音频' : '下载没有返回 MP4 视频');
       }
       const length = response.headers.get('content-length');
       const totalBytes = length === null ? null : Number(length);
@@ -472,8 +475,11 @@ export class AgentApiClient {
         await writeChunk(next.value);
         onProgress?.(bytes, totalBytes);
       }
-      if (bytes < 12 || header.toString('ascii', 4, 8) !== 'ftyp') {
-        throw new CliError('MEDIA_INVALID', '下载内容不是有效的 MP4 文件');
+      const validHeader = kind === 'audio'
+        ? header.toString('ascii', 0, 3) === 'ID3' || (header[0] === 0xff && (header[1] & 0xe0) === 0xe0)
+        : header.toString('ascii', 4, 8) === 'ftyp';
+      if (bytes < 12 || !validHeader) {
+        throw new CliError('MEDIA_INVALID', kind === 'audio' ? '下载内容不是有效的 MP3 文件' : '下载内容不是有效的 MP4 文件');
       }
       if (totalBytes !== null && bytes !== totalBytes) {
         throw new CliError('MEDIA_INCOMPLETE', '视频下载不完整，请重试');

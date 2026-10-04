@@ -30,14 +30,15 @@ export async function readVideoDownload(
   response: Response,
   onProgress?: (progress: VideoDownloadProgress) => void,
   signal?: AbortSignal,
+  kind: 'video' | 'audio' = 'video',
 ): Promise<Blob> {
   if (!response.ok) {
     throw new Error(videoDownloadError(response.status, await response.json().catch(() => null)));
   }
   const contentType = response.headers.get('Content-Type')?.split(';')[0].trim();
-  if (contentType !== 'video/mp4') {
+  if (contentType !== (kind === 'audio' ? 'audio/mpeg' : 'video/mp4')) {
     await response.body?.cancel().catch(() => undefined);
-    throw new Error('没有取得有效的视频文件，请稍后重试');
+    throw new Error(kind === 'audio' ? '没有取得有效的音频文件，请稍后重试' : '没有取得有效的视频文件，请稍后重试');
   }
   const length = Number(response.headers.get('Content-Length'));
   const totalBytes = Number.isSafeInteger(length) && length > 0 ? length : null;
@@ -66,10 +67,13 @@ export async function readVideoDownload(
     if (!receivedBytes || (totalBytes !== null && receivedBytes !== totalBytes)) {
       throw new Error('视频下载中断，文件尚未保存，请重新下载');
     }
-    const blob = new Blob(chunks, { type: 'video/mp4' });
+    const blob = new Blob(chunks, { type: kind === 'audio' ? 'audio/mpeg' : 'video/mp4' });
     const header = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
-    if (header.length < 12 || String.fromCharCode(...header.slice(4, 8)) !== 'ftyp') {
-      throw new Error('视频文件校验失败，请重新下载');
+    const validHeader = kind === 'audio'
+      ? String.fromCharCode(...header.slice(0, 3)) === 'ID3' || (header[0] === 0xff && (header[1] & 0xe0) === 0xe0)
+      : String.fromCharCode(...header.slice(4, 8)) === 'ftyp';
+    if (header.length < 12 || !validHeader) {
+      throw new Error('媒体文件校验失败，请重新下载');
     }
     signal?.throwIfAborted();
     return blob;

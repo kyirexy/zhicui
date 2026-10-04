@@ -11,6 +11,9 @@ import json
 import re
 import threading
 import time
+import subprocess
+import tempfile
+from pathlib import Path
 from collections import OrderedDict
 from contextlib import contextmanager
 from urllib.parse import parse_qs, urljoin, urlsplit
@@ -123,10 +126,12 @@ def _cipher():
     return Fernet(base64.urlsafe_b64encode(key))
 
 
-def resolve(value, *, user_id, credential_id=None, refresh=False):
+def resolve(value, *, user_id, credential_id=None, refresh=False, kind='video'):
     started = time.perf_counter()
+    if kind not in ('video', 'audio'):
+        raise safe.VideoLinkError('INVALID_INPUT', '请选择视频或音频')
     url, platform = normalize(value)
-    key = (str(user_id), url)
+    key = (str(user_id), url, kind)
     with _LOCK:
         cached = _CACHE.get(key)
     cache_hit = bool(cached and time.monotonic() - cached[0] < 120 and not refresh)
@@ -136,10 +141,11 @@ def resolve(value, *, user_id, credential_id=None, refresh=False):
         item = _douyin(url)
     else:
         info = safe._public_info(url, platform)
-        if info.get('audio_url'):
+        if info.get('audio_url') and kind == 'video':
             raise safe.VideoLinkError('INVALID_MEDIA', '这条 B站视频需要合并音视频，请使用资料页下载')
         item = {'platform': platform, 'video_id': info['video_id'], 'title': info['title'],
-            'author': info.get('author', ''), 'media': info.get('download_url') or info.get('url', '')}
+            'author': info.get('author', ''), 'media': (info.get('audio_url') if kind == 'audio' else None) or info.get('download_url') or info.get('url', '')}
+    item['kind'] = kind
     safe._target(item['media'], _MEDIA[platform], resolve=False)
     if not cache_hit:
         with _LOCK:
@@ -149,7 +155,7 @@ def resolve(value, *, user_id, credential_id=None, refresh=False):
                 _CACHE.popitem(last=False)
     ticket = _cipher().encrypt(json.dumps({**item, 'owner': str(user_id), 'credential': credential_id}, ensure_ascii=False).encode()).decode()
     return {'title': item['title'], 'video_id': item['video_id'], 'author': item['author'], 'platform': platform,
-        'media_id': ticket, 'expires_in': TTL, 'cache_hit': cache_hit,
+        'media_id': ticket, 'kind': kind, 'expires_in': TTL, 'cache_hit': cache_hit,
         'resolve_ms': round((time.perf_counter()-started)*1000), 'media_prefetch_bytes': 0}
 
 
@@ -160,17 +166,66 @@ def open_ticket(ticket, *, user_id, credential_id=None):
         item = json.loads(_cipher().decrypt(ticket.encode(), ttl=TTL))
         if item['owner'] != str(user_id) or item.get('credential') != credential_id:
             raise ValueError('owner')
+        if item.get('kind', 'video') not in ('video', 'audio'):
+            raise ValueError('kind')
         safe._target(item['media'], _MEDIA[item['platform']], resolve=False)
         return item
     except (InvalidToken, ValueError, KeyError, TypeError):
         raise safe.VideoLinkError('MEDIA_EXPIRED', '下载入口已过期或不属于当前授权，请重新解析', status=410) from None
 
 
-def stream_file(ticket, *, user_id, credential_id=None):
+def extract_audio(source: Path, target: Path):
+    """仅解码已校验的本地容器；禁用网络协议，不允许播放列表读取任意文件。"""
+    from app.services import video_extractor
+    with source.open('rb') as handle:
+        signature = handle.read(12)
+    container = 'mov' if signature[4:8] in (b'ftyp', b'styp', b'moov', b'moof') else 'flv' if signature.startswith(b'FLV') else ''
+    if not container:
+        raise safe.VideoLinkError('INVALID_MEDIA', '平台未返回有效的媒体文件', status=502)
+    command = [video_extractor._get_ffmpeg_path(), '-nostdin', '-y', '-loglevel', 'error',
+        '-protocol_whitelist', 'file,pipe', '-f', container, '-i', str(source),
+        '-map', '0:a:0', '-vn', '-map_metadata', '-1', '-c:a', 'libmp3lame',
+        '-b:a', '192k', '-ar', '48000', '-ac', '2', '-threads', '2',
+        '-fs', str(safe.MAX_MEDIA_BYTES + 1), str(target)]
+    try:
+        result = subprocess.run(command, capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        raise safe.VideoLinkError('MEDIA_PROCESSING_FAILED', '音频提取未完成，请稍后重试', status=502) from None
+    if result.returncode:
+        if video_extractor._ffmpeg_has_no_audio(result.stderr.decode('utf-8', errors='replace')):
+            raise safe.VideoLinkError('NO_AUDIO', '无音频', status=422)
+        raise safe.VideoLinkError('MEDIA_PROCESSING_FAILED', '音频暂时无法提取', status=502)
+    if not target.exists() or target.stat().st_size < 12 or target.stat().st_size > safe.MAX_MEDIA_BYTES:
+        raise safe.VideoLinkError('INVALID_MEDIA', '音频文件无效或超过大小限制', status=502)
+
+
+def _audio_response(item, *, user_id, after_prepare=None):
+    from contextlib import ExitStack
+    from app.api.media_response import TemporaryVideoResponse
+    cleanup = ExitStack()
+    try:
+        cleanup.enter_context(safe.user_download_slot(str(user_id)))
+        directory = Path(cleanup.enter_context(tempfile.TemporaryDirectory(prefix='zhicui-audio-')))
+        source, target = directory / 'source.bin', directory / 'audio.mp3'
+        safe._download(item['media'], source, platform=item['platform'], domains=_MEDIA[item['platform']],
+            budget=[safe.MAX_MEDIA_BYTES], deadline=time.monotonic() + safe.MAX_DOWNLOAD_SECONDS)
+        extract_audio(source, target)
+        if after_prepare:
+            after_prepare()
+        return TemporaryVideoResponse(target, media_type='audio/mpeg', filename='zhicui-audio.mp3',
+            cleanup=cleanup, headers={'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'})
+    except BaseException:
+        cleanup.close()
+        raise
+
+
+def stream_file(ticket, *, user_id, credential_id=None, after_prepare=None):
     """读取首块并校验后立即返回，资源在断开、错误及完成时释放。"""
     from contextlib import ExitStack
     from starlette.responses import StreamingResponse
     item = open_ticket(ticket, user_id=user_id, credential_id=credential_id)
+    if item.get('kind') == 'audio':
+        return _audio_response(item, user_id=user_id, after_prepare=after_prepare)
     stack = ExitStack()
     try:
         stack.enter_context(safe.user_download_slot(str(user_id)))

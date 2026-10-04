@@ -1,6 +1,9 @@
 import json
 import time
 import unittest
+import tempfile
+import subprocess
+from pathlib import Path
 from contextlib import contextmanager
 from unittest.mock import patch
 from tests import test_agent_interface_routes as routes
@@ -58,6 +61,21 @@ class FastVideoRoutesTests(unittest.TestCase):
     def setUp(self): routes.AgentInterfaceRouteTests.setUp(self)
     def tearDown(self): routes.AgentInterfaceRouteTests.tearDown(self)
 
+    def test_audio_web_hides_raw_source_and_returns_no_audio(self):
+        from app.api.fast_video_routes import router
+        self.client.app.include_router(router)
+        headers={'Authorization':'Bearer '+self.jwt}
+        with patch.object(fast,'_douyin',return_value=SAMPLE):
+            response=self.client.post('/api/video/fast/resolve',headers=headers,json={'url':'https://www.douyin.com/video/'+SAMPLE['video_id'],'kind':'audio'})
+        self.assertEqual(response.status_code,200,response.text)
+        data=response.json()['data']
+        self.assertEqual(data['kind'],'audio')
+        self.assertNotIn('media_url',data)
+        with patch.object(fast,'_audio_response',side_effect=VideoLinkError('NO_AUDIO','无音频',status=422)):
+            missing=self.client.get('/api/video/fast/file/'+data['media_id'],headers=headers)
+        self.assertEqual(missing.status_code,422)
+        self.assertEqual(missing.json()['error'],'无音频')
+
     def test_web_requires_session_and_returns_real_media_link(self):
         from app.api.fast_video_routes import router
         self.client.app.include_router(router)
@@ -88,3 +106,48 @@ class FastVideoRoutesTests(unittest.TestCase):
         self.assertEqual(result.status_code,200)
         self.assertEqual(stream.call_args.kwargs['user_id'],self.user_id)
         self.assertIsNotNone(stream.call_args.kwargs['credential_id'])
+
+
+class AudioMediaTests(unittest.TestCase):
+    def test_audio_ticket_is_bound_and_bilibili_prefers_audio_track(self):
+        fast._CACHE.clear()
+        info={'video_id':'BV1234567890','title':'音频测试','audio_url':'https://upos-sz-mirrorcos.bilivideo.com/audio.m4s','download_url':'https://upos-sz-mirrorcos.bilivideo.com/video.m4s'}
+        with patch.object(fast.safe,'_public_info',return_value=info):
+            result=fast.resolve('https://www.bilibili.com/video/BV1234567890/',user_id='owner',credential_id='pat',kind='audio')
+        self.assertEqual(result['media_prefetch_bytes'],0)
+        self.assertEqual(result['kind'],'audio')
+        item=fast.open_ticket(result['media_id'],user_id='owner',credential_id='pat')
+        self.assertEqual(item['media'],info['audio_url'])
+        with self.assertRaises(VideoLinkError): fast.open_ticket(result['media_id'],user_id='other',credential_id='pat')
+        with self.assertRaises(VideoLinkError): fast.resolve('https://v.douyin.com/x/',user_id='owner',kind='wav')
+
+    def test_real_ffmpeg_extracts_audio_and_reports_silent_video(self):
+        from app.services import video_extractor
+        ffmpeg=video_extractor._get_ffmpeg_path()
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            source,target=root/'source.mp4',root/'audio.mp3'
+            subprocess.run([ffmpeg,'-y','-loglevel','error','-f','lavfi','-i','sine=frequency=440:duration=0.25','-c:a','aac',str(source)],check=True)
+            fast.extract_audio(source,target)
+            self.assertGreater(target.stat().st_size,100)
+            subprocess.run([ffmpeg,'-v','error','-i',str(target),'-f','null','-'],check=True)
+            subprocess.run([ffmpeg,'-y','-loglevel','error','-f','lavfi','-i','color=s=32x32:d=0.25','-c:v','mpeg4',str(source)],check=True)
+            with self.assertRaises(VideoLinkError) as error: fast.extract_audio(source,root/'silent.mp3')
+            self.assertEqual(error.exception.code,'NO_AUDIO')
+            source.write_text('#EXTM3U\nfile:///etc/passwd')
+            with patch.object(fast.subprocess,'run') as run:
+                with self.assertRaises(VideoLinkError): fast.extract_audio(source,target)
+                run.assert_not_called()
+
+    def test_cleanup_on_conversion_failure_and_post_prepare_revocation(self):
+        seen=[]
+        def download(url,path,**kwargs):
+            seen.append(path.parent)
+            path.write_bytes(b'video')
+        def convert(source,target): target.write_bytes(b'ID3'+b'x'*30)
+        for conversion_fails in (True,False):
+            def recheck(): raise RuntimeError('revoked')
+            with patch.object(fast.safe,'_download',side_effect=download), patch.object(fast,'extract_audio',side_effect=VideoLinkError('NO_AUDIO','无音频') if conversion_fails else convert):
+                with self.assertRaises((VideoLinkError,RuntimeError)):
+                    fast._audio_response({**SAMPLE,'kind':'audio'},user_id='audio-test',after_prepare=recheck)
+            self.assertFalse(seen[-1].exists())

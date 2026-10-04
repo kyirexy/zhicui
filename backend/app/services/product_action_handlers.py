@@ -197,7 +197,7 @@ def library_media_resolve(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
     try:
         return fast_video_service.resolve(_text(payload, 'url', required=True, maximum=2000),
             user_id=ctx.user.id, credential_id=ctx.credential.id if ctx.credential else None,
-            refresh=bool(payload.get('refresh')))
+            refresh=bool(payload.get('refresh')), kind=payload.get('kind', 'video'))
     except agent_video_link_service.VideoLinkError as exc:
         raise ActionHandlerError(exc.code, str(exc), retryable=exc.retryable) from None
 

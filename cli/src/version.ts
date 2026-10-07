@@ -1,2 +1,4 @@
-/** 命令行、API 请求和 MCP 握手使用同一发行版本。 */
-export const CLI_VERSION = '1.0.13';
+import { createRequire } from 'node:module';
+
+/** 发行包为唯一版本来源，避免升级后仍向 Agent 报告旧版。 */
+export const CLI_VERSION = (createRequire(import.meta.url)('../package.json') as { version: string }).version;

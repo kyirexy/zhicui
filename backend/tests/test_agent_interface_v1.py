@@ -554,8 +554,10 @@ class AgentInterfaceV1Tests(unittest.TestCase):
             self.assertEqual(
                 definition.input_schema.get("required"), ["aweme_id"]
             )
+        cancel = registry.get("local.platform.cancel")
+        self.assertEqual(cancel.input_schema.get("properties"), {"run_id": {"type": "string", "minLength": 1, "maxLength": 64}})
+        self.assertFalse(cancel.input_schema.get("required"))
         for action_id in (
-            "local.platform.cancel",
             "local.update.check", "local.update.install",
             "local.client.update.check", "local.client.update.install",
         ):

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { RestrictedLocalAdapter } from '../dist/local-adapter.js';
 import { action, envelope, json, startServer, temporaryDirectory } from './helpers.mjs';
@@ -40,6 +40,27 @@ test('invalid descriptor expiration fails closed before contacting the desktop b
     await assert.rejects(adapter.invoke(action('local.status'), {}, 1000, undefined, userHash), {
       code: 'DESKTOP_BRIDGE_UNAVAILABLE',
     });
+  }
+});
+
+test('read-only status reports signed-out, restoring and offline without launching or invoking collection', {
+  skip: !enabled,
+}, async (t) => {
+  let state = 'signed_out';
+  const server = await startServer((request, response) => {
+    assert.equal(request.url, '/v1/connection');
+    json(response, 200, { state });
+  });
+  t.after(server.close);
+  const path = await descriptor(t, { expires_at: '1970-01-01T00:00:00Z' });
+  await writeFile(join(dirname(path), 'desktop-agent-runtime.json'), JSON.stringify({ url: server.url }));
+  for (const [nextState, code] of [['signed_out', 'DESKTOP_AUTH_REQUIRED'],
+    ['restoring', 'DESKTOP_RESTORING'], ['offline', 'DESKTOP_OFFLINE']]) {
+    state = nextState;
+    for (const name of ['local.status', 'local.capabilities.get', 'local.platform.status']) {
+      await assert.rejects(new RestrictedLocalAdapter().invoke(action(name), {}, 1000, undefined, userHash),
+        (error) => error.code === code && error.details?.zhicui_login === state);
+    }
   }
 });
 

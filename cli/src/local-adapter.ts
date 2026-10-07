@@ -261,7 +261,16 @@ export class RestrictedLocalAdapter {
     if (!retried && Date.now() - this.checkedAt > 5000 && !['local.status', 'local.capabilities.get', 'local.platform.status'].includes(action.id)) {
       await this.ensureConnected(expectedUserHash);
     }
-    const descriptor = await this.readDescriptor();
+    let descriptor: DesktopBridgeDescriptor;
+    try { descriptor = await this.readDescriptor(); }
+    catch (error) {
+      // 状态查询不启动应用，但同样返回主进程的真实状态，不能把未登录误报成未启动。
+      const diagnosis = await this.status(expectedUserHash);
+      if (diagnosis.code && diagnosis.message) {
+        throw new CliError(String(diagnosis.code), String(diagnosis.message), { details: diagnosis as JsonObject });
+      }
+      throw error;
+    }
     if (['local.platform.sync', 'local.platform.collect'].includes(action.id)) idempotencyKey ||= randomUUID();
     assertSameUser(expectedUserHash, descriptor.user_hash);
     const controller = new AbortController();

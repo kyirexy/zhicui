@@ -16,6 +16,7 @@ from sqlalchemy.pool import StaticPool
 os.environ.setdefault("JWT_SECRET", "agent-interface-route-secret-123456789")
 os.environ.setdefault("AGENT_TOKEN_PEPPER", "agent-interface-route-pepper-123456789")
 
+from app.models.auth_session import UserAuthSession, AuthRefreshReceipt
 from app.api.agent_interface_routes import get_action_events, mcp_router, router
 from app.core.config import settings
 from app.core.database import Base, get_db
@@ -59,6 +60,7 @@ class AgentInterfaceRouteTests(unittest.TestCase):
         Base.metadata.create_all(
             self.engine,
             tables=[
+                UserAuthSession.__table__, AuthRefreshReceipt.__table__,
                 User.__table__, AgentCredential.__table__, AgentDeviceAuthorization.__table__,
                 ProductActionRun.__table__, ProductActionEvent.__table__,
                 ProductActionIdempotency.__table__, ProductActionConfirmation.__table__,

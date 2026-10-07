@@ -351,14 +351,29 @@ def poll_device_authorization(
     }
 
 
-def rotate_refresh_token(db: Session, refresh_token: str) -> dict[str, Any]:
+def rotate_refresh_token(db: Session, refresh_token: str, request_id: str | None = None) -> dict[str, Any]:
+    from app.services.auth_refresh_receipt import read_receipt, save_receipt
     kind, credential_id = _parse_token(refresh_token, {"refresh"})
     del kind
     row = db.query(AgentCredential).filter(
         AgentCredential.id == credential_id,
         AgentCredential.kind == "access",
     ).with_for_update().first()
+    now = utcnow()
+    if row is not None:
+        user = db.get(User, row.user_id)
+        if user is None or not user.is_active:
+            raise CredentialError("INVALID_CREDENTIAL", "账号已停用")
+        if not row.refresh_expires_at or (_aware(row.refresh_expires_at) or now) <= now or _aware(row.created_at) + timedelta(days=365) <= now:
+            raise CredentialError("REFRESH_TOKEN_EXPIRED", "刷新凭证已过期，请重新授权")
     digest = token_hash(refresh_token)
+    if row is not None and row.revoked_at is None:
+        receipt = read_receipt(db, "agent:" + row.id, refresh_token, request_id)
+        if receipt and token_hash(receipt["refresh_token"]) == row.refresh_hash:
+            if not user_is_enabled(row.user_id):
+                raise CredentialError("ROLLOUT_RESTRICTED", "Agent 接口尚未向当前账号开放")
+            normalize_scopes(row.scopes)
+            return receipt
     if row is None or not row.refresh_hash or not hmac.compare_digest(row.refresh_hash, digest):
         # Only a digest that matches the immediately previous token is a
         # confirmed replay signal.  A random malformed token must not be able
@@ -393,13 +408,16 @@ def rotate_refresh_token(db: Session, refresh_token: str) -> dict[str, Any]:
     row.token_prefix = access_token[:18]
     row.refresh_generation += 1
     row.expires_at = now + timedelta(minutes=ACCESS_TTL_MINUTES)
+    row.refresh_expires_at = min(now + timedelta(days=REFRESH_TTL_DAYS),
+                                _aware(row.created_at) + timedelta(days=365))
     row.updated_at = now
-    db.commit()
-    db.refresh(row)
-    return {
+    result = {
         "access_token": access_token,
         "refresh_token": next_refresh,
         "token_type": "Bearer",
         "expires_in": ACCESS_TTL_MINUTES * 60,
         "credential": row.to_public_dict(),
     }
+    save_receipt(db, "agent:" + row.id, refresh_token, request_id, result)
+    db.commit()
+    return result

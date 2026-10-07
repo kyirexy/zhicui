@@ -49,6 +49,8 @@ from sqlalchemy import inspect, text
 from app.models.note import Note  # noqa: F401
 from app.models.plan import Plan  # noqa: F401
 from app.models.user import User  # noqa: F401
+from app.models.agent_sync_task import AgentSyncTask
+from app.models.auth_session import UserAuthSession, AuthRefreshReceipt  # noqa: F401
 from app.models.system_setting import SystemSetting  # noqa: F401
 from app.models.admin_audit_log import AdminAuditLog  # noqa: F401
 from app.models.showcase_case import ShowcaseCase  # noqa: F401

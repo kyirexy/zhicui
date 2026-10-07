@@ -204,7 +204,9 @@ def consume_desktop_login_session(
         return _response(error="登录会话不存在或已失效", status_code=404)
     if result.status == "success" and result.user is not None:
         user = result.user
-        token = auth_service.create_access_token(user.id, user.email)
+        from app.services.auth_session_service import login_payload
+        headers_response = Response()
+        login = login_payload(db, user, request, headers_response)
         activity_service.log_activity_safely(
             user_id=user.id,
             action="desktop_login_consumed",
@@ -215,11 +217,9 @@ def consume_desktop_login_session(
             detail={"status": "consumed", "session_id": session_id},
             event_key=f"desktop-login:{session_id}:consumed",
         )
-        return _response({
-            "status": "success",
-            "token": token,
-            "user": user.to_dict(),
-        })
+        response = _response({"status": "success", **login})
+        response.raw_headers.extend((key, value) for key, value in headers_response.raw_headers if key in (b"set-cookie", b"cache-control"))
+        return response
 
     data: dict[str, Any] = {
         "status": result.status,

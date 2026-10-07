@@ -117,7 +117,7 @@ class DailyRecapTests(_RecapFixture):
             self.assertEqual(end - start, timedelta(hours=hours))
 
     def test_bad_timezone_and_future_date_are_rejected(self):
-        for kwargs in [{"timezone_name": "../UTC"}, {"timezone_name": "Mars/Unknown"}, {"target_date": date(2027, 1, 1)}, {"limit": 101}, {"limit": True}]:
+        for kwargs in [{"timezone_name": "../UTC"}, {"timezone_name": "Mars/Unknown"}, {"target_date": date(2027, 1, 1)}, {"limit": 501}, {"limit": True}]:
             with self.assertRaises(ValueError):
                 self.daily(**kwargs)
 
@@ -284,7 +284,7 @@ class DailyRecapTests(_RecapFixture):
         self.assertEqual(response.headers["cache-control"], "private, no-store")
         self.assertEqual(response.headers["vary"], "Authorization")
         self.assertEqual(response.json()["data"]["total"], 1)
-        for query in ["timezone=bad/zone", "date=garbage", "limit=101", "limit=0"]:
+        for query in ["timezone=bad/zone", "date=garbage", "limit=501", "limit=0"]:
             self.assertEqual(self.client.get(f"/api/library/daily-recap?{query}").status_code, 422)
         self.app.dependency_overrides[get_current_user] = lambda: self.other
         self.assertEqual(self.client.get("/api/library/daily-recap?date=2026-09-09").json()["data"]["total"], 0)

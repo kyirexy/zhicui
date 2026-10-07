@@ -46,8 +46,12 @@ export function collectedItems(value: JsonObject, platform: string, limit: numbe
   for (const raw of Array.isArray(value.items) ? value.items : []) {
     const item = object(raw), id = text(item.videoId);
     if (!pattern.test(id)) throw new CliError('INVALID_OUTPUT', '本机采集返回了与平台不符的作品');
-    items.set(id, { video_id: id, title: text(item.title).slice(0, 500),
-      author_name: text(item.authorName).slice(0, 200), caption: text(item.caption).slice(0, 2000) });
+    if (!items.has(id)) items.set(id, { video_id: id, title: text(item.title).slice(0, 500),
+      author_name: text(item.authorName).slice(0, 200), caption: text(item.caption).slice(0, 2000),
+      ...(typeof item.publishedAt === 'string' && item.publishedAt ? { published_at: item.publishedAt.slice(0, 64) } : {}),
+      ...(Number.isInteger(item.durationSeconds) && Number(item.durationSeconds) >= 0 ? { duration_seconds: Math.min(86400, Number(item.durationSeconds)) } : {}),
+      ...(isJsonObject(item.engagement) ? { engagement: Object.fromEntries(Object.entries(item.engagement)
+        .filter(([key, value]) => ['likes', 'comments', 'shares', 'collects', 'views'].includes(key) && Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= 100000000000)) } : {}) });
   }
   for (const raw of Array.isArray(value.urls) ? value.urls : []) {
     let url: URL;
@@ -68,6 +72,16 @@ export async function refreshRecap(
   progress: (stage: string, data: JsonObject) => void,
   local = new RestrictedLocalAdapter(),
 ): Promise<JsonObject> {
+  const advertised = await checkRecapCapabilities(client);
+  if (advertised.actions.some(action => action.id === 'library.sync.progress')) {
+    const { synchronize } = await import('./sync.js');
+    const sync = await synchronize(client, options, progress, local);
+    const current = await client.capabilities();
+    if (current.user_hash !== advertised.user_hash) throw new CliError('LOCAL_USER_MISMATCH', '账号已切换');
+    const recap = result(await client.invoke('library.recap.get', { day: options.day, timezone: options.timezone,
+      mode: options.mode, platform: options.platform, limit: Math.min(500, options.limit) }));
+    return { ...recap, sync, message: '已先同步最近清单；今天补发现的旧视频不会被归为昨天点赞。' };
+  }
   if (!['today', 'yesterday'].includes(options.day) || !['like', 'collect', 'all'].includes(options.mode)
       || !['douyin', 'bilibili', 'all'].includes(options.platform) || !Number.isInteger(options.limit)
       || options.limit < 1 || options.limit > 100) throw usageError('日期 today/yesterday，平台 douyin/bilibili/all，来源 like/collect/all，条数 1–100');

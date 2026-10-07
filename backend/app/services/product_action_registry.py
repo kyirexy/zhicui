@@ -290,12 +290,32 @@ def _unavailable(
 
 
 _CORE_DEFINITIONS: tuple[ProductActionDefinition, ...] = (
+    _read("library.activity.list", "读取同步台账", "分页读取喜欢、收藏，包含尚无文稿的作品及平台实际互动数据。", "library:read", "library_activity_list", _object({
+        "page": {"type": "integer", "minimum": 1, "maximum": 100000},
+        "per_page": {"type": "integer", "minimum": 1, "maximum": 100},
+        "platform": {"type": "string", "enum": ["douyin", "bilibili", "all"]},
+        "mode": {"type": "string", "enum": ["like", "collect", "all"]},
+    })),
+    ProductActionDefinition(
+        id="library.sync.progress", title="更新同步进度", description="报告整次同步进度与续跑入口，不触发下载或转写。",
+        scopes=("library:write", "local:invoke"), handler_name="library_sync_progress", risk=(RiskLevel.WRITE,), rate_limit_per_minute=120,
+        input_schema=_object({
+            "task_id": {"type": "string", "pattern": "^sync-[a-f0-9-]{36}$", "maxLength": 64},
+            "platform": {"type": "string", "enum": ["douyin", "bilibili", "all"]},
+            "mode": {"type": "string", "enum": ["like", "collect", "all"]},
+            "requested": {"type": "integer", "minimum": 1, "maximum": 2000},
+            "stage": {"type": "string", "enum": ["restoring", "reading", "saving", "waiting_for_user", "paused", "partial", "completed"]},
+            **{key: {"type": "integer", "minimum": 0, "maximum": 2000} for key in ("read", "saved", "created", "reused", "skipped", "failed")},
+            "coverage": {"type": "string", "enum": ["complete", "limited", "partial"]},
+            "batch_ids": {"type": "array", "maxItems": 20, "items": {"type": "string", "maxLength": 64}},
+        }, ["task_id", "platform", "mode", "requested", "stage"]),
+    ),
     _read("library.recap.get", "读取每日喜欢收藏", "读取首次同步台账，包含尚无文稿的清单；不是平台真实点赞时间。", "library:read", "library_recap_get", _object({
         "day": {"type": "string", "enum": ["today", "yesterday"]},
         "timezone": {"type": "string", "minLength": 1, "maxLength": 64},
         "mode": {"type": "string", "enum": ["like", "collect", "all"]},
         "platform": {"type": "string", "enum": ["douyin", "bilibili", "all"]},
-        "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 500},
     })),
     ProductActionDefinition(
         id="library.activity.record", title="保存本次平台清单",
@@ -306,7 +326,14 @@ _CORE_DEFINITIONS: tuple[ProductActionDefinition, ...] = (
         input_schema=_object({
             "platform": {"type": "string", "enum": ["douyin", "bilibili"]},
             "mode": {"type": "string", "enum": ["like", "collect"]},
+            "task_id": {"type": "string", "pattern": "^sync-[a-f0-9-]{36}$", "maxLength": 64},
+            "source_rank_offset": {"type": "integer", "minimum": 0, "maximum": 499},
+            "coverage": {"type": "string", "enum": ["complete", "limited", "partial"]},
+            "order_reliable": {"type": "boolean"},
             "items": {"type": "array", "minItems": 1, "maxItems": 100, "items": _object({
+                "published_at": {"type": "string", "maxLength": 64},
+                "duration_seconds": {"type": "integer", "minimum": 0, "maximum": 86400},
+                "engagement": _object({key: {"type": "integer", "minimum": 0, "maximum": 100000000000} for key in ("likes", "comments", "shares", "collects", "views")}),
                 "video_id": {"type": "string", "minLength": 5, "maxLength": 32, "pattern": "^[A-Za-z0-9]+$"},
                 "title": {"type": "string", "maxLength": 500},
                 "author_name": {"type": "string", "maxLength": 200},
@@ -1310,7 +1337,7 @@ _CORE_DEFINITIONS: tuple[ProductActionDefinition, ...] = (
         local=True, input_schema=_object({
             "platform": {"type": "string", "enum": ["douyin", "bilibili", "xiaohongshu"]},
             "mode": {"type": "string", "enum": ["like", "collect", "post"]},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 500},
         }, ["platform", "mode", "limit"]), reason="需要已安装的 Windows 桌面客户端",
     ),
     _unavailable(
@@ -1412,7 +1439,7 @@ _LOCAL_PLATFORM_SCHEMA = _object({
 _LOCAL_COLLECT_SCHEMA = _object({
     **_LOCAL_PLATFORM_SCHEMA["properties"],
     "mode": {"type": "string", "enum": ["like", "collect", "post"]},
-    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 500},
 }, ["platform", "mode", "limit"])
 
 _LOCAL_MEDIA_SCHEMA = _object({
@@ -1422,14 +1449,14 @@ _LOCAL_MEDIA_SCHEMA = _object({
 _LOCAL_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "local.status": _object(),
     "local.capabilities.get": _object(),
-    "local.platform.status": _LOCAL_PLATFORM_SCHEMA,
+    "local.platform.status": _object({**_LOCAL_PLATFORM_SCHEMA["properties"], "run_id": {"type": "string", "minLength": 1, "maxLength": 64}}, ["platform"]),
     "local.platform.sync": _LOCAL_COLLECT_SCHEMA,
     "local.platform.disconnect": _LOCAL_PLATFORM_SCHEMA,
     "local.platform.logout": _LOCAL_PLATFORM_SCHEMA,
     "local.platform.rebind": _LOCAL_PLATFORM_SCHEMA,
     # The trusted desktop bridge cancels the single active platform operation;
     # it deliberately accepts no renderer-controlled identity or path input.
-    "local.platform.cancel": _object(),
+    "local.platform.cancel": _object({"run_id": {"type": "string", "minLength": 1, "maxLength": 64}}),
     "local.media.settings.get": _object(),
     "local.media.directory.choose": _object(),
     "local.media.delete": _LOCAL_MEDIA_SCHEMA,

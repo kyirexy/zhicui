@@ -75,6 +75,10 @@ interface PlatformJob {
   startedAt: string;
   updatedAt: string;
   result?: PlatformAccountResult;
+  idempotencyKey?: string;
+  mode?: string;
+  limit?: number;
+  readCount?: number;
 }
 
 interface LocalUiJob {
@@ -102,6 +106,7 @@ export interface DesktopAgentActionBridgeOptions {
   platformAccounts: PlatformAccountConnector;
   getMediaLibrary: () => DesktopMediaLibrary | null;
   getWindow: () => BrowserWindow | null;
+  connectionState?: () => string;
 }
 
 function record(value: unknown): JsonRecord {
@@ -226,6 +231,11 @@ async function readJsonBody(request: IncomingMessage): Promise<JsonRecord> {
 }
 
 export class DesktopAgentActionBridge {
+  lastActivity = Date.now();
+  get busy(): boolean {
+    return Boolean(this.activePlatformJob && !['succeeded', 'failed', 'canceled'].includes(this.activePlatformJob.status)
+      || this.activeUiJob && !['succeeded', 'failed', 'canceled'].includes(this.activeUiJob.status));
+  }
   private server: Server | null = null;
   private token = '';
   private tokenExpiresAt = 0;
@@ -236,6 +246,8 @@ export class DesktopAgentActionBridge {
   private activeProfileKey = '';
   private bindQueue: Promise<void> = Promise.resolve();
   private readonly latestPlatformJobs = new Map<string, PlatformJob>();
+  private readonly jobsById = new Map<string, PlatformJob>();
+  private jobWrites: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: DesktopAgentActionBridgeOptions) {}
 
@@ -263,6 +275,10 @@ export class DesktopAgentActionBridge {
       user_hash: '',
       expires_at: new Date(Date.now() + DESCRIPTOR_TTL_MS).toISOString(),
     };
+    await mkdir(this.options.descriptorDirectory, { recursive: true });
+    await writeFile(join(this.options.descriptorDirectory, 'desktop-agent-runtime.json'), JSON.stringify({
+      api_version: 'v1', url: this.descriptor.url, version: this.options.version,
+    }), { mode: 0o600 });
     if (this.activeProfileKey) {
       this.descriptor.user_hash = desktopUserHash(this.activeProfileKey);
       await this.writeDescriptor();
@@ -311,6 +327,9 @@ export class DesktopAgentActionBridge {
     }
     this.options.getMediaLibrary()?.bindProfile(normalized || null);
     this.activeProfileKey = normalized;
+    this.latestPlatformJobs.clear();
+    this.jobsById.clear();
+    if (normalized) await this.restoreJobs(normalized);
     this.token = randomBytes(32).toString('base64url');
     this.tokenExpiresAt = Date.now() + DESCRIPTOR_TTL_MS;
     if (!this.descriptor) return true;
@@ -347,14 +366,15 @@ export class DesktopAgentActionBridge {
 
   recordPlatformStatus(status: PlatformAccountStatus): void {
     const job = this.activePlatformJob;
-    if (!job || job.platform !== status.platform) return;
+    if (!job || job.platform !== status.platform || job.status === 'canceled') return;
+    if (status.readCount !== undefined) job.readCount = status.readCount;
     job.stage = status.stage;
     job.message = status.message;
     job.updatedAt = new Date().toISOString();
     if (status.stage === 'browser-open' || status.stage === 'waiting' || status.stage === 'needs-action') {
       job.status = 'waiting_for_user';
     } else if (status.stage === 'success') {
-      job.status = 'succeeded';
+      job.status = 'running'; // 等待采集结果落盘，不能仅凭进度通知结束任务。
     } else if (status.stage === 'cancelled') {
       job.status = 'canceled';
     } else if (status.stage === 'error') {
@@ -362,6 +382,7 @@ export class DesktopAgentActionBridge {
     } else {
       job.status = 'running';
     }
+    void this.persistJobs().catch(() => undefined);
   }
 
   private async handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -369,6 +390,12 @@ export class DesktopAgentActionBridge {
     const actionMatch = request.url?.match(/^\/v1\/actions\/([^/?]+)\/invoke$/);
     if (!isLoopback(request.socket.remoteAddress)) {
       response.destroy();
+      return;
+    }
+    if (request.method === 'GET' && request.url === '/v1/connection') {
+      sendJson(response, 200, { api_version: 'v1', version: this.options.version,
+        state: this.options.connectionState?.() || (this.activeProfileKey ? 'ready' : 'signed_out'),
+        max_sync_items: 500 });
       return;
     }
     if (request.method !== 'POST' || !actionMatch) {
@@ -389,6 +416,7 @@ export class DesktopAgentActionBridge {
       return;
     }
     const action = actionMatch[1];
+    this.lastActivity = Date.now();
     if (!(LOCAL_ACTIONS as readonly string[]).includes(action)) {
       sendJson(response, 404, this.envelope(action, requestId, 'failed', null, {
         code: 'ACTION_NOT_ALLOWED', message: '该本机 Action 不在固定白名单中',
@@ -397,7 +425,9 @@ export class DesktopAgentActionBridge {
     }
     try {
       const input = await readJsonBody(request);
-      const result = await this.invoke(action, input);
+      const idempotencyKey = String(request.headers['idempotency-key'] || '');
+      if (idempotencyKey && !/^[A-Za-z0-9_.:-]{1,160}$/.test(idempotencyKey)) throw new Error('同步请求标识无效');
+      const result = await this.invoke(action, input, idempotencyKey);
       const resultRecord = record(result.data);
       const resultError = result.status === 'failed'
         ? safeError({
@@ -424,6 +454,7 @@ export class DesktopAgentActionBridge {
   private async invoke(
     action: string,
     input: JsonRecord,
+    idempotencyKey = '',
   ): Promise<{ status: LocalRunStatus; data: unknown; runId?: string }> {
     if (action === 'local.status' || action === 'local.capabilities.get') {
       rejectExtraKeys(input, []);
@@ -449,8 +480,10 @@ export class DesktopAgentActionBridge {
       throw error;
     }
     if (action === 'local.platform.status') {
-      const request = platformRequest(input, this.activeProfileKey);
-      const job = this.latestPlatformJobs.get(platformKey(request));
+      rejectExtraKeys(input, ['platform', 'run_id']);
+      const request = platformRequest({ platform: input.platform }, this.activeProfileKey);
+      const job = input.run_id ? this.jobsById.get(String(input.run_id)) : this.latestPlatformJobs.get(platformKey(request));
+      if (job && job.key !== platformKey(request)) throw new Error('本机同步任务不属于当前账号与平台');
       return {
         status: 'succeeded',
         data: job ? this.publicJob(job) : {
@@ -471,10 +504,14 @@ export class DesktopAgentActionBridge {
       const request = collectRequest(input, this.activeProfileKey);
       return this.startPlatformJob(action, request, () => (
         this.options.platformAccounts.collect(request)
-      ), 'running');
+      ), 'running', idempotencyKey);
     }
     if (action === 'local.platform.cancel') {
-      rejectExtraKeys(input, []);
+      rejectExtraKeys(input, ['run_id']);
+      if (input.run_id && (input.run_id !== this.activePlatformJob?.runId
+        || ['succeeded', 'failed', 'canceled'].includes(this.activePlatformJob.status))) {
+        return { status: 'canceled', data: { cancelled: true, message: '该任务已结束，不影响其他任务' }, runId: String(input.run_id) };
+      }
       const result = await this.options.platformAccounts.cancel();
       if (this.activePlatformJob) {
         this.activePlatformJob.status = 'canceled';
@@ -640,7 +677,14 @@ export class DesktopAgentActionBridge {
     request: PlatformAccountRequest,
     execute: () => Promise<PlatformAccountResult>,
     initialStatus: LocalRunStatus,
+    idempotencyKey = '',
   ): { status: LocalRunStatus; data: unknown; runId: string } {
+    const collect = request as Partial<PlatformAccountCollectRequest>;
+    const existing = idempotencyKey && [...this.jobsById.values()].find(job => job.key === platformKey(request) && job.idempotencyKey === idempotencyKey);
+    if (existing) {
+      if (existing.action !== action || existing.mode !== collect.mode || existing.limit !== collect.limit) throw new Error('同一同步标识不能用于不同请求');
+      return { status: existing.status, data: this.publicJob(existing), runId: existing.runId };
+    }
     if (this.activePlatformJob && !['succeeded', 'failed', 'canceled'].includes(this.activePlatformJob.status)) {
       const error = new Error('已有平台账号操作正在进行') as Error & { code: string };
       error.code = 'LOCAL_ACTION_BUSY';
@@ -659,21 +703,32 @@ export class DesktopAgentActionBridge {
         : '本机平台任务已开始',
       startedAt: now,
       updatedAt: now,
+      idempotencyKey,
+      mode: collect.mode,
+      limit: collect.limit,
     };
     this.activePlatformJob = job;
     this.latestPlatformJobs.set(job.key, job);
-    void execute().then((result) => {
+    this.jobsById.set(job.runId, job);
+    void this.persistJobs().then(() => {
+      if (job.status === 'canceled') throw new Error('任务已取消');
+      return execute();
+    }).then(async (result) => {
+      if (job.status === 'canceled') return;
       job.result = result;
       job.status = result.cancelled ? 'canceled' : result.success ? 'succeeded' : 'failed';
       job.stage = result.cancelled ? 'cancelled' : result.success ? 'success' : 'error';
       job.message = result.success ? '本机平台任务已完成' : result.error || '本机平台任务失败';
       job.updatedAt = new Date().toISOString();
+      await this.persistJobs();
     }).catch((error) => {
+      if (job.status === 'canceled') return;
       const safe = safeError(error);
       job.status = 'failed';
       job.stage = 'error';
       job.message = safe.message;
       job.updatedAt = new Date().toISOString();
+      void this.persistJobs().catch(() => undefined);
     });
     return { status: job.status, data: this.publicJob(job), runId: job.runId };
   }
@@ -683,6 +738,8 @@ export class DesktopAgentActionBridge {
       run_id: job.runId,
       action: job.action,
       platform: job.platform,
+      mode: job.mode,
+      read_count: job.readCount || 0,
       status: job.status,
       stage: job.stage,
       message: job.message,
@@ -695,6 +752,9 @@ export class DesktopAgentActionBridge {
         code: job.result.code,
         error: job.result.error,
         count: job.result.count,
+        coverage: job.result.coverage,
+        orderReliable: job.result.orderReliable,
+        warning: job.result.warning,
         urls: job.result.urls,
         items: job.result.items?.map(({
           ephemeralMediaUrl: _secretMediaUrl,
@@ -748,6 +808,38 @@ export class DesktopAgentActionBridge {
 
   private descriptorPath(): string {
     return join(this.options.descriptorDirectory, DESCRIPTOR_FILE);
+  }
+
+  private persistJobs(): Promise<void> {
+    if (!this.activeProfileKey) return Promise.resolve();
+    const path = join(this.options.descriptorDirectory, `sync-jobs-${desktopUserHash(this.activeProfileKey)}.json`);
+    const values = [...this.jobsById.values()].slice(-40).map(job => ({
+      ...job, key: undefined, result: this.publicJob(job).result,
+    }));
+    const work = this.jobWrites.then(async () => {
+      const temporary = `${path}.${randomUUID()}.tmp`;
+      await writeFile(temporary, JSON.stringify(values), { mode: 0o600 });
+      await rename(temporary, path);
+    });
+    this.jobWrites = work.catch(() => undefined);
+    return work;
+  }
+
+  private async restoreJobs(profileKey: string): Promise<void> {
+    const path = join(this.options.descriptorDirectory, `sync-jobs-${desktopUserHash(profileKey)}.json`);
+    try {
+      const values = JSON.parse(await readFile(path, 'utf8')) as PlatformJob[];
+      for (const value of values.slice(-40)) {
+        if (!value.runId || !['douyin', 'bilibili', 'xiaohongshu'].includes(value.platform)) continue;
+        const job = { ...value, key: `${profileKey}:${value.platform}` };
+        if (!['succeeded', 'failed', 'canceled'].includes(job.status)) {
+          job.status = 'failed'; job.stage = 'error'; job.message = '客户端曾退出，继续时将重新读取并去重';
+          job.result = { success: false, platform: job.platform, code: 'LOCAL_CAPTURE_INTERRUPTED' };
+        }
+        this.jobsById.set(job.runId, job);
+        this.latestPlatformJobs.set(job.key, job);
+      }
+    } catch { /* 首次启动没有采集历史。 */ }
   }
 
   private async writeDescriptor(): Promise<void> {

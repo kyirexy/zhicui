@@ -147,7 +147,7 @@ test('real CLI rejects invalid recap before network and emits one JSONL error', 
   let calls = 0;
   const server = await startServer((_req, res) => { calls++; json(res, 500, {}); });
   t.after(server.close);
-  const result = await runCli(['recap', 'yesterday', '--limit', '101', '--connect', '--jsonl'], { env: credentialEnv(directory, server.url) });
+  const result = await runCli(['recap', 'yesterday', '--limit', '501', '--connect', '--jsonl'], { env: credentialEnv(directory, server.url) });
   assert.notEqual(result.code, 0);
   assert.equal(calls, 0);
   const events = result.stdout.trim().split('\n').map(JSON.parse);

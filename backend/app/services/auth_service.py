@@ -48,8 +48,9 @@ def verify_password(plain: str, hashed: str) -> bool:
 # ---------------------------------------------------------------------------
 # JWT
 # ---------------------------------------------------------------------------
-def create_access_token(user_id: str, email: str, *, session_id: str | None = None) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
+def create_access_token(user_id: str, email: str, *, session_id: str | None = None,
+                        auth_session_id: str | None = None, ttl_seconds: int | None = None) -> str:
+    expire = datetime.now(timezone.utc) + (timedelta(seconds=ttl_seconds) if ttl_seconds is not None else timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS))
     payload = {
         "sub": user_id,
         "email": email,
@@ -57,6 +58,8 @@ def create_access_token(user_id: str, email: str, *, session_id: str | None = No
     }
     if session_id is not None:
         payload["jti"] = session_id
+    if auth_session_id is not None:
+        payload["sid"] = auth_session_id
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 

@@ -202,6 +202,19 @@ def library_media_resolve(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
         raise ActionHandlerError(exc.code, str(exc), retryable=exc.retryable) from None
 
 
+def library_activity_list(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    from app.services.agent_activity_service import list_activity
+    return list_activity(ctx.db, user_id=ctx.user.id, payload=payload)
+
+
+def library_sync_progress(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    from app.services.agent_sync_task_service import update
+    try:
+        return update(ctx.db, user_id=ctx.user.id, payload=payload)
+    except ValueError as exc:
+        raise ActionHandlerError("INVALID_INPUT", str(exc)) from exc
+
+
 def library_activity_record(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
     from app.services.agent_activity_service import record_snapshot
     try:

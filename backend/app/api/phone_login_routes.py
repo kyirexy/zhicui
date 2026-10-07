@@ -1,6 +1,6 @@
 """电脑已登录时授权手机登录，所有秘密仅出现在不缓存的请求/响应体。"""
 from typing import Literal
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 from app.core.auth import get_current_user
@@ -69,11 +69,16 @@ def decision(session_id: str, body: DecisionBody, request: Request,
 
 @router.post("/{session_id}/token", include_in_schema=False)
 def token(session_id: str, body: TokenBody, request: Request, db: Session = Depends(get_db)):
+    headers_response = Response()
     data, user = service.consume(db, session_id, body.claim_secret)
     if user is not None:
-        data = {**data, "token": auth_service.create_access_token(user.id, user.email, session_id=session_id), "user": user.to_dict()}
+        from app.services.auth_session_service import login_payload
+        data = {**data, **login_payload(db, user, request, headers_response,
+            legacy=auth_service.create_access_token(user.id, user.email, session_id=session_id))}
         activity_service.log_activity_safely(user_id=user.id, action="phone_login_consumed", method="POST",
             path="/api/auth/phone-login/sessions/{session_id}/token", status_code=200,
             ip=request.client.host if request.client else None, detail={"session_id": session_id},
             event_key=f"phone-login:{session_id}:consumed")
-    return result(data)
+    response = result(data)
+    response.raw_headers.extend((key, value) for key, value in headers_response.raw_headers if key in (b"set-cookie", b"cache-control"))
+    return response

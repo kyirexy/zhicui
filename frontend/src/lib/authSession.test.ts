@@ -5,7 +5,7 @@ import {
   clearStoredSession, createSessionEpoch, isCurrentSessionRejected,
   isSessionExpired, readCachedUser, readStoredToken, sessionExpiresAt,
   sessionFetch, SESSION_REJECTED_EVENT, TOKEN_STORAGE_KEY, USER_STORAGE_KEY,
-  writeStoredSession, storedSessionChange, canUpdateCurrentUser,
+  writeStoredSession, storedSessionChange, canUpdateCurrentUser, registerSessionRecovery,
 } from './authSession.ts';
 
 const user = {
@@ -150,14 +150,56 @@ test('实际请求遇断网或服务异常保留缓存，当前 401 清理并通
   assert.equal(events.length, 1);
 });
 
+test('当前 401 自动续期重放；续期断网保留登录，切账号不重放旧操作', async (t) => {
+  const storage = memoryStorage();
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: {
+    localStorage: storage, dispatchEvent: () => true,
+  } });
+  t.after(() => {
+    if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
+    else Reflect.deleteProperty(globalThis, 'window');
+  });
+  const old = jwt(user.id, Math.floor(Date.now() / 1000) + 10);
+  const fresh = jwt();
+  writeStoredSession(old, user);
+  const seen: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (_input: unknown, init?: RequestInit) => {
+    const auth = new Headers(init?.headers).get('Authorization')!;
+    seen.push(auth);
+    return new Response(null, { status: auth === `Bearer ${fresh}` ? 200 : 401 });
+  });
+  let stop = registerSessionRecovery(async () => {
+    writeStoredSession(fresh, user);
+    return { token: fresh };
+  });
+  assert.equal((await sessionFetch('/api/example', { headers: { Authorization: `Bearer ${old}` } })).status, 200);
+  assert.deepEqual(seen, [`Bearer ${old}`, `Bearer ${fresh}`]);
+  stop(); seen.length = 0;
+  writeStoredSession(old, user);
+  stop = registerSessionRecovery(async () => { throw new TypeError('offline'); });
+  await assert.rejects(sessionFetch('/api/example', { headers: { Authorization: `Bearer ${old}` } }), /offline/);
+  assert.equal(readStoredToken(), old);
+  stop(); seen.length = 0;
+  stop = registerSessionRecovery(async () => {
+    const other = jwt('user-b');
+    writeStoredSession(other, { ...user, id: 'user-b' });
+    return { token: other };
+  });
+  await sessionFetch('/api/example', { headers: { Authorization: `Bearer ${old}` } });
+  assert.equal(seen.length, 1, '旧账号的写操作不能用新账号身份重放');
+  assert.equal(readStoredToken(), jwt('user-b'));
+  stop();
+});
+
 test('Provider 使用会话代次守护恢复/登录/注册，监听联网和到期，并保留现有退出接口', () => {
   const source = readFileSync(new URL('./hooks/AuthContext.tsx', import.meta.url), 'utf8');
   assert.match(source, /const isCurrent = \(\) => !cancelled && sessionEpoch\.current\.isCurrent\(epoch\)/);
   assert.equal((source.match(/if \(!sessionEpoch\.current\.isCurrent\(epoch\)\) return null;/g) || []).length, 3);
-  assert.match(source, /window\.addEventListener\('online', refresh\)/);
-  assert.match(source, /sessionExpiresAt\(token\) - Date\.now\(\)/);
+  assert.match(source, /window\.addEventListener\('online', wake\)/);
+  assert.match(source, /sessionExpiresAt\(token \|\| ''\) - Date\.now\(\)/);
   assert.match(source, /clearPendingDesktopLoginApproval\(\)/);
-  assert.match(source, /const logout = useCallback\(\(\) => \{\s*clearSession\(\)/);
+  assert.match(source, /const logout = useCallback\(\(\) => \{[\s\S]*?revokeSession\(previous\)[\s\S]*?clearSession\(\)/);
   assert.match(source, /const cached = cachedCandidate && !shouldDiscardDevelopmentSession\(cachedCandidate,[\s\S]*?\? cachedCandidate : null;/);
   assert.match(source, /if \(change === 'reload'\) \{[\s\S]*?sessionEpoch\.current\.begin\(\);[\s\S]*?setUser\(null\);[\s\S]*?window\.location\.reload\(\);/);
 });

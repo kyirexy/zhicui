@@ -67,7 +67,7 @@ function parseCredential(value: string): StoredCredential {
   }
 }
 
-function configRoot(): string {
+export function configRoot(): string {
   if (process.env.ZHICUI_CONFIG_HOME) return process.env.ZHICUI_CONFIG_HOME;
   if (process.platform === 'win32') {
     return join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'Zhicui', 'cli');

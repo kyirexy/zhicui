@@ -5,7 +5,7 @@ import json
 import os
 import unittest
 import uuid
-from datetime import timedelta
+from datetime import timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -17,6 +17,7 @@ from sqlalchemy.pool import StaticPool
 os.environ.setdefault("JWT_SECRET", "agent-interface-test-secret-123456789")
 os.environ.setdefault("AGENT_TOKEN_PEPPER", "agent-interface-pepper-123456789")
 
+from app.models.auth_session import UserAuthSession, AuthRefreshReceipt
 from app.agent_interface.contracts import ALL_SCOPE_IDS
 from app.core.config import settings
 from app.core.database import Base
@@ -87,6 +88,7 @@ class AgentInterfaceV1Tests(unittest.TestCase):
         Base.metadata.create_all(
             self.engine,
             tables=[
+                UserAuthSession.__table__, AuthRefreshReceipt.__table__,
                 User.__table__,
                 AgentCredential.__table__,
                 AgentDeviceAuthorization.__table__,
@@ -232,8 +234,8 @@ class AgentInterfaceV1Tests(unittest.TestCase):
         ids = {definition.id for definition in definitions}
         # Deliberate explicit inventory: changing either count requires a
         # reviewed Registry update instead of accidental route reflection.
-        self.assertEqual(len(ids), 129)
-        self.assertEqual(sum(definition.available for definition in definitions), 111)
+        self.assertEqual(len(ids), 131)
+        self.assertEqual(sum(definition.available for definition in definitions), 113)
         self.assertFalse(any(action_id.startswith("admin.") for action_id in ids))
         self.assertTrue(ids.isdisjoint({
             "video.source_scan", "video.transcript_map", "web.public_research",
@@ -622,6 +624,20 @@ class AgentInterfaceV1Tests(unittest.TestCase):
         with self.assertRaises(CredentialError) as replay:
             rotate_refresh_token(self.db, old_refresh)
         self.assertEqual(replay.exception.code, "REFRESH_TOKEN_REUSED")
+
+    def test_rolling_refresh_and_idempotent_lost_response(self):
+        authorization, device_code, user_code = create_device_authorization(self.db, client_name="sync", client_type="cli", scopes=["account:read"])
+        approve_device_authorization(self.db, user_id=self.user.id, user_code=user_code, approve=True)
+        issued = poll_device_authorization(self.db, device_code=device_code)
+        row = self.db.get(AgentCredential, issued["credential"]["id"])
+        row.refresh_expires_at = utcnow() + timedelta(days=1)
+        self.db.commit()
+        first = rotate_refresh_token(self.db, issued["refresh_token"], "stable-request-123456789")
+        self.assertGreater(row.refresh_expires_at.replace(tzinfo=timezone.utc), utcnow() + timedelta(days=29))
+        self.assertEqual(first, rotate_refresh_token(self.db, issued["refresh_token"], "stable-request-123456789"))
+        self.user.is_active = False; self.db.commit()
+        with self.assertRaises(CredentialError):
+            rotate_refresh_token(self.db, issued["refresh_token"], "stable-request-123456789")
 
     def test_device_and_refresh_tokens_obey_user_rollout_gate(self) -> None:
         authorization, device_code, user_code = create_device_authorization(

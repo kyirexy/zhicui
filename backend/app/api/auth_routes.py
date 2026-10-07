@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,7 @@ from app.models.user import User as UserModel, get_user_by_id
 from app.services import (
     activity_service,
     auth_service,
+    auth_session_service,
     desktop_handoff_service,
     error_log_service,
     feedback_service,
@@ -84,7 +85,7 @@ def _auth_error_category(error: str | None) -> str:
 
 
 @router.post("/api/auth/register")
-def auth_register(body: RegisterRequest, request: Request, db: Session = Depends(get_db)) -> dict:
+def auth_register(body: RegisterRequest, request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
     user, error = privacy_account_service.register_with_consent(
         db, email=body.email, password=body.password, username=body.username,
         accepted_terms=body.accepted_terms, accepted_privacy=body.accepted_privacy,
@@ -104,11 +105,11 @@ def auth_register(body: RegisterRequest, request: Request, db: Session = Depends
         status_code=200, ip=request.client.host if request.client else None,
         detail={"outcome": "success"},
     )
-    return _ok({"token": token, "user": user.to_dict()})
+    return _ok(auth_session_service.login_payload(db, user, request, response, token))
 
 
 @router.post("/api/auth/login")
-def auth_login(body: LoginRequest, request: Request, db: Session = Depends(get_db)) -> dict:
+def auth_login(body: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
     token, user, error = auth_service.login(db, body.email, body.password)
     if error:
         activity_service.log_activity_safely(
@@ -122,7 +123,7 @@ def auth_login(body: LoginRequest, request: Request, db: Session = Depends(get_d
         status_code=200, ip=request.client.host if request.client else None,
         detail={"outcome": "success"},
     )
-    return _ok({"token": token, "user": user.to_dict()})
+    return _ok(auth_session_service.login_payload(db, user, request, response, token))
 
 
 @router.post("/api/auth/dev-session", include_in_schema=False)
@@ -175,7 +176,7 @@ def desktop_handoff_claim(
 
 
 @router.get("/api/auth/desktop-handoff/status/{session_id}", include_in_schema=False)
-def desktop_handoff_status(session_id: str, db: Session = Depends(get_db)) -> dict:
+def desktop_handoff_status(session_id: str, request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
     normalized = desktop_handoff_service.normalize_session_id(session_id)
     if normalized is None:
         raise HTTPException(status_code=400, detail="登录票据格式不正确")
@@ -190,7 +191,67 @@ def desktop_handoff_status(session_id: str, db: Session = Depends(get_db)) -> di
     user = get_user_by_id(db, user_id) if user_id else None
     if user is None:
         return _err("登录用户不存在，请返回客户端重新发起")
-    return _ok({"status": "success", "token": auth_service.create_access_token(user.id, user.email), "user": user.to_dict()})
+    return _ok({"status": "success", **auth_session_service.login_payload(db, user, request, response)})
+
+
+class SessionRefreshRequest(BaseModel):
+    refresh_token: str | None = Field(default=None, max_length=512)
+    request_id: str = Field(..., min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+def _check_session_origin(request: Request) -> None:
+    from urllib.parse import urlsplit
+    origin = request.headers.get("origin")
+    if origin and urlsplit(origin).netloc != request.headers.get("host"):
+        import os
+        allowed = os.environ.get("ALLOWED_ORIGINS", "")
+        allowed = allowed.split(",") if isinstance(allowed, str) else allowed
+        if origin not in allowed:
+            raise HTTPException(403, "会话请求来源不匹配")
+    if request.headers.get("sec-fetch-site") == "cross-site":
+        raise HTTPException(403, "不允许跨站刷新会话")
+
+
+@router.post("/api/auth/refresh")
+def refresh_session(body: SessionRefreshRequest, request: Request, response: Response,
+                    db: Session = Depends(get_db)) -> dict:
+    _check_session_origin(request)
+    refresh = body.refresh_token or request.cookies.get(auth_session_service.COOKIE) or ""
+    data = auth_session_service.refresh(db, refresh, body.request_id)
+    return _ok(auth_session_service.public_session(data, request, response))
+
+
+@router.post("/api/auth/session/migrate")
+def migrate_session(body: SessionRefreshRequest, request: Request, response: Response,
+                    db: Session = Depends(get_db), user: UserModel = Depends(get_current_user)) -> dict:
+    from app.services.auth_refresh_receipt import read_receipt, save_receipt
+    _check_session_origin(request)
+    token = request.headers.get("authorization", "")[7:]
+    db.query(UserModel).filter(UserModel.id == user.id).with_for_update().first()
+    owner = "migration:" + auth_session_service.digest(token)[:64]
+    data = read_receipt(db, owner, token, body.request_id)
+    if data is None:
+        data = auth_session_service.issue(db, user,
+            "desktop" if request.headers.get("X-Zhicui-Session-Transport") == "native" else "web", token, commit=False)
+        save_receipt(db, owner, token, body.request_id, data)
+        db.commit()
+    else:
+        payload = auth_service.decode_access_token(data["token"])
+        if not payload:
+            raise auth_session_service.rejected()
+        auth_session_service.assert_session_active(db, payload)
+    return _ok(auth_session_service.public_session(data, request, response))
+
+
+@router.post("/api/auth/logout")
+def logout_session(body: SessionRefreshRequest, request: Request, response: Response,
+                   db: Session = Depends(get_db)) -> dict:
+    _check_session_origin(request)
+    auth_session_service.revoke(db, body.refresh_token or request.cookies.get(auth_session_service.COOKIE),
+        request.headers.get("authorization", "")[7:])
+    response.delete_cookie(auth_session_service.COOKIE, path="/api/auth")
+    response.headers["Cache-Control"] = "no-store"
+    return _ok({"logged_out": True})
 
 
 @router.get("/api/auth/me")

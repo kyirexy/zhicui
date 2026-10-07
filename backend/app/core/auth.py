@@ -31,6 +31,8 @@ def get_current_user(
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(status_code=401, detail="无效的登录凭证")
+    from app.services.auth_session_service import assert_session_active
+    assert_session_active(db, payload, credentials.credentials)
     user = get_user_by_id(db, user_id)
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="账号不存在或已被禁用")
@@ -46,6 +48,11 @@ def get_current_user_optional(
         return None
     payload = decode_access_token(credentials.credentials)
     if not payload:
+        return None
+    from app.services.auth_session_service import assert_session_active
+    try:
+        assert_session_active(db, payload, credentials.credentials)
+    except HTTPException:
         return None
     user_id = payload.get("sub")
     if not user_id:

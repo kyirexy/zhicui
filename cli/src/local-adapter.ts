@@ -1,7 +1,9 @@
-import { timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+import { launchDesktop } from './desktop-launch.js';
 import { CliError, EXIT_CODES } from './errors.js';
 import type { AgentActionDefinition, AgentEnvelope, JsonObject } from './types.js';
 
@@ -47,7 +49,7 @@ const COLLECT_INPUT_SCHEMA: JsonObject = {
   properties: {
     ...(PLATFORM_INPUT_SCHEMA.properties as JsonObject),
     mode: { type: 'string', enum: ['like', 'collect', 'post'] },
-    limit: { type: 'integer', minimum: 1, maximum: 100 },
+    limit: { type: 'integer', minimum: 1, maximum: 500 },
   },
   required: ['platform', 'mode', 'limit'],
   additionalProperties: false,
@@ -73,7 +75,13 @@ const MEDIA_INPUT_SCHEMA: JsonObject = {
  * 不会向 Agent 宣告桌面端不接受的字段（尤其是任意命令、路径或密钥）。
  */
 export function trustedLocalInputSchema(actionId: string): JsonObject | null {
-  if (['local.status', 'local.capabilities.get', 'local.platform.cancel',
+  if (actionId === 'local.platform.status') return { ...PLATFORM_INPUT_SCHEMA, properties: {
+    ...(PLATFORM_INPUT_SCHEMA.properties as JsonObject), run_id: { type: 'string', minLength: 1, maxLength: 64 },
+  } };
+  if (actionId === 'local.platform.cancel') return { ...EMPTY_INPUT_SCHEMA, properties: {
+    run_id: { type: 'string', minLength: 1, maxLength: 64 },
+  } };
+  if (['local.status', 'local.capabilities.get',
     'local.media.settings.get', 'local.media.directory.choose',
     'local.update.check', 'local.client.update.check',
     'local.update.install', 'local.client.update.install'].includes(actionId)) {
@@ -172,6 +180,33 @@ function assertSameUser(expectedUserHash: string | null | undefined, actualUserH
 }
 
 export class RestrictedLocalAdapter {
+  private checkedAt = 0;
+  private async connection(): Promise<Record<string, unknown> | null> {
+    try {
+      const runtime = JSON.parse(await readFile(join(dirname(descriptorPath()), 'desktop-agent-runtime.json'), 'utf8'));
+      const url = new URL(runtime.url);
+      if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)
+        || url.username || url.password || url.search || url.hash || url.pathname !== '/') return null;
+      const response = await fetch(`${url.origin}/v1/connection`, { redirect: 'error', signal: AbortSignal.timeout(1000) });
+      return response.ok ? await response.json() as Record<string, unknown> : null;
+    } catch { return null; }
+  }
+  async ensureConnected(expectedUserHash?: string | null): Promise<Record<string, unknown>> {
+    let current = await this.status(expectedUserHash);
+    if (current.available) { this.checkedAt = Date.now(); return current; }
+    if (current.code === 'LOCAL_USER_MISMATCH' || current.code === 'UNSUPPORTED_PLATFORM') {
+      throw new CliError(String(current.code), String(current.message || '客户端与 CLI 账号不一致'));
+    }
+    if (!['DESKTOP_RESTORING', 'DESKTOP_AUTH_REQUIRED', 'DESKTOP_OFFLINE'].includes(String(current.code))) await launchDesktop(descriptorPath());
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      current = await this.status(expectedUserHash);
+      if (current.available) { this.checkedAt = Date.now(); return current; }
+      if (['LOCAL_USER_MISMATCH', 'DESKTOP_AUTH_REQUIRED'].includes(String(current.code))) break;
+      await delay(500);
+    }
+    throw new CliError(String(current.code || 'DESKTOP_START_TIMEOUT'), String(current.message || '客户端尚未就绪，稍后继续原任务'));
+  }
   async status(expectedUserHash?: string | null): Promise<Record<string, unknown>> {
     if (!['win32', 'darwin'].includes(process.platform)) {
       return { available: false, code: 'UNSUPPORTED_PLATFORM', platform: process.platform };
@@ -179,8 +214,27 @@ export class RestrictedLocalAdapter {
     try {
       const descriptor = await this.readDescriptor();
       if (expectedUserHash !== undefined) assertSameUser(expectedUserHash, descriptor.user_hash);
-      return { available: true, api_version: descriptor.api_version };
+      const live = await this.connection();
+      if (live && live.state !== 'ready') throw new CliError('DESKTOP_RESTORING', '客户端正在恢复连接');
+      // 新版执行真实探测；旧版描述文件保持兼容，实际调用仍验证连接。
+      if (!live && !process.env.ZHICUI_DESKTOP_BRIDGE_DESCRIPTOR) {
+        const probe = await fetch(`${descriptor.url}/v1/connection`, { redirect: 'error', signal: AbortSignal.timeout(1000) });
+        if (probe.status !== 404 && !probe.ok) throw new Error('bridge probe failed');
+      }
+      return { available: true, api_version: descriptor.api_version, max_sync_items: live?.max_sync_items || 100,
+        zhicui_login: live ? 'ready' : 'bound_legacy',
+        platform_login: { state: 'not_checked', next_action: '发起同步时复用本机平台会话；需要登录或验证才显示官方窗口' } };
     } catch (error) {
+      if (error instanceof CliError && error.code === 'LOCAL_USER_MISMATCH') return { available: false, code: error.code, message: error.message };
+      const live = await this.connection();
+      const states: Record<string, [string, string]> = {
+        signed_out: ['DESKTOP_AUTH_REQUIRED', '知萃客户端需要确认登录；CLI 授权会继续保留'],
+        restoring: ['DESKTOP_RESTORING', '知萃正在恢复登录，稍后自动继续'],
+        offline: ['DESKTOP_OFFLINE', '知萃暂时无法联网，会话已保留'],
+      };
+      const diagnosis = live && states[String(live.state)];
+      if (diagnosis) return { available: false, code: diagnosis[0], message: diagnosis[1], platform: process.platform,
+        zhicui_login: live!.state, platform_login: { state: 'not_checked' } };
       const code = error instanceof CliError ? error.code : 'DESKTOP_BRIDGE_UNAVAILABLE';
       return { available: false, code, platform: process.platform };
     }
@@ -192,6 +246,7 @@ export class RestrictedLocalAdapter {
     timeoutMs: number,
     idempotencyKey?: string,
     expectedUserHash?: string | null,
+    retried = false,
   ): Promise<AgentEnvelope> {
     if (!isAllowedLocalAction(action.id)) {
       throw new CliError('ACTION_NOT_ALLOWED', '该本机 Action 不在知萃固定白名单中', {
@@ -203,7 +258,11 @@ export class RestrictedLocalAdapter {
         exitCode: EXIT_CODES.localUnavailable,
       });
     }
+    if (!retried && Date.now() - this.checkedAt > 5000 && !['local.status', 'local.capabilities.get', 'local.platform.status'].includes(action.id)) {
+      await this.ensureConnected(expectedUserHash);
+    }
     const descriptor = await this.readDescriptor();
+    if (['local.platform.sync', 'local.platform.collect'].includes(action.id)) idempotencyKey ||= randomUUID();
     assertSameUser(expectedUserHash, descriptor.user_hash);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -227,6 +286,9 @@ export class RestrictedLocalAdapter {
       const payload = await response.json() as AgentEnvelope;
       if (!response.ok) {
         const error = payload.error;
+        if (!retried && response.status === 401 && typeof error === 'object' && error?.code === 'LOCAL_AUTH_INVALID') {
+          return this.invoke(action, input, timeoutMs, idempotencyKey, expectedUserHash, true);
+        }
         throw new CliError(
           typeof error === 'object' && error ? error.code : 'DESKTOP_BRIDGE_UNAVAILABLE',
           typeof error === 'object' && error ? error.message : '桌面端本机 Action 调用失败',

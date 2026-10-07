@@ -25,6 +25,9 @@ import type {
 } from './contract';
 
 const bridge: ZhicuiDesktopBridge = {
+  restoreAuthSession: (force = false) => ipcRenderer.invoke('desktop:auth-restore', force),
+  adoptAuthSession: (token: string) => ipcRenderer.invoke('desktop:auth-adopt', token),
+  logoutAuthSession: () => ipcRenderer.invoke('desktop:auth-logout'),
   getRuntimeInfo: () => (
     ipcRenderer.invoke('desktop:get-runtime-info') as Promise<DesktopRuntimeInfo>
   ),

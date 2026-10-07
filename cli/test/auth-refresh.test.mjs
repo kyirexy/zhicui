@@ -300,7 +300,7 @@ for (const transport of ['request', 'events']) {
     const saveIfUnchanged = credentials.saveIfUnchanged.bind(credentials);
     credentials.saveIfUnchanged = async (...args) => {
       const result = await saveIfUnchanged(...args);
-      await credentials.save(credential({
+      if (args[1].access_token !== args[0].access_token) await credentials.save(credential({
         access_token: 'access_new_login_test_only',
         refresh_token: 'refresh_new_login_test_only',
         created_at: '2026-02-01T00:00:00.000Z',

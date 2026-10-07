@@ -19,7 +19,7 @@ from app.models.note import Note
 from app.models.video_source_ledger import VideoSourceLedger
 from app.services import local_douyin_library_service, platform_library_service, media_extraction_outcome_service
 
-MAX_RECAP_ITEMS = 100
+MAX_RECAP_ITEMS = 500
 _MODES = ("collect", "like")
 
 

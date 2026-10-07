@@ -930,6 +930,12 @@ export interface BilibiliImportJob {
 
 export interface LibrarySyncRun {
   id: string;
+  task_id?: string;
+  task_source?: string;
+  stage?: string;
+  read?: number;
+  saved?: number;
+  resume_command?: string;
   platform: string;
   source_mode: string;
   status: 'running' | 'succeeded' | 'partial' | 'failed' | 'rejected' | 'invalid';

@@ -9,6 +9,7 @@ import {
 } from './local-adapter.js';
 import type { AgentActionDefinition, AgentEnvelope, JsonObject } from './types.js';
 import { CLI_VERSION } from './version.js';
+import { synchronize } from './sync.js';
 
 interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -373,6 +374,17 @@ export class StdioMcpServer {
     );
     const publishedRunTools = runTools(canCancel);
     this.activeRunToolNames = new Set(publishedRunTools.map((tool) => tool.name));
+    if (capabilities.actions.some(action => action.id === 'library.sync.progress')
+      && capabilities.actions.some(action => action.id === 'local.platform.sync')) {
+      tools.unshift({ name: 'zhicui_sync', title: '同步喜欢和收藏',
+        description: '自动恢复授权、按需启动桌面、分页采集并保存。同一请求自动接续未完成任务；返回 run_id 可通过 resume 续跑。默认抖音喜欢 200 条。',
+        inputSchema: { type: 'object', additionalProperties: false, properties: {
+          platform: { type: 'string', enum: ['douyin', 'bilibili', 'all'] },
+          mode: { type: 'string', enum: ['like', 'collect', 'all'] },
+          limit: { type: 'integer', minimum: 1, maximum: 500 },
+          resume: { type: 'string', pattern: '^sync-[a-f0-9-]{36}$' },
+        } }, annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true } });
+    }
     return [...publishedRunTools, ...tools];
   }
 
@@ -383,6 +395,17 @@ export class StdioMcpServer {
     const args = value.arguments && typeof value.arguments === 'object' && !Array.isArray(value.arguments)
       ? value.arguments as JsonObject
       : {};
+    if (name === 'zhicui_sync') {
+      if (Object.keys(args).some(key => !['platform', 'mode', 'limit', 'resume'].includes(key))) throw new CliError('INVALID_INPUT', '同步参数无效');
+      try {
+        const data = await synchronize(this.client, { platform: String(args.platform || 'douyin'), mode: String(args.mode || 'like'),
+          limit: args.limit === undefined ? 200 : Number(args.limit), resume: typeof args.resume === 'string' ? args.resume : undefined,
+          timeoutMs: 120_000 }, () => {}, this.local);
+        return { content: [{ type: 'text', text: JSON.stringify(data) }], structuredContent: data, isError: false };
+      } catch (error) {
+        return { content: [{ type: 'text', text: JSON.stringify(redactSecretValues({ error: normalizeUnknownError(error).toPayload() })) }], isError: true };
+      }
+    }
     if (Object.values(RUN_TOOL_NAMES).includes(name as (typeof RUN_TOOL_NAMES)[keyof typeof RUN_TOOL_NAMES])) {
       if (!this.activeRunToolNames.has(name)) await this.tools();
       if (!this.activeRunToolNames.has(name)) {

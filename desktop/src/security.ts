@@ -150,8 +150,8 @@ export function validatePlatformAccountCollectRequest(
   if (request.platform !== 'douyin' && mode === 'post') {
     throw new Error('当前平台不支持同步自己的作品');
   }
-  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
-    throw new Error('账号同步数量必须在 1–100 条之间');
+  if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+    throw new Error('账号同步数量必须在 1–500 条之间');
   }
   if (value.interactive !== undefined && typeof value.interactive !== 'boolean') {
     throw new Error('同步窗口显示选项必须为布尔值');
@@ -168,7 +168,7 @@ export function validatePlatformAccountCollectRequest(
     || !Array.isArray(value.targetVideoIds) || value.targetVideoIds.length === 0
     || value.targetVideoIds.length > limit
     || value.targetVideoIds.some((id) => typeof id !== 'string' || !/^\d{5,32}$/.test(id)))) {
-    throw new Error('定向播放地址更新需要 1–100 个有效抖音视频标识，且不能超过同步数量');
+    throw new Error('定向播放地址更新需要 1–500 个有效抖音视频标识，且不能超过同步数量');
   }
   return { ...request, mode, limit,
     ...(value.interactive === undefined ? {} : { interactive: value.interactive }),

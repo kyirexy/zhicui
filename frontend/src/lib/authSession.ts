@@ -14,6 +14,13 @@ export interface AuthUser {
 export const TOKEN_STORAGE_KEY = 'zhicui_token';
 export const USER_STORAGE_KEY = 'zhicui_auth_user:v1';
 export const SESSION_REJECTED_EVENT = 'zhicui:session-rejected';
+let storageEpoch = 0;
+export const sessionStorageEpoch = () => storageEpoch;
+let recovery: (() => Promise<{ token: string } | null>) | null = null;
+export function registerSessionRecovery(handler: () => Promise<{ token: string } | null>): () => void {
+  recovery = handler;
+  return () => { if (recovery === handler) recovery = null; };
+}
 type SessionStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
 function browserStorage(): SessionStorage | null {
@@ -58,6 +65,7 @@ export function readCachedUser(token: string, storage = browserStorage()): AuthU
 }
 
 export function writeStoredSession(token: string, user: AuthUser, storage = browserStorage()): void {
+  if (readStoredToken(storage) !== token) storageEpoch++;
   try { storage?.setItem(TOKEN_STORAGE_KEY, token); } catch { /* 存储受限时保留内存会话。 */ }
   writeCachedUser(user, storage);
 }
@@ -76,6 +84,7 @@ export function writeCachedUser(user: AuthUser, storage = browserStorage()): voi
 }
 
 export function clearStoredSession(storage = browserStorage()): void {
+  storageEpoch++;
   for (const key of [TOKEN_STORAGE_KEY, USER_STORAGE_KEY]) {
     try { storage?.removeItem(key); } catch { /* 内存会话仍会立即清理。 */ }
   }
@@ -116,11 +125,32 @@ export async function sessionFetch(input: RequestInfo | URL, init?: RequestInit)
   const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
   const authorization = headers.get('Authorization');
   const requested = authorization?.startsWith('Bearer ') ? authorization.slice(7) : null;
+  const retryInput = input instanceof Request ? input.clone() : input;
   const response = await fetch(input, init);
   if (typeof window !== 'undefined'
     && isCurrentSessionRejected(response.status, requested, readStoredToken())) {
-    clearStoredSession();
-    window.dispatchEvent(new CustomEvent(SESSION_REJECTED_EVENT, { detail: { token: requested } }));
+    if (recovery) {
+      try {
+        const restored = await recovery();
+        if (restored && readStoredToken() === restored.token
+          && tokenClaims(restored.token)?.sub === tokenClaims(requested!)?.sub) {
+          const nextHeaders = new Headers(headers);
+          nextHeaders.set('Authorization', `Bearer ${restored.token}`);
+          const retried = await fetch(retryInput, { ...init, headers: nextHeaders });
+          if (isCurrentSessionRejected(retried.status, restored.token, readStoredToken())) {
+            clearStoredSession();
+            window.dispatchEvent(new CustomEvent(SESSION_REJECTED_EVENT, { detail: { token: restored.token } }));
+          }
+          return retried;
+        }
+      } catch (error) {
+        if (!(error && typeof error === 'object' && 'rejected' in error && error.rejected)) throw error;
+      }
+    }
+    if (readStoredToken() === requested) {
+      clearStoredSession();
+      window.dispatchEvent(new CustomEvent(SESSION_REJECTED_EVENT, { detail: { token: requested } }));
+    }
   }
   return response;
 }

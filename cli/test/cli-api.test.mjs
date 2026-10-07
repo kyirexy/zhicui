@@ -431,7 +431,9 @@ test('event stream refreshes an expired access token without leaking either toke
       json(response, 200, envelope(null, { run_id: 'run-refresh', status: 'running' }));
     } else if (url.pathname.endsWith('/auth/refresh')) {
       refreshCalls += 1;
-      assert.deepEqual(await readJsonBody(request), { refresh_token: refreshToken });
+      const refresh = await readJsonBody(request);
+      assert.equal(refresh.refresh_token, refreshToken);
+      assert.match(refresh.request_id, /^[a-f0-9-]{36}$/);
       json(response, 200, envelope({
         access_token: newToken,
         refresh_token: 'refresh_rotated_private_token',

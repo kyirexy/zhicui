@@ -20,18 +20,21 @@
 
 这种请求本身就是一次同步授权。每次都先同步，再读取回顾，不能只查询旧文稿后把空列表说成用户没点赞。
 
-- 首选已安装 CLI 1.0.12+：`zhicui recap yesterday --mode like --connect --json --timeout 5m`。今天改为 `today`；收藏用 `--mode collect`，两者用 `--mode all`；指定平台时加 `--platform douyin` 或 `--platform bilibili`。默认每个平台最近 50 条，不自发扩大为全量。页面短暂等待时继续查询同一任务，完成后自动保存并回顾，不重复提交；确需验证时提示用户在平台窗口完成。
+- 首选 CLI 1.0.14+：`zhicui sync --platform douyin --mode like --limit 200 --json --timeout 5m`。默认喜欢优先，每个平台/来源最多 500 条；`--mode all` 先喜欢后收藏，`--platform all` 包括 B站。不自发扩大为全量。
+- 客户端关闭时会按需后台启动，登录由主进程恢复；无需先打开首页。普通 `auth status` / `agent doctor` 不启动客户端。
+- 保存返回的 `run_id`；超时、中断或完成平台验证后执行 `zhicui sync resume <run_id> --json --timeout 5m`。同参数命令优先接续未完成任务。固定批次幂等，禁止为了重试另建任务。
+- 回顾兼容 `zhicui recap yesterday --mode like --limit 200 --json --timeout 5m`，今天改为 `today`。同步后由 `library.recap.get` 查询首次同步日期；查看最近 200 条清单用 `zhicui library activity --platform douyin --mode like --page 1 --per-page 100 --json`，随后第 2 页。未提取文稿也在台账中。
 - 同步复用当前用户的桌面平台登录；缺少知萃授权时由用户在浏览器确认，平台登录或验证码仍由本人完成。不能改用其他用户的绑定。
 - 先根据返回的清单回答“看了什么”。若要求内容总结，再读取 `ready_note_ids` 的现有文稿；缺少文稿时使用公开的单条提取 Action，不要把目录标题写成全文观点。
 - `sync.completed=false` 时明确哪些来源失败；整个同步失败时不要把缓存结果宣称为最新。`WAITING_FOR_USER`、风控或任务忙时停止重复提交，按返回的平台和 Run ID 查询进度。
 - 日期依据 `first_discovered`（知萃首次同步），不是平台真实点赞时间。今天补同步出来的旧视频不能写成昨天点赞；`has_more` 或有限采集范围也要如实说明。
-- 若直接使用 MCP，依次调用当前发现的本机同步/状态、`library.activity.record`、`library.recap.get`；本机 Run 只能向本机状态工具查询。不能在同步仅启动时就宣称同步已完成。
+- MCP 首选 `zhicui_sync`，参数 platform/mode/limit，续跑传 resume；同样自动连接与分批保存。之后调用 `library.activity.list` 或 `library.recap.get`。旧版无此工具时先升级官网 CLI。采集成功不等于资料已保存。
 
 1. 先查看 capabilities 或资料列表，确认 Action 可用且 scope 足够。
 2. 导入或同步只提交用户明确指定的来源和数量。
 3. 长任务保存 `run_id`，使用 Run 查询/事件续传，不重复提交同一任务；重试时沿用幂等键。
 4. 多视频提问前确认选中的视频文稿已就绪；回答引用知萃返回的来源信息，不把模型推断写成原文事实。
-5. 本机能力不可用时，返回结构化原因并建议启动/登录知萃 Windows 客户端；不要回退到 Shell 或浏览器自动化。
+5. 本机不可用时按诊断区分未安装、恢复中、知萃登录、平台验证、账号不一致。保留现有 CLI 授权；只在确认失效或权限不足时发起授权，不能因网络错误反复登录。
 
 ## 音频提取与下载
 

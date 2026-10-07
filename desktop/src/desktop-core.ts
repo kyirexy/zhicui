@@ -58,8 +58,8 @@ export function normalizeLocalPlatformResult(
     success: value.success === true,
     platform,
     error: error || undefined,
-    urls: value.urls?.slice(0, 100),
-    items: value.items?.slice(0, 100),
+    urls: value.urls?.slice(0, 500),
+    items: value.items?.slice(0, 500),
     count: Number.isFinite(value.count) ? Math.max(0, Number(value.count)) : undefined,
   };
 }

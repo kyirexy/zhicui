@@ -32,6 +32,7 @@ export interface DomainAlias {
 }
 
 const aliases: Record<string, DomainAlias> = {
+  'library.activity': { candidates: ['library.activity.list'], namedInputKeys: ['platform', 'mode', 'page', 'per_page'] },
   'library.list': { candidates: ['library.list', 'library.notes.list', 'library.sources.list'] },
   'library.get': { candidates: ['library.get', 'library.note.get', 'library.source.get'], positionalKeys: ['note_id'] },
   'library.download': { candidates: ['library.media.download'], positionalKeys: ['note_id'] },

@@ -1,3 +1,4 @@
+import { synchronize } from './sync.js';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { open, rm, stat } from 'node:fs/promises';
@@ -110,6 +111,8 @@ function helpPayload(): Record<string, unknown> {
     usage: 'zhicui <domain> <command> [options]',
     domains,
     generic: [
+      'sync --platform douyin --mode like --limit 200 — 自动连接、采集、分批保存',
+      'sync resume <run_id> — 继续原同步任务',
       'download <url-or-share-text> [--output video.mp4] [--connect]',
       'audio <url-or-share-text> [--output audio.mp3] [--connect] — 提取原声，不分离背景音乐',
       'resolve <url-or-share-text> [--refresh]',
@@ -1002,6 +1005,34 @@ async function connectCommand(args: string[], options: GlobalOptions, writer: Pr
   else writer.result(result);
 }
 
+async function syncCommand(args: string[], options: GlobalOptions, writer: ProtocolWriter,
+  credentials: CredentialManager, client: AgentApiClient): Promise<void> {
+  const connect = takeFlag(args, '--connect'), noOpen = takeFlag(args, '--no-open');
+  const platform = takeValue(args, '--platform') || 'douyin', mode = takeValue(args, '--mode') || 'like';
+  const limit = positiveInteger(takeValue(args, '--limit'), 200);
+  const resuming = args[0] === 'resume';
+  const resume = resuming ? (args.shift(), args.shift()) : undefined;
+  if ((resuming && !resume) || args.length || !['douyin', 'bilibili', 'all'].includes(platform) || !['like', 'collect', 'all'].includes(mode)
+    || limit > 500 || limit < 1) throw usageError('zhicui sync --platform douyin --mode like --limit 200；续跑：zhicui sync resume <run_id>');
+  let sequence = 0;
+  try { await checkRecapCapabilities(client); }
+  catch (error) {
+    if (!connect || !(error instanceof CliError) || !PREPARE_AUTH_ERRORS.has(error.code)) throw error;
+    const existing = await credentials.load();
+    const scopes = [...new Set([...(existing?.scopes || []), ...RECAP_SCOPES])];
+    await authCommand(['login', '--scopes', scopes.join(','), ...(noOpen ? ['--no-open'] : [])], options, writer, credentials, client, {
+      event: value => { if (options.jsonl) writer.event({ ...value, sequence: ++sequence, terminal: false }); },
+      complete: () => writer.diagnostic('授权完成，继续同步。'),
+    });
+  }
+  const data = await synchronize(client, { platform, mode, limit, resume, timeoutMs: options.timeoutMs }, (stage, info) => {
+    writer.diagnostic(`${stage} · ${info.active_platform || info.platform || ''} · 已读取 ${info.read || 0} · 已保存 ${info.saved || 0}${info.message ? ` · ${info.message}` : ''}`);
+    if (options.jsonl) writer.event({ sequence: ++sequence, event: stage, terminal: false, status: 'running', data: info });
+  });
+  if (options.jsonl) writer.event({ sequence: ++sequence, event: 'sync.finished', terminal: true, status: data.completed ? 'succeeded' : 'partial', data });
+  else writer.result(data);
+}
+
 async function recapCommand(args: string[], options: GlobalOptions, writer: ProtocolWriter,
   credentials: CredentialManager, client: AgentApiClient): Promise<void> {
   const connect = takeFlag(args, '--connect');
@@ -1012,8 +1043,8 @@ async function recapCommand(args: string[], options: GlobalOptions, writer: Prot
   const limit = positiveInteger(takeValue(args, '--limit'), 50);
   const day = args.shift() || 'yesterday';
   if (args.length || !['today', 'yesterday'].includes(day) || !['douyin', 'bilibili', 'all'].includes(platform)
-      || !['like', 'collect', 'all'].includes(mode) || limit < 1 || limit > 100) {
-    throw usageError('用法：zhicui recap yesterday|today --platform douyin|bilibili|all --mode like|collect|all --limit 1–100');
+      || !['like', 'collect', 'all'].includes(mode) || limit < 1 || limit > 500) {
+    throw usageError('用法：zhicui recap yesterday|today --platform douyin|bilibili|all --mode like|collect|all --limit 1–500');
   }
   let sequence = 0;
   try { await checkRecapCapabilities(client); }
@@ -1052,7 +1083,7 @@ export async function runCli(argv: string[]): Promise<number> {
       writer.result({ name: '@zhicui/cli', version: CLI_VERSION });
       return EXIT_CODES.success;
     }
-    if (!['capabilities', 'resolve', 'download', 'audio', 'connect', 'recap'].includes(domain) && !USER_COMMAND_DOMAINS.includes(domain as (typeof USER_COMMAND_DOMAINS)[number])) {
+    if (!['capabilities', 'resolve', 'download', 'audio', 'connect', 'recap', 'sync'].includes(domain) && !USER_COMMAND_DOMAINS.includes(domain as (typeof USER_COMMAND_DOMAINS)[number])) {
       throw usageError(`未知命令域：${domain}`);
     }
     if (command.includes('--help') || command.includes('-h')) {
@@ -1090,6 +1121,7 @@ export async function runCli(argv: string[]): Promise<number> {
       writer.result(await client.publicCapabilities());
     }
     else if (domain === 'connect') await connectCommand(command, options, writer, credentials, client);
+    else if (domain === 'sync') await syncCommand(command, options, writer, credentials, client);
     else if (domain === 'recap') await recapCommand(command, options, writer, credentials, client);
     else if (domain === 'resolve' || domain === 'download' || domain === 'audio') await fastVideoCommand(domain, command, options, writer, client, credentials);
     else if (domain === 'auth') await authCommand(command, options, writer, credentials, client);

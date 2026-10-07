@@ -115,6 +115,8 @@ export function captureLabel(capture: LibraryCaptureState): string {
 }
 
 export function syncRunLabel(run: LibrarySyncRun): string {
+  if (run.stage) return { restoring: '恢复连接', reading: '读取清单', saving: '保存资料',
+    waiting_for_user: '等待平台验证', paused: '已暂停，可续跑', partial: '部分完成', completed: '完成' }[run.stage] || '同步中';
   return { running: '正在保存', succeeded: '已同步', partial: '部分完成', failed: '未完成',
     rejected: '已跳过', invalid: '请求无效' }[run.status];
 }

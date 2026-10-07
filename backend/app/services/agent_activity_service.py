@@ -7,10 +7,13 @@ import re
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.models.douyin_local_library_item import DouyinLocalLibraryItem
 from app.models.library_hidden_item import LibraryHiddenItem
+from app.models.note import Note
+from app.models.video_source_ledger import VideoSourceLedger
+from app.models.agent_sync_task import AgentSyncTask
 from app.services import (
     agent_video_link_service, daily_recap_service, library_sync_service,
     note_service, video_source_ledger_service,
@@ -50,14 +53,31 @@ def record_snapshot(ctx, payload):
         raise ValueError("同步清单包含重复作品")
     db, user_id = ctx.db, ctx.user.id
     # 日期由已鉴权的服务端 Run 确定，不接收可倒填的点赞或同步时间。
-    stamp = ctx.run.created_at.replace(tzinfo=ctx.run.created_at.tzinfo or timezone.utc)
+    observed_at = ctx.run.created_at.replace(tzinfo=ctx.run.created_at.tzinfo or timezone.utc)
+    stamp = observed_at
+    parent_id = payload.get("task_id")
+    if parent_id:
+        parent = db.get(AgentSyncTask, parent_id)
+        if not parent or parent.user_id != user_id:
+            raise ValueError("同步任务不存在")
+        # 分页共享清单标识时间；首次发现仍用本批服务端时间，跨天续跑不倒填昨天。
+        stamp = parent.created_at.replace(tzinfo=parent.created_at.tzinfo or timezone.utc)
+    coverage = payload.get("coverage", "partial")
+    offset = payload.get("source_rank_offset", 0)
     sync = library_sync_service.start_run(
         db, user_id=user_id, platform=platform, source_mode=mode,
-        source_synced_at=stamp, requested_count=len(items), coverage="partial", order_reliable=False,
+        source_synced_at=stamp, requested_count=len(items), coverage=coverage,
+        source_rank_offset=offset, order_reliable=payload.get("order_reliable", False),
         request_fingerprint=hashlib.sha256(json.dumps(items, sort_keys=True, ensure_ascii=False).encode()).hexdigest(),
     )
     if getattr(sync, "_sync_duplicate_running", False):
         raise ValueError("这批同步仍在处理中，请继续查询原运行")
+    if parent_id:
+        parent = db.scalar(select(AgentSyncTask).where(AgentSyncTask.id == parent_id).with_for_update())
+        state = json.loads(parent.state_json or "{}")
+        state["batch_ids"] = list(dict.fromkeys([*state.get("batch_ids", []), sync.id]))
+        parent.state_json = json.dumps(state, ensure_ascii=False)
+        db.commit()
     hidden = set(db.scalars(select(LibraryHiddenItem.aweme_id).where(LibraryHiddenItem.user_id == user_id)))
     result = {"accepted": 0, "created": 0, "reused": 0, "ready": 0, "skipped": 0, "failed": 0, "items": [], "video_ids": []}
     try:
@@ -101,9 +121,18 @@ def record_snapshot(ctx, payload):
                                 db, video_info={"video_id": video_id, "title": title, "source_url": source_url, "platform": platform},
                                 transcript="", source_meta=meta, user_id=user_id,
                             )
+                # 只保留平台实际返回的公开信息；没有互动数据时保持未知，不能填 0。
+                summary = json.loads(note.ai_summary or "{}")
+                meta = summary.setdefault("source_meta", {})
+                meta.update({"observed_at": observed_at.isoformat()})
+                for key in ("title", "author_name", "caption", "published_at", "duration_seconds", "engagement"):
+                    if key in raw:
+                        meta[key] = raw[key]
+                note.ai_summary = json.dumps(summary, ensure_ascii=False)
                 ledger = video_source_ledger_service.upsert_source(
                     db, user_id=user_id, video_id=video_id, note_id=note.id, source_mode=mode,
-                    observed_at=stamp, source_synced_at=stamp,
+                    observed_at=observed_at, source_synced_at=stamp,
+                    source_rank=offset + index if payload.get("order_reliable") else None,
                 )
                 ready = bool((note.transcript_raw or "").strip())
                 result["accepted"] += 1
@@ -128,8 +157,45 @@ def record_snapshot(ctx, payload):
         library_sync_service.finish_run(db, sync, result, status="failed", error_code="import_failed")
         raise
     return {**result, "sync_run_id": sync.id, "platform": platform, "mode": mode,
-            "coverage": "partial", "time_basis": "first_discovered", "media_downloaded": False,
+            "task_id": parent_id, "coverage": coverage, "source_rank_offset": offset,
+            "observed_at": observed_at.isoformat(), "time_basis": "first_discovered", "media_downloaded": False,
             "transcribed": False, "message": "只更新本次采集范围内的清单；平台未提供真实点赞日期，已有文稿直接复用。"}
+
+
+def list_activity(db, *, user_id, payload):
+    """分页读取同步台账；尚未转写、尚未生成卡片的作品也会返回。"""
+    page, size = payload.get("page", 1), payload.get("per_page", 100)
+    filters = [VideoSourceLedger.user_id == user_id, VideoSourceLedger.video_id.not_in(
+        select(LibraryHiddenItem.aweme_id).where(LibraryHiddenItem.user_id == user_id))]
+    mode, platform = payload.get("mode", "all"), payload.get("platform", "all")
+    if mode != "all":
+        filters.append(VideoSourceLedger.source_mode == mode)
+    else:
+        filters.append(VideoSourceLedger.source_mode.in_(("like", "collect")))
+    if platform != "all":
+        is_bilibili = VideoSourceLedger.video_id.like("BV%")
+        filters.append(is_bilibili if platform == "bilibili" else ~is_bilibili)
+    total = db.scalar(select(func.count()).select_from(VideoSourceLedger).where(*filters))
+    rows = db.scalars(select(VideoSourceLedger).where(*filters).order_by(
+        VideoSourceLedger.source_synced_at.desc(), VideoSourceLedger.source_rank.asc(), VideoSourceLedger.id.desc()
+    ).offset((page - 1) * size).limit(size)).all()
+    ids = [row.video_id for row in rows]
+    notes = {row.video_id: row for row in db.scalars(select(Note).where(Note.user_id == user_id, Note.video_id.in_(ids)))}
+    snapshots = {row.video_id: row for row in db.scalars(select(DouyinLocalLibraryItem).where(
+        DouyinLocalLibraryItem.user_id == user_id, DouyinLocalLibraryItem.video_id.in_(ids)))}
+    items = []
+    for row in rows:
+        note, snapshot = notes.get(row.video_id), snapshots.get(row.video_id)
+        meta = daily_recap_service._source_meta(note)
+        video_platform = daily_recap_service._platform(row.video_id)
+        items.append({**row.to_dict(), "platform": video_platform,
+            "title": meta.get("title") or (note.video_title if note else snapshot.title if snapshot else ""),
+            "author_name": meta.get("author_name") or (snapshot.author_name if snapshot else ""),
+            "source_url": f"https://www.{'bilibili.com' if video_platform == 'bilibili' else 'douyin.com'}/video/{row.video_id}",
+            "engagement": meta.get("engagement"), "observed_at": meta.get("observed_at"),
+            "transcript_ready": bool(note and (note.transcript_raw or "").strip())})
+    return {"items": items, "total": total, "page": page, "per_page": size,
+            "has_more": page * size < total, "time_basis": "first_discovered"}
 
 
 def get_recap(db, *, user_id, payload):

@@ -150,7 +150,7 @@ export class AgentApiClient {
   private async currentCredential(): Promise<StoredCredential | null> {
     let credential = await this.options.credentials.load();
     if (!credential) return null;
-    if (tokenExpired(credential) && credential.refresh_token) {
+    if ((tokenExpired(credential) || credential.refresh_request_id) && credential.refresh_token) {
       credential = await this.refreshSerialized(credential);
     }
     return credential;
@@ -303,10 +303,14 @@ export class AgentApiClient {
 
   private async exchangeRefreshToken(observed: StoredCredential): Promise<StoredCredential> {
     const refreshToken = observed.refresh_token!;
+    const requestId = observed.refresh_request_id || crypto.randomUUID();
+    if (!observed.refresh_request_id && !await this.options.credentials.saveIfUnchanged(observed, {
+      ...observed, refresh_request_id: requestId,
+    })) throw new CliError('AUTH_REQUIRED', '登录状态已更改，请重新运行命令');
     const payload = await this.request('/api/agent-interface/v1/auth/refresh', {
       method: 'POST',
       authenticated: false,
-      body: JSON.stringify({ refresh_token: refreshToken }),
+      body: JSON.stringify({ refresh_token: refreshToken, request_id: requestId }),
     });
     const envelope = normalizeEnvelope(payload);
     throwEnvelopeError(envelope);

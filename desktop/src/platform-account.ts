@@ -578,12 +578,14 @@ export async function collectBilibiliSource(
   mode: PlatformAccountSourceMode,
   limit: number,
   cancelled: () => boolean = () => false,
+  onProgress: (count: number) => void = () => {},
 ): Promise<PlatformSourceCollection> {
   const nav = record(await request('https://api.bilibili.com/x/web-interface/nav'));
   const mid = numeric(nav.mid);
   if (!mid || nav.isLogin === false) throw new Error('B站登录状态无效，请重新登录');
   const urls: string[] = [];
   const seen = new Set<string>();
+  const items: PlatformAccountItem[] = [];
   let malformedItems = false;
   const append = (value: unknown): boolean => {
     const bvid = firstText(record(value).bvid);
@@ -592,6 +594,15 @@ export async function collectBilibiliSource(
     if (seen.has(url)) return false;
     seen.add(url);
     urls.push(url);
+    const raw = record(value), author = record(raw.owner ?? raw.upper), stats = record(raw.stat ?? raw.cnt_info);
+    const engagement = Object.fromEntries(Object.entries({ likes: stats.like, comments: stats.reply,
+      shares: stats.share, collects: stats.favorite ?? stats.collect, views: stats.view ?? stats.play })
+      .filter(([, count]) => typeof count === 'number' && Number.isSafeInteger(count) && count >= 0));
+    items.push({ videoId: bvid, sourceUrl: url, title: firstText(raw.title).slice(0, 500),
+      caption: firstText(raw.desc, raw.intro).slice(0, 2000), authorName: firstText(author.name, raw.author).slice(0, 200),
+      coverUrl: firstText(raw.pic, raw.cover).slice(0, 2048), publishedAt: '', durationSeconds: Math.min(86400, Math.max(0, Math.round(numeric(raw.duration)))),
+      sourceRank: items.length, engagement });
+    onProgress(Math.min(items.length, limit));
     return true;
   };
   if (mode === 'like') {
@@ -632,7 +643,7 @@ export async function collectBilibiliSource(
     const coverage = warning || malformedItems ? 'partial'
       : ended && urls.length <= limit ? 'complete' : urls.length >= limit ? 'limited' : 'partial';
     return {
-      urls: urls.slice(0, limit), coverage, orderReliable: true,
+      urls: urls.slice(0, limit), items: items.slice(0, limit), coverage, orderReliable: true,
       warning: warning || (coverage === 'limited' ? `本次读取前 ${limit} 条，未扫描全部作品`
         : coverage === 'partial' ? '点赞分页尚未完整读取，请稍后重试' : undefined),
     };
@@ -715,7 +726,7 @@ export async function collectBilibiliSource(
   const ended = folders.every((folder) => folder.confirmedEnd && folder.offset >= folder.items.length);
   const coverage = warning || malformedItems ? 'partial' : ended ? 'complete' : urls.length >= limit ? 'limited' : 'partial';
   return {
-    urls: urls.slice(0, limit), coverage, orderReliable,
+    urls: urls.slice(0, limit), items: items.slice(0, limit), coverage, orderReliable,
     warning: [warning, missingFavoriteTime ? '部分作品缺少收藏时间，跨收藏夹顺序暂无法完整校准' : '',
       coverage === 'limited' ? `本次读取前 ${limit} 条，未扫描全部作品`
         : coverage === 'partial' && !warning ? '收藏分页尚未完整读取，请稍后重试' : ''].filter(Boolean).join('；') || undefined,
@@ -764,6 +775,10 @@ export function normalizeDouyinRecord(
   ).slice(0, 500);
   const createdAt = numeric(payload.create_time || payload.createTime);
   const rawDuration = numeric(video.duration || payload.duration);
+  const statistics = record(payload.statistics);
+  const engagement = Object.fromEntries(Object.entries({ likes: statistics.digg_count, comments: statistics.comment_count,
+    shares: statistics.share_count, collects: statistics.collect_count, views: statistics.play_count })
+    .filter(([, value]) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0));
   return {
     videoId,
     sourceUrl,
@@ -781,6 +796,7 @@ export function normalizeDouyinRecord(
       ? Math.round(rawDuration / 1000)
       : Math.round(rawDuration),
     sourceRank,
+    engagement,
     ephemeralMediaUrl: firstDouyinMediaUrl(video).slice(0, 8192) || undefined,
   };
 }
@@ -853,7 +869,7 @@ export function boundedPlatformUrls(
   values: string[],
   limit: number,
 ): string[] {
-  const boundedLimit = Math.max(1, Math.min(100, Math.trunc(limit) || 1));
+  const boundedLimit = Math.max(1, Math.min(500, Math.trunc(limit) || 1));
   const seen = new Set<string>();
   const result: string[] = [];
   for (const value of values) {
@@ -983,7 +999,7 @@ export class PlatformAccountConnector {
       this.notifyStatus(request.platform, 'starting', '正在读取本机登录会话…');
       const launched = this.restoredBrowser || await this.launchBrowser(
         profilePath,
-        request.platform === 'douyin' && !request.interactive,
+        ['douyin', 'bilibili'].includes(request.platform) && !request.interactive,
       );
       this.restoredBrowser = null;
       this.activeBrowser = launched.browser;
@@ -995,7 +1011,14 @@ export class PlatformAccountConnector {
         await showPlatformAccountPage(page).catch(() => { windowNeedsAttention = true; });
       }
       if (!hasPlatformAuthCookie(request.platform, await launched.context.cookies())) {
-        throw new Error('账号登录已失效，请先重新登录');
+        const page = launched.context.pages()[0] || await launched.context.newPage();
+        await page.goto(request.platform === 'douyin' ? DOUYIN_LOGIN_URL : request.platform === 'bilibili' ? BILIBILI_LOGIN_URL : XHS_LOGIN_URL,
+          { waitUntil: 'commit', timeout: 20_000 }).catch(() => undefined);
+        await showPlatformAccountPage(page).catch(() => undefined);
+        this.notifyStatus(request.platform, 'needs-action', '请在官方窗口登录，完成后自动继续原同步任务', launched.browser);
+        const deadline = Date.now() + LOGIN_TIMEOUT_MS;
+        while (!this.cancelled && Date.now() < deadline && !hasPlatformAuthCookie(request.platform, await launched.context.cookies())) await wait(POLL_INTERVAL_MS);
+        if (!hasPlatformAuthCookie(request.platform, await launched.context.cookies())) throw new Error('等待平台登录超时，进度已保留');
       }
       this.notifyStatus(
         request.platform,
@@ -1039,7 +1062,7 @@ export class PlatformAccountConnector {
       if (this.cancelled) {
         return { success: false, cancelled: true, platform: request.platform };
       }
-      if (urls.length === 0) {
+      if (urls.length === 0 && collection.coverage !== 'complete') {
         if (request.targetVideoIds?.length) {
           throw new Error('暂未取得指定作品的有效播放地址，请在官方窗口确认作品可播放或完成验证，再重试解析');
         }
@@ -1253,8 +1276,9 @@ export class PlatformAccountConnector {
     message: string,
     browser?: SupportedBrowser,
     code?: string,
+    readCount?: number,
   ): void {
-    this.notify({ platform, stage, message, browser, code, mode: this.activeMode });
+    this.notify({ platform, stage, message, browser, code, mode: this.activeMode, readCount });
   }
 
   private async requestBilibili(
@@ -1271,6 +1295,7 @@ export class PlatformAccountConnector {
   ): Promise<PlatformSourceCollection> {
     return collectBilibiliSource(
       (url) => this.requestBilibili(context, url), mode, limit, () => this.cancelled,
+      (count) => this.notifyStatus('bilibili', 'collecting', `已读取 ${count}/${limit} 条`, this.activeBrowser, undefined, count),
     );
   }
 
@@ -1604,6 +1629,7 @@ export class PlatformAccountConnector {
           await wait(200);
         }
         const after = pages.snapshot(limit);
+        this.notifyStatus('douyin', 'collecting', `已读取 ${after.urls.length}/${limit} 条，正在继续分页…`, browser, undefined, after.urls.length);
         // 长列表尚未滚到底时数量会暂时不变，不能把正常滚动误判为分页停滞。
         unchangedRounds = after.urls.length === before.urls.length && !scrollAdvanced ? unchangedRounds + 1 : 0;
         if (after.coverage !== 'partial'

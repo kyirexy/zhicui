@@ -6,8 +6,8 @@ import { useLibrarySync } from '@/lib/hooks/LibrarySyncContext';
 import { captureLabel, syncRunLabel } from '@/lib/librarySyncMonitor';
 import styles from './HomeSyncActivity.module.css';
 
-const platforms: Record<string, string> = { douyin: '抖音', bilibili: 'B站', xiaohongshu: '小红书', mixed: '视频' };
-const modes: Record<string, string> = { like: '喜欢', collect: '收藏', post: '作品', import: '导入' };
+const platforms: Record<string, string> = { douyin: '抖音', bilibili: 'B站', xiaohongshu: '小红书', mixed: '视频', all: '抖音 / B站' };
+const modes: Record<string, string> = { like: '喜欢', collect: '收藏', post: '作品', import: '导入', all: '喜欢与收藏' };
 
 export default function HomeSyncActivity() {
   const { runs, capture, offline } = useLibrarySync();
@@ -35,13 +35,15 @@ export default function HomeSyncActivity() {
               <div><Icon size={16} className={running ? styles.spin : undefined} aria-hidden="true" />
                 <strong>{platforms[run.platform] || '视频'} · {modes[run.source_mode] || '同步'}</strong>
                 <span>{syncRunLabel(run)}</span>
+                {run.task_source ? <small>{run.task_source}</small> : null}
               </div>
-              <p>{running ? `已处理 ${processed}/${run.requested_count} · ` : ''}新增 {run.created} · 复用 {run.reused}
+              <p>{run.task_id ? `已读取 ${run.read || 0}/${run.requested_count} · 已保存 ${run.accepted} · ` : running ? `已处理 ${processed}/${run.requested_count} · ` : ''}新增 {run.created} · 复用 {run.reused}
                 {run.failed_count > 0 ? ` · 失败 ${run.failed_count}` : ''}
                 {(run.skipped || 0) > 0 ? ` · 跳过 ${run.skipped}` : ''}
                 {(run.quarantined || 0) > 0 ? ` · 待补资料 ${run.quarantined}` : ''}
               </p>
               {running ? <progress max={Math.max(1, run.requested_count)} value={processed} aria-label="保存视频进度" /> : null}
+              {['paused', 'partial'].includes(run.stage || '') && run.resume_command ? <p><code>{run.resume_command}</code></p> : null}
               <footer><time dateTime={run.started_at}>{new Date(run.started_at).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time>
                 <Link href={`/library?platform=${encodeURIComponent(run.platform)}&mode=${encodeURIComponent(run.source_mode)}`}>查看{modes[run.source_mode] || '资料'} →</Link>
               </footer>

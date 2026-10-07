@@ -13,6 +13,8 @@ from app.models.douyin_local_library_item import DouyinLocalLibraryItem
 from app.models.library_sync import LibrarySyncRun
 from app.models.media_extraction_outcome import MediaExtractionOutcome
 from app.models.note import Note
+from app.models.agent_sync_task import AgentSyncTask
+from app.services import agent_sync_task_service
 from app.models.video_source_ledger import VideoSourceLedger
 from app.services import agent_activity_service as activity, daily_recap_service, local_douyin_library_service, platform_library_service
 from app.services.product_action_registry import registry
@@ -23,7 +25,7 @@ class AgentActivityTests(unittest.TestCase):
     def setUp(self):
         fixtures.AgentInterfaceV1Tests.setUp(self)
         Base.metadata.create_all(self.engine, tables=[
-            DouyinLocalLibraryItem.__table__, LibrarySyncRun.__table__,
+            DouyinLocalLibraryItem.__table__, LibrarySyncRun.__table__, AgentSyncTask.__table__,
             MediaExtractionOutcome.__table__, VideoSourceLedger.__table__,
         ])
         self.settings = patch.multiple(settings, AGENT_INTERFACE_ENABLED=True,
@@ -45,6 +47,42 @@ class AgentActivityTests(unittest.TestCase):
 
     def payload(self, mode="like", video_id="7659724478275947822"):
         return {"platform": "douyin", "mode": mode, "items": [{"video_id": video_id, "title": "真实作品标题", "author_name": "作者"}]}
+
+    def test_two_hundred_paged_items_and_parent_progress(self):
+        task_id = "sync-" + str(uuid.uuid4())
+        task = {"task_id": task_id, "platform": "douyin", "mode": "like", "requested": 200, "stage": "reading", "read": 200}
+        agent_sync_task_service.update(self.db, user_id=self.user.id, payload=task)
+        for offset in (0, 100):
+            items = [{"video_id": str(7690000000000000000 + index), "title": f"视频{index}",
+                      "engagement": {"likes": index}} for index in range(offset, offset + 100)]
+            result = activity.record_snapshot(self.context(), {"task_id": task_id, "platform": "douyin", "mode": "like",
+                "source_rank_offset": offset, "coverage": "limited", "order_reliable": True, "items": items})
+            self.assertEqual(result["accepted"], 100)
+        pages = [activity.list_activity(self.db, user_id=self.user.id, payload={"page": page, "per_page": 100, "mode": "like"}) for page in (1, 2)]
+        self.assertEqual([p["total"] for p in pages], [200, 200])
+        self.assertEqual(len({item["video_id"] for page in pages for item in page["items"]}), 200)
+        self.assertEqual(pages[1]["items"][0]["source_rank"], 100)
+        self.assertEqual(pages[1]["items"][0]["engagement"], {"likes": 100})
+        self.assertFalse(pages[0]["items"][0]["transcript_ready"])
+        self.assertEqual(activity.list_activity(self.db, user_id=self.other.id, payload={})["total"], 0)
+        progress = agent_sync_task_service.list_tasks(self.db, user_id=self.user.id)[0]
+        self.assertEqual(progress["accepted"], 200)
+        self.assertEqual(len(progress["batch_ids"]), 2)
+        self.assertEqual(progress["stage"], "reading", "清单采集与落库完成分别报告")
+        with self.assertRaises(ValueError):
+            agent_sync_task_service.update(self.db, user_id=self.other.id, payload=task)
+
+    def test_resume_old_task_does_not_backdate_newly_discovered_items(self):
+        task_id = "sync-" + str(uuid.uuid4())
+        task = {"task_id": task_id, "platform": "douyin", "mode": "like", "requested": 200, "stage": "reading"}
+        agent_sync_task_service.update(self.db, user_id=self.user.id, payload=task)
+        parent = self.db.get(AgentSyncTask, task_id)
+        parent.created_at = datetime.now(timezone.utc) - timedelta(days=2)
+        self.db.commit()
+        saved = activity.record_snapshot(self.context(), {**self.payload(), "task_id": task_id})
+        first_seen = datetime.fromisoformat(saved["items"][0]["first_seen_at"])
+        self.assertLess((datetime.now(timezone.utc) - first_seen).total_seconds(), 60)
+        self.assertEqual(activity.get_recap(self.db, user_id=self.user.id, payload={"day": "yesterday", "mode": "like"})["total"], 0)
 
     def test_metadata_only_reuses_note_and_preserves_first_seen(self):
         yesterday = datetime.now(timezone.utc) - timedelta(days=1)

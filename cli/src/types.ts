@@ -85,6 +85,7 @@ export interface AgentRunEvent {
 }
 
 export interface StoredCredential {
+  refresh_request_id?: string;
   kind: 'pat' | 'device';
   access_token: string;
   refresh_token?: string;

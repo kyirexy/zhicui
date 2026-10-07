@@ -103,6 +103,7 @@ export interface PlatformAccountCollectRequest extends PlatformAccountRequest {
 }
 
 export interface PlatformAccountStatus {
+  readCount?: number;
   platform: PlatformAccountProvider;
   stage: PlatformAccountStage;
   message: string;
@@ -121,6 +122,7 @@ export interface PlatformAccountItem {
   publishedAt: string;
   durationSeconds: number;
   sourceRank: number;
+  engagement?: Partial<Record<'likes' | 'comments' | 'shares' | 'collects' | 'views', number>>;
   /**
    * Short-lived playback capability captured from the official page.
    * The renderer may submit it directly to one extraction job, but it must
@@ -317,6 +319,9 @@ export interface DesktopMediaDownloadResult {
 }
 
 export interface ZhicuiDesktopBridge {
+  restoreAuthSession?(force?: boolean): Promise<DesktopZhicuiSession | null>;
+  adoptAuthSession?(token: string): Promise<DesktopZhicuiSession>;
+  logoutAuthSession?(): Promise<void>;
   getRuntimeInfo(): Promise<DesktopRuntimeInfo>;
   bindAgentUser?(profileKey: string | null): Promise<boolean>;
   setTitlebarTheme?(theme: 'light' | 'dark'): Promise<boolean>;

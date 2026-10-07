@@ -1956,6 +1956,11 @@ def list_library_sync_runs(
     """只返回当前用户的有界同步提交记录，不包含视频正文或平台凭据。"""
     response.headers["Cache-Control"] = "no-store"
     items = library_sync_service.list_runs(db, user_id=current_user.id, limit=limit)
+    from app.services.agent_sync_task_service import list_tasks
+    tasks = list_tasks(db, user_id=current_user.id, limit=limit)
+    child_ids = {key for task in tasks for key in task.get("batch_ids", [])}
+    items = sorted([*tasks, *(item for item in items if item["id"] not in child_ids)],
+                   key=lambda item: item.get("updated_at") or item["started_at"], reverse=True)[:limit]
     return _ok({"items": items, "total": len(items)})
 
 

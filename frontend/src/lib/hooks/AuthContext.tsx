@@ -11,11 +11,14 @@ import {
   type ReactNode,
 } from 'react';
 import { API_BASE } from '@/lib/api';
+import { Capacitor } from '@capacitor/core';
 import { currentClientType } from '@/lib/clientIdentity';
 import { shouldDiscardDevelopmentSession } from '@/lib/clientAuthPolicy';
 import { clearPendingDesktopLoginApproval } from '@/lib/desktopLogin';
+import { recoverSession, markExplicitLogin, persistDesktopSession, revokeSession, SessionRecoveryError, SESSION_UPDATED_EVENT } from '@/lib/sessionRecovery';
 import {
   canUpdateCurrentUser,
+  registerSessionRecovery,
   clearStoredSession,
   createSessionEpoch,
   isSessionExpired,
@@ -149,6 +152,8 @@ async function authRequest<T>(
   try {
     const response = await fetch(`${API_BASE}${endpoint}`, {
       ...options,
+      credentials: 'include',
+      headers: { ...(window.zhicuiDesktop?.adoptAuthSession || Capacitor.isNativePlatform() ? {} : { 'X-Zhicui-Session-Version': '2' }), ...Object.fromEntries(new Headers(options.headers).entries()) },
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => null) as AuthResponse<T> | null;
@@ -219,6 +224,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const acceptSession = useCallback((session: AuthSession) => {
     applySession(session);
+    void persistDesktopSession(session.token).catch(() => setError('已登录，客户端会话暂未保存，稍后会自动重试'));
     return session.user;
   }, [applySession]);
 
@@ -230,55 +236,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return true;
   }, [user?.id]);
 
-  // 回到应用时重新读取账号资料，使其他设备更换的头像同步到当前端。
+  // API 401、后台续期和页面恢复共用同一恢复器。
   useEffect(() => {
-    if (!token) return;
-    const controller = new AbortController();
-    let pending = false;
+    const stop = registerSessionRecovery(() => recoverSession(true));
+    const updated = (event: Event) => applySession((event as CustomEvent<AuthSession>).detail);
+    window.addEventListener(SESSION_UPDATED_EVENT, updated);
+    return () => { stop(); window.removeEventListener(SESSION_UPDATED_EVENT, updated); };
+  }, [applySession]);
+
+  useEffect(() => {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
     const refresh = async () => {
-      if (document.visibilityState === 'hidden' || pending || restoringToken.current === token) return;
-      if (currentToken.current !== token) return;
-      if (isSessionExpired(token)) {
-        clearSession('登录已过期，请重新登录');
-        return;
+      if (stopped || restoringToken.current || currentToken.current !== token) return;
+      try { await recoverSession(Boolean(token) && sessionExpiresAt(token!) <= Date.now() + 60_000); }
+      catch (failure) {
+        if (stopped || currentToken.current !== token) return;
+        if (failure instanceof SessionRecoveryError && failure.rejected) clearSession(failure.message);
+        else setError('暂时无法恢复连接，登录信息已保留，将自动重试');
+      } finally {
+        if (!stopped) timer = setTimeout(refresh, Math.max(30_000, Math.min(300_000, sessionExpiresAt(token || '') - Date.now() - 60_000)));
       }
-      const epoch = sessionEpoch.current.current();
-      pending = true;
-      try {
-        const response = await authRequest<AuthUser>('/api/auth/me', {
-          headers: { Authorization: `Bearer ${token}` }, signal: controller.signal,
-        });
-        if (controller.signal.aborted || !sessionEpoch.current.isCurrent(epoch)) return;
-        if (response.success && response.data) {
-          if (shouldDiscardDevelopmentSession(response.data, {
-            desktop: Boolean(window.zhicuiDesktop), development: IS_DEV, automaticDevAuth: DEV_AUTH_AUTO,
-          })) { clearSession(); return; }
-          writeStoredSession(token, response.data);
-          setUser(response.data);
-          setError(null);
-        } else if (response.status === 401) {
-          clearSession('登录已过期，请重新登录');
-        }
-      } finally { pending = false; }
     };
-    void refresh();
-    window.addEventListener('focus', refresh);
-    window.addEventListener('online', refresh);
-    document.addEventListener('visibilitychange', refresh);
-    let expirationTimer: ReturnType<typeof setTimeout>;
-    const checkExpiry = () => {
-      if (currentToken.current !== token) return;
-      const remaining = sessionExpiresAt(token) - Date.now();
-      if (remaining <= 0) { clearSession('登录已过期，请重新登录'); return; }
-      expirationTimer = setTimeout(checkExpiry, Math.min(remaining, 2_147_483_647));
-    };
-    checkExpiry();
+    const wake = () => { if (document.visibilityState !== 'hidden') { clearTimeout(timer); void refresh(); } };
+    timer = setTimeout(refresh, Math.max(1_000, Math.min(300_000, sessionExpiresAt(token || '') - Date.now() - 60_000)));
+    window.addEventListener('focus', wake);
+    window.addEventListener('online', wake);
+    document.addEventListener('visibilitychange', wake);
     return () => {
-      controller.abort();
-      clearTimeout(expirationTimer);
-      window.removeEventListener('focus', refresh);
-      window.removeEventListener('online', refresh);
-      document.removeEventListener('visibilitychange', refresh);
+      stopped = true; clearTimeout(timer);
+      window.removeEventListener('focus', wake);
+      window.removeEventListener('online', wake);
+      document.removeEventListener('visibilitychange', wake);
     };
   }, [clearSession, token]);
 
@@ -348,53 +337,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const isCurrent = () => !cancelled && sessionEpoch.current.isCurrent(epoch);
 
     const restore = async () => {
-      const saved = readStoredToken();
-      if (saved) {
-        if (isSessionExpired(saved)) {
-          clearSession('登录已过期，请重新登录');
-          return;
-        }
+      let saved = readStoredToken();
+      const cachedCandidate = saved ? readCachedUser(saved) : null;
+      const cached = cachedCandidate && !shouldDiscardDevelopmentSession(cachedCandidate, { desktop: Boolean(window.zhicuiDesktop), development: IS_DEV, automaticDevAuth: DEV_AUTH_AUTO }) ? cachedCandidate : null;
+      if (cachedCandidate && !cached) { clearStoredSession(); saved = null; }
+      if (saved || window.zhicuiDesktop?.restoreAuthSession || !DEV_AUTH_AUTO) {
         restoringToken.current = saved;
         currentToken.current = saved;
-        const cachedCandidate = readCachedUser(saved);
-        const cached = cachedCandidate && !shouldDiscardDevelopmentSession(cachedCandidate, {
-          desktop: Boolean(window.zhicuiDesktop), development: IS_DEV, automaticDevAuth: DEV_AUTH_AUTO,
-        }) ? cachedCandidate : null;
-        if (cached) {
-          setToken(saved);
-          setUser(cached);
-          setLoading(false);
+        if (cached) { setToken(saved); setUser(cached); setLoading(false); }
+        try {
+          const restored = await recoverSession();
+          if (isCurrent() && restored) applySession(restored);
+        } catch (failure) {
+          if (!isCurrent()) return;
+          if (failure instanceof SessionRecoveryError && failure.rejected) clearSession(saved ? failure.message : null);
+          else { setToken(saved); setUser(cached); setError('连接暂时不可用，登录信息已保留，联网后自动恢复'); }
         }
-        const restored = await authRequest<AuthUser>('/api/auth/me', {
-          headers: { Authorization: `Bearer ${saved}` },
-          signal: controller.signal,
-        }, AUTH_RESTORE_TIMEOUT_MS);
-        if (!isCurrent()) return;
-        if (restored.success && restored.data) {
-          if (shouldDiscardDevelopmentSession(restored.data, {
-            desktop: typeof window !== 'undefined' && Boolean(window.zhicuiDesktop),
-            development: IS_DEV,
-            automaticDevAuth: DEV_AUTH_AUTO,
-          })) {
-            clearSession();
-            return;
-          }
-          applySession({ token: saved, user: restored.data });
-          return;
-        }
-
-        const sessionRejected = restored.status === 401;
-        if (sessionRejected) {
-          clearSession('登录已过期，请重新登录');
-          return;
-        } else {
-          // A timeout or temporary server failure is not proof that the saved
-          // session is invalid. Keep the token so a retry can recover it.
-          setToken(saved);
-          setUser(cached);
-          setError(restored.error || '暂时无法确认登录状态，请稍后重试');
-          return;
-        }
+        return;
       }
 
       if (DEV_AUTH_AUTO) {
@@ -456,6 +415,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!bridge || typeof bridge.onZhicuiSession !== 'function') return;
     const unsubscribe = bridge.onZhicuiSession((session) => {
       if (!session?.token) return;
+      markExplicitLogin();
       applySession({
         token: session.token,
         user: {
@@ -480,7 +440,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const bridge = typeof window !== 'undefined'
       ? window.zhicuiDesktop
       : undefined;
-    if (!bridge || typeof bridge.bindAgentUser !== 'function') return;
+    if (!bridge || typeof bridge.bindAgentUser !== 'function' || bridge.restoreAuthSession || !user?.agent_profile_key) return;
     void bridge.bindAgentUser(user?.agent_profile_key || null).catch(() => {
       // 桥接不可用不影响 Web 会话；Agent doctor 会给出结构化诊断。
     });
@@ -498,6 +458,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!sessionEpoch.current.isCurrent(epoch)) return null;
     if (response.success && response.data) {
       applySession(response.data);
+      void persistDesktopSession(response.data.token).catch(() => setError('客户端会话保存暂未完成，将自动重试'));
       return response.data.user;
     }
     setError(response.error || '登录失败');
@@ -530,6 +491,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!sessionEpoch.current.isCurrent(epoch)) return null;
     if (response.success && response.data) {
       applySession(response.data);
+      void persistDesktopSession(response.data.token).catch(() => setError('客户端会话保存暂未完成，将自动重试'));
       return response.data.user;
     }
     setError(response.error || '注册失败');
@@ -537,7 +499,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [applySession]);
 
   const logout = useCallback(() => {
+    const previous = currentToken.current;
+    void revokeSession(previous).catch(() => setError('本机已退出，联网后将完成服务端退出'));
     clearSession();
+    void window.zhicuiDesktop?.bindAgentUser?.(null).catch(() => undefined);
   }, [clearSession]);
 
   const clearError = useCallback(() => setError(null), []);

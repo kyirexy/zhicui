@@ -101,6 +101,7 @@ class DevicePollRequest(StrictModel):
 
 class RefreshRequest(StrictModel):
     refresh_token: str = Field(..., min_length=32, max_length=512)
+    request_id: str | None = Field(default=None, min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
 
 
 class InvokeRequest(StrictModel):
@@ -311,6 +312,8 @@ def _principal_from_credentials(
     user = get_user_by_id(db, user_id) if user_id else None
     if user is None or not user.is_active:
         raise CredentialError("INVALID_CREDENTIAL", "登录已过期，请重新登录")
+    from app.services.auth_session_service import assert_session_active
+    assert_session_active(db, payload, token)
     _ensure_user_enabled(user.id)
     # Browser JWT may manage all ordinary-user scopes. is_admin is never
     # inspected here and therefore cannot add an admin Action.
@@ -826,7 +829,7 @@ def refresh_device(body: RefreshRequest, request: Request, db: Session = Depends
     try:
         return _envelope(
             action="auth.refresh", request_id=_request_id(request),
-            data=rotate_refresh_token(db, body.refresh_token),
+            data=rotate_refresh_token(db, body.refresh_token, body.request_id),
         )
     except Exception as exc:
         return _error_response("auth.refresh", _request_id(request), exc)

@@ -10,6 +10,18 @@ npm install -g https://luxai.cn/cli.tgz; if ($LASTEXITCODE -eq 0) { zhicui conne
 
 已安装后只需 `zhicui connect`；Claude Code 用 `zhicui connect --client claude`。自动安装 MCP 与 Skill、复用有效授权或打开浏览器确认授权，再通过真实工具发现验证连接。默认接入使用 default 配置；其他命名 profile 继续用于单独 CLI 操作。重新连接 Agent 中的知萃 MCP 后生效。
 
+## 同步最近 200 条，自动连接与续跑（1.0.14 起）
+
+```powershell
+zhicui sync --platform douyin --mode like --limit 200 --timeout 5m
+zhicui sync resume <run_id> --timeout 5m
+zhicui library activity --platform douyin --mode like --page 1 --per-page 100 --json
+```
+
+默认先同步抖音喜欢。`--mode all` 按喜欢、收藏顺序处理；每平台每来源最多 500 条，云端按每批 100 条保存。清单包含尚无文稿的作品、平台提供的互动数据及观察时间。任务有固定 ID，相同请求会接续未完成检查点，CLI 退出后可继续原任务。
+
+调用本机能力会按需后台启动已安装客户端，最多等待 30 秒恢复；普通状态查询不会启动应用。有效登录自动续期，网络错误不清空会话。客户端首页显示相同的读取、保存、新增、复用与失败进度。缺少权限时加 `--connect`，只补充缺少的授权；需要平台扫码或验证时显示官方窗口。
+
 ## 先同步再回顾（1.0.11 起）
 
 ```powershell
@@ -17,9 +29,9 @@ zhicui recap yesterday --connect --json --timeout 5m
 zhicui recap today --mode collect --platform douyin --connect --json --timeout 5m
 ```
 
-每次先同步桌面客户端当前账号的最近清单、增量保存，再返回指定日期的喜欢/收藏。默认两个平台、喜欢、每个平台 50 条，`--mode all` 同时读取收藏；`--limit` 最多 100。已有文稿直接复用，清单查询不等待音频下载或转写。首次需要确认本机调用及整理资料权限，后续复用授权。
+每次先同步桌面客户端当前账号的最近清单、增量保存，再返回指定日期的喜欢/收藏。默认两个平台、喜欢、每个平台 50 条，`--mode all` 同时读取收藏；新版客户端 `--limit` 最多 500。已有文稿直接复用，清单查询不等待音频下载或转写。首次需要确认本机调用及整理资料权限，后续复用授权。
 
-需要知萃 Windows/Mac 客户端运行且登录同一账号，平台登录有效。同步失败、等待验证、账号不一致会明确返回，不能将旧缓存说成最新。回顾日期仍是首次同步日期；今天补发现的旧视频不会被回填到昨天。覆盖范围按本次条数报告，不宣称同步完整历史。
+需要安装知萃 Windows/Mac 客户端并登录同一账号，平台登录有效。同步失败、等待验证、账号不一致会明确返回，不能将旧缓存说成最新。回顾日期仍是首次同步日期；今天补发现的旧视频不会被回填到昨天。覆盖范围按本次条数报告，不宣称同步完整历史。
 
 1.0.12 起，平台窗口短暂等待不会结束命令；CLI 持续查询同一任务，读取完成后自动继续保存和回顾。若窗口要求验证，请本人完成，命令会在超时范围内接续；超时返回平台与本机 Run ID，不会重复提交采集。
 

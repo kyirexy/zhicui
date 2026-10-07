@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { mkdir, writeFile } from 'node:fs/promises';
 import {
   app,
   BrowserWindow,
@@ -25,6 +26,7 @@ import {
   resolveBundledCliEntry,
 } from './agent-integration';
 import { DesktopAgentActionBridge } from './agent-action-bridge';
+import { DesktopAuthSession } from './auth-session';
 import { desktopBuildIdentity } from './build-identity';
 import { desktopBridgeDirectory } from './platform-runtime';
 import { applyWindowTheme } from './window-theme';
@@ -61,6 +63,11 @@ const BUILD_IDENTITY = desktopBuildIdentity(
   PACKAGED_RELEASE_CHANNEL,
 );
 app.setName(BUILD_IDENTITY.displayName);
+// 固定历史渠道目录，产品展示名称变化不再改变登录/平台资料位置。
+app.setPath('userData', join(app.getPath('appData'), !app.isPackaged ? '知萃开发版'
+  : PACKAGED_RELEASE_CHANNEL === 'beta' ? '知萃公测版' : '知萃'));
+let agentBackground = process.argv.includes('--agent-background');
+let authSession: DesktopAuthSession | null = null;
 let mainWindow: BrowserWindow | null = null;
 let pendingDeepLink: string | null = null;
 let mediaLibrary: DesktopMediaLibrary | null = null;
@@ -129,6 +136,14 @@ function emitAgentAuthorizationStatus(status: DesktopAgentAuthorizationStatus): 
 }
 
 function emitZhicuiSession(session: DesktopZhicuiSession): void {
+  if (authSession) {
+    void authSession.adopt(session.token).then((value) => {
+      mainWindow?.webContents.send('desktop:zhicui-session', value);
+      agentBackground = false;
+      focusMainWindow();
+    }).catch(() => emitZhicuiLoginStatus({ stage: 'error', message: '登录已确认，正在恢复本机连接，请稍后重试' }));
+    return;
+  }
   agentIntegration.bindUser(session.user.agent_profile_key || null);
   const publish = () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -196,6 +211,7 @@ function findDeepLink(argv: string[]): string | null {
 }
 
 function focusMainWindow(deepLink?: string | null): void {
+  agentBackground = false;
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
@@ -263,7 +279,7 @@ function createMainWindow(): BrowserWindow {
       loadDesktopPage(window, desktopDestination());
     }
   });
-  window.once('ready-to-show', () => window.show());
+  window.once('ready-to-show', () => { if (!agentBackground) window.show(); });
   if (process.env.ZHICUI_DESKTOP_SMOKE === '1') {
     window.webContents.once('did-finish-load', () => {
       if (!isTrustedAppUrl(window.webContents.getURL())) return;
@@ -285,6 +301,19 @@ function createMainWindow(): BrowserWindow {
 }
 
 function registerIpc(): void {
+  ipcMain.handle('desktop:auth-restore', async (event, force: boolean) => {
+    assertTrustedIpcSender(event);
+    try { return await authSession?.restore(force === true) || null; }
+    finally { if (authSession?.state === 'signed_out' && agentBackground) focusMainWindow(); }
+  });
+  ipcMain.handle('desktop:auth-adopt', (event, token: string) => {
+    assertTrustedIpcSender(event);
+    return authSession!.adopt(token);
+  });
+  ipcMain.handle('desktop:auth-logout', (event) => {
+    assertTrustedIpcSender(event);
+    return authSession!.logout();
+  });
   ipcMain.handle('desktop:get-runtime-info', (event): DesktopRuntimeInfo => {
     assertTrustedIpcSender(event);
     return {
@@ -309,6 +338,8 @@ function registerIpc(): void {
   ipcMain.handle('desktop:bind-agent-user', async (event, profileKey: string | null) => {
     assertTrustedIpcSender(event);
     if (!agentActionBridge) return false;
+    // 新会话以主进程在线验证结果为准，页面 hydration 的 null 不再解绑。
+    if (authSession) return authSession.state === 'ready';
     const normalized = profileKey === null
       ? null
       : validatePlatformAccountRequest({ platform: 'douyin', profileKey }).profileKey;
@@ -450,6 +481,7 @@ function registerProtocol(): void {
 }
 
 app.on('second-instance', (_event, argv) => {
+  if (argv.includes('--agent-background')) { void authSession?.restore().catch(() => undefined); return; }
   focusMainWindow(findDeepLink(argv));
 });
 
@@ -460,7 +492,7 @@ app.on('open-url', (event, url) => {
   else pendingDeepLink = url;
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   nativeTheme.themeSource = 'system';
   if (process.platform === 'darwin') {
     Menu.setApplicationMenu(Menu.buildFromTemplate([
@@ -505,17 +537,37 @@ app.whenReady().then(() => {
   registerIpc();
   pendingDeepLink = pendingDeepLink || findDeepLink(process.argv);
   agentActionBridge = new DesktopAgentActionBridge({
-    descriptorDirectory: desktopBridgeDirectory(),
+    descriptorDirectory: app.isPackaged ? desktopBridgeDirectory() : join(app.getPath('userData'), 'agent-bridge'),
     version: app.getVersion(),
     channel: BUILD_IDENTITY.channel,
     platformAccounts,
     getMediaLibrary: () => mediaLibrary,
     getWindow: () => mainWindow,
+    connectionState: () => authSession?.state || 'restoring',
   });
-  void agentActionBridge.start().catch((error: unknown) => {
+  authSession = new DesktopAuthSession(join(app.getPath('userData'), 'auth', 'session-v2.enc'),
+    configuredAppUrl().origin, async (session) => {
+      agentIntegration.bindUser(session?.user.agent_profile_key || null);
+      await agentActionBridge?.bindUser(session?.user.agent_profile_key || null);
+    });
+  await agentActionBridge.start().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[desktop] Agent 本机桥接启动失败：${message}`);
   });
+  if (app.isPackaged) {
+    await mkdir(desktopBridgeDirectory(), { recursive: true });
+    await writeFile(join(desktopBridgeDirectory(), 'desktop-agent-launch.json'), JSON.stringify({
+      version: 1, executable: app.getPath('exe'), origin: configuredAppUrl().origin, channel: BUILD_IDENTITY.channel,
+    }), { mode: 0o600 });
+  }
+  void authSession.restore().catch(() => undefined).finally(() => {
+    if (agentBackground && authSession?.state === 'signed_out') focusMainWindow();
+  });
+  setInterval(() => {
+    if (agentBackground && agentActionBridge && !agentActionBridge.busy
+      && Date.now() - agentActionBridge.lastActivity > 5 * 60_000) { app.quit(); return; }
+    void authSession?.restore().catch(() => undefined);
+  }, 45_000).unref();
   mainWindow = createMainWindow();
   // 只刷新用户此前已选择的受管接入；CLI 不会为未接入的 Agent 新建配置。
   if (app.isPackaged) void agentIntegration.reconcileManaged();
@@ -523,6 +575,7 @@ app.whenReady().then(() => {
 
 app.on('activate', () => {
   if (!mainWindow) mainWindow = createMainWindow();
+  focusMainWindow();
 });
 
 app.on('before-quit', () => {

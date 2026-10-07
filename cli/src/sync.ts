@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { AgentApiClient, runFromEnvelope, runIdOf } from './api-client.js';
 import { configRoot, withOwnedCredentialGate } from './credentials.js';
-import { CliError, usageError } from './errors.js';
+import { CliError, EXIT_CODES, usageError } from './errors.js';
 import { RestrictedLocalAdapter } from './local-adapter.js';
 import { collectedItems, checkRecapCapabilities } from './recap.js';
 import { isJsonObject, isTerminalStatus, type AgentEnvelope, type JsonObject } from './types.js';
@@ -141,7 +141,7 @@ export async function synchronize(client: AgentApiClient, options: SyncOptions,
         if (heartbeatBusy) return;
         heartbeatBusy = true;
         void publish().catch(error => {
-          if (error instanceof CliError && ['LOCAL_USER_MISMATCH', 'SCOPE_DENIED', 'INVALID_CREDENTIAL', 'CREDENTIAL_REVOKED', 'AUTH_REQUIRED'].includes(error.code)) invalidated = error;
+          if (error instanceof CliError && [EXIT_CODES.authentication, EXIT_CODES.permission].some(code => code === error.exitCode)) invalidated = error;
         }).finally(() => { heartbeatBusy = false; });
       }, 20_000);
       const callLocal = async (id: string, input: JsonObject, key?: string) => {
@@ -236,7 +236,7 @@ export async function synchronize(client: AgentApiClient, options: SyncOptions,
       return response();
     } catch (error) {
       if (heartbeat) clearInterval(heartbeat);
-      if (error instanceof CliError && ['LOCAL_USER_MISMATCH', 'SCOPE_DENIED', 'INVALID_CREDENTIAL', 'CREDENTIAL_REVOKED', 'AUTH_REQUIRED'].includes(error.code)) {
+      if (error instanceof CliError && [EXIT_CODES.authentication, EXIT_CODES.permission].some(code => code === error.exitCode)) {
         const cancel = caps.actions.find(action => action.id === 'local.platform.cancel');
         if (cancel) for (const source of current.sources.filter(item => item.localRun && !item.items)) {
           // 只取消此任务的本机读取；已切账号时桌面身份校验会拒绝，不碰新账号任务。

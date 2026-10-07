@@ -321,7 +321,7 @@ test('stdio MCP publishes trusted local schemas instead of drifting server schem
   assert.deepEqual(Object.keys(collect.inputSchema.properties), ['platform', 'mode', 'limit']);
   assert.equal(collect.inputSchema.additionalProperties, false);
   assert.deepEqual(cancel.inputSchema, {
-    type: 'object', properties: {}, required: [], additionalProperties: false,
+    type: 'object', properties: { run_id: { type: 'string', minLength: 1, maxLength: 64 } }, required: [], additionalProperties: false,
   });
   assert.deepEqual(media.inputSchema.required, ['aweme_id']);
   assert.deepEqual(Object.keys(media.inputSchema.properties), ['aweme_id']);

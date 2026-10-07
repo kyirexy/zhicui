@@ -92,7 +92,7 @@ test('reconcile migrates recorded old install paths, updates Skills and preserve
   const previousCli = resolve(directory, 'old-cli');
   await cp(resolve('dist'), resolve(previousCli, 'dist'), { recursive: true });
   await cp(resolve('skills'), resolve(previousCli, 'skills'), { recursive: true });
-  await writeFile(resolve(previousCli, 'package.json'), '{"type":"module"}\n');
+  await cp(resolve('package.json'), resolve(previousCli, 'package.json'));
   const server = await startServer((_request, response) => json(response, 200, { status: 'ok' }));
   t.after(server.close);
   const env = { ...fakeEnv(directory), ...credentialEnv(directory, server.url) };
@@ -146,7 +146,7 @@ test('a failed migration restores the old registration, provenance and user Skil
   const oldCli = resolve(directory, 'old-cli');
   await cp(resolve('dist'), resolve(oldCli, 'dist'), { recursive: true });
   await cp(resolve('skills'), resolve(oldCli, 'skills'), { recursive: true });
-  await writeFile(resolve(oldCli, 'package.json'), '{"type":"module"}\n');
+  await cp(resolve('package.json'), resolve(oldCli, 'package.json'));
   const env = fakeEnv(directory);
   const setup = await runCliEntry(resolve(oldCli, 'dist', 'index.js'), ['agent', 'setup', '--client', 'codex', '--json'], { env });
   assert.equal(setup.code, 0, setup.stderr);
@@ -451,7 +451,10 @@ test('packaged Electron resources/cli layout resolves its adjacent Skill bundle'
   const packagedCli = resolve(directory, 'resources', 'cli');
   await cp(resolve('dist'), packagedCli, { recursive: true });
   await cp(resolve('skills'), resolve(packagedCli, 'skills'), { recursive: true });
-  await writeFile(resolve(packagedCli, 'package.json'), '{"type":"module"}\n');
+  await cp(resolve('package.json'), resolve(packagedCli, 'package.json'));
+  const version = await runCliEntry(resolve(packagedCli, 'index.js'), ['--version']);
+  assert.equal(version.code, 0, version.stderr);
+  assert.equal(JSON.parse(version.stdout).version, JSON.parse(await readFile(resolve('package.json'), 'utf8')).version);
 
   const env = fakeEnv(directory);
   await mkdir(resolve(directory, 'codex'), { recursive: true });

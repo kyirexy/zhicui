@@ -6,6 +6,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import jwt
 from fastapi import HTTPException, Request, Response
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -86,8 +87,9 @@ def refresh(db: Session, token: str, request_id: str) -> dict:
         raise rejected("ACCOUNT_DISABLED")
     owner = "session:" + row.id
     receipt = read_receipt(db, owner, token, request_id)
-    if receipt and digest(receipt["refresh_token"]) == row.refresh_hash:
-        return receipt
+    if receipt and secrets.compare_digest(digest(receipt["refresh_token"]), row.refresh_hash):
+        # 重试不再次轮换或延长会话；回执里的访问令牌可能已过期，必须重新签发。
+        return _payload(row, user, receipt["refresh_token"])
     if not secrets.compare_digest(row.refresh_hash, digest(token)):
         raise rejected("SESSION_REFRESH_REUSED")
     next_token = f"zhc_session_{row.id}_{secrets.token_urlsafe(36)}"
@@ -95,7 +97,41 @@ def refresh(db: Session, token: str, request_id: str) -> dict:
     row.refresh_hash = digest(next_token)
     row.expires_at = min(datetime.now(timezone.utc) + timedelta(days=IDLE_DAYS), aware(row.absolute_expires_at))
     result = _payload(row, user, next_token)
-    save_receipt(db, owner, token, request_id, result)
+    save_receipt(db, owner, token, request_id, result,
+        expires_at=min(aware(row.expires_at), aware(row.absolute_expires_at)), replace_owner=True)
+    db.commit()
+    return result
+
+
+def migrate(db: Session, token: str, request_id: str, client_type: str = "web") -> dict:
+    # 仅此恢复入口允许已过期的签名：它只能查找原请求回执，不能授权创建新会话。
+    try:
+        payload = jwt.decode(token, auth_service.SECRET_KEY, algorithms=[auth_service.ALGORITHM],
+            options={"verify_exp": False, "require": ["exp", "sub"]})
+        expired = int(payload["exp"]) <= datetime.now(timezone.utc).timestamp()
+        if not payload["sub"] or payload.get("purpose") is not None:
+            raise ValueError("不是登录访问令牌")
+    except (jwt.PyJWTError, TypeError, ValueError, OverflowError):
+        raise rejected("SESSION_INVALID") from None
+    user = db.query(User).filter(User.id == payload["sub"]).with_for_update().first()
+    if user is None or not user.is_active:
+        raise rejected("ACCOUNT_DISABLED")
+    assert_session_active(db, payload, token)
+    owner = "migration:" + digest(token)
+    receipt = read_receipt(db, owner, token, request_id)
+    if receipt is not None:
+        row = _row(db, receipt["refresh_token"])
+        if row.user_id != user.id or row.legacy_token_hash != digest(token):
+            raise rejected("SESSION_INVALID")
+        if not secrets.compare_digest(row.refresh_hash, digest(receipt["refresh_token"])):
+            raise rejected("SESSION_REFRESH_REUSED")
+        return _payload(row, user, receipt["refresh_token"])
+    if expired:
+        raise rejected("SESSION_EXPIRED")
+    result = issue(db, user, client_type, token, commit=False)
+    row = db.get(UserAuthSession, result["session_id"])
+    save_receipt(db, owner, token, request_id, result,
+        expires_at=min(aware(row.expires_at), aware(row.absolute_expires_at)), replace_owner=True)
     db.commit()
     return result
 

@@ -27,7 +27,8 @@ import type {
 const bridge: ZhicuiDesktopBridge = {
   restoreAuthSession: (force = false) => ipcRenderer.invoke('desktop:auth-restore', force),
   adoptAuthSession: (token: string) => ipcRenderer.invoke('desktop:auth-adopt', token),
-  logoutAuthSession: () => ipcRenderer.invoke('desktop:auth-logout'),
+  logoutAuthSession: (expectedSessionId?: string) => ipcRenderer.invoke('desktop:auth-logout', expectedSessionId),
+  supportsConditionalAuthLogout: true,
   getRuntimeInfo: () => (
     ipcRenderer.invoke('desktop:get-runtime-info') as Promise<DesktopRuntimeInfo>
   ),

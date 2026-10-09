@@ -321,7 +321,8 @@ export interface DesktopMediaDownloadResult {
 export interface ZhicuiDesktopBridge {
   restoreAuthSession?(force?: boolean): Promise<DesktopZhicuiSession | null>;
   adoptAuthSession?(token: string): Promise<DesktopZhicuiSession>;
-  logoutAuthSession?(): Promise<void>;
+  logoutAuthSession?(expectedSessionId?: string): Promise<void>;
+  supportsConditionalAuthLogout?: boolean;
   getRuntimeInfo(): Promise<DesktopRuntimeInfo>;
   bindAgentUser?(profileKey: string | null): Promise<boolean>;
   setTitlebarTheme?(theme: 'light' | 'dark'): Promise<boolean>;

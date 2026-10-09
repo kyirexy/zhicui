@@ -10,6 +10,37 @@ const api = () => process.env.NEXT_PUBLIC_API_URL || '';
 let pending: Promise<RecoveredSession | null> | null = null;
 const requestKey = 'zhicui:session-refresh-request:v2';
 const logoutKey = 'zhicui:session-logged-out:v2';
+interface DesktopLogoutIntent {
+  version: 1;
+  kind: 'desktop';
+  requestId: string;
+  sessionId: string | null;
+  state: 'pending' | 'confirmed';
+}
+
+function tokenSessionId(token: string | null): string | null {
+  try {
+    const encoded = token!.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    const claims = JSON.parse(atob(encoded.padEnd(Math.ceil(encoded.length / 4) * 4, '=')));
+    return typeof claims.sid === 'string' && claims.sid ? claims.sid : null;
+  } catch { return null; }
+}
+
+function desktopLogoutIntent(raw: string | null): DesktopLogoutIntent | null {
+  try {
+    const value = JSON.parse(raw || 'null');
+    return value?.version === 1 && value.kind === 'desktop' && typeof value.requestId === 'string'
+      && (value.sessionId === null || typeof value.sessionId === 'string')
+      && (value.state === 'pending' || value.state === 'confirmed') ? value : null;
+  } catch { return null; }
+}
+
+function confirmDesktopLogout(raw: string, intent: DesktopLogoutIntent): void {
+  if (window.localStorage.getItem(logoutKey) === raw) {
+    window.localStorage.setItem(logoutKey, JSON.stringify({ ...intent, state: 'confirmed' }));
+  }
+}
+
 export function markExplicitLogin(): void { window.localStorage.removeItem(logoutKey); }
 
 async function post(path: string, token?: string | null): Promise<RecoveredSession> {
@@ -34,21 +65,48 @@ async function post(path: string, token?: string | null): Promise<RecoveredSessi
 export function recoverSession(force = false): Promise<RecoveredSession | null> {
   if (pending) return pending;
   const operation = async (): Promise<RecoveredSession | null> => {
-    if (window.localStorage.getItem(logoutKey)) {
+    const bridge = window.zhicuiDesktop;
+    const logout = window.localStorage.getItem(logoutKey);
+    // Web Cookie 的离线退出仍由页面阻止；桌面退出事实由主进程保管。
+    if (logout && !bridge?.restoreAuthSession) {
       void revokeSession(null).catch(() => undefined);
       throw new SessionRecoveryError('已退出登录', true);
     }
     const expected = readStoredToken();
     const epoch = sessionStorageEpoch();
     let result: RecoveredSession | null = null;
-    const bridge = window.zhicuiDesktop;
     if (bridge?.restoreAuthSession) {
       try {
         result = await bridge.restoreAuthSession(force) as RecoveredSession | null;
-        if (!result && expected && sessionExpiresAt(expected) > Date.now()) {
+        // 恢复期间的新登录/退出不能被旧快照覆盖，更不能发出旧退出请求。
+        if (sessionStorageEpoch() !== epoch || readStoredToken() !== expected
+          || window.localStorage.getItem(logoutKey) !== logout) {
+          throw new SessionRecoveryError('登录状态已改变，已忽略旧恢复结果');
+        }
+        if (logout) {
+          const intent = desktopLogoutIntent(logout);
+          const sameSession = Boolean(intent?.sessionId) && intent!.sessionId === tokenSessionId(result?.token || null);
+          // IPC 未确认的主动退出只重试原会话；主进程再校验 sid，防止交接竞态。
+          if (result && intent && (sameSession || (!intent.sessionId && intent.state === 'pending'))) {
+            if (sameSession && intent.state === 'pending' && bridge.logoutAuthSession) {
+              if (bridge.supportsConditionalAuthLogout !== true) {
+                throw new SessionRecoveryError('退出确认尚未完成，请更新知萃客户端后恢复连接', true);
+              }
+              await bridge.logoutAuthSession(intent.sessionId!);
+              confirmDesktopLogout(logout, intent);
+            }
+            throw new SessionRecoveryError('已退出登录', true);
+          }
+          // 旧版“1”没有会话归属，不能据此撤销主进程的新会话。
+          // 主进程确实无会话时也不重新迁移页面留下的旧 token。
+          if (!result) throw new SessionRecoveryError('已退出登录', true);
+          if (window.localStorage.getItem(logoutKey) === logout) markExplicitLogin();
+        }
+        if (!result && !logout && expected && sessionExpiresAt(expected) > Date.now()) {
           result = await bridge.adoptAuthSession!(expected) as RecoveredSession;
         }
       } catch (error) {
+        if (error instanceof SessionRecoveryError) throw error;
         const message = error instanceof Error ? error.message : '客户端连接暂时不可用';
         throw new SessionRecoveryError(message, /SESSION_(EXPIRED|REVOKED|INVALID|REFRESH_REUSED)|ACCOUNT_DISABLED/.test(message));
       }
@@ -75,9 +133,12 @@ export function recoverSession(force = false): Promise<RecoveredSession | null> 
         }
       }
       if (!result) {
+        // 已发出的迁移可能只丢了回包；过期JWT仍可用原request_id领取已有回执。
+        const hadPendingRequest = Boolean(window.localStorage.getItem(requestKey));
         try { result = await post('/api/auth/refresh'); }
         catch (error) {
-          if (!(error instanceof SessionRecoveryError) || !error.rejected || !expected || sessionExpiresAt(expected) <= Date.now()) throw error;
+          if (!(error instanceof SessionRecoveryError) || !error.rejected || !expected
+            || (sessionExpiresAt(expected) <= Date.now() && !hadPendingRequest)) throw error;
           result = await post('/api/auth/session/migrate', expected);
         }
       }
@@ -107,12 +168,18 @@ export async function persistDesktopSession(token: string): Promise<void> {
 }
 
 export async function revokeSession(token: string | null): Promise<void> {
-  // 离线退出后不能因 HttpOnly Cookie 尚未撤销而自动复活。
-  window.localStorage.setItem(logoutKey, '1');
   if (window.zhicuiDesktop?.logoutAuthSession) {
+    // 只保存会话标识，不保存 JWT；IPC 失败后仍能针对原会话补偿退出。
+    const intent: DesktopLogoutIntent = { version: 1, kind: 'desktop', requestId: crypto.randomUUID(),
+      sessionId: tokenSessionId(token), state: 'pending' };
+    const raw = JSON.stringify(intent);
+    window.localStorage.setItem(logoutKey, raw);
     await window.zhicuiDesktop.logoutAuthSession();
+    confirmDesktopLogout(raw, intent);
     return;
   }
+  // 离线退出后不能因 HttpOnly Cookie 尚未撤销而自动复活。
+  window.localStorage.setItem(logoutKey, '1');
   await fetch(`${api()}/api/auth/logout`, { method: 'POST', credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify({ request_id: crypto.randomUUID() }), signal: AbortSignal.timeout(10_000) });

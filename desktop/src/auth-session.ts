@@ -24,6 +24,8 @@ export class DesktopAuthSession {
   private loaded = false;
   private generation = 0;
   private pending: Promise<DesktopZhicuiSession | null> | null = null;
+  private adoption: { token: string; promise: Promise<DesktopZhicuiSession> } | null = null;
+  private operations: Promise<unknown> = Promise.resolve();
   private writes: Promise<void> = Promise.resolve();
   private transport: typeof fetch;
   private encrypt: (value: string) => Buffer;
@@ -63,6 +65,11 @@ export class DesktopAuthSession {
     const value = this.vault?.session;
     return value && !this.vault?.logoutPending ? { token: value.token, user: value.user } : null;
   }
+  private exclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.operations.then(operation, operation);
+    this.operations = next.catch(() => undefined);
+    return next;
+  }
   private async request(path: string, body?: unknown, token?: string): Promise<SavedSession> {
     const response = await this.transport(`${this.origin}${path}`, {
       method: body === undefined ? 'GET' : 'POST', redirect: 'error',
@@ -78,12 +85,14 @@ export class DesktopAuthSession {
     return payload.data!;
   }
   restore(force = false): Promise<DesktopZhicuiSession | null> {
+    if (this.adoption) return this.adoption.promise;
     if (this.pending) return this.pending;
-    this.pending = this.restoreNow(force).finally(() => { this.pending = null; });
+    const generation = this.generation;
+    this.pending = this.exclusive(() => this.restoreNow(force, generation)).finally(() => { this.pending = null; });
     return this.pending;
   }
-  private async restoreNow(force: boolean): Promise<DesktopZhicuiSession | null> {
-    const generation = this.generation;
+  private async restoreNow(force: boolean, generation: number): Promise<DesktopZhicuiSession | null> {
+    if (generation !== this.generation) return null;
     try {
       await this.load();
       if (!this.vault || this.vault.logoutPending) {
@@ -93,7 +102,7 @@ export class DesktopAuthSession {
       }
       const current = this.vault.session;
       let next = current;
-      if (!current.refresh_token && expiry(current.token) > Date.now()) {
+      if (!current.refresh_token && (expiry(current.token) > Date.now() || this.vault.requestId)) {
         this.vault.requestId ||= randomUUID();
         await this.save();
         next = await this.request('/api/auth/session/migrate', { request_id: this.vault.requestId }, current.token);
@@ -130,16 +139,36 @@ export class DesktopAuthSession {
       throw error;
     }
   }
-  async adopt(token: string): Promise<DesktopZhicuiSession> {
-    if (typeof token !== 'string' || token.length > 16000 || expiry(token) <= Date.now()) throw new Error('SESSION_INVALID: 登录凭证无效');
+  adopt(token: string): Promise<DesktopZhicuiSession> {
+    if (this.adoption?.token === token) return this.adoption.promise;
+    const generation = ++this.generation;
+    const promise = this.exclusive(() => this.adoptNow(token, generation)).finally(() => {
+      if (this.adoption?.promise === promise) this.adoption = null;
+    });
+    this.adoption = { token, promise };
+    return promise;
+  }
+  private async adoptNow(token: string, generation: number): Promise<DesktopZhicuiSession> {
+    if (generation !== this.generation) throw new Error('SESSION_CHANGED');
+    if (typeof token !== 'string' || token.length > 16000) throw new Error('SESSION_INVALID: 登录凭证无效');
     await this.load();
+    const resuming = this.vault?.session.token === token && !!this.vault.requestId && !this.vault.logoutPending;
+    const knownRefresh = this.vault?.session.token === token && !!this.vault.session.refresh_token && !this.vault.logoutPending;
+    if (expiry(token) <= Date.now() && !resuming && !knownRefresh) throw new Error('SESSION_INVALID: 登录凭证无效');
     if (this.vault?.session.token === token && this.vault.session.refresh_token && !this.vault.logoutPending) {
+      if (this.vault.requestId || expiry(token) <= Date.now() + 60_000) {
+        const recovered = await this.restoreNow(false, generation);
+        if (!recovered) throw new Error('SESSION_CHANGED');
+        return recovered;
+      }
+      this.state = 'ready';
+      await this.onSession(this.publicSession());
       return this.publicSession()!;
     }
-    const generation = ++this.generation;
     const requestId = this.vault?.session.token === token && this.vault.requestId ? this.vault.requestId : randomUUID();
     // 先加密保存迁移中的 JWT 和请求标识，进程退出后仍可恢复同一次请求。
-    const user = await this.request('/api/auth/me', undefined, token) as unknown as DesktopZhicuiSession['user'];
+    const user = resuming ? this.vault!.session.user
+      : await this.request('/api/auth/me', undefined, token) as unknown as DesktopZhicuiSession['user'];
     if (generation !== this.generation) throw new Error('SESSION_CHANGED');
     this.vault = { version: 2, origin: this.origin, session: { token, user }, requestId };
     await this.save();
@@ -152,8 +181,25 @@ export class DesktopAuthSession {
     await this.onSession(this.publicSession());
     return this.publicSession()!;
   }
-  async logout(): Promise<void> {
-    ++this.generation;
+  logout(expectedSessionId?: string): Promise<void> {
+    // 条件退出用于补偿旧页面未完成的 IPC；不能注销之后登录的新会话。
+    const expectedGeneration = this.generation;
+    if (expectedSessionId !== undefined) return this.exclusive(async () => {
+      if (expectedGeneration !== this.generation) return;
+      await this.load();
+      if (expectedGeneration !== this.generation) return;
+      let current = this.vault?.session.session_id;
+      if (!current && this.vault?.session.token) {
+        try { current = JSON.parse(Buffer.from(this.vault.session.token.split('.')[1], 'base64url').toString()).sid; } catch { /* 旧凭据不匹配条件退出 */ }
+      }
+      if (!current || current !== expectedSessionId) return;
+      await this.logoutNow(++this.generation);
+    });
+    const generation = ++this.generation;
+    return this.exclusive(() => this.logoutNow(generation));
+  }
+  private async logoutNow(generation: number): Promise<void> {
+    if (generation !== this.generation) return;
     await this.load();
     this.state = 'signed_out';
     if (this.vault) { this.vault.logoutPending = true; this.vault.requestId = randomUUID(); await this.save(); }

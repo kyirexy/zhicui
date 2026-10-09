@@ -5,10 +5,11 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.core.auth import get_current_user
+from app.core.auth import bearer_scheme, get_current_user
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User as UserModel, get_user_by_id
@@ -223,23 +224,11 @@ def refresh_session(body: SessionRefreshRequest, request: Request, response: Res
 
 @router.post("/api/auth/session/migrate")
 def migrate_session(body: SessionRefreshRequest, request: Request, response: Response,
-                    db: Session = Depends(get_db), user: UserModel = Depends(get_current_user)) -> dict:
-    from app.services.auth_refresh_receipt import read_receipt, save_receipt
+                    db: Session = Depends(get_db),
+                    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme)) -> dict:
     _check_session_origin(request)
-    token = request.headers.get("authorization", "")[7:]
-    db.query(UserModel).filter(UserModel.id == user.id).with_for_update().first()
-    owner = "migration:" + auth_session_service.digest(token)[:64]
-    data = read_receipt(db, owner, token, body.request_id)
-    if data is None:
-        data = auth_session_service.issue(db, user,
-            "desktop" if request.headers.get("X-Zhicui-Session-Transport") == "native" else "web", token, commit=False)
-        save_receipt(db, owner, token, body.request_id, data)
-        db.commit()
-    else:
-        payload = auth_service.decode_access_token(data["token"])
-        if not payload:
-            raise auth_session_service.rejected()
-        auth_session_service.assert_session_active(db, payload)
+    data = auth_session_service.migrate(db, credentials.credentials if credentials else "", body.request_id,
+        "desktop" if request.headers.get("X-Zhicui-Session-Transport") == "native" else "web")
     return _ok(auth_session_service.public_session(data, request, response))
 
 

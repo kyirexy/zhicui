@@ -135,13 +135,12 @@ function emitAgentAuthorizationStatus(status: DesktopAgentAuthorizationStatus): 
   mainWindow.webContents.send('desktop:agent-authorization-status', status);
 }
 
-function emitZhicuiSession(session: DesktopZhicuiSession): void {
+async function emitZhicuiSession(session: DesktopZhicuiSession): Promise<void> {
   if (authSession) {
-    void authSession.adopt(session.token).then((value) => {
-      mainWindow?.webContents.send('desktop:zhicui-session', value);
-      agentBackground = false;
-      focusMainWindow();
-    }).catch(() => emitZhicuiLoginStatus({ stage: 'error', message: '登录已确认，正在恢复本机连接，请稍后重试' }));
+    const value = await authSession.adopt(session.token);
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('desktop:zhicui-session', value);
+    agentBackground = false;
+    focusMainWindow();
     return;
   }
   agentIntegration.bindUser(session.user.agent_profile_key || null);
@@ -159,11 +158,8 @@ function emitZhicuiSession(session: DesktopZhicuiSession): void {
     publish();
     return;
   }
-  void binding.then(publish).catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`[desktop] 登录账号绑定到本机 Agent 失败：${message}`);
-    publish();
-  });
+  await binding;
+  publish();
 }
 
 function emitPlatformAccountStatus(status: PlatformAccountStatus): void {
@@ -310,9 +306,10 @@ function registerIpc(): void {
     assertTrustedIpcSender(event);
     return authSession!.adopt(token);
   });
-  ipcMain.handle('desktop:auth-logout', (event) => {
+  ipcMain.handle('desktop:auth-logout', (event, expectedSessionId?: string) => {
     assertTrustedIpcSender(event);
-    return authSession!.logout();
+    if (expectedSessionId !== undefined && (typeof expectedSessionId !== 'string' || expectedSessionId.length > 128)) throw new Error('SESSION_INVALID: 退出会话标识无效');
+    return authSession!.logout(expectedSessionId);
   });
   ipcMain.handle('desktop:get-runtime-info', (event): DesktopRuntimeInfo => {
     assertTrustedIpcSender(event);

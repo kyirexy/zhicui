@@ -36,11 +36,15 @@ def read_receipt(db: Session, owner: str, token: str, request_id: str | None) ->
     return json.loads(_cipher().decrypt(row.encrypted_result.encode()).decode())
 
 
-def save_receipt(db: Session, owner: str, token: str, request_id: str | None, result: dict) -> None:
+def save_receipt(db: Session, owner: str, token: str, request_id: str | None, result: dict,
+                 *, expires_at: datetime | None = None, replace_owner: bool = False) -> None:
     if not request_id:
         return
     now = datetime.now(timezone.utc)
     db.query(AuthRefreshReceipt).filter(AuthRefreshReceipt.expires_at <= now).delete(synchronize_session=False)
+    if replace_owner:
+        # 登录会话只保留当前后继凭据的回执，长期离线恢复不会累积历次轮换结果。
+        db.query(AuthRefreshReceipt).filter(AuthRefreshReceipt.owner == owner).delete(synchronize_session=False)
     db.merge(AuthRefreshReceipt(id=_key(owner, token, request_id), owner=owner,
         encrypted_result=_cipher().encrypt(json.dumps(result).encode()).decode(),
-        expires_at=now + timedelta(minutes=10)))
+        expires_at=aware(expires_at) if expires_at is not None else now + timedelta(minutes=10)))

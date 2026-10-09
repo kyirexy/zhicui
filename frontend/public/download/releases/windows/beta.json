@@ -5,28 +5,26 @@
   "platform": "windows",
   "architecture": "x64",
   "artifact_kind": "unsigned",
-  "version": "1.1.19",
-  "source_commit": "5ee5ebc9e14acca16cec1399b69941446b5cbdf5",
-  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.19-x64.exe",
-  "size_bytes": 93703467,
-  "sha256": "367c50e75e3e3b11a3f4ae79da06d5b643605bfe45d33ee3a72c7defbf603ca4",
+  "version": "1.1.20",
+  "source_commit": "f32b93bedac0d74c81d16b34850a10bc2625afab",
+  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.20-x64.exe",
+  "size_bytes": 93620023,
+  "sha256": "08619b281a7b14efe2301fc755fe8c751c90e9d978b5223d6e821d8c8c5f5699",
   "blockmap": {
-    "name": "Zhicui-Setup-1.1.19-x64.exe.blockmap",
-    "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.19-x64.exe.blockmap",
-    "size_bytes": 99482,
-    "sha256": "6fed673997a057e2dc1acd858efd6b8ea52a69c343e5e947a00f43d808d5f2f6"
+    "name": "Zhicui-Setup-1.1.20-x64.exe.blockmap",
+    "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.20-x64.exe.blockmap",
+    "size_bytes": 99440,
+    "sha256": "a3953f41ba4f9f773ac236e9f29916c0a6c2904f7c667c7ffc29fc724bf5e8ff"
   },
   "update_feed": {
     "name": "beta.yml",
     "download_url": "https://luxai.cn/download/windows/beta.yml",
     "size_bytes": 351,
-    "sha256": "fe0f5c4d591f214059e9e1a8bc9a4c2ce8fc137aafb74639b13d2bde437ddd1d"
+    "sha256": "f98aa822c71ba054fde71168c8a3cd5e266532a7f18261c8894dd291909f4c73"
   },
-  "published_at": "2026-10-07T05:31:44.5563262Z",
+  "published_at": "2026-10-09T10:27:01.5411414Z",
   "release_notes": [
-    "登录自动续期，网络异常保留会话。",
-    "Agent 后台启动，同步 200 条并在首页展示进度，中断后可继续。",
-    "首次启动兼容中文安装路径，明确区分登录、连接和平台验证状态。"
+    "修复客户端登录恢复、离线续期和网页登录保存问题。"
   ],
   "installer_profile": "balanced-download",
   "code_signed": false,

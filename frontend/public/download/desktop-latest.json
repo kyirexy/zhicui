@@ -5,17 +5,15 @@
   "platform": "windows",
   "architecture": "x64",
   "artifact_kind": "unsigned",
-  "version": "1.1.19",
-  "source_commit": "5ee5ebc9e14acca16cec1399b69941446b5cbdf5",
-  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.19-x64.exe",
-  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.19-x64.exe",
-  "size_bytes": 93703467,
-  "sha256": "367c50e75e3e3b11a3f4ae79da06d5b643605bfe45d33ee3a72c7defbf603ca4",
-  "published_at": "2026-10-07T05:31:44.5563262Z",
+  "version": "1.1.20",
+  "source_commit": "f32b93bedac0d74c81d16b34850a10bc2625afab",
+  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.20-x64.exe",
+  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.20-x64.exe",
+  "size_bytes": 93620023,
+  "sha256": "08619b281a7b14efe2301fc755fe8c751c90e9d978b5223d6e821d8c8c5f5699",
+  "published_at": "2026-10-09T10:27:01.5411414Z",
   "notes": [
-    "登录自动续期，网络异常保留会话。",
-    "Agent 后台启动，同步 200 条并在首页展示进度，中断后可继续。",
-    "首次启动兼容中文安装路径，明确区分登录、连接和平台验证状态。"
+    "修复客户端登录恢复、离线续期和网页登录保存问题。"
   ],
   "code_signed": false,
   "release_status": "beta_download"

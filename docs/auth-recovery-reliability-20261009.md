@@ -26,3 +26,16 @@
 - 用户已主动退出、账号禁用/撤销、超出会话有效期仍应要求验证；不承诺永久免登录。
 
 保留现有视频解析、Jenkins、发布基础设施等未提交改动，本次只提交上述修复。
+
+## 发行与本机验收结果
+
+- 修复源码提交：`f32b93bedac0d74c81d16b34850a10bc2625afab`，仅包含本次20个相关文件；原有其他工作保持未提交。
+- Web 1.1.17已上线，build `f32b93bedac0-20261009103812`，runtime `/opt/zhicui-runtime/releases/manual-auth-recovery-core-f32b93b`，health=ok/readiness=ready，Agent core已恢复。
+- Jenkins318因npm下载ECONNRESET失败且未切流；319使用同一SHA重试成功。隔离恢复双启动证据为`agent-schema-rehearsal-20261009T103419Z-f32b93bedac0.json`，core完整冒烟通过，未放宽闸门。
+- Windows beta 1.1.20由同一提交的干净worktree构建，Agent集成、更新与发布契约通过。已发布官网并完整下载回读校验：SHA-256 `08619b281a7b14efe2301fc755fe8c751c90e9d978b5223d6e821d8c8c5f5699`，93,620,023字节。
+- 本机覆盖安装ExitCode=0，实际EXE版本1.1.20。官网清单source_commit/hash与本机安装来源一致；备份为`D:/6month-backups/auth-recovery-install-20261009`（旧app.asar和账号/平台资料，不含可再生成缓存）。
+- 真实Electron43.2.0 / Windows DPAPI测试使用隔离目录、模拟HTTP和假凭据；三个独立进程验证保存、重启恢复原刷新请求、断网保留、离线退出不复活。不能替代实际用户登录验收。
+- 原同步任务已通过官方MCP续跑：自动启动安装后的1.1.20，CLI授权继续有效；仍返回DESKTOP_AUTH_REQUIRED，读取0/保存0。仅检查文件存在性，用户资料目录仍没有auth/session-v2.enc。已请求用户在新版完成一次原账号登录，随后继续同run_id验证保存和同步。
+- 直接启动客户端的shell命令曾被自动审批拦截，未获更详细原因；采用正式MCP同步入口完成了自动启动验证，未绕过界面控制限制。
+- 本机详细产物：`.artifacts/auth-recovery-installed-1.1.20.json`、`auth-recovery-public-installer.json`、`auth-recovery-desktop-1.1.20-{build,publish}.log`；生产专用账号验收结果另行补录。
+- 生产专用账号额外HTTPS验收全部通过：Web与native重试前后会话到期时刻差均为0秒（PG返回时区不同但同一时刻）；4路并发回执、丢包重试新access、同请求不重复轮换、不延长会话、旧request拒绝、正常续期、迁移重试与轮换后拒绝、退出与跨站防护。10次测试会话已注销，临时密码租约归还、明文删除、无活动租约。

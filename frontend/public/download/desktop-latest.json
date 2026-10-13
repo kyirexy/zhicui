@@ -5,15 +5,16 @@
   "platform": "windows",
   "architecture": "x64",
   "artifact_kind": "unsigned",
-  "version": "1.1.20",
-  "source_commit": "f32b93bedac0d74c81d16b34850a10bc2625afab",
-  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.20-x64.exe",
-  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.20-x64.exe",
-  "size_bytes": 93620023,
-  "sha256": "08619b281a7b14efe2301fc755fe8c751c90e9d978b5223d6e821d8c8c5f5699",
-  "published_at": "2026-10-09T10:27:01.5411414Z",
+  "version": "1.1.21",
+  "source_commit": "efe1ed7df23f6505fe9f14c3f34c8a7a3a6e27cd",
+  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.21-x64.exe",
+  "url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.21-x64.exe",
+  "size_bytes": 93707646,
+  "sha256": "7bc96d10d11d481cb8536bdf93f21638a06907100e16ce54d33aef514ae4fb7f",
+  "published_at": "2026-10-13T08:37:45.7877752Z",
   "notes": [
-    "修复客户端登录恢复、离线续期和网页登录保存问题。"
+    "新增每日研究：定时同步喜欢与收藏并生成选题报告。",
+    "支持桌面采集进度、断线续传与邮件报告。"
   ],
   "code_signed": false,
   "release_status": "beta_download"

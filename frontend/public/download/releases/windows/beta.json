@@ -5,26 +5,27 @@
   "platform": "windows",
   "architecture": "x64",
   "artifact_kind": "unsigned",
-  "version": "1.1.20",
-  "source_commit": "f32b93bedac0d74c81d16b34850a10bc2625afab",
-  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.20-x64.exe",
-  "size_bytes": 93620023,
-  "sha256": "08619b281a7b14efe2301fc755fe8c751c90e9d978b5223d6e821d8c8c5f5699",
+  "version": "1.1.21",
+  "source_commit": "efe1ed7df23f6505fe9f14c3f34c8a7a3a6e27cd",
+  "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.21-x64.exe",
+  "size_bytes": 93707646,
+  "sha256": "7bc96d10d11d481cb8536bdf93f21638a06907100e16ce54d33aef514ae4fb7f",
   "blockmap": {
-    "name": "Zhicui-Setup-1.1.20-x64.exe.blockmap",
-    "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.20-x64.exe.blockmap",
-    "size_bytes": 99440,
-    "sha256": "a3953f41ba4f9f773ac236e9f29916c0a6c2904f7c667c7ffc29fc724bf5e8ff"
+    "name": "Zhicui-Setup-1.1.21-x64.exe.blockmap",
+    "download_url": "https://luxai.cn/download/windows/Zhicui-Setup-1.1.21-x64.exe.blockmap",
+    "size_bytes": 99309,
+    "sha256": "68e18c3645bbc4ebf4019cb8aebc2aaffaa9e5a14e4eb4e4185fe6005f9b5f6c"
   },
   "update_feed": {
     "name": "beta.yml",
     "download_url": "https://luxai.cn/download/windows/beta.yml",
     "size_bytes": 351,
-    "sha256": "f98aa822c71ba054fde71168c8a3cd5e266532a7f18261c8894dd291909f4c73"
+    "sha256": "1fc5be0e127eb657eb6392b6e0d56828748fbd8e28b974d9e6836297807f8510"
   },
-  "published_at": "2026-10-09T10:27:01.5411414Z",
+  "published_at": "2026-10-13T08:37:45.7877752Z",
   "release_notes": [
-    "修复客户端登录恢复、离线续期和网页登录保存问题。"
+    "新增每日研究：定时同步喜欢与收藏并生成选题报告。",
+    "支持桌面采集进度、断线续传与邮件报告。"
   ],
   "installer_profile": "balanced-download",
   "code_signed": false,

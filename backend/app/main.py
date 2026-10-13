@@ -32,6 +32,7 @@ from app.api.ops_routes import router as ops_router
 from app.api.privacy_account_routes import router as privacy_account_router
 from app.api.catalog_quality_routes import router as catalog_quality_router
 from app.api.daily_recap_routes import router as daily_recap_router
+from app.api.daily_research_routes import router as daily_research_router
 from app.api.home_video_routes import router as home_video_router
 from app.api.showcase_case_routes import router as showcase_case_router
 from app.api.community_qr_routes import router as community_qr_router
@@ -103,6 +104,11 @@ from app.models import video_analysis as video_analysis_models  # noqa: F401
 from app.models.agent_automation import (  # noqa: F401
     AgentAutomation,
     AgentAutomationRun,
+)
+from app.models.daily_research import (  # noqa: F401
+    DailyResearchRecipient,
+    DailyResearchDevice,
+    DailyResearchBatch,
 )
 from app.models.agent_interface import (  # noqa: F401
     AgentCredential,
@@ -389,6 +395,11 @@ def create_app() -> FastAPI:
                 and request.method.upper() != "GET"
                 and not route_path.startswith("/api/auth/")
                 and route_path != "/api/client-errors"
+                # 桌面每30秒探测/续租不属于用户操作；避免污染活动历史。
+                and route_path not in {
+                    "/api/daily-research/desktop/claim",
+                    "/api/daily-research/desktop/progress",
+                }
                 and not activity_service.is_explicit_activity_route(
                     request.method,
                     route_path,
@@ -421,6 +432,7 @@ def create_app() -> FastAPI:
     app.include_router(privacy_account_router)
     app.include_router(catalog_quality_router)
     app.include_router(daily_recap_router)
+    app.include_router(daily_research_router)
     app.include_router(home_video_router)
     app.include_router(showcase_case_router)
     app.include_router(community_qr_router)
@@ -1023,6 +1035,16 @@ def _migrate_db() -> None:
             automation_cols = {
                 c["name"] for c in insp.get_columns("agent_automations")
             }
+            if "report_kind" not in automation_cols:
+                conn.execute(text(
+                    "ALTER TABLE agent_automations ADD COLUMN "
+                    "report_kind VARCHAR(32) NOT NULL DEFAULT 'digest'"
+                ))
+            if "config_json" not in automation_cols:
+                conn.execute(text(
+                    "ALTER TABLE agent_automations ADD COLUMN "
+                    "config_json TEXT NOT NULL DEFAULT '{}'"
+                ))
             if "source_mode" not in automation_cols:
                 conn.execute(text(
                     "ALTER TABLE agent_automations ADD COLUMN "
@@ -1056,6 +1078,16 @@ def _migrate_db() -> None:
             run_cols = {
                 c["name"] for c in insp.get_columns("agent_automation_runs")
             }
+            if "state_json" not in run_cols:
+                conn.execute(text(
+                    "ALTER TABLE agent_automation_runs ADD COLUMN "
+                    "state_json TEXT NOT NULL DEFAULT '{}'"
+                ))
+            if "execution_token" not in run_cols:
+                conn.execute(text(
+                    "ALTER TABLE agent_automation_runs ADD COLUMN "
+                    "execution_token VARCHAR(64) NULL"
+                ))
             if "automation_version" not in run_cols:
                 conn.execute(text(
                     "ALTER TABLE agent_automation_runs ADD COLUMN "

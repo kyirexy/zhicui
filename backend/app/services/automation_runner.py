@@ -26,7 +26,7 @@ class AutomationRunner:
         self._last_error = ""
 
     def start(self) -> None:
-        if not settings.AGENT_AUTOMATION_ENABLED or profile_name() != "full":
+        if not settings.AGENT_AUTOMATION_ENABLED:
             return
         with self._lock:
             if self._thread and self._thread.is_alive():
@@ -84,14 +84,18 @@ class AutomationRunner:
                 )
                 with SessionLocal() as db:
                     automation_service.mark_stale_runs(db)
+                    from app.services import daily_research_service
+                    ready_research = daily_research_service.poll(db, limit=free_slots)
                     run_ids = (
                         automation_service.claim_due_runs(
                             db,
-                            limit=free_slots,
+                            limit=max(1, free_slots - len(ready_research)),
+                            daily_only=profile_name() != "full",
                         )
-                        if free_slots
+                        if free_slots > len(ready_research)
                         else []
                     )
+                    run_ids = ready_research + run_ids
                 if executor and run_ids:
                     for run_id in run_ids:
                         self._futures.add(
@@ -166,7 +170,7 @@ class AutomationRunner:
     def status(self) -> dict[str, Any]:
         thread = self._thread
         return {
-            "enabled": bool(settings.AGENT_AUTOMATION_ENABLED) and profile_name() == "full",
+            "enabled": bool(settings.AGENT_AUTOMATION_ENABLED),
             "running": bool(thread and thread.is_alive()),
             "poll_seconds": max(
                 5,

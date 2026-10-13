@@ -27,6 +27,7 @@ import {
 } from './agent-integration';
 import { DesktopAgentActionBridge } from './agent-action-bridge';
 import { DesktopAuthSession } from './auth-session';
+import { DailyResearchWorker } from './daily-research-worker';
 import { desktopBuildIdentity } from './build-identity';
 import { desktopBridgeDirectory } from './platform-runtime';
 import { applyWindowTheme } from './window-theme';
@@ -68,6 +69,7 @@ app.setPath('userData', join(app.getPath('appData'), !app.isPackaged ? '知萃�
   : PACKAGED_RELEASE_CHANNEL === 'beta' ? '知萃公测版' : '知萃'));
 let agentBackground = process.argv.includes('--agent-background');
 let authSession: DesktopAuthSession | null = null;
+let dailyResearchWorker: DailyResearchWorker | null = null;
 let mainWindow: BrowserWindow | null = null;
 let pendingDeepLink: string | null = null;
 let mediaLibrary: DesktopMediaLibrary | null = null;
@@ -164,6 +166,7 @@ async function emitZhicuiSession(session: DesktopZhicuiSession): Promise<void> {
 
 function emitPlatformAccountStatus(status: PlatformAccountStatus): void {
   agentActionBridge?.recordPlatformStatus(status);
+  dailyResearchWorker?.recordPlatformStatus(status);
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send('desktop:platform-account-status', status);
 }
@@ -544,9 +547,19 @@ app.whenReady().then(async () => {
   });
   authSession = new DesktopAuthSession(join(app.getPath('userData'), 'auth', 'session-v2.enc'),
     configuredAppUrl().origin, async (session) => {
+      await dailyResearchWorker?.bindSession(session);
       agentIntegration.bindUser(session?.user.agent_profile_key || null);
       await agentActionBridge?.bindUser(session?.user.agent_profile_key || null);
     });
+  dailyResearchWorker = new DailyResearchWorker({
+    directory: join(app.getPath('userData'), 'daily-research'),
+    origin: configuredAppUrl().origin,
+    getAccessToken: (userId) => authSession?.getAccessToken(userId) || null,
+    collect: (request) => platformAccounts.collect(request),
+    cancel: (request) => platformAccounts.cancel(request),
+    ownsSession: (sessionKey) => platformAccounts.ownsSyncSession(sessionKey),
+    onError: (message) => console.info(`[desktop] ${message}`),
+  });
   await agentActionBridge.start().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[desktop] Agent 本机桥接启动失败：${message}`);
@@ -559,9 +572,10 @@ app.whenReady().then(async () => {
   }
   void authSession.restore().catch(() => undefined).finally(() => {
     if (agentBackground && authSession?.state === 'signed_out') focusMainWindow();
+    dailyResearchWorker?.start();
   });
   setInterval(() => {
-    if (agentBackground && agentActionBridge && !agentActionBridge.busy
+    if (agentBackground && agentActionBridge && !agentActionBridge.busy && !dailyResearchWorker?.busy
       && Date.now() - agentActionBridge.lastActivity > 5 * 60_000) { app.quit(); return; }
     void authSession?.restore().catch(() => undefined);
   }, 45_000).unref();
@@ -576,6 +590,7 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', () => {
+  void dailyResearchWorker?.stop();
   agentIntegration.cancelAuthorization();
   stopDesktopUpdateChecks?.();
   stopDesktopUpdateChecks = null;

@@ -1,6 +1,7 @@
 import {
   BookOpenText,
   CalendarCheck,
+  CalendarClock,
   Clapperboard,
   House,
   Link2,
@@ -22,6 +23,7 @@ export const PRODUCT_NAVIGATION_ICONS: Record<ProductDestinationId, LucideIcon> 
   harness: Sparkles,
   studio: Clapperboard,
   'agent-access': Plug,
+  'daily-research': CalendarClock,
   knowledge: BookOpenText,
   plans: CalendarCheck,
 };

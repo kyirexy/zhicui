@@ -573,6 +573,8 @@ const ownedBatch = (sessionKey, keepSessionOpen = false) => ({ platform: 'douyin
   fixture.connector.collectDouyin = async () => { started.resolve(); await finish.promise; return fixture.trusted(); };
   const running = fixture.connector.collect(ownedBatch('test-session-owner-B'));
   await started.promise;
+  assert.equal(fixture.connector.ownsSyncSession('test-session-owner-B'), true);
+  assert.equal(fixture.connector.ownsSyncSession('test-session-owner-A'), false);
   assert.equal((await fixture.connector.collect(ownedBatch('test-session-owner-A'))).code, 'LOCAL_ACTION_BUSY');
   assert.equal((await fixture.connector.cancel({ sessionKey: 'test-session-owner-A' })).code, 'LOCAL_ACTION_NOT_FOUND');
   assert.equal(fixture.connector.cancelled, false);
@@ -580,6 +582,7 @@ const ownedBatch = (sessionKey, keepSessionOpen = false) => ({ platform: 'douyin
   assert.equal(fixture.events.filter((event) => event.stage === 'cancelled').length, 0);
   finish.resolve();
   assert.equal((await running).success, true);
+  assert.equal(fixture.connector.ownsSyncSession('test-session-owner-B'), false, '任务结束后不再拥有进度');
   assert.equal(fixture.released(), 1);
 }
 

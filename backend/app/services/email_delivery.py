@@ -29,7 +29,7 @@ def public_status() -> dict[str, Any]:
     }
 
 
-def _html_body(title: str, body: str, source_count: int, thread_url: str) -> str:
+def _html_body(title: str, body: str, source_count: int, thread_url: str, research_report: bool = False) -> str:
     safe_title = html.escape(title)
     paragraphs = [
         f"<p>{html.escape(part).replace(chr(10), '<br>')}</p>"
@@ -37,21 +37,25 @@ def _html_body(title: str, body: str, source_count: int, thread_url: str) -> str
         if part.strip()
     ]
     safe_url = html.escape(thread_url, quote=True)
+    source_label = "本次整理了公开清单与可用文稿，证据等级及覆盖限制见报告。" if research_report else f"本次依据 {source_count} 条按规则筛选、且文案已就绪的视频。"
+    footer = "公开元数据初筛与完整文稿分别标注，不代表已核验原片。" if research_report else "这封邮件只总结已经同步到知萃的完整文案；知萃服务器不保存视频文件。"
+    heading = "每日视频研究" if research_report else "视频资料摘要"
+    button = "查看完整研究报告" if research_report else "继续向这些视频提问"
     return f"""\
 <!doctype html>
 <html lang="zh-CN">
   <body style="margin:0;background:#f3f7f5;color:#17211c;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC',sans-serif">
     <div style="max-width:680px;margin:0 auto;padding:32px 18px">
       <div style="background:#ffffff;border:1px solid #dfe8e3;border-radius:20px;padding:28px">
-        <p style="margin:0 0 8px;color:#16835f;font-size:13px;font-weight:700">知萃 · 视频资料摘要</p>
+        <p style="margin:0 0 8px;color:#16835f;font-size:13px;font-weight:700">知萃 · {heading}</p>
         <h1 style="margin:0 0 8px;font-size:24px;line-height:1.35">{safe_title}</h1>
-        <p style="margin:0 0 24px;color:#6b7a72;font-size:14px">本次依据 {source_count} 条按规则筛选、且文案已就绪的视频。</p>
+        <p style="margin:0 0 24px;color:#6b7a72;font-size:14px">{source_label}</p>
         <div style="font-size:15px;line-height:1.8">{''.join(paragraphs)}</div>
         <p style="margin:26px 0 0">
-          <a href="{safe_url}" style="display:inline-block;background:#16835f;color:#fff;text-decoration:none;padding:11px 18px;border-radius:12px;font-weight:700">继续向这些视频提问</a>
+          <a href="{safe_url}" style="display:inline-block;background:#16835f;color:#fff;text-decoration:none;padding:11px 18px;border-radius:12px;font-weight:700">{button}</a>
         </p>
       </div>
-      <p style="color:#87938d;font-size:12px;line-height:1.6;padding:0 8px">这封邮件只总结已经同步到知萃的完整文案；知萃服务器不保存视频文件。</p>
+      <p style="color:#87938d;font-size:12px;line-height:1.6;padding:0 8px">{footer}</p>
     </div>
   </body>
 </html>
@@ -66,6 +70,8 @@ def send_digest(
     source_count: int,
     thread_id: str | None,
     idempotency_key: str,
+    report_url: str | None = None,
+    research_report: bool = False,
 ) -> dict[str, str]:
     """Submit one digest and return a truthful delivery status."""
     if not is_configured():
@@ -74,7 +80,7 @@ def send_digest(
             "error": "邮件服务尚未配置，摘要已保存在知萃中。",
         }
 
-    thread_url = (
+    thread_url = report_url or (
         f"{settings.PUBLIC_APP_URL.rstrip('/')}/harness?thread={thread_id}"
         if thread_id
         else f"{settings.PUBLIC_APP_URL.rstrip('/')}/harness"
@@ -96,13 +102,14 @@ def send_digest(
         if character.isalnum() or character in {"-", "_", "."}
     )[:120]
     message["Message-ID"] = f"<zhicui-{stable_id}@{sender_domain}>"
+    source_label = f"本次整理 {source_count} 部视频，证据等级与覆盖限制见报告。" if research_report else f"本次依据 {source_count} 条按规则筛选、且文案已就绪的视频。"
     message.set_content(
-        f"{title}\n\n本次依据 {source_count} 条按规则筛选、且文案已就绪的视频。\n\n"
+        f"{title}\n\n{source_label}\n\n"
         f"{body}\n\n继续查看：{thread_url}\n\n"
         "知萃服务器不保存视频文件。"
     )
     message.add_alternative(
-        _html_body(title, body, source_count, thread_url),
+        _html_body(title, body, source_count, thread_url, research_report),
         subtype="html",
     )
 
@@ -112,6 +119,7 @@ def send_digest(
 def _submit_message(message: EmailMessage) -> dict[str, str]:
     timeout = max(5, min(int(settings.SMTP_TIMEOUT_SECONDS), 60))
     tls_context = ssl.create_default_context()
+    submitting = False
     try:
         if settings.SMTP_USE_SSL:
             smtp: smtplib.SMTP = smtplib.SMTP_SSL(
@@ -133,13 +141,27 @@ def _submit_message(message: EmailMessage) -> dict[str, str]:
                 smtp.ehlo()
             if settings.SMTP_USER:
                 smtp.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+            submitting = True
             smtp.send_message(message)
     except Exception as exc:
         return {
-            "status": "failed",
+            "status": "unknown" if submitting else "failed",
             "error": f"{type(exc).__name__}: {str(exc)[:240]}",
         }
     return {"status": "sent", "error": ""}
+
+
+def send_daily_research_verification(*, recipient: str, code: str, message_key: str) -> dict[str, str]:
+    """只在用户显式验证收件地址时发送；调用者保存哈希，不保存验证码。"""
+    if not is_configured():
+        return {"status": "not_configured", "error": "邮件服务尚未配置。"}
+    message = EmailMessage()
+    message["Subject"] = "知萃每日研究 · 验证收件邮箱"
+    message["From"] = formataddr((settings.SMTP_FROM_NAME.strip() or "知萃", settings.SMTP_FROM.strip()))
+    message["To"] = recipient
+    message["Message-ID"] = f"<daily-verify-{message_key}@{settings.SMTP_FROM.rsplit('@', 1)[-1]}>"
+    message.set_content(f"你的知萃每日研究收件验证码：{code}\n\n10 分钟内有效。若非本人操作，请忽略此邮件。")
+    return _submit_message(message)
 
 
 def send_verification(

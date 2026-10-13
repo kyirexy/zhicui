@@ -29,6 +29,8 @@ let auth = session();
 assert.equal(await auth.restore(), null);
 await auth.adopt(jwt());
 assert.equal(auth.state, 'ready');
+assert.ok(auth.getAccessToken(user.id));
+assert.equal(auth.getAccessToken('another-user'), null);
 assert.equal((await readFile(path)).includes(Buffer.from('test-secret-refresh')), false);
 auth = session();
 assert.equal((await auth.restore()).user.id, user.id);
@@ -44,6 +46,7 @@ assert.deepEqual(requests.at(-1).body, lost, '进程重启后恢复同一次刷�
 offline = true;
 await assert.rejects(auth.restore());
 assert.equal(auth.state, 'offline');
+assert.equal(auth.getAccessToken(user.id), null);
 offline = false;
 assert.equal((await auth.restore()).user.id, user.id);
 offline = true;
@@ -56,6 +59,7 @@ await auth.adopt(jwt());
 revoked = true;
 await assert.rejects(auth.restore());
 assert.equal(auth.state, 'signed_out');
+assert.equal(auth.getAccessToken(user.id), null);
 assert.equal(binds.at(-1), null);
 console.log('桌面会话：重启恢复、并发刷新、回包丢失、断网、离线退出与撤销全部通过');
 

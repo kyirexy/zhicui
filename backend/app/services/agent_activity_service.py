@@ -38,7 +38,7 @@ def _active(ctx):
     ctx.db.commit()
 
 
-def record_snapshot(ctx, payload):
+def record_snapshot(ctx, payload, *, check_active=None, on_progress=None, observed_at=None):
     from app.services.product_action_run_service import append_event
     platform, mode = payload["platform"], payload["mode"]
     pattern = r"[0-9]{5,32}" if platform == "douyin" else r"BV[0-9A-Za-z]{3,30}"
@@ -53,7 +53,7 @@ def record_snapshot(ctx, payload):
         raise ValueError("同步清单包含重复作品")
     db, user_id = ctx.db, ctx.user.id
     # 日期由已鉴权的服务端 Run 确定，不接收可倒填的点赞或同步时间。
-    observed_at = ctx.run.created_at.replace(tzinfo=ctx.run.created_at.tzinfo or timezone.utc)
+    observed_at = observed_at or ctx.run.created_at.replace(tzinfo=ctx.run.created_at.tzinfo or timezone.utc)
     stamp = observed_at
     parent_id = payload.get("task_id")
     if parent_id:
@@ -82,7 +82,11 @@ def record_snapshot(ctx, payload):
     result = {"accepted": 0, "created": 0, "reused": 0, "ready": 0, "skipped": 0, "failed": 0, "items": [], "video_ids": []}
     try:
         for index, raw in enumerate(items):
-            _active(ctx)
+            # 产品调度复用登记逻辑，但使用自身的用户、版本及桌面租约校验。
+            if check_active is not None:
+                check_active()
+            else:
+                _active(ctx)
             video_id = raw["video_id"]
             if video_id in hidden:
                 result["skipped"] += 1
@@ -122,6 +126,9 @@ def record_snapshot(ctx, payload):
                                 transcript="", source_meta=meta, user_id=user_id,
                             )
                 # 只保留平台实际返回的公开信息；没有互动数据时保持未知，不能填 0。
+                if check_active is not None:
+                    # 创建笔记的内部提交可能释放行锁，登记来源前重新核验桌面租约。
+                    check_active()
                 summary = json.loads(note.ai_summary or "{}")
                 meta = summary.setdefault("source_meta", {})
                 meta.update({"observed_at": observed_at.isoformat()})
@@ -149,8 +156,11 @@ def record_snapshot(ctx, payload):
                     result["failed"] += len(items) - index - 1
                     break
             library_sync_service.update_run_progress(db, sync, result)
-            append_event(db, run=ctx.run, event_type="activity.recording", status="running",
-                         data={"processed": index + 1, "total": len(items), "accepted": result["accepted"]})
+            progress = {"processed": index + 1, "total": len(items), "accepted": result["accepted"]}
+            if on_progress is not None:
+                on_progress(progress)
+            else:
+                append_event(db, run=ctx.run, event_type="activity.recording", status="running", data=progress)
         library_sync_service.finish_run(db, sync, result)
     except BaseException:
         db.rollback()

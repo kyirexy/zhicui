@@ -143,6 +143,7 @@ def list_automations(db: Session, user_id: str) -> list[AgentAutomation]:
         db.query(AgentAutomation)
         .filter(
             AgentAutomation.user_id == user_id,
+            AgentAutomation.report_kind == "digest",
             AgentAutomation.deleted_at.is_(None),
         )
         .order_by(AgentAutomation.created_at.desc())
@@ -160,6 +161,7 @@ def get_automation(
     query = db.query(AgentAutomation).filter(
         AgentAutomation.id == automation_id,
         AgentAutomation.user_id == user_id,
+        AgentAutomation.report_kind == "digest",
     )
     if not include_deleted:
         query = query.filter(AgentAutomation.deleted_at.is_(None))
@@ -377,7 +379,7 @@ def create_manual_run(
     return run
 
 
-def claim_due_runs(db: Session, *, limit: int = 4) -> list[str]:
+def claim_due_runs(db: Session, *, limit: int = 4, daily_only: bool = False) -> list[str]:
     now = _utcnow()
     candidates = (
         db.query(AgentAutomation)
@@ -386,6 +388,7 @@ def claim_due_runs(db: Session, *, limit: int = 4) -> list[str]:
             AgentAutomation.deleted_at.is_(None),
             AgentAutomation.next_run_at.is_not(None),
             AgentAutomation.next_run_at <= now,
+            AgentAutomation.report_kind == "daily_research" if daily_only else True,
             or_(
                 AgentAutomation.lease_until.is_(None),
                 AgentAutomation.lease_until < now,
@@ -397,6 +400,16 @@ def claim_due_runs(db: Session, *, limit: int = 4) -> list[str]:
     )
     run_ids: list[str] = []
     for candidate in candidates:
+        if candidate.report_kind == "daily_research":
+            from app.services.daily_research_service import ACTIVE
+            pending = db.query(AgentAutomationRun.id).filter(
+                AgentAutomationRun.automation_id == candidate.id,
+                AgentAutomationRun.status.in_(ACTIVE)).first()
+            if pending:
+                candidate.next_run_at = calculate_next_run(schedule_time=candidate.schedule_time,
+                    timezone_name=candidate.timezone, after=now)
+                db.commit()
+                continue
         # Collapse multiple missed days to the most recent occurrence. This
         # produces one useful catch-up digest instead of sending an old queue.
         scheduled_for = calculate_most_recent_run(
@@ -465,7 +478,7 @@ def claim_due_runs(db: Session, *, limit: int = 4) -> list[str]:
             idempotency_key=idempotency_key,
             automation_version=candidate.version,
             lease_token=token,
-            status="running",
+            status="queued" if candidate.report_kind == "daily_research" else "running",
             delivery_status="skipped",
             scheduled_for=scheduled_for,
         )
@@ -476,7 +489,14 @@ def claim_due_runs(db: Session, *, limit: int = 4) -> list[str]:
             db.rollback()
             continue
         db.refresh(run)
-        run_ids.append(run.id)
+        if candidate.report_kind == "daily_research":
+            # 桌面离线等待不进入研究线程池，也不持续持有订阅调度租约。
+            db.query(AgentAutomation).filter(AgentAutomation.id == candidate.id,
+                AgentAutomation.lease_token == token).update({AgentAutomation.lease_token: None,
+                    AgentAutomation.lease_until: None}, synchronize_session=False)
+            db.commit()
+        else:
+            run_ids.append(run.id)
     return run_ids
 
 
@@ -491,6 +511,18 @@ def execute_run(
     ).first()
     if run is None:
         return None
+    kind = db.query(AgentAutomation.report_kind).filter(AgentAutomation.id == run.automation_id).scalar()
+    if kind == "daily_research":
+        from app.services.daily_research_service import execute_research
+        return execute_research(db, run_id=run_id)
+    if run.status != "running" or run.delivery_status in {"delivering", "sent", "unknown"}:
+        return run
+    claimed = db.query(AgentAutomationRun).filter(AgentAutomationRun.id == run_id,
+        AgentAutomationRun.status == "running", AgentAutomationRun.execution_token.is_(None)).update({
+            AgentAutomationRun.execution_token: uuid.uuid4().hex}, synchronize_session=False)
+    db.commit()
+    if not claimed:
+        return db.query(AgentAutomationRun).filter(AgentAutomationRun.id == run_id).populate_existing().first()
     automation = (
         db.query(AgentAutomation)
         .filter(
@@ -742,6 +774,7 @@ def execute_run(
             run.delivery_status = delivery["status"]
             run.delivery_error = delivery.get("error") or None
         else:
+            run.status = "completed"
             run.delivery_status = "skipped"
             run.delivery_error = None
         run.finished_at = _utcnow()
@@ -809,7 +842,7 @@ def heartbeat_run(db: Session, run_id: str) -> bool:
         db.query(AgentAutomationRun)
         .filter(
             AgentAutomationRun.id == run_id,
-            AgentAutomationRun.status == "running",
+            AgentAutomationRun.status.in_(("running", "researching")),
         )
         .first()
     )

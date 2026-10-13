@@ -583,6 +583,11 @@ export default function WorkspaceActionHome() {
             <ArrowRight size={17} weight="bold" aria-hidden="true" />
           </Link>
         </div>
+        <Link href="/daily-research" className={styles.dailyResearchEntry}>
+          <CalendarCheck size={20} weight="bold" aria-hidden="true" />
+          <span><strong>每日研究</strong><small>定时同步喜欢与收藏，整理选题、制作建议与邮件报告</small></span>
+          <span className={styles.dailyResearchSetup}>设置订阅<ArrowRight size={15} weight="bold" aria-hidden="true" /></span>
+        </Link>
       </section>
 
       <section className={styles.start} aria-labelledby="workspace-start-title">

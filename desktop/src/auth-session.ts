@@ -65,6 +65,12 @@ export class DesktopAuthSession {
     const value = this.vault?.session;
     return value && !this.vault?.logoutPending ? { token: value.token, user: value.user } : null;
   }
+  /** 仅供主进程任务读取当前账号的短期令牌，不暴露刷新凭证。 */
+  getAccessToken(expectedUserId: string): string | null {
+    const value = this.publicSession();
+    return this.state === 'ready' && !this.adoption && value?.user.id === expectedUserId
+      && expiry(value.token) > Date.now() ? value.token : null;
+  }
   private exclusive<T>(operation: () => Promise<T>): Promise<T> {
     const next = this.operations.then(operation, operation);
     this.operations = next.catch(() => undefined);

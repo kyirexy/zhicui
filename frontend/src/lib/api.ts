@@ -224,7 +224,7 @@ function requestFailureMessage(error: unknown): string {
   return '网络连接失败';
 }
 
-async function request<T>(endpoint: string, options?: RequestInit): Promise<ApiResponse<T>> {
+export async function request<T>(endpoint: string, options?: RequestInit): Promise<ApiResponse<T>> {
   try {
     const { headers, ...rest } = options || {};
     const response = await sessionFetch(`${API_BASE}${endpoint}`, {

@@ -934,6 +934,11 @@ export class PlatformAccountConnector {
     ),
   ) {}
 
+  /** 主进程后台任务只接收自己持有的批次进度；同平台手动同步不能冒充该任务。 */
+  ownsSyncSession(sessionKey: string): boolean {
+    return this.running && !this.cancelled && Boolean(sessionKey) && this.activeSessionKey === sessionKey;
+  }
+
   async login(request: PlatformAccountRequest): Promise<PlatformAccountResult> {
     return this.runExclusive(request, async () => {
       const profilePath = await this.profilePath(request);

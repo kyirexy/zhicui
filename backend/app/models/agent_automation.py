@@ -67,6 +67,8 @@ class AgentAutomation(Base):
         String(16), default="collect", nullable=False
     )
     instruction: Mapped[str] = mapped_column(Text, nullable=False)
+    report_kind: Mapped[str] = mapped_column(String(32), default="digest", server_default="digest", nullable=False)
+    config_json: Mapped[str] = mapped_column(Text, default="{}", server_default="{}", nullable=False)
     recipient_email: Mapped[str] = mapped_column(String(256), nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     next_run_at: Mapped[datetime | None] = mapped_column(
@@ -99,6 +101,8 @@ class AgentAutomation(Base):
             "source_scope": self.source_scope,
             "source_mode": self.source_mode,
             "instruction": self.instruction,
+            "report_kind": self.report_kind,
+            "config": _json_dict(self.config_json),
             "recipient_email": self.recipient_email,
             "version": self.version,
             "next_run_at": _iso_utc(self.next_run_at),
@@ -140,6 +144,8 @@ class AgentAutomationRun(Base):
     source_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     result_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
     result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state_json: Mapped[str] = mapped_column(Text, default="{}", server_default="{}", nullable=False)
+    execution_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     delivery_status: Mapped[str] = mapped_column(
         String(24), default="skipped", nullable=False
     )
@@ -169,6 +175,10 @@ class AgentAutomationRun(Base):
     @property
     def result(self) -> dict[str, Any]:
         return _json_dict(self.result_json)
+
+    @property
+    def state(self) -> dict[str, Any]:
+        return _json_dict(self.state_json)
 
     def to_dict(self) -> dict[str, Any]:
         return {

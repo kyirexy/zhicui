@@ -205,8 +205,14 @@ class CoreProfileTests(unittest.TestCase):
             self.assertEqual(readiness._check_agent_automation_runtime()["status"], "not_required")
             smtp.assert_not_called(); creator.assert_not_called()
         with patch.object(settings, "AGENT_AUTOMATION_ENABLED", True):
-            runner = AutomationRunner(); runner.start()
-            self.assertFalse(runner.status()["running"])
+            runner = AutomationRunner()
+            # Core 的普通用户每日研究复用运行器；公开 Agent automation 动作仍未开放。
+            with patch.object(runner, "_loop", side_effect=lambda: runner._stop.wait(1)):
+                try:
+                    runner.start()
+                    self.assertTrue(runner.status()["running"])
+                finally:
+                    runner.stop()
 
 
 if __name__ == "__main__":

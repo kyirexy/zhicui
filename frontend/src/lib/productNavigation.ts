@@ -7,6 +7,7 @@ export type ProductDestinationId =
   | 'harness'
   | 'studio'
   | 'agent-access'
+  | 'daily-research'
   | 'knowledge'
   | 'plans';
 
@@ -98,9 +99,19 @@ export const AGENT_ACCESS_DESTINATION: ProductDestination = {
   group: 'workspace',
 };
 
+export const DAILY_RESEARCH_DESTINATION: ProductDestination = {
+  id: 'daily-research',
+  href: '/daily-research',
+  label: '每日研究',
+  mobileLabel: '研究',
+  description: '定时同步喜欢与收藏，整理研究报告与制作建议',
+  group: 'knowledge-flow',
+};
+
 /** 桌面端左侧导航容纳独立解析和博主入口；移动端继续保持五个主 Tab。 */
 export const DESKTOP_PRODUCT_DESTINATIONS: ProductDestination[] = PRODUCT_DESTINATIONS.flatMap(
   (destination) => {
+    if (destination.id === 'harness') return [destination, DAILY_RESEARCH_DESTINATION];
     if (destination.id === 'library') {
       return [destination, SINGLE_LINK_EXTRACT_DESTINATION, CREATOR_DESTINATION, {
         id: 'video-download', href: '/video-download', label: '视频下载', mobileLabel: '下载',
@@ -127,6 +138,7 @@ export function isProductDestinationActive(
   if (destination === 'harness') return pathname.startsWith('/harness');
   if (destination === 'studio') return pathname.startsWith('/studio');
   if (destination === 'agent-access') return pathname === '/agent-access';
+  if (destination === 'daily-research') return pathname === '/daily-research';
   return pathname.startsWith('/notes');
 }
 

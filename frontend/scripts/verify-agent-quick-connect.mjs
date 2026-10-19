@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const { chromium } = createRequire(`${root}/desktop/package.json`)('playwright-core');
 const base = process.env.AGENT_UI_BASE_URL || 'http://127.0.0.1:3016';
-const output = process.env.AGENT_UI_OUTPUT || 'D:/6month/.codex-artifacts/agent-onboarding-20260914';
+const output = process.env.AGENT_UI_OUTPUT || resolve(root, '.artifacts/agent-access-browser');
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true });
 const results = [];
@@ -17,17 +17,22 @@ const fixtureToken = `fixture.${Buffer.from(JSON.stringify({ sub: fixtureUser.id
 const dailyScopes = ['account:read', 'library:read', 'library:write', 'creator:read', 'ask:read', 'ask:run', 'local:invoke'];
 const readOnlyScopes = ['account:read', 'library:read', 'creator:read', 'ask:read'];
 
-async function scenario(name, { disabled = false, desktop = true, nativeMobile = !desktop, legacy = false, resume = false, cancelRetry = false, pat = false, presets = false, profile = 'full' } = {}) {
+async function scenario(name, { disabled = false, desktop = true, nativeMobile = !desktop, legacy = false, resume = false, cancelRetry = false, pat = false, presets = false, simpleKey = false, keyFailure = false, copyFailure = false, profile = 'full' } = {}) {
   const availableScopes = presets ? [...dailyScopes.filter(scope => profile !== 'core' || !['creator:read', 'local:invoke'].includes(scope)), 'knowledge:read'] : ['library:read'];
   const patRequests = [];
+  const keyRequests = [];
+  let keyIssued = false;
+  let keyRevoked = false;
+  let keyRevocationVerified = false;
+  const keyCredential = { id: 'agent-key-fixture', type: 'pat', client_type: 'agent_key', name: '我的 Agent', token_prefix: 'zhc_pat_key', scopes: dailyScopes, expiry_policy: 'sliding_inactivity', inactivity_days: 365, created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 365 * 86400000).toISOString(), revoked_at: null, last_used_at: null };
   const existingCredential = { id: 'existing-readonly', type: 'pat', name: '已有只读连接', token_prefix: 'zhc_pat_existing', scopes: ['library:read'], created_at: '2026-09-01T00:00:00Z', expires_at: null, revoked_at: null, last_used_at: null };
   const context = await browser.newContext({ viewport: { width: desktop || !nativeMobile ? 1440 : 390, height: 1000 }, permissions: ['clipboard-read', 'clipboard-write'], bypassCSP: true });
   const page = await context.newPage();
   page.on('pageerror', error => errors.push(`${name}: ${error.message}`));
-  await context.addInitScript(({ desktop, nativeMobile, legacy, disabled, resume, fixtureToken, fixtureUser }) => {
+  await context.addInitScript(({ desktop, nativeMobile, legacy, disabled, resume, copyFailure, fixtureToken, fixtureUser }) => {
     localStorage.setItem('zhicui_token', fixtureToken);
     const state = window.__agentFixture = { configured: resume, authorized: false, calls: [], listeners: new Set(), pending: null, copied: '', activeId: resume ? '90f2d2a8-9b24-4336-9ac5-3e5f10c587fc' : null, activeClient: resume ? 'claude' : 'codex' };
-    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async value => { state.copied = value; } } });
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async value => { if (copyFailure) throw new Error('复制失败，请查看密钥手动复制'); state.copied = value; } } });
     state.emit = event => state.listeners.forEach(listener => listener(event));
     state.finish = approve => {
       state.authorized = approve;
@@ -74,7 +79,7 @@ async function scenario(name, { disabled = false, desktop = true, nativeMobile =
       if (String(key).startsWith('on')) return () => () => {};
       return async () => ({ success: true, status: 'idle' });
     } });
-  }, { desktop, nativeMobile, legacy, disabled, resume, fixtureToken, fixtureUser });
+  }, { desktop, nativeMobile, legacy, disabled, resume, copyFailure, fixtureToken, fixtureUser });
   await context.route('**/*', async route => {
     const url = new URL(route.request().url());
     if (url.pathname.startsWith('/api/')) {
@@ -82,7 +87,21 @@ async function scenario(name, { disabled = false, desktop = true, nativeMobile =
         if (disabled) return route.fulfill({ status: 503, json: { status: 'failed', error: { code: 'INTERFACE_DISABLED', message: '尚未开放' }, data: null } });
         let data = { items: [] };
         if (url.pathname.endsWith('/capabilities')) data = { release_profile: profile, limitations: [], feature_enabled: true, actions: [], scopes: availableScopes.map(id => ({ id, title: id, description: '当前服务可用权限' })), user_hash: 'fixture-profile' };
-        if (url.pathname.endsWith('/credentials')) data = { items: [existingCredential] };
+        if (url.pathname.endsWith('/credentials')) data = { items: [...(keyIssued && !keyRevoked ? [keyCredential] : []), existingCredential] };
+        if (url.pathname.endsWith('/credentials/agent-key')) {
+          const input = route.request().postDataJSON();
+          keyRequests.push(input);
+          assert.deepEqual(input, {});
+          if (keyFailure) return route.fulfill({ status: 500, json: { status: 'failed', error: { code: 'INTERNAL_ERROR', message: '生成密钥失败，请稍后重试' }, data: null } });
+          keyIssued = true;
+          keyRevoked = false;
+          await new Promise(resolve => setTimeout(resolve, 80));
+          data = { token: 'zhc_pat_synthetic_agent_key_fixture', credential: keyCredential };
+        }
+        if (url.pathname.endsWith('/credentials/agent-key-fixture/revoke')) {
+          keyRevoked = true;
+          data = { credential: { ...keyCredential, revoked_at: new Date().toISOString() } };
+        }
         if (url.pathname.endsWith('/credentials/pat')) {
           const input = route.request().postDataJSON();
           patRequests.push(input);
@@ -105,11 +124,85 @@ async function scenario(name, { disabled = false, desktop = true, nativeMobile =
   });
   await page.goto(`${base}/settings?section=agent`, { waitUntil: 'domcontentloaded', timeout: 90000 });
   await page.waitForURL('**/agent-access');
+  await page.getByRole('heading', { name: 'Agent 密钥', exact: true }).waitFor();
+  const advanced = page.locator('details').filter({ has: page.locator(':scope > summary', { hasText: /^高级设置$/ }) });
+  if (simpleKey) {
+    const keyPanel = page.locator('#agent-key');
+    assert.equal(await advanced.getAttribute('open'), null);
+    assert.equal(await page.locator('section[aria-labelledby="agent-confirmations-title"]').count(), 0);
+    await page.getByText('仅可读取资料 · 尚未使用', { exact: true }).waitFor();
+    assert.equal(await page.getByRole('heading', { name: '连接你的 AI Agent', exact: true }).isVisible(), false);
+    await keyPanel.getByRole('button', { name: '生成 Agent 密钥', exact: true }).click({ clickCount: 2 });
+    if (keyFailure) {
+      await keyPanel.getByRole('alert').waitFor();
+      assert.match(await keyPanel.getByRole('alert').innerText(), /生成密钥失败/);
+      assert.equal(keyRequests.length, 1);
+      assert.equal(patRequests.length, 0);
+      assert.equal(await keyPanel.getByRole('button', { name: '生成 Agent 密钥', exact: true }).isEnabled(), true);
+    } else {
+      await keyPanel.getByRole('button', { name: '复制给 Agent', exact: true }).click();
+      assert.equal(keyRequests.length, 1);
+      assert.equal(patRequests.length, 0);
+      if (copyFailure) {
+        await keyPanel.getByRole('alert').waitFor();
+        await keyPanel.getByText('查看密钥', { exact: true }).click();
+        assert.equal(await keyPanel.locator('code').innerText(), 'zhc_pat_synthetic_agent_key_fixture');
+      } else {
+        const copied = await page.evaluate(() => window.__agentFixture.copied);
+        assert.match(copied, /connect --pat-stdin --client codex --non-interactive --json/);
+        assert.equal(copied.split('zhc_pat_synthetic_agent_key_fixture').length - 1, 1);
+      }
+      assert.equal(await page.evaluate(() => Object.values(localStorage).some(value => value.includes('zhc_pat_synthetic_agent_key_fixture'))), false);
+      await page.screenshot({ path: `${output}/${name}-ready.png`, fullPage: true });
+      const connection = page.locator('article').filter({ has: page.getByText('我的 Agent', { exact: true }) });
+      await connection.getByText('等待 Agent 使用 · 尚未使用', { exact: true }).waitFor();
+      await connection.getByRole('button', { name: '吊销', exact: true }).click();
+      await page.getByRole('button', { name: '取消', exact: true }).click();
+      await connection.getByRole('button', { name: '吊销', exact: true }).click();
+      await page.getByRole('button', { name: '确认吊销', exact: true }).click();
+      await connection.waitFor({ state: 'detached' });
+      assert.equal(keyRevoked, true);
+      keyRevocationVerified = true;
+      assert.equal(await keyPanel.getByRole('button', { name: '复制给 Agent', exact: true }).count(), 0);
+      assert.equal(await keyPanel.locator('code').count(), 0);
+      await keyPanel.getByRole('button', { name: '生成 Agent 密钥', exact: true }).click();
+      await keyPanel.getByRole('button', { name: '复制给 Agent', exact: true }).waitFor();
+      assert.equal(keyRequests.length, 2);
+      await keyPanel.getByRole('button', { name: '完成', exact: true }).click();
+      assert.equal(await keyPanel.locator('code').count(), 0);
+    }
+    assert.equal(await page.evaluate(() => window.__agentFixture.calls.length), 0);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+    assert.equal(await page.locator('[data-nextjs-dialog]').count(), 0);
+    await keyPanel.getByRole('button', { name: '生成 Agent 密钥', exact: true }).hover();
+    const primaryContrast = await keyPanel.getByRole('button', { name: '生成 Agent 密钥', exact: true }).evaluate(element => {
+      const luminance = color => {
+        const values = color.match(/[\d.]+/g).slice(0, 3).map(value => Number(value) / 255)
+          .map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
+        return values[0] * .2126 + values[1] * .7152 + values[2] * .0722;
+      };
+      const results = {};
+      for (const theme of ['light', 'dark']) {
+        document.documentElement.dataset.theme = theme;
+        const style = getComputedStyle(element);
+        const color = luminance(style.color), background = luminance(style.backgroundColor);
+        results[theme] = (Math.max(color, background) + .05) / (Math.min(color, background) + .05);
+      }
+      document.documentElement.dataset.theme = 'light';
+      return results;
+    });
+    assert.ok(primaryContrast.light >= 4.5 && primaryContrast.dark >= 4.5, `${name}: 密钥主按钮明暗主题文字对比度`);
+    await page.screenshot({ path: `${output}/${name}.png`, fullPage: true });
+    results.push({ name, passed: true, keyRequests: keyRequests.length, keyRevocationVerified, primaryContrast });
+    await context.close();
+    return;
+  }
+  if (await advanced.getAttribute('open') === null) await advanced.locator(':scope > summary').click();
   await page.getByRole('heading', { name: '连接你的 AI Agent', exact: true }).waitFor();
   const panel = page.locator('section[aria-labelledby="quick-agent-title"]');
   const patPanel = page.locator('#personal-access-token');
   await patPanel.getByRole('heading', { name: '个人访问令牌 PAT', exact: true }).waitFor();
-  if (profile === 'core') await page.getByText('基础接入 · 公开链接提取、资料问答、知识与计划', { exact: true }).waitFor();
+  if (profile === 'core') await page.getByText('复制一次交给 Agent，之后打开知萃即可使用。', { exact: true }).waitFor();
   if (disabled) {
     await page.getByText('当前环境的 Agent 接口尚未启用', { exact: true }).waitFor();
     assert.equal(await patPanel.getByRole('button', { name: '创建个人访问令牌', exact: true }).isDisabled(), true);
@@ -119,7 +212,7 @@ async function scenario(name, { disabled = false, desktop = true, nativeMobile =
     assert.equal(await patPanel.getByRole('button', { name: '创建个人访问令牌', exact: true }).isDisabled(), true);
     await patPanel.getByRole('button', { name: '我已保存，关闭', exact: true }).click();
     assert.equal(await patPanel.getByText('zhc_pat_fixture_not_a_real_token', { exact: true }).count(), 0);
-    await page.getByRole('heading', { name: '已授权连接', exact: true }).waitFor();
+    await page.getByRole('heading', { name: '我的连接', exact: true }).waitFor();
   }
   if (!desktop) {
     await panel.getByRole('link', { name: '下载知萃电脑客户端' }).waitFor();
@@ -226,6 +319,11 @@ async function scenario(name, { disabled = false, desktop = true, nativeMobile =
 }
 
 try {
+  await scenario('desktop-simple-key', { simpleKey: true });
+  await scenario('mobile-simple-key', { simpleKey: true, desktop: false });
+  await scenario('key-creation-failure', { simpleKey: true, keyFailure: true });
+  await scenario('key-copy-failure', { simpleKey: true, copyFailure: true });
+  if (process.env.AGENT_UI_ONLY !== 'key') {
   await scenario('cloud-disabled', { disabled: true });
   await scenario('desktop-connect');
   await scenario('cancel-and-retry', { cancelRetry: true });
@@ -236,6 +334,7 @@ try {
   await scenario('browser-core-pat', { desktop: false, nativeMobile: false, pat: true, profile: 'core' });
   await scenario('browser-scope-presets', { desktop: false, nativeMobile: false, presets: true });
   await scenario('browser-core-scope-presets', { desktop: false, nativeMobile: false, presets: true, profile: 'core' });
+  }
   assert.deepEqual(errors, []);
   await writeFile(`${output}/browser-report.json`, JSON.stringify({ results, errors, realPlatformAccess: false }, null, 2));
   console.log(JSON.stringify({ passed: results.length, errors }));

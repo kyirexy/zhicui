@@ -97,12 +97,20 @@ test('Agent API 的列表结构不携带 token，创建结果单独声明一次�
   assert.match(api, /INTERFACE_DISABLED/);
 });
 
-test('PAT 创建在首屏连接区始终可见，服务关闭时只禁用创建而不隐藏入口', () => {
+test('密钥是首屏入口，安装和旧PAT只在高级设置里，服务关闭时保留禁用入口', () => {
   const component = read('components/AgentAccessSettingsCard.tsx');
+  const keyPosition = component.indexOf('id="agent-key"');
+  const advancedPosition = component.indexOf('<summary>高级设置</summary>');
   const patPosition = component.indexOf('id="personal-access-token"');
+  assert.ok(keyPosition > 0 && keyPosition < advancedPosition);
+  assert.ok(component.indexOf('<AgentQuickConnect') > advancedPosition);
   assert.ok(patPosition > component.indexOf('<AgentQuickConnect'));
   assert.ok(patPosition < component.indexOf('aria-labelledby="device-authorization-title"'));
-  assert.doesNotMatch(component, /高级接入：个人访问令牌/);
+  assert.match(component, /pendingConfirmations\.length > 0 &&/);
+  assert.match(component, /disabled=\{creatingAgentKey \|\| loading \|\| !capabilities \|\| interfaceDisabled\}/);
+  assert.match(component, /const result = await createAgentKey\(\)/);
+  assert.match(component, /agentKeyHandoffPrompt\(oneTimeAgentKey\)/);
+  assert.match(component, /setOneTimeAgentKey\(null\)/);
   assert.match(component, /disabled=\{creating \|\| loading \|\| !capabilities \|\| interfaceDisabled \|\| Boolean\(oneTimeToken\)\}/);
   assert.match(component, /当前环境的 Agent 接口尚未启用/);
   assert.doesNotMatch(component, /localStorage\.setItem|sessionStorage\.setItem|console\.log/);
@@ -123,12 +131,10 @@ test('独立授权页与旧设置入口衔接，网页不再只能下载客户�
 test('新PAT和网页命令共享日常预设，保留只读与自定义且按可用scope过滤', () => {
   const component = read('components/AgentAccessSettingsCard.tsx');
   const quickConnect = read('components/AgentQuickConnect.tsx');
-  assert.match(component, /capabilities\?\.release_profile === 'core'/);
+  assert.match(component, /releaseProfile=\{capabilities\?\.release_profile\}/);
   assert.match(component, /capabilities \? capabilities\.scopes : FALLBACK_SCOPES/);
-  assert.match(component, /基础接入 · 公开链接提取、资料问答、知识与计划/);
-  assert.match(component, /推荐“日常使用”/);
   assert.match(component, /你指定的抖音\/B站公开链接导入资料、提取文稿、下载视频/);
-  assert.match(component, /本机按需同步以服务和客户端开放的能力为准/);
+  assert.match(component, /复制一次交给 Agent，之后打开知萃即可使用/);
   assert.match(component, /useState<AgentScopePreset>\('daily'\)/);
   assert.match(component, /agentPresetScopes\(scopePreset, availableScopes\.map/);
   assert.match(component, /setScopePreset\('custom'\)/);

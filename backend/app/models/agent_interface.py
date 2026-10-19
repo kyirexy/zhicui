@@ -24,6 +24,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.agent_interface.contracts import AGENT_KEY_CLIENT_TYPE, AGENT_KEY_INACTIVITY_DAYS
 from app.core.database import Base
 
 
@@ -83,6 +84,7 @@ class AgentCredential(Base):
         def iso(value: datetime | None) -> str | None:
             return value.isoformat() if value else None
 
+        is_agent_key = self.kind == "pat" and self.client_type == AGENT_KEY_CLIENT_TYPE
         return {
             "id": self.id,
             "type": self.kind,
@@ -91,6 +93,8 @@ class AgentCredential(Base):
             "token_prefix": self.token_prefix,
             "scopes": self.scopes,
             "expires_at": iso(self.expires_at),
+            "expiry_policy": "sliding_inactivity" if is_agent_key else "fixed",
+            "inactivity_days": AGENT_KEY_INACTIVITY_DAYS if is_agent_key else None,
             "created_at": iso(self.created_at),
             "updated_at": iso(self.updated_at),
             "last_used_at": iso(self.last_used_at),

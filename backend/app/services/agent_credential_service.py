@@ -10,14 +10,17 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import case
 from sqlalchemy.orm import Session
 
-from app.agent_interface.contracts import ALL_SCOPE_IDS
+from app.agent_interface.contracts import (
+    ALL_SCOPE_IDS, AGENT_KEY_CLIENT_TYPE, AGENT_KEY_INACTIVITY_DAYS, ExecutionLocation,
+)
 from app.agent_interface.profiles import allowed_scope_ids
 from app.core.config import settings
 from app.models.agent_interface import AgentCredential, AgentDeviceAuthorization
 from app.models.user import User
-from app.services.agent_rollout_service import user_is_enabled
+from app.services.agent_rollout_service import action_is_enabled, user_is_enabled
 from app.services.auth_session_service import lock_user_for_auth_change
 
 
@@ -26,6 +29,10 @@ ACCESS_TTL_MINUTES = 60
 REFRESH_TTL_DAYS = 30
 DEVICE_TTL_MINUTES = 10
 MAX_ACTIVE_CREDENTIALS = 30
+DAILY_AGENT_SCOPE_IDS = frozenset({
+    "account:read", "library:read", "library:write", "creator:read",
+    "ask:read", "ask:run", "local:invoke",
+})
 
 
 class CredentialError(ValueError):
@@ -119,6 +126,41 @@ def issue_pat(
     scopes: list[str],
     expires_in_days: int = PAT_TTL_DAYS,
 ) -> tuple[AgentCredential, str]:
+    return _issue_pat_credential(
+        db, user_id=user_id, name=name, scopes=scopes, client_type="pat",
+        ttl_days=max(1, min(int(expires_in_days), PAT_TTL_DAYS)),
+    )
+
+
+def daily_agent_scopes() -> list[str]:
+    """固定日常权限只与当前真正开放的能力相交，不随未来目录自动扩权。"""
+    from app.services.product_action_registry import registry
+
+    published = {
+        scope
+        for definition in registry.all()
+        # 本机能力的 available=False 表示等待客户端连接，不是服务尚未发布。
+        if action_is_enabled(definition.id) and (
+            definition.available or definition.execution_location == ExecutionLocation.LOCAL_WINDOWS
+        )
+        for scope in definition.scopes
+    }
+    return sorted(DAILY_AGENT_SCOPE_IDS & allowed_scope_ids() & published)
+
+
+def issue_agent_key(
+    db: Session, *, user_id: str, name: str = "我的 Agent",
+) -> tuple[AgentCredential, str]:
+    return _issue_pat_credential(
+        db, user_id=user_id, name=name, scopes=daily_agent_scopes(),
+        client_type=AGENT_KEY_CLIENT_TYPE, ttl_days=AGENT_KEY_INACTIVITY_DAYS,
+    )
+
+
+def _issue_pat_credential(
+    db: Session, *, user_id: str, name: str, scopes: list[str],
+    client_type: str, ttl_days: int,
+) -> tuple[AgentCredential, str]:
     clean_scopes = normalize_scopes(scopes)
     _lock_credential_user(db, user_id)
     active_count = db.query(AgentCredential).filter(
@@ -127,16 +169,15 @@ def issue_pat(
     ).count()
     if active_count >= MAX_ACTIVE_CREDENTIALS:
         raise CredentialError("CREDENTIAL_LIMIT_REACHED", "已达到 Agent 凭证数量上限")
-    ttl = max(1, min(int(expires_in_days), PAT_TTL_DAYS))
     row = AgentCredential(
         user_id=user_id,
         kind="pat",
         name=(name or "知萃 PAT").strip()[:120],
-        client_type="pat",
+        client_type=client_type,
         token_hash="pending",
         token_prefix="pending",
         scopes_json=json.dumps(clean_scopes, separators=(",", ":")),
-        expires_at=utcnow() + timedelta(days=ttl),
+        expires_at=utcnow() + timedelta(days=ttl_days),
     )
     db.add(row)
     db.flush()
@@ -174,11 +215,37 @@ def authenticate_access_token(db: Session, token: str) -> AgentCredential:
     row = db.query(AgentCredential).filter(
         AgentCredential.id == credential_id,
         AgentCredential.kind == kind,
-    ).first()
+    ).populate_existing().first()
     if row is None or not hmac.compare_digest(row.token_hash, token_hash(token)):
         raise CredentialError("INVALID_CREDENTIAL", "Agent 凭证无效")
-    _assert_active(row)
-    row.last_used_at = utcnow()
+    now = utcnow()
+    _assert_active(row, now)
+    if row.kind == "pat" and row.client_type == AGENT_KEY_CLIENT_TYPE:
+        user = db.query(User).filter(User.id == row.user_id).populate_existing().first()
+        if user is None or not user.is_active:
+            raise CredentialError("INVALID_CREDENTIAL", "账号不存在或已被禁用")
+        if not user_is_enabled(row.user_id):
+            raise CredentialError("ROLLOUT_RESTRICTED", "Agent 接口尚未向当前账号开放")
+        renewed_until = now + timedelta(days=AGENT_KEY_INACTIVITY_DAYS)
+        # 带有效性条件更新，避免并发撤销或过期后被续期复活；并发请求不缩短期限。
+        updated = db.query(AgentCredential).filter(
+            AgentCredential.id == row.id,
+            AgentCredential.token_hash == row.token_hash,
+            AgentCredential.revoked_at.is_(None),
+            AgentCredential.expires_at > now,
+        ).update({
+            AgentCredential.expires_at: case(
+                (AgentCredential.expires_at < renewed_until, renewed_until),
+                else_=AgentCredential.expires_at,
+            ),
+            AgentCredential.last_used_at: now,
+        }, synchronize_session=False)
+        if not updated:
+            db.expire(row)
+            _assert_active(row, now)
+            raise CredentialError("INVALID_CREDENTIAL", "Agent 凭证已失效")
+    else:
+        row.last_used_at = now
     db.commit()
     db.refresh(row)
     return row

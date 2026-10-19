@@ -20,6 +20,8 @@ export interface ParsedInvocation {
 const SECRET_ARG_NAMES = new Set([
   'token',
   'pat',
+  'key',
+  'agentkey',
   'apikey',
   'accesstoken',
   'refreshtoken',
@@ -71,6 +73,9 @@ function readOptionValue(
 }
 
 export function parseInvocation(argv: string[]): ParsedInvocation {
+  if (argv.some(value => /zhc_(?:pat|access|refresh)_[A-Za-z0-9._~-]+/u.test(value))) {
+    throw usageError('知萃密钥禁止放入命令参数；请通过 connect --pat-stdin 的无回显标准输入提供');
+  }
   const configuredApiUrl = process.env.ZHICUI_API_URL || PRODUCTION_API_URL;
   const options: GlobalOptions = {
     json: false,

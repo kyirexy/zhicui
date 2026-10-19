@@ -20,6 +20,7 @@ import {
   AgentInterfaceApiError,
   approveAgentPendingConfirmation,
   approveAgentDeviceAuthorization,
+  createAgentKey,
   createAgentPat,
   getAgentPendingConfirmation,
   getAgentDeviceAuthorizationRequest,
@@ -57,6 +58,7 @@ import {
 import styles from './AgentAccessSettingsCard.module.css';
 import AgentQuickConnect from './AgentQuickConnect';
 import { DAILY_AGENT_SCOPES, agentLoginCommand, agentPresetScopes, type AgentScopePreset } from '@/lib/agentQuickConnect';
+import { agentConnectionUsage, agentCredentialLifetime, agentKeyHandoffPrompt } from '@/lib/agentKeyUi';
 
 const FALLBACK_SCOPES: AgentScopeDefinition[] = [
   { id: 'account:read', title: '读取账号', description: '识别当前连接的知萃账号。' },
@@ -109,7 +111,7 @@ interface AgentAccessSettingsCardProps {
   nativeIOS?: boolean;
 }
 
-type AgentAccessErrorContext = 'global' | 'local' | 'pat' | 'connections' | 'confirmations';
+type AgentAccessErrorContext = 'global' | 'local' | 'key' | 'pat' | 'connections' | 'confirmations';
 
 export default function AgentAccessSettingsCard({
   isDesktop,
@@ -120,7 +122,6 @@ export default function AgentAccessSettingsCard({
   const authorizationSectionRef = useRef<HTMLElement | null>(null);
   const platform = resolveAgentAccessPlatform({ desktop: isDesktop, android: nativeAndroid, ios: nativeIOS });
   const [capabilities, setCapabilities] = useState<AgentCapabilities | null>(null);
-  const coreAccess = capabilities?.release_profile === 'core';
   const [credentials, setCredentials] = useState<AgentCredential[]>([]);
   const [devices, setDevices] = useState<AgentDeviceConnection[]>([]);
   const [recentCalls, setRecentCalls] = useState<AgentRecentCall[]>([]);
@@ -146,6 +147,11 @@ export default function AgentAccessSettingsCard({
   const [selectedScopes, setSelectedScopes] = useState<string[]>([...DAILY_AGENT_SCOPES]);
   const [creating, setCreating] = useState(false);
   const [oneTimeToken, setOneTimeToken] = useState<string | null>(null);
+  const [oneTimeAgentKey, setOneTimeAgentKey] = useState<string | null>(null);
+  const [oneTimeAgentKeyCredentialId, setOneTimeAgentKeyCredentialId] = useState('');
+  const [creatingAgentKey, setCreatingAgentKey] = useState(false);
+  const creatingAgentKeyRef = useRef(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [revokingId, setRevokingId] = useState('');
   const [pendingRevokeId, setPendingRevokeId] = useState('');
   const [desktopOverview, setDesktopOverview] = useState<DesktopAgentIntegrationOverview | null>(null);
@@ -288,14 +294,18 @@ export default function AgentAccessSettingsCard({
   }, [loadAccessData, loadDesktopStatus]);
 
   useEffect(() => {
-    if (!authorizationVisible) return;
+    if (authorizationVisible) setAdvancedOpen(true);
+  }, [authorizationVisible]);
+
+  useEffect(() => {
+    if (!authorizationVisible || !advancedOpen) return;
     const section = authorizationSectionRef.current;
     section?.focus({ preventScroll: true });
     section?.scrollIntoView({
       block: 'center',
       behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
     });
-  }, [authorizationVisible]);
+  }, [authorizationVisible, advancedOpen]);
 
   useEffect(() => {
     const bridge = window.zhicuiDesktop;
@@ -450,7 +460,7 @@ export default function AgentAccessSettingsCard({
   );
 
   const runCopy = async (key: string, value: string) => {
-    setErrorContext(key === 'token' ? 'pat' : 'global');
+    setErrorContext(key.startsWith('agent-key') ? 'key' : key === 'token' ? 'pat' : 'global');
     setError('');
     try {
       await copyText(value);
@@ -459,6 +469,32 @@ export default function AgentAccessSettingsCard({
     } catch (copyError) {
       setError(copyError instanceof Error ? copyError.message : '复制失败');
     }
+  };
+
+  const submitAgentKey = async () => {
+    if (interfaceDisabled || loading || !capabilities || creatingAgentKeyRef.current || oneTimeAgentKey) return;
+    creatingAgentKeyRef.current = true;
+    setCreatingAgentKey(true);
+    setErrorContext('key');
+    setError('');
+    setNotice('');
+    try {
+      const result = await createAgentKey();
+      if (!mountedRef.current) return;
+      setOneTimeAgentKey(result.token);
+      setOneTimeAgentKeyCredentialId(result.credential.id);
+      setCredentials((current) => [result.credential, ...current.filter((item) => item.id !== result.credential.id)]);
+    } catch (createError) {
+      if (mountedRef.current) setError(createError instanceof Error ? createError.message : '生成密钥失败，请稍后重试');
+    } finally {
+      creatingAgentKeyRef.current = false;
+      if (mountedRef.current) setCreatingAgentKey(false);
+    }
+  };
+
+  const clearAgentKey = () => {
+    setOneTimeAgentKey(null);
+    setOneTimeAgentKeyCredentialId('');
   };
 
   const toggleScope = (scope: string) => {
@@ -515,6 +551,7 @@ export default function AgentAccessSettingsCard({
       if (kind === 'credential') {
         const updated = await revokeAgentCredential(id);
         setCredentials((current) => current.map((item) => item.id === id ? updated : item));
+        if (id === oneTimeAgentKeyCredentialId) clearAgentKey();
       } else {
         const updated = await revokeAgentDevice(id);
         setDevices((current) => current.map((item) => item.id === id ? updated : item));
@@ -610,7 +647,7 @@ export default function AgentAccessSettingsCard({
         <div className={styles.heroCopy}>
           <h1 id="agent-access-title">Agent 接入</h1>
           <p>
-            {coreAccess ? '基础接入 · 公开链接提取、资料问答、知识与计划' : '让 Codex、Claude Code 和本地工具直接使用你的视频、文稿与知识。'}
+            复制一次交给 Agent，之后打开知萃即可使用。
           </p>
         </div>
         <span className={styles.platformBadge}>
@@ -618,15 +655,250 @@ export default function AgentAccessSettingsCard({
         </span>
       </section>
 
-      {coreAccess && <p className={styles.capabilityHint}>推荐“日常使用”：一次申请当前服务支持的导入、文稿提取、视频下载和问答权限。本机按需同步以服务和客户端开放的能力为准，操作仍由你发起；已有连接的权限不会改变。</p>}
-
       {interfaceDisabled && (
         <div className={styles.serviceBanner} role="status">
-          <div><strong>当前环境的 Agent 接口尚未启用</strong><p>连接入口和个人访问令牌已就绪；服务启用后即可授权和创建 PAT。</p></div>
+          <div><strong>当前环境的 Agent 接口尚未启用</strong><p>服务启用后即可生成密钥。</p></div>
           <button type="button" disabled={loading} onClick={() => void loadAccessData()}><RefreshCw size={16} />重新检查</button>
         </div>
       )}
 
+      <section className={`${styles.card} ${styles.agentKeyCard}`} id="agent-key" aria-labelledby="agent-key-title">
+        <div className={styles.keyHeading}>
+          <KeyRound size={22} aria-hidden="true" />
+          <h2 id="agent-key-title">Agent 密钥</h2>
+        </div>
+        <p className={styles.keyDescription}>让 Agent 导入视频、提取文稿、下载和问答，结果保存在你的知萃账号。</p>
+        {error && errorContext === 'key' && <p className={styles.inlineError} role="alert">{error}</p>}
+        {oneTimeAgentKey ? (
+          <div className={styles.keyReady}>
+            <p role="status"><Check size={17} aria-hidden="true" />密钥已生成，把它交给你使用的 Agent。</p>
+            <div className={styles.keyActions}>
+              <button type="button" className={styles.keyPrimary} onClick={() => void runCopy('agent-key-prompt', agentKeyHandoffPrompt(oneTimeAgentKey))}>
+                {copied === 'agent-key-prompt' ? <Check size={17} /> : <Clipboard size={17} />}
+                {copied === 'agent-key-prompt' ? '已复制，粘贴给 Agent 即可' : '复制给 Agent'}
+              </button>
+              <button type="button" onClick={() => void runCopy('agent-key-only', oneTimeAgentKey)}>
+                {copied === 'agent-key-only' ? '已复制密钥' : '仅复制密钥'}
+              </button>
+              <button type="button" onClick={clearAgentKey}>完成</button>
+            </div>
+            <p className={styles.keyHint}>完整密钥只在这次生成后可复制。</p>
+            <details className={styles.keyValue}>
+              <summary>查看密钥</summary>
+              <code>{oneTimeAgentKey}</code>
+            </details>
+          </div>
+        ) : (
+          <div className={styles.keyActions}>
+            <button type="button" className={styles.keyPrimary} disabled={creatingAgentKey || loading || !capabilities || interfaceDisabled} onClick={() => void submitAgentKey()}>
+              {creatingAgentKey ? <Loader2 size={17} /> : <KeyRound size={17} />}
+              {creatingAgentKey ? '正在生成…' : '生成 Agent 密钥'}
+            </button>
+          </div>
+        )}
+        <p className={styles.keyHint}>使用时自动延续，连续 365 天未使用后失效。已有只读连接保持原权限。</p>
+      </section>
+
+      {notice && <div className={styles.noticeBanner} role="status">{notice}</div>}
+      {error && errorContext === 'global' && !interfaceDisabled && (
+        <div className={styles.errorBanner} role="alert">{error}</div>
+      )}
+
+      {error && errorContext === 'local' && (
+        <div className={styles.errorBanner} role="alert">{error}</div>
+      )}
+
+      {!interfaceDisabled && pendingConfirmations.length > 0 && (
+        <section className={styles.card} aria-labelledby="agent-confirmations-title">
+          <header className={styles.cardHeader}>
+            <span className={styles.cardIcon}><ShieldCheck size={19} /></span>
+            <div>
+              <h3 id="agent-confirmations-title">待确认的敏感操作</h3>
+              <p>删除、注销、更新安装或密钥修改必须由你在这里确认一次。Agent 不能替你批准。</p>
+            </div>
+            <span className={styles.pendingCount}>{pendingConfirmations.length}</span>
+          </header>
+          {error && errorContext === 'confirmations' && (
+            <p className={styles.inlineError} role="alert">{error}</p>
+          )}
+          {pendingConfirmations.length === 0 ? (
+            <p className={styles.emptyState}>{loading ? '正在读取确认请求…' : '当前没有等待确认的操作。'}</p>
+          ) : (
+            <div className={styles.confirmationList}>
+              {pendingConfirmations.map((confirmation) => (
+                <article key={confirmation.id}>
+                  <div>
+                    <strong>{confirmation.action_title || confirmation.action_id}</strong>
+                    <small>
+                      {confirmation.credential_name || '本地 Agent'} · {formatDate(confirmation.created_at)} 发起
+                    </small>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={Boolean(confirmationLoadingId)}
+                    onClick={() => void openConfirmationDetail(confirmation.id)}
+                  >
+                    {confirmationLoadingId === confirmation.id ? <Loader2 size={15} /> : <ChevronRight size={15} />}
+                    查看并处理
+                  </button>
+                </article>
+              ))}
+            </div>
+          )}
+          <dialog
+            open={selectedConfirmation !== null}
+            className={`${styles.confirmDialog} ${styles.actionConfirmationDialog}`}
+            aria-labelledby="action-confirmation-title"
+            aria-describedby="action-confirmation-description"
+          >
+            <strong id="action-confirmation-title">
+              {selectedConfirmation?.action_title || '确认这次敏感操作？'}
+            </strong>
+            <p id="action-confirmation-description">
+              {selectedConfirmation?.action_description || '此操作只会批准一次；批准后仍须由原 Agent 使用原请求继续。'}
+            </p>
+            {selectedConfirmation && (
+              <dl className={styles.confirmationDetails}>
+                <div>
+                  <dt>请求方</dt>
+                  <dd>{selectedConfirmation.credential_name} · {selectedConfirmation.credential_prefix}</dd>
+                </div>
+                <div>
+                  <dt>Action</dt>
+                  <dd>{selectedConfirmation.action_id}</dd>
+                </div>
+                <div>
+                  <dt>失效时间</dt>
+                  <dd>{formatDate(selectedConfirmation.expires_at)}</dd>
+                </div>
+                <div>
+                  <dt>当前状态</dt>
+                  <dd>{selectedConfirmation.status === 'pending' ? '等待你处理' : selectedConfirmation.status}</dd>
+                </div>
+                {selectedConfirmation.confirmation_summary?.targets?.map((target, index) => (
+                  <div key={`${target.label}-${index}`}>
+                    <dt>{target.label}</dt>
+                    <dd>{target.reference}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+            <p className={styles.confirmationPrivacyNote}>
+              为保护隐私，这里不会返回或展示原始输入、文稿、路径、Cookie、密钥或临时媒体地址。
+            </p>
+            <div className={styles.confirmDialogActions}>
+              <button
+                type="button"
+                disabled={Boolean(confirmationDecision)}
+                onClick={() => setSelectedConfirmation(null)}
+              >
+                暂不处理
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(confirmationDecision) || selectedConfirmation?.status !== 'pending'}
+                onClick={() => void decideConfirmation(false)}
+              >
+                {confirmationDecision === 'reject' ? <Loader2 size={15} /> : <CircleX size={15} />}
+                拒绝
+              </button>
+              <button
+                type="button"
+                className={styles.dangerAction}
+                disabled={Boolean(confirmationDecision) || selectedConfirmation?.status !== 'pending'}
+                onClick={() => void decideConfirmation(true)}
+              >
+                {confirmationDecision === 'approve' ? <Loader2 size={15} /> : <Check size={15} />}
+                确认一次
+              </button>
+            </div>
+          </dialog>
+        </section>
+      )}
+
+      <section className={styles.card} aria-labelledby="connections-title">
+        <header className={styles.cardHeader}>
+          <span className={styles.cardIcon}><ShieldCheck size={19} /></span>
+          <div>
+            <h3 id="connections-title">我的连接</h3>
+            <p>{activeCredentials.length + activeDevices.length} 个有效连接 · 可随时停用</p>
+          </div>
+          <button
+            type="button"
+            className={styles.iconButton}
+            aria-label="刷新连接"
+            disabled={loading}
+            onClick={() => void loadAccessData()}
+          >
+            {loading ? <Loader2 size={16} /> : <RefreshCw size={16} />}
+          </button>
+        </header>
+        {error && errorContext === 'connections' && (
+          <p className={styles.inlineError} role="alert">{error}</p>
+        )}
+
+        {activeCredentials.length === 0 && activeDevices.length === 0 ? (
+          <p className={styles.emptyState}>{loading ? '正在读取连接…' : interfaceDisabled ? '接口尚未启用，暂时无法读取已授权连接。启用后点击刷新即可查看。' : '生成密钥交给 Agent 后，它就能使用知萃。'}</p>
+        ) : (
+          <div className={styles.connectionList}>
+            {activeCredentials.map((credential) => (
+              <ConnectionRow
+                key={credential.id}
+                title={credential.name}
+                subtitle={`${agentConnectionUsage(credential)} · ${formatDate(credential.last_used_at)}`}
+                detail={`${agentCredentialPrefix(credential)} · ${agentCredentialLifetime(credential)}`}
+                scopes={credential.scopes}
+                scopeMap={scopeMap}
+                disabled={interfaceDisabled || revokingId === credential.id}
+                onRevoke={() => setPendingRevokeId(credential.id)}
+              />
+            ))}
+            {activeDevices.map((device) => (
+              <ConnectionRow
+                key={device.id}
+                title={device.name}
+                subtitle={`${agentConnectionUsage(device)} · ${formatDate(device.last_used_at)}`}
+                detail={device.client_type || '本地设备'}
+                scopes={device.scopes}
+                scopeMap={scopeMap}
+                disabled={interfaceDisabled || revokingId === device.id}
+                onRevoke={() => setPendingRevokeId(device.id)}
+              />
+            ))}
+          </div>
+        )}
+        <dialog
+          open={Boolean(pendingRevokeId)}
+          className={styles.confirmDialog}
+          role="alertdialog"
+          aria-labelledby="agent-revoke-title"
+          aria-describedby="agent-revoke-description"
+        >
+          <strong id="agent-revoke-title">吊销这个 Agent 连接？</strong>
+          <p id="agent-revoke-description">
+            {pendingCredential?.name || pendingDevice?.name || '该连接'} 的新请求会立即失效，其他连接不受影响。
+          </p>
+          <div className={styles.confirmDialogActions}>
+            <button type="button" disabled={Boolean(revokingId)} onClick={() => setPendingRevokeId('')}>取消</button>
+            <button
+              type="button"
+              className={styles.dangerAction}
+              disabled={Boolean(revokingId) || (!pendingCredential && !pendingDevice)}
+              onClick={() => {
+                if (pendingCredential) void revokeConnection('credential', pendingCredential.id);
+                else if (pendingDevice) void revokeConnection('device', pendingDevice.id);
+              }}
+            >
+              {revokingId ? <Loader2 size={15} /> : <Unplug size={15} />}
+              确认吊销
+            </button>
+          </div>
+        </dialog>
+      </section>
+
+      <details className={styles.advanced} open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
+        <summary>高级设置</summary>
+        <div className={styles.advancedContent}>
       <div className={styles.connectGrid}>
       <AgentQuickConnect
         desktop={canRunLocalAgentActions(platform)}
@@ -748,15 +1020,6 @@ export default function AgentAccessSettingsCard({
       </section>
       </div>
 
-      {notice && <div className={styles.noticeBanner} role="status">{notice}</div>}
-      {error && errorContext === 'global' && !interfaceDisabled && (
-        <div className={styles.errorBanner} role="alert">{error}</div>
-      )}
-
-      {error && errorContext === 'local' && (
-        <div className={styles.errorBanner} role="alert">{error}</div>
-      )}
-
       {authorizationVisible && <section ref={authorizationSectionRef} tabIndex={-1} className={`${styles.card} ${styles.authorizationCard}`} aria-labelledby="device-authorization-title">
         <header className={styles.cardHeader}>
           <span className={styles.cardIcon}><ShieldCheck size={19} /></span>
@@ -831,192 +1094,6 @@ export default function AgentAccessSettingsCard({
           知萃不会把密码、JWT、Cookie 或 API Key 交给 Agent；已连接设备可随时在下方吊销。
         </p>
       </section>}
-
-      {!interfaceDisabled && (
-        <section className={styles.card} aria-labelledby="agent-confirmations-title">
-          <header className={styles.cardHeader}>
-            <span className={styles.cardIcon}><ShieldCheck size={19} /></span>
-            <div>
-              <h3 id="agent-confirmations-title">待确认的敏感操作</h3>
-              <p>删除、注销、更新安装或密钥修改必须由你在这里确认一次。Agent 不能替你批准。</p>
-            </div>
-            <span className={styles.pendingCount}>{pendingConfirmations.length}</span>
-          </header>
-          {error && errorContext === 'confirmations' && (
-            <p className={styles.inlineError} role="alert">{error}</p>
-          )}
-          {pendingConfirmations.length === 0 ? (
-            <p className={styles.emptyState}>{loading ? '正在读取确认请求…' : '当前没有等待确认的操作。'}</p>
-          ) : (
-            <div className={styles.confirmationList}>
-              {pendingConfirmations.map((confirmation) => (
-                <article key={confirmation.id}>
-                  <div>
-                    <strong>{confirmation.action_title || confirmation.action_id}</strong>
-                    <small>
-                      {confirmation.credential_name || '本地 Agent'} · {formatDate(confirmation.created_at)} 发起
-                    </small>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={Boolean(confirmationLoadingId)}
-                    onClick={() => void openConfirmationDetail(confirmation.id)}
-                  >
-                    {confirmationLoadingId === confirmation.id ? <Loader2 size={15} /> : <ChevronRight size={15} />}
-                    查看并处理
-                  </button>
-                </article>
-              ))}
-            </div>
-          )}
-          <dialog
-            open={selectedConfirmation !== null}
-            className={`${styles.confirmDialog} ${styles.actionConfirmationDialog}`}
-            aria-labelledby="action-confirmation-title"
-            aria-describedby="action-confirmation-description"
-          >
-            <strong id="action-confirmation-title">
-              {selectedConfirmation?.action_title || '确认这次敏感操作？'}
-            </strong>
-            <p id="action-confirmation-description">
-              {selectedConfirmation?.action_description || '此操作只会批准一次；批准后仍须由原 Agent 使用原请求继续。'}
-            </p>
-            {selectedConfirmation && (
-              <dl className={styles.confirmationDetails}>
-                <div>
-                  <dt>请求方</dt>
-                  <dd>{selectedConfirmation.credential_name} · {selectedConfirmation.credential_prefix}</dd>
-                </div>
-                <div>
-                  <dt>Action</dt>
-                  <dd>{selectedConfirmation.action_id}</dd>
-                </div>
-                <div>
-                  <dt>失效时间</dt>
-                  <dd>{formatDate(selectedConfirmation.expires_at)}</dd>
-                </div>
-                <div>
-                  <dt>当前状态</dt>
-                  <dd>{selectedConfirmation.status === 'pending' ? '等待你处理' : selectedConfirmation.status}</dd>
-                </div>
-                {selectedConfirmation.confirmation_summary?.targets?.map((target, index) => (
-                  <div key={`${target.label}-${index}`}>
-                    <dt>{target.label}</dt>
-                    <dd>{target.reference}</dd>
-                  </div>
-                ))}
-              </dl>
-            )}
-            <p className={styles.confirmationPrivacyNote}>
-              为保护隐私，这里不会返回或展示原始输入、文稿、路径、Cookie、密钥或临时媒体地址。
-            </p>
-            <div className={styles.confirmDialogActions}>
-              <button
-                type="button"
-                disabled={Boolean(confirmationDecision)}
-                onClick={() => setSelectedConfirmation(null)}
-              >
-                暂不处理
-              </button>
-              <button
-                type="button"
-                disabled={Boolean(confirmationDecision) || selectedConfirmation?.status !== 'pending'}
-                onClick={() => void decideConfirmation(false)}
-              >
-                {confirmationDecision === 'reject' ? <Loader2 size={15} /> : <CircleX size={15} />}
-                拒绝
-              </button>
-              <button
-                type="button"
-                className={styles.dangerAction}
-                disabled={Boolean(confirmationDecision) || selectedConfirmation?.status !== 'pending'}
-                onClick={() => void decideConfirmation(true)}
-              >
-                {confirmationDecision === 'approve' ? <Loader2 size={15} /> : <Check size={15} />}
-                确认一次
-              </button>
-            </div>
-          </dialog>
-        </section>
-      )}
-
-      <section className={styles.card} aria-labelledby="connections-title">
-        <header className={styles.cardHeader}>
-          <span className={styles.cardIcon}><ShieldCheck size={19} /></span>
-          <div>
-            <h3 id="connections-title">已授权连接</h3>
-            <p>{activeCredentials.length} 个 PAT · {activeDevices.length} 个设备连接。可随时吊销。</p>
-          </div>
-          <button
-            type="button"
-            className={styles.iconButton}
-            aria-label="刷新连接"
-            disabled={loading}
-            onClick={() => void loadAccessData()}
-          >
-            {loading ? <Loader2 size={16} /> : <RefreshCw size={16} />}
-          </button>
-        </header>
-        {error && errorContext === 'connections' && (
-          <p className={styles.inlineError} role="alert">{error}</p>
-        )}
-
-        {activeCredentials.length === 0 && activeDevices.length === 0 ? (
-          <p className={styles.emptyState}>{loading ? '正在读取连接…' : interfaceDisabled ? '接口尚未启用，暂时无法读取已授权连接。启用后点击刷新即可查看。' : '还没有已授权的 Agent 连接。'}</p>
-        ) : (
-          <div className={styles.connectionList}>
-            {activeCredentials.map((credential) => (
-              <ConnectionRow
-                key={credential.id}
-                title={credential.name}
-                subtitle={`PAT · ${agentCredentialPrefix(credential)} · ${formatDate(credential.last_used_at)}`}
-                scopes={credential.scopes}
-                scopeMap={scopeMap}
-                disabled={interfaceDisabled || revokingId === credential.id}
-                onRevoke={() => setPendingRevokeId(credential.id)}
-              />
-            ))}
-            {activeDevices.map((device) => (
-              <ConnectionRow
-                key={device.id}
-                title={device.name}
-                subtitle={`${device.client_type || '本地设备'} · ${formatDate(device.last_used_at)}`}
-                scopes={device.scopes}
-                scopeMap={scopeMap}
-                disabled={interfaceDisabled || revokingId === device.id}
-                onRevoke={() => setPendingRevokeId(device.id)}
-              />
-            ))}
-          </div>
-        )}
-        <dialog
-          open={Boolean(pendingRevokeId)}
-          className={styles.confirmDialog}
-          role="alertdialog"
-          aria-labelledby="agent-revoke-title"
-          aria-describedby="agent-revoke-description"
-        >
-          <strong id="agent-revoke-title">吊销这个 Agent 连接？</strong>
-          <p id="agent-revoke-description">
-            {pendingCredential?.name || pendingDevice?.name || '该连接'} 的新请求会立即失效，其他连接不受影响。
-          </p>
-          <div className={styles.confirmDialogActions}>
-            <button type="button" disabled={Boolean(revokingId)} onClick={() => setPendingRevokeId('')}>取消</button>
-            <button
-              type="button"
-              className={styles.dangerAction}
-              disabled={Boolean(revokingId) || (!pendingCredential && !pendingDevice)}
-              onClick={() => {
-                if (pendingCredential) void revokeConnection('credential', pendingCredential.id);
-                else if (pendingDevice) void revokeConnection('device', pendingDevice.id);
-              }}
-            >
-              {revokingId ? <Loader2 size={15} /> : <Unplug size={15} />}
-              确认吊销
-            </button>
-          </div>
-        </dialog>
-      </section>
 
       {!interfaceDisabled && canShowAgentInstallGuide(platform) && (
         <details className={styles.advanced}>
@@ -1205,6 +1282,8 @@ export default function AgentAccessSettingsCard({
           </div>
         )}
       </section>}
+        </div>
+      </details>
     </div>
   );
 }
@@ -1235,6 +1314,7 @@ function CommandRow({
 function ConnectionRow({
   title,
   subtitle,
+  detail,
   scopes,
   scopeMap,
   disabled,
@@ -1242,6 +1322,7 @@ function ConnectionRow({
 }: {
   title: string;
   subtitle: string;
+  detail: string;
   scopes: string[];
   scopeMap: Map<string, AgentScopeDefinition>;
   disabled: boolean;
@@ -1253,11 +1334,15 @@ function ConnectionRow({
       <div className={styles.connectionCopy}>
         <strong>{title}</strong>
         <small>{subtitle}</small>
-        <div>
+        <details className={styles.connectionDetails}>
+          <summary>连接详情</summary>
+          <small>{detail}</small>
+          <div>
           {safeAgentScopes(scopes).map((scope) => (
             <span key={scope}>{scopeMap.get(scope)?.title || scope}</span>
           ))}
-        </div>
+          </div>
+        </details>
       </div>
       <button type="button" disabled={disabled} onClick={onRevoke}>
         {disabled ? <Loader2 size={15} /> : <Unplug size={15} />}

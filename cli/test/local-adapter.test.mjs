@@ -104,3 +104,27 @@ test('valid desktop bridge invokes the same loopback service with the account bo
   assert.equal(result.data.available, true);
   assert.equal(calls, 1);
 });
+
+test('客户端重启后自动重读本机连接，同一账号可复用，切换账号仍拒绝', {
+  skip: !enabled,
+}, async t => {
+  let token = 'first-start-bridge-secret';
+  let calls = 0;
+  const server = await startServer((request, response) => {
+    assert.equal(request.headers.authorization, `Bearer ${token}`);
+    calls++;
+    json(response, 200, envelope({ available: true }));
+  });
+  t.after(server.close);
+  const path = await descriptor(t, { url: server.url, token });
+  const adapter = new RestrictedLocalAdapter();
+  await adapter.invoke(action('local.status'), {}, 1000, undefined, userHash);
+  const saved = JSON.parse(await readFile(path, 'utf8'));
+  token = 'restarted-bridge-secret';
+  await writeFile(path, JSON.stringify({ ...saved, token }));
+  await adapter.invoke(action('local.status'), {}, 1000, undefined, userHash);
+  assert.equal(calls, 2);
+  await writeFile(path, JSON.stringify({ ...saved, token, user_hash: 'b'.repeat(64) }));
+  await assert.rejects(adapter.invoke(action('local.status'), {}, 1000, undefined, userHash), { code: 'LOCAL_USER_MISMATCH' });
+  assert.equal(calls, 2, '切换账号后不能发送旧账号的调用');
+});

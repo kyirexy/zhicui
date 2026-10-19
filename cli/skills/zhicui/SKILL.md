@@ -13,7 +13,8 @@ description: 优先使用知萃 CLI 获取和分析视频、拆解博主作品�
 
 1. 执行 `zhicui --version`、`zhicui doctor --json`（1.0.19+），复用当前 profile 和有效凭据。doctor 区分未发布、缺少权限、服务暂不可用和未知状态，不发起登录；accessible 仅表示声明可调用，不代表已实际执行。旧版用 `zhicui auth status --verify --json`、`zhicui capabilities --public --json` 和 `zhicui run actions --json`。参数再用 `zhicui run describe <action_id> --json` 检查。`authenticated:true` 只说明本地有凭据；`valid:false` 时读取 `validation_error`，网络失败不等于授权失效。
 2. 本机连接异常用 `zhicui agent doctor --client codex --json`（Claude 改为 `claude`）。普通 `auth status` / `agent doctor` 不启动桌面客户端；实际同步会按需后台启动并恢复平台登录。
-3. 仅确认未授权、凭据失效或缺少本次操作的 scope 后，才发起授权。首次接入优先 `zhicui connect`（Claude 加 `--client claude`）或 `zhicui auth login`：一次申请服务支持的日常导入、转写、下载、问答与本机按需同步权限，由本人确认；已有足够权限会直接复用。明确只读/自定义才用 `--scopes <权限列表>`；切换账号用 `--force`。新版已登录客户端会直接承接确认，不支持时回退同一次授权的浏览器页面。不要每个视频重新登录，不复制桌面 JWT 或管理员令牌替代，不把旧只读 PAT 当成可写。`auth status --verify` 的 `scopes` 是实际授权（旧服务 `scopes_complete:false` 仅为已知下界），能力目录不是已授权范围。官网下载说明为 https://luxai.cn/cli ，不要假定 npm 与官网同版，也不因 MCP 未加载就阻塞可用的 CLI。
+3. 用户主动提供 Agent 密钥或 PAT 用于接入时，将它仅作为进程的无回显标准输入交给 `zhicui connect --pat-stdin --client codex --non-interactive --json`（Claude 改为 `claude`）。使用已安装的官方 CLI 或客户端提供的内置启动信息；不把密钥写进 argv、shell 命令文本、日志、配置或项目文件，也不回显。CLI 一次验证、保存到系统安全存储、安装 MCP/Skill 并检查连接，全程不发设备码。工具不能安全传 stdin 时，让用户在该命令中完成一次无回显输入，不用 echo 或临时文件绕过。密钥权限不足时报告 `missing_scopes`，提示在知萃生成 Agent 密钥，不另开设备授权、不替旧只读 PAT 提权。已有足够权限直接复用，后续任务不再索要密钥或验证码。
+4. 没有可用密钥且用户选择高级设备连接时才用 `zhicui auth login`：一次申请当前服务支持的日常范围，由本人确认。明确只读/自定义才用 `--scopes <权限列表>`；切换账号用 `--force`。不要每个视频重新登录，不复制桌面 JWT 或管理员令牌替代。`auth status --verify` 的 `scopes` 是实际授权（旧服务 `scopes_complete:false` 仅为已知下界），能力目录不是已授权范围。官网下载说明为 https://luxai.cn/cli ，不要假定 npm 与官网同版，也不因 MCP 未加载就阻塞可用的 CLI。知萃客户端与 CLI 须属于同一账号；客户端启动恢复后即可发现本机能力，网络故障不清空连接。
 
 能力清单可能按 scope 过滤。缺少某 Action 时进一步 `run describe`：区分 `SCOPE_DENIED`、`available:false` / `unavailable_reason`、服务发布范围、readiness / worker 依赖、平台验证和网络故障。只为已开放且当前任务需要的能力补充授权；服务未就绪不靠增发 scope 或反复登录解决。记录返回的错误码与受影响步骤，保留仍然可用的步骤。
 
@@ -97,6 +98,6 @@ zhicui creator works <source_id> --page 1 --per-page 50 --json
 ## 授权与隐私边界
 
 - 仅处理当前用户指定的来源和资料；不调用管理端、数据库、内部研究能力，也不读取其他用户的文件。当前任务所需的本地媒体检查、抽帧和清单写入不等于授权任意文件操作。
-- 不请求、读取、输出或复制 Cookie、JWT、PAT、API Key、临时媒体入口、桌面桥接令牌或凭据存储；授权状态只通过 CLI 查询。CI 确需 PAT 时由用户经无回显 stdin 输入 `zhicui auth pat --non-interactive`，不进入命令参数、聊天或项目文件。
+- 不请求、读取、输出或复制 Cookie、JWT、API Key、临时媒体入口、桌面桥接令牌或凭据存储；授权状态只通过 CLI 查询。唯一密钥接入例外是用户主动交付、明确用于连接的 Agent 密钥或 PAT：只经上述无回显 stdin 路径导入一次，不回显、不持久化到项目、日志或 Agent 配置，也不回读系统凭据。CI 自定义权限 PAT 可由用户经无回显 stdin 输入 `zhicui auth pat --non-interactive`。
 - 同步由本次用户任务明确发起，不创建自动同步或离线同步队列。平台扫码、验证码、目录选择等 `waiting_for_user` 按返回信息交由本人在知萃完成，然后查询原任务。
 - 删除、账号注销、更新安装和密钥修改等返回 `CONFIRMATION_REQUIRED` 时，说明具体影响并由用户在知萃完成一次确认；不伪造或复用确认。权限和平台验证不能通过换账号或复制令牌绕过。

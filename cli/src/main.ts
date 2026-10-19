@@ -120,7 +120,7 @@ function helpPayload(): Record<string, unknown> {
       'library prepare <url-or-share-text> [--connect] [--output <new-directory>] [--resume]',
       'mcp serve --stdio',
       'agent setup|doctor|status|update|reconcile|uninstall [--client all|codex|claude]',
-      'connect [--client codex|claude|all] [--no-open] — 安装连接、确认授权并检查可用工具',
+      'connect [--pat-stdin] [--client codex|claude|all] — 保存 Agent 密钥、安装连接并检查可用工具',
       'auth login [--scopes <范围>] [--force] — 复用有效连接；默认一次连接日常视频功能，--force 可切换账号',
       'account export --output <new-file.zip>  # password via no-echo stdin',
       'account delete                          # password + phrase via no-echo stdin',
@@ -216,7 +216,8 @@ async function authCommand(
   const scopesValue = takeValue(args, '--scopes');
   if (args.length) throw usageError(`多余参数：${args.join(' ')}`);
   if (patMode) {
-    const token = await readSecretFromStdin(options.nonInteractive, '请输入知萃 PAT（不会回显）：');
+    const token = await readSecretFromStdin(options.nonInteractive, '请输入知萃 Agent 密钥或 PAT（不会回显）：');
+    if (/\s/u.test(token)) throw usageError('请通过 stdin 提供一行完整密钥，不要附带提示文字');
     const previous = await credentials.load();
     const credential: StoredCredential = {
       kind: 'pat',
@@ -228,17 +229,21 @@ async function authCommand(
       await credentials.save(credential);
       const capabilities = await client.capabilities();
       const scopeSnapshot = grantedScopeSnapshot(capabilities);
+      const requiredScopes = scopesValue?.split(',').map(value => value.trim()).filter(Boolean) || [];
+      assertKeyScopes(scopeSnapshot.scopes, requiredScopes);
       if (!await credentials.saveIfUnchanged(credential, { ...credential, ...scopeSnapshot })) {
         throw new CliError('AUTH_REQUIRED', '登录状态已更改，请重新检查当前连接');
       }
-      writer.result({
+      const result = {
         authenticated: true,
         kind: 'pat',
-        token_prefix: credential.token_prefix,
+        token_prefix: credential.token_prefix || null,
         actions: capabilities.actions.length,
         ...scopeSnapshot,
         store: credentials.store.kind,
-      });
+      };
+      if (continuation) continuation.complete(result);
+      else writer.result(result);
     } catch (error) {
       // 校验期间若另一个进程已登录或退出，不能用旧快照覆盖它的决定。
       if (previous) await credentials.saveIfUnchanged(credential, previous);
@@ -1046,11 +1051,19 @@ async function agentCommand(
   } else throw usageError(`未知 agent 命令：${command}`);
 }
 
+function assertKeyScopes(granted: string[], required: readonly string[]): void {
+  const missing = required.filter(scope => !granted.includes(scope));
+  if (missing.length) throw new CliError('SCOPE_DENIED',
+    `这把密钥缺少日常使用权限：${missing.join('、')}。请在知萃生成 Agent 密钥后重新连接；不会发起设备码授权。`,
+    { details: { missing_scopes: missing, next_command: 'zhicui connect --pat-stdin' } });
+}
+
 async function connectCommand(args: string[], options: GlobalOptions, writer: ProtocolWriter,
   credentials: CredentialManager, client: AgentApiClient): Promise<void> {
   const selection = clientSelection(takeValue(args, '--client') || 'codex');
   const noOpen = takeFlag(args, '--no-open');
-  if (args.length) throw usageError(`多余参数：${args.join(' ')}`);
+  const patStdin = takeFlag(args, '--pat-stdin');
+  if (args.length) throw usageError('connect 参数无效；密钥只能通过无回显 stdin 提供');
   // MCP 的受管注册使用默认凭据；不把另一个 profile 的成功检查误报为默认连接成功。
   if (options.profile !== 'default') throw usageError('一键接入使用默认配置，请用 --profile default；其他配置可继续单独使用 CLI');
   let sequence = 0;
@@ -1058,18 +1071,32 @@ async function connectCommand(args: string[], options: GlobalOptions, writer: Pr
     writer.diagnostic(message);
     if (options.jsonl) writer.event({ sequence: ++sequence, event: `connect.${name}`, status: 'running', terminal: false });
   };
-  stage('setup', '1/3 安装并检查 Agent 连接…');
+  stage('authorization', '1/3 验证并保存知萃连接…');
+  const continuation = {
+    event: (value: JsonObject) => { if (options.jsonl) writer.event({ ...value, sequence: ++sequence, terminal: false }); },
+    complete: () => writer.diagnostic('连接凭据已验证，继续检查。'),
+  };
+  const existing = await credentials.load();
+  if (patStdin || existing?.kind === 'pat') {
+    const requiredScopes = await client.defaultAgentKeyScopes(DEFAULT_DEVICE_SCOPES);
+    if (!requiredScopes.length) throw new CliError('INTERFACE_DISABLED', '当前服务未开放日常连接能力，请稍后重试');
+    if (patStdin) {
+      await authCommand(['pat', '--scopes', requiredScopes.join(',')], options, writer, credentials, client, continuation);
+    } else {
+      const capabilities = await (await client.bindCurrentSession()).capabilities();
+      assertKeyScopes(grantedScopeSnapshot(capabilities).scopes, requiredScopes);
+      writer.diagnostic('已复用保存的密钥，无需重新输入或设备码授权。');
+    }
+  } else {
+    await authCommand(['login', ...(noOpen ? ['--no-open'] : [])], options, writer, credentials, client, continuation);
+  }
+  stage('setup', '2/3 安装并检查 Agent 连接…');
   const setup = await new AgentClientManager(options.timeoutMs).setup(selection);
   for (const [name, value] of Object.entries(setup)) {
     if (!(value as Record<string, unknown>).installed) {
       throw new CliError('AGENT_NOT_INSTALLED', `请先安装 ${name === 'codex' ? 'Codex' : 'Claude Code'}，然后重新运行 zhicui connect`, { exitCode: EXIT_CODES.localUnavailable });
     }
   }
-  stage('authorization', '2/3 检查知萃授权…');
-  await authCommand(['login', ...(noOpen ? ['--no-open'] : [])], options, writer, credentials, client, {
-      event: value => { if (options.jsonl) writer.event({ ...value, sequence: ++sequence, terminal: false }); },
-      complete: () => writer.diagnostic('授权完成，继续检查。'),
-  });
   stage('verify', '3/3 验证云端与 MCP 工具…');
   let report: Record<string, unknown> = {};
   await agentCommand(['doctor', '--client', selection], options, writer, credentials, value => { report = value; });

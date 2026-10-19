@@ -314,6 +314,26 @@ export class AgentApiClient {
 
   async defaultDeviceScopes(defaults: readonly string[]): Promise<string[]> {
     const data = await this.publicCapabilities();
+    return this.defaultScopesFromCatalog(data, defaults);
+  }
+
+  async defaultAgentKeyScopes(defaults: readonly string[]): Promise<string[]> {
+    const data = await this.publicCapabilities();
+    // 新服务提供与签发密钥完全一致的开放范围；它不是当前密钥的实际 grants。
+    if (Object.hasOwn(data, 'daily_agent_scopes')) {
+      const exact = data.daily_agent_scopes;
+      if (!Array.isArray(exact) || exact.some(scope => typeof scope !== 'string' || !defaults.includes(scope))) {
+        throw new CliError('REMOTE_FAILURE', '知萃日常密钥权限清单无效');
+      }
+      const scopes = defaults.filter(scope => exact.includes(scope));
+      if (!scopes.length) throw new CliError('ACTION_NOT_AVAILABLE', '当前服务没有开放日常密钥能力，请稍后重试');
+      return scopes;
+    }
+    // 老服务没有精确字段时保留原有目录兼容；显式空数组绝不能降级为全范围。
+    return this.defaultScopesFromCatalog(data, defaults);
+  }
+
+  private defaultScopesFromCatalog(data: RecordValue, defaults: readonly string[]): string[] {
     // 兼容旧服务；新服务始终按公开发布范围收窄连接预设。
     if (!data.release_profile && !Array.isArray(data.scopes)) return [...defaults];
     if (!['core', 'full', 'video_intake'].includes(stringValue(data.release_profile, 'full')) || !Array.isArray(data.scopes)) {
@@ -399,6 +419,7 @@ export class AgentApiClient {
       user_hash: stringValue(data.user_hash) || null,
       actions: rawActions.map(normalizeAction),
       scopes: (data.scopes ?? null) as JsonValue,
+      ...(Array.isArray(data.daily_agent_scopes) ? { daily_agent_scopes: stringList(data.daily_agent_scopes) } : {}),
       granted_scopes: Array.isArray(data.granted_scopes)
         ? data.granted_scopes.filter((scope): scope is string => typeof scope === 'string') : null,
       feature_enabled: data.feature_enabled !== false,

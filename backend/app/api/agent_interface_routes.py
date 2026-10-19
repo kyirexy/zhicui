@@ -41,6 +41,8 @@ from app.services.agent_credential_service import (
     approve_device_authorization,
     authenticate_access_token,
     create_device_authorization,
+    daily_agent_scopes,
+    issue_agent_key,
     issue_pat,
     list_credentials,
     poll_device_authorization,
@@ -82,6 +84,10 @@ class PatCreateRequest(StrictModel):
     name: str = Field(default="知萃 PAT", min_length=1, max_length=120)
     scopes: list[str] = Field(..., min_length=1, max_length=32)
     expires_in_days: int = Field(default=90, ge=1, le=90)
+
+
+class AgentKeyCreateRequest(StrictModel):
+    name: str = Field(default="我的 Agent", min_length=1, max_length=120)
 
 
 class DeviceStartRequest(StrictModel):
@@ -378,6 +384,8 @@ def capabilities(
                 "actions": [item.model_dump(mode="json") for item in actions],
                 # scopes 是发布权限目录；当前凭证的实际授权单独返回，匿名请求为 null。
                 "scopes": [item for item in SCOPES if item["id"] in allowed_scopes],
+                # 日常连接的当前申请范围；不是这个凭证已获授权的范围。
+                "daily_agent_scopes": daily_agent_scopes(),
                 "granted_scopes": sorted(scopes & allowed_scopes) if scopes is not None else None,
                 **profile_metadata(),
                 "transports": {
@@ -693,6 +701,28 @@ def create_pat(
     except Exception as exc:
         db.rollback()
         return _error_response("credentials.pat.create", _request_id(request), exc)
+
+
+@router.post("/credentials/agent-key")
+def create_agent_key(
+    body: AgentKeyCreateRequest,
+    request: Request,
+    current_user: User = Depends(get_agent_browser_user),
+    db: Session = Depends(get_db),
+):
+    """已登录客户端一次生成日常密钥；不经设备码，也不允许 Agent 自行签发。"""
+    try:
+        row, token = issue_agent_key(db, user_id=current_user.id, name=body.name)
+        return JSONResponse(
+            content=_envelope(
+                action="credentials.agent_key.create", request_id=_request_id(request),
+                data={"credential": row.to_public_dict(), "token": token},
+            ),
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+        )
+    except Exception as exc:
+        db.rollback()
+        return _error_response("credentials.agent_key.create", _request_id(request), exc)
 
 
 @router.post("/credentials/{credential_id}/revoke")

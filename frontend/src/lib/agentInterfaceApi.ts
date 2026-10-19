@@ -73,6 +73,9 @@ export interface AgentCredential {
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
+  client_type?: string;
+  expiry_policy?: 'fixed' | 'sliding_inactivity';
+  inactivity_days?: number | null;
 }
 
 export interface AgentDeviceConnection {
@@ -129,6 +132,10 @@ export interface AgentPatCreateResult {
   credential: AgentCredential;
   /** 只在创建响应中出现一次；服务端列表接口不会再次返回。 */
   token: string;
+}
+
+export interface AgentKeyCreateInput {
+  name?: string;
 }
 
 export interface AgentDeviceApprovalResult {
@@ -222,6 +229,13 @@ export async function listAgentCredentials(): Promise<AgentCredential[]> {
 
 export function createAgentPat(input: AgentPatCreateInput): Promise<AgentPatCreateResult> {
   return requestAgentInterface<AgentPatCreateResult>('/credentials/pat', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function createAgentKey(input: AgentKeyCreateInput = {}): Promise<AgentPatCreateResult> {
+  return requestAgentInterface<AgentPatCreateResult>('/credentials/agent-key', {
     method: 'POST',
     body: JSON.stringify(input),
   });

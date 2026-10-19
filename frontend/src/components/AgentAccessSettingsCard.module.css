@@ -17,6 +17,122 @@
   outline-offset: 3px;
 }
 
+.advancedContent {
+  display: grid;
+  gap: 18px;
+  padding-top: 12px;
+}
+
+.agentKeyCard {
+  padding: 28px;
+}
+
+.keyHeading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--accent-brand);
+}
+
+.keyHeading h2 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.keyDescription {
+  max-width: 68ch;
+  margin: 12px 0 0;
+  color: var(--foreground-secondary);
+  font-size: .875rem;
+  line-height: 1.7;
+}
+
+.keyActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 22px;
+}
+
+.keyActions button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 16px;
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  color: var(--foreground-secondary);
+  background: transparent;
+  font: inherit;
+  font-size: .8125rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.keyActions button:hover:not(:disabled) { background: var(--hover-bg); }
+.keyActions button:disabled { opacity: .58; cursor: default; }
+.keyActions button.keyPrimary { border-color: var(--accent-brand); color: var(--background); background: var(--accent-brand); }
+.keyActions button.keyPrimary:hover:not(:disabled) { color: var(--background); background: var(--accent-brand); filter: brightness(.94); }
+.keyActions button:focus-visible,
+.keyValue > summary:focus-visible,
+.connectionDetails > summary:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 3px; }
+
+.keyHint {
+  margin: 14px 0 0;
+  color: var(--foreground-secondary);
+  font-size: .75rem;
+  line-height: 1.65;
+}
+
+.keyReady > p:first-child {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 22px 0 0;
+  color: var(--foreground-secondary);
+  font-size: .875rem;
+}
+
+.keyValue { margin-top: 12px; }
+.keyValue > summary,
+.connectionDetails > summary {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  color: var(--foreground-secondary);
+  cursor: pointer;
+  font-size: .75rem;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.keyValue code {
+  display: block;
+  padding: 12px;
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+  color: var(--foreground);
+  font-size: .8125rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.connectionDetails small { display: block; overflow-wrap: anywhere; }
+.connectionDetails > div { display: flex; flex-wrap: wrap; gap: 5px; margin-block: 8px 4px; }
+.connectionDetails > div > span { padding: 4px 6px; border-radius: 4px; color: var(--foreground-secondary); background: var(--background-secondary); font-size: .6875rem; }
+
+@media (max-width: 560px) {
+  .agentKeyCard { padding: 20px 16px; }
+  .keyActions > .keyPrimary { width: 100%; }
+  .keyActions > button:not(.keyPrimary) { flex: 1; }
+}
+
 .hero,
 .card {
   border: 1px solid var(--card-border);

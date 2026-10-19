@@ -49,8 +49,8 @@ for (const mode of ['existing', 'read-only', 'new', 'denied', 'offline']) {
     const result = await runCli(['connect','--no-open','--jsonl','--timeout','20s'],{env,processTimeoutMs:25000});
     const events = result.stdout.trim().split('\n').map(JSON.parse);
     assert.equal(events.filter(x=>x.terminal).length,1);
-    assert.equal(result.code===0,['existing','read-only','new'].includes(mode),result.stdout+result.stderr);
-    assert.equal(starts,['new','denied','read-only'].includes(mode)?1:0);
+    assert.equal(result.code===0,['existing','new'].includes(mode),result.stdout+result.stderr);
+    assert.equal(starts,['new','denied'].includes(mode)?1:0);
     assert.doesNotMatch(result.stdout+result.stderr,/connect_test_secret|connect_device_secret/);
     if(result.code===0) {
       assert.equal(events.at(-1).data.ready,true);
@@ -58,8 +58,14 @@ for (const mode of ['existing', 'read-only', 'new', 'denied', 'offline']) {
       const again=await runCli(['connect','--json','--no-open'],{env,processTimeoutMs:20000});
       assert.equal(again.code,0,again.stdout+again.stderr);
       assert.equal(JSON.parse(again.stdout).setup.codex.changed,false);
-      assert.equal(starts,['new','read-only'].includes(mode)?1:0,'再次连接不能重复授权');
-    } else assert.equal(events.at(-1).status,'failed');
+      assert.equal(starts,mode==='new'?1:0,'再次连接不能重复授权');
+    } else {
+      assert.equal(events.at(-1).status,'failed');
+      if (mode === 'read-only') {
+        assert.equal(events.at(-1).error.code, 'SCOPE_DENIED');
+        assert.deepEqual(events.at(-1).error.details.missing_scopes, DAILY_AGENT_SCOPES.filter(scope => scope !== 'library:read'));
+      }
+    }
   });
 }
 

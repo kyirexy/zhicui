@@ -57,6 +57,7 @@ export interface AgentCapabilities {
   user_hash?: string | null;
   actions: AgentActionDefinition[];
   scopes?: JsonValue;
+  daily_agent_scopes?: string[];
   granted_scopes?: string[] | null;
   feature_enabled?: boolean;
 }

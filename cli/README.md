@@ -19,10 +19,15 @@ zhicui download batch --input links.json --output ./reference-videos --resume --
 安装说明与经 CI 验收的安装包：https://luxai.cn/cli 。官网分发独立于 npm 官方仓库，仍使用 npm 安装客户端，不需要 npm 登录。
 
 ```powershell
-npm install -g https://luxai.cn/cli.tgz; if ($LASTEXITCODE -eq 0) { zhicui connect }
+npm install -g https://luxai.cn/cli.tgz
+zhicui connect --pat-stdin --client codex
 ```
 
-已安装后只需 `zhicui connect`；Claude Code 用 `zhicui connect --client claude`。自动安装 MCP 与 Skill，复用权限足够的有效连接；首次连接或缺少权限时，一次确认日常使用需要的范围，再通过真实工具发现验证连接。新版已登录桌面客户端会直接显示确认页；不支持或未能打开时，使用同一授权的浏览器页面。默认接入使用 default 配置；其他命名 profile 继续用于单独 CLI 操作。重新连接 Agent 中的知萃 MCP 后生效。
+在知萃「Agent 接入」生成一次 Agent 密钥，交给当前 Agent。Agent 通过 `zhicui connect --pat-stdin --client codex --non-interactive --json` 的标准输入接收密钥；也可在上面的交互命令中无回显输入。Claude Code 把 `codex` 换成 `claude`。密钥不放进命令参数、shell 脚本、日志、MCP 配置或项目文件；CLI 验证实际权限后保存在系统安全存储，安装 MCP 与 Skill 并检查连接，全程不发设备码。无效或权限不足的密钥保留原有连接，权限不足会返回 `missing_scopes`。
+
+后续直接使用知萃工具；`zhicui connect` 会复用已保存且权限足够的密钥。知萃客户端启动并恢复同一账号后即可使用本机能力，实际调用也支持按需启动。新 Agent 密钥连续 365 天未使用才失效，使用会续期，可随时撤销；旧 PAT 仍按创建时的权限与期限生效。默认接入使用 default 配置；其他命名 profile 继续用于单独 CLI 操作。首次安装或升级后，重新加载 Agent 中的知萃 MCP 即可。
+
+高级设备连接保留 `zhicui auth login`；没有保存凭据的 `zhicui connect` 仍兼容此流程。已有密钥权限不足时不会自动转设备授权。
 
 ## 同步最近 200 条，自动连接与续跑（1.0.14 起）
 
@@ -63,10 +68,10 @@ Agent 通过 MCP 的 `library.media.resolve`（本地工具名 `zhicui_library_m
 
 知萃普通用户能力的 Node 22 CLI 与本地 MCP 入口。它只调用版本化 Action 接口，不包含管理端、数据库、任意 Shell、Cookie、JWT、API Key 或内部视频研究工具。
 
-桌面客户端内置 CLI 和 Skill，可以在「Agent 接入」中安装到 Codex / Claude Code，再完成独立设备授权，无需安装 Node 或等待 npm 发布。独立 CLI 可从已审核的本地发行包安装；安装后执行：
+桌面客户端内置 CLI 和 Skill，可以在「Agent 接入」生成密钥并复制接入说明，无需安装 Node 或等待 npm 发布。独立 CLI 可从已审核的本地发行包安装；安装后执行：
 
 ```bash
-zhicui auth login
+zhicui connect --pat-stdin --client codex
 zhicui library list --json
 zhicui creator --help --json
 zhicui run actions --json
@@ -79,7 +84,7 @@ zhicui mcp serve --stdio
 
 桌面独立授权协议为 `auth login --jsonl --no-open --non-interactive --timeout 10m`。需要新授权时，首条 `device_authorization` 事件包含官方 `verification_url`、`user_code`、`scopes`、`expires_at`、`interval_seconds` 和 `authorization_target`；用户在知萃批准后，CLI 将凭据存入系统存储，再发送唯一终态 `authorization_complete`。已有足够权限时直接发送 `authorization_complete`，其中 `reused: true`，不生成验证码。机器授权码和令牌不出现在事件中。取消时结束该独立进程，原凭据保留；授权过程中另一次登录、退出或新授权会阻止旧结果覆盖当前凭据。默认等待服务端授权有效期（最多十分钟），显式 `--timeout` 可缩短等待。
 
-设备授权与 `connect` 默认使用“日常使用”：`account:read,library:read,library:write,creator:read,ask:read,ask:run,local:invoke`，只申请当前服务已发布的范围，覆盖视频导入、转写、下载和问答。仍需本人确认，已有令牌不会被自动扩权；权限不足时确认新设备连接，本机当前 profile 才会替换凭据。新 PAT 页面提供相同预设，也保留只读和自定义选项。
+Agent 密钥与高级设备授权默认使用日常范围：`account:read,library:read,library:write,creator:read,ask:read,ask:run,local:invoke`，与当前服务已发布范围取交集，覆盖视频导入、转写、下载和问答。`connect --pat-stdin` 只验证密钥已有权限，不申请、扩展或替换为设备授权。原只读 PAT 不会扩权；需要日常范围时在知萃生成新的 Agent 密钥。
 
 明确只读可用 `zhicui auth login --scopes library:read`；切换账号或强制重新连接用 `zhicui auth login --force`。`auth status --verify` 返回服务端的实际 `scopes`；`scopes_complete: true` 表示完整授权快照，旧服务仅能根据已授权动作推导时为 `false`，不会把服务的权限目录误报为已授权。
 
@@ -205,13 +210,13 @@ zhicui local media-open <aweme_id> --json
 请用 `local platform-status <platform>` 查看进度。桌面桥只使用客户端当前
 登录的知萃账号，CLI 不能自行指定其他账号的 `profile_key`。
 
-PAT 只能从无回显 stdin 保存：
+Agent 密钥与 PAT 只能从无回显 stdin 保存。密钥接入并安装 MCP/Skill：
 
 ```bash
-printf '%s' "$ZHICUI_PAT" | zhicui auth pat --non-interactive --json
+zhicui connect --pat-stdin --client codex
 ```
 
-Codex / Claude Code 接入使用实际安装版本自带的 MCP 管理命令，配置前创建备份，失败时恢复：
+非交互工具把密钥作为进程 stdin 传入，并加 `--non-interactive --json`；不要用含密钥的 `echo`、命令参数或临时文件。仅保存自定义权限 PAT 可继续用 `zhicui auth pat`。Codex / Claude Code 接入使用实际安装版本自带的 MCP 管理命令，配置前创建备份，失败时恢复：
 
 ```bash
 zhicui agent setup --client all --json

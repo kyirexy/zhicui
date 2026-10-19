@@ -206,6 +206,10 @@ try {
   assert.ok(overview.setup_prompt.includes(JSON.stringify(fakeCli).slice(1, -1)));
   assert.doesNotMatch(overview.setup_prompt, /npx|acceptance|npm install/);
   assert.match(overview.setup_prompt, /重新加载|不会热替换/);
+  assert.match(overview.setup_prompt, /connect --pat-stdin --client codex --non-interactive --json/);
+  assert.match(overview.setup_prompt, /无回显标准输入/);
+  assert.match(overview.setup_prompt, /不另开设备授权/);
+  assert.match(overview.setup_prompt, /同一账号/);
   assert.equal((await integration.run({ client: 'codex', operation: 'authorize', authorization_id: randomUUID() })).code, 'DESKTOP_AUTH_REQUIRED');
   await writeFile(fakeState, JSON.stringify({ ...initialState, configured: true, authenticated: true, granted_scopes: ['library:read'] }));
   const reused = await integration.run({ client: 'codex', operation: 'setup' });

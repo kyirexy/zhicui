@@ -193,6 +193,7 @@
     "POST /api/agent-interface/v1/auth/refresh",
     "POST /api/agent-interface/v1/confirmations/{confirmation_id}/approve",
     "POST /api/agent-interface/v1/confirmations/{confirmation_id}/reject",
+    "POST /api/agent-interface/v1/credentials/agent-key",
     "POST /api/agent-interface/v1/credentials/pat",
     "POST /api/agent-interface/v1/credentials/{credential_id}/revoke",
     "POST /api/agent-interface/v1/devices/{credential_id}/revoke",

@@ -280,7 +280,7 @@ export class DesktopAgentIntegration {
 
   private setupPrompt(): string {
     const launcher = JSON.stringify({ command: this.executable, args: [this.getCliEntry()], env: { ELECTRON_RUN_AS_NODE: '1' } }, null, 2);
-    return `请帮我接入知萃。先检查当前 Agent 是否已有可用的知萃 MCP 工具；若已有，先读取能力或资料列表。\n\n若缺少接入，请使用当前安装的知萃客户端内置 CLI，不要下载其他版本。固定启动信息如下：\n${launcher}\n\n在以上 args 后追加 agent setup --client codex --json；如果当前是 Claude Code，将 codex 改为 claude。MCP 服务器实际启动参数是在同一入口后追加 mcp serve --stdio。仅更新知萃管理的配置和 Skill，遇到自定义同名配置先说明冲突，不覆盖。不要读取、复制或输出任何凭据。\n\n安装配置后运行同一入口的 agent doctor --client codex --json（Claude Code 使用 claude）。配置成功不等于已授权或服务可用；若需要授权，让我回到知萃客户端的 Agent 接入页主动确认权限，不要代替我批准。\n\n配置或内置 CLI 更新后，需要重新加载当前 Agent 的 MCP 连接或重启会话；已运行的 MCP 进程不会热替换。最后验证工具列表和一次只读调用，并分别报告已配置、已授权、云端可用、MCP 可调用的状态。`;
+    return `请帮我接入知萃。先复用当前有效连接；已有可用工具时直接读取能力或资料列表。\n\n使用当前安装的知萃客户端内置 CLI，固定启动信息如下：\n${launcher}\n\n若我主动提供了 Agent 密钥，在以上 args 后追加 connect --pat-stdin --client codex --non-interactive --json，将密钥只通过进程的无回显标准输入传入；Claude Code 将 codex 改为 claude。不要把密钥放入命令参数、shell 命令文本、日志、配置或项目文件，不回显，也不回读系统凭据。CLI 验证后保存在系统安全存储并安装 MCP 与 Skill，全程不发设备码。权限不足时报告缺项，让我在知萃生成 Agent 密钥，不另开设备授权。没有密钥时请引导我在知萃的 Agent 接入页生成一次。\n\n已有保存的密钥时，在同一入口追加 connect --client codex --json 即可复用。仅更新知萃管理的配置与 Skill，遇到自定义同名配置不覆盖。本机操作要求知萃客户端与密钥属于同一账号；客户端启动恢复后自动发现本机能力。\n\n安装或内置 CLI 更新后，重新加载当前 Agent 的 MCP 连接即可；已运行的 MCP 进程不会热替换。使用同一入口的 agent doctor --client codex --json 验证，再检查工具列表和一次只读调用，报告实际连接状态。`;
   }
 
   async reconcileManaged(): Promise<void> {

@@ -14,6 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 API_VERSION = "v1"
+AGENT_KEY_CLIENT_TYPE = "agent_key"
+AGENT_KEY_INACTIVITY_DAYS = 365
 
 
 class RunStatus(StrEnum):

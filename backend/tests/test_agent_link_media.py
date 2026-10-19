@@ -5,12 +5,14 @@ import tempfile
 import subprocess
 import time
 import unittest
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from app.core.config import settings
+from app.core.database import Base
+from app.models.creator_sync import CreatorSource, CreatorSourceItem, CreatorSyncRun
 from app.models.note import Note
 from app.models.user import User
 from app.models.douyin_account_binding import DouyinAccountBinding
@@ -313,6 +315,270 @@ class AgentMediaRouteTests(unittest.TestCase):
                 product_action_handlers.library_import_link(ctx, {"url": "https://www.xiaohongshu.com/explore/example"})
             self.assertEqual(error.exception.code, "UNSUPPORTED_PLATFORM")
             old_import.assert_not_called()
+
+
+class BilibiliCatalogMediaLinkTests(unittest.TestCase):
+    def setUp(self):
+        AgentInterfaceRouteTests.setUp(self)
+        Base.metadata.create_all(self.engine, tables=[CreatorSource.__table__, CreatorSyncRun.__table__, CreatorSourceItem.__table__])
+        self.serial = 0
+
+    tearDown = AgentInterfaceRouteTests.tearDown
+
+    def _catalog_note(self, db, *, transcript="", ready=False, meta=None):
+        self.serial += 1
+        bvid = f"BV{self.serial:010d}"
+        note = note_service.create_transcript_note(
+            db, user_id=self.user_id,
+            video_info={"video_id": bvid, "title": "目录视频", "source_url": f"https://www.bilibili.com/video/{bvid}/", "platform": "bilibili"},
+            transcript=transcript,
+            source_meta={"platform": "bilibili", "source_kind": media.SOURCE_KIND, "speech_ready": ready, "transcript_source": "cloud-asr" if ready else "pending", "transcript_status": "ready" if ready else "pending", **(meta or {})},
+        )
+        source = CreatorSource(user_id=self.user_id, platform="bilibili", creator_id=str(10000 + self.serial), profile_url=f"https://space.bilibili.com/{10000 + self.serial}", display_name="目录博主")
+        db.add(source)
+        db.flush()
+        item = CreatorSourceItem(user_id=self.user_id, source_id=source.id, platform="bilibili", external_id=bvid, title="目录视频")
+        db.add(item)
+        db.commit()
+        return note, item
+
+    def test_new_asr_persists_or_rolls_back_transcript_and_catalog_link_together(self):
+        @contextmanager
+        def fake_media(*_args, **_kwargs):
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "video.mp4"
+                path.write_bytes(b"video")
+                yield path
+
+        for fail_commit in (False, True):
+            with self.subTest(fail_commit=fail_commit), self.Session() as db:
+                note, item = self._catalog_note(db)
+                note_id, item_id = note.id, item.id
+                original_commit = db.commit
+                completed_commits = []
+
+                def checked_commit():
+                    if note.transcript_raw:
+                        self.assertEqual(item.note_id, note.id)
+                        self.assertEqual(item.state, "ready")
+                        self.assertTrue(json.loads(note.ai_summary)["source_meta"]["speech_ready"])
+                        completed_commits.append(True)
+                        if fail_commit:
+                            raise RuntimeError("模拟提交失败")
+                    original_commit()
+
+                with patch.object(db, "commit", side_effect=checked_commit), patch.object(media.settings_service, "get_asr_config", return_value={"api_key": "unit-test"}), patch.object(media, "prepared_user_media", side_effect=fake_media), patch.object(media.subprocess, "run", return_value=SimpleNamespace(returncode=0)), patch.object(media.video_extractor, "_audio_is_digital_silence", return_value=False), patch.object(media.video_extractor, "_asr_audio_file", return_value="本次语音识别完成") as asr:
+                    if fail_commit:
+                        with self.assertRaisesRegex(RuntimeError, "模拟提交失败"):
+                            media.transcribe_note(db, user_id=self.user_id, note_id=note_id)
+                    else:
+                        result = media.transcribe_note(db, user_id=self.user_id, note_id=note_id)
+                        self.assertFalse(result["already_existed"])
+                asr.assert_called_once()
+                self.assertEqual(len(completed_commits), 1)
+                db.rollback()
+                saved_note, saved_item = db.get(Note, note_id), db.get(CreatorSourceItem, item_id)
+                self.assertEqual(saved_note.transcript_raw, "" if fail_commit else "本次语音识别完成")
+                self.assertEqual(saved_item.note_id, None if fail_commit else note_id)
+                self.assertEqual(saved_item.state, "discovered" if fail_commit else "ready")
+
+    def test_ready_note_reuse_repairs_catalog_without_media_or_asr(self):
+        for entry in ("transcript", "transcript_after_lease", "import", "import_after_parse"):
+            with self.subTest(entry=entry), self.Session() as db:
+                note, item = self._catalog_note(db, transcript="" if entry == "transcript_after_lease" else "已有真实文稿", ready=True)
+                note_id, item_id = note.id, item.id
+
+                @contextmanager
+                def finish_before_lease(*_args, **_kwargs):
+                    note.transcript_raw = "已有真实文稿"
+                    db.commit()
+                    yield
+
+                with ExitStack() as patches:
+                    prepare = patches.enter_context(patch.object(media, "prepared_user_media"))
+                    config = patches.enter_context(patch.object(media.settings_service, "get_asr_config"))
+                    asr = patches.enter_context(patch.object(media.video_extractor, "_asr_audio_file"))
+                    parse = patches.enter_context(patch.object(media, "_public_info", return_value={"video_id": note.video_id, "title": "目录视频"}))
+                    if entry == "transcript_after_lease":
+                        patches.enter_context(patch.object(media.library_sync_service, "import_lease", side_effect=finish_before_lease))
+                    if entry == "import_after_parse":
+                        patches.enter_context(patch.object(media.platform_library_service, "_canonical_bilibili_id", return_value=""))
+                    if entry.startswith("transcript"):
+                        result = media.transcribe_note(db, user_id=self.user_id, note_id=note_id)
+                        self.assertTrue(result["already_existed"])
+                    else:
+                        result = media.import_link(db, user_id=self.user_id, value=note.video_url)
+                        self.assertEqual(result["status"], "reused")
+                    prepare.assert_not_called()
+                    config.assert_not_called()
+                    asr.assert_not_called()
+                    self.assertEqual(parse.call_count, int(entry == "import_after_parse"))
+                db.rollback()
+                self.assertEqual(db.get(CreatorSourceItem, item_id).note_id, note_id)
+                self.assertEqual(db.get(CreatorSourceItem, item_id).state, "ready")
+                with patch.object(db, "commit", wraps=db.commit) as commit:
+                    media.transcribe_note(db, user_id=self.user_id, note_id=note_id)
+                    commit.assert_not_called()
+
+    def test_pending_caption_and_no_audio_notes_do_not_mark_catalog_imported(self):
+        cases = [
+            ("", {}, "import"),
+            ("只有简介", {"transcript_source": "caption-only"}, "transcript"),
+            ("", {"transcript_status": "no_audio"}, "transcript"),
+        ]
+        for transcript, meta, entry in cases:
+            with self.subTest(meta=meta), self.Session() as db, patch.object(media, "prepared_user_media") as prepare, patch.object(media.settings_service, "get_asr_config") as config, patch.object(media.video_extractor, "_asr_audio_file") as asr:
+                note, item = self._catalog_note(db, transcript=transcript, meta=meta)
+                item_id = item.id
+                if entry == "import":
+                    result = media.import_link(db, user_id=self.user_id, value=note.video_url)
+                    self.assertEqual(result["status"], "reused")
+                else:
+                    result = media.transcribe_note(db, user_id=self.user_id, note_id=note.id)
+                    self.assertTrue(result["already_existed"])
+                db.rollback()
+                self.assertIsNone(db.get(CreatorSourceItem, item_id).note_id)
+                self.assertEqual(db.get(CreatorSourceItem, item_id).state, "discovered")
+                prepare.assert_not_called()
+                config.assert_not_called()
+                asr.assert_not_called()
+
+
+class BilibiliMediaCandidateTests(unittest.TestCase):
+    def _response(self, *, status=200, headers=None, body=b"track"):
+        response = MagicMock(status=status, headers=headers or {"Content-Type": "video/mp4", "Content-Length": str(len(body))})
+        response.stream.return_value = iter([body])
+        return response
+
+    def _download(self, urls, *, responses=None, addresses=None, budget=None, deadline=None):
+        pools = []
+        def make_pool(*_args, **_kwargs):
+            pool = MagicMock()
+            pool.urlopen.return_value = responses[len(pools)]
+            pools.append(pool)
+            return pool
+        public_dns = [(2, 1, 6, "", ("8.8.8.8", 443))]
+        with tempfile.TemporaryDirectory() as directory, patch.object(media.socket, "getaddrinfo", side_effect=addresses, return_value=public_dns) as dns, patch.object(media.urllib3, "HTTPSConnectionPool", side_effect=make_pool) as factory:
+            path = Path(directory) / "track.bin"
+            media._download_track(urls, path, platform="bilibili", budget=budget if budget is not None else [100], deadline=deadline if deadline is not None else time.monotonic() + 30)
+            return path.read_bytes(), dns, factory, pools
+
+    def test_dash_uses_separate_safe_backups_for_video_and_audio(self):
+        note = SimpleNamespace(video_id="BV1TEST", video_url="https://www.bilibili.com/video/BV1TEST/", ai_summary=json.dumps({"source_meta": {"platform": "bilibili"}}))
+        play = {"dash": {
+            "video": [{"codecid": 7, "baseUrl": "https://edge.mcdn.bilivideo.cn:4483/video", "backupUrl": ["https://video.bilivideo.com/video"]}],
+            "audio": [{"base_url": "http://audio.bilivideo.com/audio", "backup_url": ["https://audio.bilivideo.cn/audio"]}],
+        }}
+        pool = MagicMock()
+        pool.urlopen.side_effect = [self._response(body=b"video"), self._response(body=b"audio")]
+        def remux(paths, target):
+            self.assertEqual([path.read_bytes() for path in paths], [b"video", b"audio"])
+            target.write_bytes(b"combined")
+        with patch.object(media, "_public_info", return_value={"video_id": "BV1TEST", "cid": "123"}), patch.object(media.video_extractor, "_bilibili_api_data", return_value=play) as api, patch.object(media.socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("8.8.8.8", 443))]) as dns, patch.object(media.urllib3, "HTTPSConnectionPool", return_value=pool) as factory, patch.object(media, "_remux", side_effect=remux), patch.object(media, "_download", wraps=media._download) as download:
+            with media.prepared_media(note) as path:
+                self.assertEqual(path.read_bytes(), b"combined")
+            self.assertFalse(path.exists())
+        api.assert_called_once()
+        self.assertEqual([call.args[0] for call in dns.call_args_list], ["video.bilivideo.com", "audio.bilivideo.cn"])
+        self.assertEqual(factory.call_count, 2)
+        self.assertEqual(download.call_count, 4)
+        budgets = [call.kwargs["budget"] for call in download.call_args_list]
+        self.assertTrue(all(budget is budgets[0] for budget in budgets))
+        self.assertEqual(budgets[0][0], media.MAX_MEDIA_BYTES - 10)
+        self.assertEqual(len({call.kwargs["deadline"] for call in download.call_args_list}), 1)
+        for call in factory.call_args_list:
+            self.assertEqual(call.args[0], "8.8.8.8")
+            self.assertEqual(call.kwargs["server_hostname"], call.kwargs["assert_hostname"])
+        for call in pool.urlopen.call_args_list:
+            self.assertFalse(call.kwargs["redirect"])
+            self.assertFalse(call.kwargs["retries"])
+            self.assertFalse({"authorization", "cookie", "x-zhicui-scope"} & {key.lower() for key in call.kwargs["headers"]})
+
+    def test_single_durl_uses_its_own_backup(self):
+        note = SimpleNamespace(video_id="BV1TEST", video_url="https://www.bilibili.com/video/BV1TEST/", ai_summary=json.dumps({"source_meta": {"platform": "bilibili"}}))
+        play = {"durl": [{"url": "http://video.bilivideo.com/video", "backup_url": ["https://video.bilivideo.com/video"]}]}
+        pool = MagicMock()
+        pool.urlopen.return_value = self._response()
+        with patch.object(media, "_public_info", return_value={"video_id": "BV1TEST", "cid": "123"}), patch.object(media.video_extractor, "_bilibili_api_data", return_value=play), patch.object(media.socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("8.8.8.8", 443))]), patch.object(media.urllib3, "HTTPSConnectionPool", return_value=pool) as factory, patch.object(media, "_remux", side_effect=lambda paths, target: target.write_bytes(paths[0].read_bytes())):
+            with media.prepared_media(note) as path:
+                self.assertEqual(path.read_bytes(), b"track")
+        factory.assert_called_once()
+
+    def test_primary_success_does_not_request_backup(self):
+        body, dns, factory, _ = self._download(["https://primary.bilivideo.com/video", "https://backup.bilivideo.com/video"], responses=[self._response()])
+        self.assertEqual(body, b"track")
+        dns.assert_called_once_with("primary.bilivideo.com", 443, type=media.socket.SOCK_STREAM)
+        factory.assert_called_once()
+
+    def test_candidates_are_deduplicated_and_bounded_without_rewriting_urls(self):
+        primary = "https://edge.mcdn.bilivideo.cn:4483/video"
+        backups = [f"https://backup{i}.bilivideo.com/video" for i in range(6)]
+        urls = media._bilibili_track_urls({"baseUrl": primary, "backupUrl": [primary, None, "", *backups]})
+        self.assertEqual(urls, [primary, *backups[:3]])
+        for malformed in ["https://backup.bilivideo.com/video", {"url": backups[0]}, 7]:
+            self.assertEqual(media._bilibili_track_urls({"base_url": primary, "backup_url": malformed}), [primary])
+        self.assertEqual(media._bilibili_track_urls({"baseUrl": primary, "base_url": primary, "backupUrl": [backups[0]], "backup_url": [backups[0], backups[1]]}), [primary, *backups[:2]])
+        self.assertEqual(media._bilibili_track_urls({"backupUrl": [backups[0]]}), [backups[0]])
+        with patch.object(media, "_download", side_effect=media.VideoLinkError("UNSAFE_MEDIA_TARGET", "拒绝")) as download:
+            with self.assertRaises(media.VideoLinkError):
+                media._download_track(urls, Path("unused"), platform="bilibili", budget=[100], deadline=time.monotonic() + 30)
+        self.assertEqual(download.call_count, 4)
+
+    def test_invalid_candidates_never_connect_and_keep_safe_error(self):
+        urls = ["http://cdn.bilivideo.com/video", "https://cdn.bilivideo.cn:4483/video", "https://user:pass@cdn.bilivideo.com/video", "https://bilivideo.com.evil.test/video?signature=secret", "https://cdn.bilivideo.com/video#fragment", "https://cdn.bilivideo.com/video\n"]
+        with patch.object(media.socket, "getaddrinfo") as dns, patch.object(media.urllib3, "HTTPSConnectionPool") as factory:
+            with self.assertRaises(media.VideoLinkError) as error:
+                media._download_track(urls, Path("unused"), platform="bilibili", budget=[100], deadline=time.monotonic() + 30)
+        self.assertEqual(error.exception.code, "UNSAFE_MEDIA_TARGET")
+        self.assertNotIn("signature", str(error.exception))
+        self.assertNotIn("bilivideo", str(error.exception))
+        dns.assert_not_called()
+        factory.assert_not_called()
+
+    def test_private_or_mixed_dns_candidate_is_skipped_before_connection(self):
+        public_dns = [(2, 1, 6, "", ("8.8.8.8", 443))]
+        for rejected in [[(2, 1, 6, "", ("127.0.0.1", 443))], [*public_dns, (2, 1, 6, "", ("10.0.0.1", 443))]]:
+            with self.subTest(addresses=rejected):
+                body, dns, factory, _ = self._download(["https://primary.bilivideo.com/video", "https://backup.bilivideo.com/video"], addresses=[rejected, public_dns], responses=[self._response()])
+                self.assertEqual(body, b"track")
+                self.assertEqual(dns.call_count, 2)
+                factory.assert_called_once()
+                self.assertEqual(factory.call_args.kwargs["server_hostname"], "backup.bilivideo.com")
+
+    def test_unsafe_redirect_is_rejected_before_using_safe_backup(self):
+        public_dns = [(2, 1, 6, "", ("8.8.8.8", 443))]
+        cases = [
+            ("https://untrusted.example/video", [public_dns, public_dns]),
+            ("https://redirect.bilivideo.com/video", [public_dns, [(2, 1, 6, "", ("169.254.169.254", 443))], public_dns]),
+            ("https://redirect.bilivideo.com:4483/video", [public_dns, public_dns]),
+        ]
+        for location, addresses in cases:
+            with self.subTest(location=location):
+                redirect = self._response(status=302, headers={"Location": location})
+                body, _, factory, pools = self._download(["https://primary.bilivideo.com/video", "https://backup.bilivideo.com/video"], addresses=addresses, responses=[redirect, self._response()])
+                self.assertEqual(body, b"track")
+                self.assertEqual([call.kwargs["server_hostname"] for call in factory.call_args_list], ["primary.bilivideo.com", "backup.bilivideo.com"])
+                redirect.close.assert_called_once()
+                self.assertTrue(all(pool.urlopen.call_count == 1 and pool.close.call_count == 1 for pool in pools))
+
+    def test_platform_verification_and_download_failures_never_try_backup(self):
+        cases = [(status, None, "PLATFORM_AUTH_REQUIRED") for status in (401, 403, 412, 429)] + [
+            (500, None, "PLATFORM_UNAVAILABLE"),
+            (200, {"Content-Type": "text/html"}, "INVALID_MEDIA"),
+            (200, {"Content-Type": "video/mp4", "Content-Length": "101"}, "MEDIA_TOO_LARGE"),
+        ]
+        for status, headers, code in cases:
+            with self.subTest(status=status, code=code), patch.object(media, "_download", wraps=media._download) as download:
+                with self.assertRaises(media.VideoLinkError) as error:
+                    self._download(["https://primary.bilivideo.com/video", "https://backup.bilivideo.com/video"], responses=[self._response(status=status, headers=headers)])
+                self.assertEqual(error.exception.code, code)
+                download.assert_called_once()
+        with patch.object(media, "_download", wraps=media._download) as download, patch.object(media.urllib3, "HTTPSConnectionPool") as factory:
+            with self.assertRaises(media.VideoLinkError) as error:
+                media._download_track(["https://primary.bilivideo.com/video", "https://backup.bilivideo.com/video"], Path("unused"), platform="bilibili", budget=[100], deadline=time.monotonic() - 1)
+        self.assertEqual(error.exception.code, "MEDIA_TIMEOUT")
+        download.assert_called_once()
+        factory.assert_not_called()
 
 
 class PublicMediaNetworkTests(unittest.TestCase):

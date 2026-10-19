@@ -170,6 +170,7 @@ def library_list(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
         per_page=per_page,
         user_id=ctx.user.id,
         search=_text(payload, "search", maximum=120) or None,
+        include_uninitialized=True,
     )
     # 列表不传 transcript_raw 全文（大列）；transcript_chars 用 SQL length 回填，
     # agent 端「X 字文稿」显示不受影响。

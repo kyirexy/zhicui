@@ -367,6 +367,7 @@ def list_notes(
     user_id: str = "",
     search: str | None = None,
     card_type: str | None = None,
+    include_uninitialized: bool = False,
 ) -> tuple[list[Note], int]:
     """Return a paginated list of notes and the total count.
 
@@ -388,9 +389,9 @@ def list_notes(
     query = db.query(Note)
     if user_id:
         query = query.filter(Note.user_id == user_id)
-    # Transcript-ready library records live in the library workspace until the
-    # user explicitly initializes a card; do not render them as empty cards.
-    query = query.filter(Note.ai_initialized.is_(True))
+    # 卡片页默认只显示已初始化卡片；资料库还需读取导入及待转写的资料。
+    if not include_uninitialized:
+        query = query.filter(Note.ai_initialized.is_(True))
     clean_search = (search or "").strip()
     if clean_search:
         escaped_search = (

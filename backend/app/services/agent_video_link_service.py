@@ -23,11 +23,12 @@ from sqlalchemy.orm import Session
 from app.core.media_reference import stable_note_source
 from app.models.note import Note
 from app.models.user import User
-from app.services import douyin_binding_service, douyin_library, library_sync_service, note_service, platform_library_service, settings_service, video_extractor
+from app.services import creator_note_link_service, douyin_binding_service, douyin_library, library_sync_service, note_service, platform_library_service, settings_service, video_extractor
 
 
 MAX_MEDIA_BYTES = 512 * 1024 * 1024
 MAX_DOWNLOAD_SECONDS = 240
+MAX_BILIBILI_TRACK_URLS = 4
 SOURCE_KIND = "agent-link-import"
 _MEDIA_DOMAINS = {
     "douyin": platform_library_service._DOUYIN_MEDIA_DOMAINS,
@@ -225,6 +226,8 @@ def import_link(db: Session, *, user_id: str, value: str) -> dict[str, Any]:
     if direct_id:
         existing = note_service.get_note_by_video_id(db, direct_id, user_id)
         if existing is not None and platform_library_service.media_platform(existing) == platform:
+            if creator_note_link_service.link_ready_bilibili_note(db, user_id=user_id, note=existing):
+                db.commit()
             return {"status": "reused", "item": _item(existing)}
     db.commit()
     info = _public_info(url, platform)
@@ -233,6 +236,8 @@ def import_link(db: Session, *, user_id: str, value: str) -> dict[str, Any]:
         existing = note_service.get_note_by_video_id(db, video_id, user_id)
         if existing is not None and platform_library_service.media_platform(existing) == platform:
             _remember_share(db, existing, url)
+            if creator_note_link_service.link_ready_bilibili_note(db, user_id=user_id, note=existing):
+                db.commit()
             return {"status": "reused", "item": _item(existing)}
         source_url = stable_note_source(video_id=video_id, video_url=url, source_meta={"platform": platform, "source_url": url}, platform=platform)
         meta = {
@@ -289,6 +294,34 @@ def _download(url: str, path: Path, *, platform: str, budget: list[int], deadlin
             raise VideoLinkError("INVALID_MEDIA", "视频下载不完整，请稍后重试", status=502, retryable=True)
 
 
+def _bilibili_track_urls(track: dict[str, Any]) -> list[str]:
+    """只使用同一轨道的主备入口，去重并限制候选数量；不改写协议或端口。"""
+    candidates = [track.get(key) for key in ("baseUrl", "base_url", "url")]
+    for key in ("backupUrl", "backup_url"):
+        backups = track.get(key)
+        if isinstance(backups, list):
+            candidates.extend(backups)
+    urls: list[str] = []
+    for url in candidates:
+        if isinstance(url, str) and url and url not in urls:
+            urls.append(url)
+            if len(urls) == MAX_BILIBILI_TRACK_URLS:
+                break
+    return urls
+
+
+def _download_track(urls: list[str], path: Path, *, platform: str, budget: list[int], deadline: float) -> None:
+    """仅在入口未通过安全校验时选择备址，其余下载错误立即停止。"""
+    for index, url in enumerate(urls):
+        try:
+            # 每个候选仍走完整的公网 DNS、固定 IP 和逐跳校验，沿用同一下载预算。
+            _download(url, path, platform=platform, budget=budget, deadline=deadline)
+            return
+        except VideoLinkError as exc:
+            if exc.code != "UNSAFE_MEDIA_TARGET" or index == len(urls) - 1:
+                raise
+
+
 def _remux(paths: list[Path], target: Path) -> None:
     command = [video_extractor._get_ffmpeg_path(), "-nostdin", "-y", "-loglevel", "error"]
     for path in paths:
@@ -327,9 +360,10 @@ def prepared_media(note: Note) -> Iterator[Path]:
     info = _public_info(source, platform)
     if str(info.get("video_id")) != str(note.video_id):
         raise VideoLinkError("INVALID_MEDIA", "平台返回的视频与资料不一致", status=502)
-    urls: list[str] = []
+    track_urls: list[list[str]] = []
     if platform == "douyin":
-        urls = [str(info.get("download_url") or info.get("url") or "")]
+        url = str(info.get("download_url") or info.get("url") or "")
+        track_urls = [[url]] if url else []
     else:
         try:
             play = video_extractor._bilibili_api_data("/x/player/playurl", {"bvid": info.get("bvid") or info["video_id"], "cid": info["cid"], "qn": 64, "fnval": 16, "fourk": 0})
@@ -338,19 +372,19 @@ def prepared_media(note: Note) -> Iterator[Path]:
             audios = sorted(dash.get("audio") or [], key=lambda row: -int(row.get("bandwidth") or 0))
             if videos:
                 tracks = [videos[0]] + ([audios[0]] if audios else [])
-                urls = [str(track.get("baseUrl") or track.get("base_url") or "") for track in tracks]
+                track_urls = [_bilibili_track_urls(track) for track in tracks]
             elif len(play.get("durl") or []) == 1:
-                urls = [str(play["durl"][0].get("url") or "")]
+                track_urls = [_bilibili_track_urls(play["durl"][0])]
         except Exception:
             raise VideoLinkError("PLATFORM_UNAVAILABLE", "B站暂未返回可下载的视频轨道", status=502) from None
-    if not urls or any(not url for url in urls):
+    if not track_urls or any(not urls for urls in track_urls):
         raise VideoLinkError("MEDIA_UNAVAILABLE", "这个作品暂时没有可下载的视频", status=404)
     with tempfile.TemporaryDirectory(prefix="zhicui-agent-media-") as directory:
         root = Path(directory)
         paths, budget, deadline = [], [MAX_MEDIA_BYTES], time.monotonic() + MAX_DOWNLOAD_SECONDS
-        for index, url in enumerate(urls):
+        for index, urls in enumerate(track_urls):
             path = root / f"track-{index}.bin"
-            _download(url, path, platform=platform, budget=budget, deadline=deadline)
+            _download_track(urls, path, platform=platform, budget=budget, deadline=deadline)
             paths.append(path)
         target = root / "video.mp4"
         _remux(paths, target)
@@ -446,11 +480,15 @@ def transcribe_note(db: Session, *, user_id: str, note_id: str, check_active: Ca
     if note is None:
         raise VideoLinkError("RESOURCE_NOT_FOUND", "视频资料不存在", status=404)
     if (note.transcript_raw or "").strip():
+        if creator_note_link_service.link_ready_bilibili_note(db, user_id=user_id, note=note):
+            db.commit()
         return {**note.to_dict(), "already_existed": True}
     note = owned_note(db, user_id=user_id, note_id=note_id)
     with library_sync_service.import_lease(db, user_id=user_id, platform=platform_library_service.media_platform(note), video_id=note.video_id):
         db.refresh(note)
         if (note.transcript_raw or "").strip():
+            if creator_note_link_service.link_ready_bilibili_note(db, user_id=user_id, note=note):
+                db.commit()
             return {**note.to_dict(), "already_existed": True}
         meta = platform_library_service._source_meta(note)
         if meta.get("transcript_status") == "no_audio":
@@ -503,6 +541,7 @@ def transcribe_note(db: Session, *, user_id: str, note_id: str, check_active: Ca
         payload["source_meta"] = {**platform_library_service._source_meta(note), "transcript_status": "ready", "transcript_source": "cloud-asr", "speech_ready": True}
         note.transcript_raw = transcript.strip()
         note.ai_summary = json.dumps(payload, ensure_ascii=False)
+        creator_note_link_service.link_ready_bilibili_note(db, user_id=user_id, note=note)
         db.commit()
         db.refresh(note)
         return {**note.to_dict(), "already_existed": False}

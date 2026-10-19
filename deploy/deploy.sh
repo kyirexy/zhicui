@@ -399,6 +399,22 @@ rollback_runtime() {
   set -e
 }
 
+ensure_public_android_apk() {
+  local source="$1" temporary=''
+  [[ -f "$source" && ! -L "$source" && -s "$source" ]] || return 1
+  [[ "$(stat -c '%a' -- "$source")" == 644 ]] && return 0
+  # umask 027 会让 rsync --no-perms 的新文件成为 0640。不能直接 chmod
+  # 上次由另一个发布账号创建的文件；同目录原子替换相同字节，保留共享目录权限。
+  temporary="$(mktemp "${source}.public.XXXXXX")" || return 1
+  if cp -- "$source" "$temporary" && chmod 0644 "$temporary" &&
+     [[ -f "$source" && ! -L "$source" ]] &&
+     cmp -s -- "$source" "$temporary" && mv -Tf -- "$temporary" "$source"; then
+    return 0
+  fi
+  rm -f -- "$temporary"
+  return 1
+}
+
 publish_android_legacy_alias() {
   local source="$1"
   [[ -s "$source" ]] || return 1
@@ -920,6 +936,7 @@ NODE
 )"
 if [[ -n "$ANDROID_RELEASE_APK_PATH" ]]; then
   [[ -s "$ANDROID_RELEASE_APK_PATH" ]] || err '持久 Android 版本化 APK 缺失'
+  ensure_public_android_apk "$ANDROID_RELEASE_APK_PATH" || err 'Android 版本化 APK 公共读取权限修复失败'
 fi
 ZHICUI_DOWNLOAD_ROOT="$DOWNLOAD_ROOT" \
 ZHICUI_REQUIRE_LEGACY_ANDROID_MATCH=0 \

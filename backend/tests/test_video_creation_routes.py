@@ -105,6 +105,16 @@ class VideoCreationRoutesTests(unittest.TestCase):
         response = self.client.post("/api/video-creation/jobs", json={"requirement_text": "  "})
         self.assertEqual(response.status_code, 422)
 
+    def test_estimate_and_confirm_keep_feature_gate_closed(self):
+        job_id = self._create_job(status="draft", svml_text="<svml/>")
+        with patch("app.api.video_creation_routes._feature_unavailable", return_value="创作工坊暂未开启"), \
+                patch.object(hypit_service, "price_project") as price:
+            estimate = self.client.post(f"/api/video-creation/jobs/{job_id}/estimate")
+            confirm = self.client.post(f"/api/video-creation/jobs/{job_id}/confirm", json={"quote_token": "0" * 64})
+        self.assertEqual(estimate.status_code, 503)
+        self.assertEqual(confirm.status_code, 503)
+        price.assert_not_called()
+
     def test_create_runs_author_synchronously_in_test(self):
         with patch("app.api.video_creation_routes.threading.Thread", _SyncThread), \
                 patch("app.core.database.SessionLocal", self.Session), \
@@ -140,38 +150,102 @@ class VideoCreationRoutesTests(unittest.TestCase):
         )
         self.assertEqual(self.client.get("/api/video-creation/jobs/missing").status_code, 404)
 
-    def test_confirm_requires_draft_with_svml(self):
+    def test_estimate_then_confirm_requires_current_draft_quote(self):
         draft_id = self._create_job(status="draft", svml_text="<svml/>")
         queued_id = self._create_job(status="queued", svml_text="<svml/>")
         empty_id = self._create_job(status="draft", svml_text="")
 
         with patch.object(hypit_service, "price_project",
-                          return_value={"estimate": {"total": 1.2}}):
-            ok = self.client.post(f"/api/video-creation/jobs/{draft_id}/confirm")
-            blocked = self.client.post(f"/api/video-creation/jobs/{queued_id}/confirm")
-            empty = self.client.post(f"/api/video-creation/jobs/{empty_id}/confirm")
+                          return_value={"estimate": {"total": 1.2}}) as price:
+            quote = self.client.post(f"/api/video-creation/jobs/{draft_id}/estimate")
+            self.assertEqual(quote.status_code, 200)
+            self.assertEqual(quote.json()["data"]["status"], "draft")
+            body = {"quote_token": quote.json()["data"]["quote_token"]}
+            ok = self.client.post(f"/api/video-creation/jobs/{draft_id}/confirm", json=body)
+            blocked = self.client.post(f"/api/video-creation/jobs/{queued_id}/confirm", json=body)
+            empty = self.client.post(f"/api/video-creation/jobs/{empty_id}/confirm", json=body)
+            price.assert_called_once()
         self.assertEqual(ok.status_code, 200)
         self.assertEqual(ok.json()["data"]["status"], "queued")
         self.assertEqual(ok.json()["data"]["pricing"]["estimate"]["total"], 1.2)
         self.assertEqual(blocked.status_code, 400)
         self.assertEqual(empty.status_code, 400)
 
-    def test_confirm_pricing_failure_keeps_draft(self):
+    def test_estimate_failure_keeps_draft_and_can_retry(self):
         draft_id = self._create_job(status="draft", svml_text="<svml/>")
         from app.services.hypit_service import HypitError
 
         with patch.object(hypit_service, "price_project",
                           side_effect=HypitError("hypit_command_failed", "endpoint 未配置")):
-            response = self.client.post(f"/api/video-creation/jobs/{draft_id}/confirm")
+            response = self.client.post(f"/api/video-creation/jobs/{draft_id}/estimate")
         self.assertEqual(response.status_code, 400)
         self.assertIn("endpoint", response.json()["error"])
         with self.Session() as db:
             job = db.get(VideoCreationJob, draft_id)
             self.assertEqual(job.status, "draft")
             self.assertIn("endpoint", job.error)
+        with patch.object(hypit_service, "price_project", return_value={"estimate": 1.2}):
+            retry = self.client.post(f"/api/video-creation/jobs/{draft_id}/estimate")
+        self.assertEqual(retry.status_code, 200)
+        self.assertEqual(retry.json()["data"]["status"], "draft")
+        self.assertTrue(retry.json()["data"]["quote_token"])
+
+    def test_confirm_rejects_missing_or_stale_quote(self):
+        draft_id = self._create_job(status="draft", svml_text="<svml/>")
+        self.assertEqual(self.client.post(f"/api/video-creation/jobs/{draft_id}/confirm").status_code, 422)
+        self.assertEqual(self.client.post(f"/api/video-creation/jobs/{draft_id}/confirm", json={"quote_token": "0" * 64}).status_code, 409)
+        with patch.object(hypit_service, "price_project", return_value={"estimate": 1.2}):
+            quote = self.client.post(f"/api/video-creation/jobs/{draft_id}/estimate").json()["data"]
+        with self.Session() as db:
+            db.get(VideoCreationJob, draft_id).svml_text = "<changed/>"
+            db.commit()
+        stale = self.client.post(f"/api/video-creation/jobs/{draft_id}/confirm", json={"quote_token": quote["quote_token"]})
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(self.client.get(f"/api/video-creation/jobs/{draft_id}").json()["data"]["status"], "draft")
+
+    def test_estimate_discarded_if_job_cancelled_during_pricing(self):
+        job_id = self._create_job(status="draft", svml_text="<svml/>")
+        def price(_directory):
+            with self.Session() as db:
+                db.get(VideoCreationJob, job_id).status = "cancelled"
+                db.commit()
+            return {"estimate": 1.2}
+        with patch.object(hypit_service, "price_project", side_effect=price):
+            response = self.client.post(f"/api/video-creation/jobs/{job_id}/estimate")
+        self.assertEqual(response.status_code, 409)
+        detail = self.client.get(f"/api/video-creation/jobs/{job_id}").json()["data"]
+        self.assertEqual(detail["status"], "cancelled")
+        self.assertEqual(detail["pricing"], {})
+
+    def test_changed_estimate_needs_new_confirmation(self):
+        job_id = self._create_job(status="draft", svml_text="<svml/>")
+        with patch.object(hypit_service, "price_project", side_effect=[{"estimate": 1.2}, {"estimate": 2.4}]):
+            first = self.client.post(f"/api/video-creation/jobs/{job_id}/estimate").json()["data"]
+            second = self.client.post(f"/api/video-creation/jobs/{job_id}/estimate").json()["data"]
+        self.assertNotEqual(first["quote_token"], second["quote_token"])
+        stale = self.client.post(f"/api/video-creation/jobs/{job_id}/confirm", json={"quote_token": first["quote_token"]})
+        self.assertEqual(stale.status_code, 409)
+        accepted = self.client.post(f"/api/video-creation/jobs/{job_id}/confirm", json={"quote_token": second["quote_token"]})
+        self.assertEqual(accepted.status_code, 200)
+        self.assertEqual(accepted.json()["data"]["pricing"], {"estimate": 2.4})
+
+    def test_estimate_and_confirm_remain_user_scoped(self):
+        other_id = self._create_job(user_id="user-2", status="draft", svml_text="<svml/>")
+        self.assertEqual(self.client.post(f"/api/video-creation/jobs/{other_id}/estimate").status_code, 404)
+        self.assertEqual(self.client.post(f"/api/video-creation/jobs/{other_id}/confirm", json={"quote_token": "0" * 64}).status_code, 404)
+
+    def test_invalid_estimate_cannot_enable_confirmation(self):
+        job_id = self._create_job(status="draft", svml_text="<svml/>")
+        for pricing in ({}, {"detail": "x" * 8001}):
+            with self.subTest(pricing_length=len(str(pricing))), patch.object(hypit_service, "price_project", return_value=pricing):
+                response = self.client.post(f"/api/video-creation/jobs/{job_id}/estimate")
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(self.client.get(f"/api/video-creation/jobs/{job_id}").json()["data"]["quote_token"], "")
 
     def test_iterate_requires_existing_draft(self):
         draft_id = self._create_job(status="draft", svml_text="<svml/>")
+        with patch.object(hypit_service, "price_project", return_value={"estimate": 1.2}):
+            quote = self.client.post(f"/api/video-creation/jobs/{draft_id}/estimate").json()["data"]
         with patch("app.api.video_creation_routes.threading.Thread", _SyncThread), \
                 patch("app.core.database.SessionLocal", self.Session), \
                 patch("app.services.video_creation_author.iterate_svml",
@@ -184,6 +258,9 @@ class VideoCreationRoutesTests(unittest.TestCase):
         detail = self.client.get(f"/api/video-creation/jobs/{draft_id}")
         self.assertEqual(detail.json()["data"]["svml_text"], "<svml v2/>")
         self.assertEqual(detail.json()["data"]["status"], "draft")
+        self.assertEqual(detail.json()["data"]["pricing"], {})
+        stale = self.client.post(f"/api/video-creation/jobs/{draft_id}/confirm", json={"quote_token": quote["quote_token"]})
+        self.assertEqual(stale.status_code, 409)
 
     def test_cancel_transition_rules(self):
         rendering_id = self._create_job(status="rendering", svml_text="<svml/>")
@@ -220,6 +297,12 @@ class VideoCreationRoutesTests(unittest.TestCase):
         self.assertEqual(
             self.client.get(f"/api/video-creation/jobs/{missing}/video").status_code, 404
         )
+
+    def test_video_endpoint_still_requires_bearer_and_owner(self):
+        other_id = self._create_job(user_id="user-2", status="completed", output_filename="done.mp4")
+        self.assertEqual(self.client.get(f"/api/video-creation/jobs/{other_id}/video").status_code, 404)
+        del self.app.dependency_overrides[get_current_user]
+        self.assertEqual(self.client.get(f"/api/video-creation/jobs/{other_id}/video").status_code, 401)
 
     def test_admin_config_requires_admin(self):
         def plain_user():

@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from app.models.desktop_handoff import DesktopHandoff
+from app.services.auth_session_service import lock_user_for_auth_change
 
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{32,64}$")
 HANDOFF_TTL_SECONDS = 5 * 60  # 5 分钟足够完成一次登录
@@ -107,7 +108,8 @@ def claim_handoff(db: Session, session_id: str, user_id: str) -> str:
 
     返回状态：claimed（成功）| not_found | expired | already_consumed。
     """
-    handoff = get_handoff(db, session_id)
+    lock_user_for_auth_change(db, user_id)
+    handoff = db.query(DesktopHandoff).filter(DesktopHandoff.session_id == session_id).populate_existing().with_for_update().first()
     if handoff is None:
         return "not_found"
     if _is_expired(handoff.expires_at):
@@ -132,9 +134,16 @@ def consume_handoff(db: Session, session_id: str) -> tuple[str, str | None]:
 
     返回 (status, user_id)；status ∈ pending | success | expired | not_found | consumed。
     """
-    handoff = get_handoff(db, session_id)
+    owner_id = db.query(DesktopHandoff.user_id).filter(DesktopHandoff.session_id == session_id).scalar()
+    if owner_id:
+        user = lock_user_for_auth_change(db, owner_id)
+        db.info.setdefault("handoff_auth_versions", {})[session_id] = user.auth_version
+    handoff = db.query(DesktopHandoff).filter(DesktopHandoff.session_id == session_id).populate_existing().with_for_update().first()
     if handoff is None:
         return "not_found", None
+    if handoff.user_id != owner_id:
+        # claim 正好发生在两次读取之间，下一次从用户锁开始重新领取。
+        return "pending", None
     if _is_expired(handoff.expires_at):
         handoff.status = "expired"
         db.commit()

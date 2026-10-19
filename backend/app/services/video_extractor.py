@@ -161,6 +161,7 @@ _DOUYIN_ROUTER_MAX_BYTES = 2 * 1024 * 1024
 _DOUYIN_ROUTER_CONNECT_TIMEOUT = 5
 _DOUYIN_ROUTER_READ_TIMEOUT = 10
 _DOUYIN_ROUTER_MAX_REDIRECTS = 4
+_DOUYIN_ROUTER_TOTAL_TIMEOUT_SECONDS = 20
 
 
 class VideoExtractionError(RuntimeError):
@@ -383,7 +384,7 @@ def _normalize_douyin_info(payload: object, *, expected_id: str = "") -> dict[st
     return normalized
 
 
-def _read_douyin_router_payload(response: Any) -> Mapping[str, Any] | None:
+def _read_douyin_router_payload(response: Any, *, deadline: float | None = None) -> Mapping[str, Any] | None:
     try:
         declared_size = int(response.headers.get("Content-Length") or 0)
     except (TypeError, ValueError):
@@ -392,7 +393,9 @@ def _read_douyin_router_payload(response: Any) -> Mapping[str, Any] | None:
         return None
 
     body = bytearray()
-    for chunk in response.iter_content(chunk_size=64 * 1024):
+    for chunk in response.iter_content(chunk_size=4 * 1024):
+        if deadline is not None and time.monotonic() >= deadline:
+            return None
         if not chunk:
             continue
         body.extend(chunk)
@@ -451,10 +454,14 @@ def _fetch_douyin_router_page(
     resolved_id = _douyin_aweme_id_from_url(initial_url)
     session = requests.Session()
     session.trust_env = False
+    deadline = time.monotonic() + _DOUYIN_ROUTER_TOTAL_TIMEOUT_SECONDS
     try:
         while candidates:
             current = candidates.pop(0)
             for _redirect in range(_DOUYIN_ROUTER_MAX_REDIRECTS + 1):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return resolved_id, None
                 if current in visited or not _trusted_douyin_page_url(current):
                     break
                 visited.add(current)
@@ -464,8 +471,8 @@ def _fetch_douyin_router_page(
                         current,
                         headers=headers,
                         timeout=(
-                            _DOUYIN_ROUTER_CONNECT_TIMEOUT,
-                            _DOUYIN_ROUTER_READ_TIMEOUT,
+                            min(_DOUYIN_ROUTER_CONNECT_TIMEOUT, remaining),
+                            min(_DOUYIN_ROUTER_READ_TIMEOUT, remaining),
                         ),
                         allow_redirects=False,
                         stream=True,
@@ -485,7 +492,7 @@ def _fetch_douyin_router_page(
                     if not _trusted_douyin_page_url(final_url):
                         break
                     resolved_id = _douyin_aweme_id_from_url(final_url) or resolved_id
-                    payload = _read_douyin_router_payload(response)
+                    payload = _read_douyin_router_payload(response, deadline=deadline)
                     item = _probe_douyin_item(payload, expected_id=resolved_id)
                     if item is not None:
                         payload_id = str(

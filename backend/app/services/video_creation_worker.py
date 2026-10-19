@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import json
 import shutil
 import threading
 import time
@@ -31,10 +30,6 @@ STATUS_POLL_SLEEP_SECONDS = 2
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _dump_json(payload: dict[str, Any]) -> str:
-    return json.dumps(payload, ensure_ascii=False)[:8000]
 
 
 class VideoCreationWorker:
@@ -153,9 +148,12 @@ class VideoCreationWorker:
             reset_request_context()
 
     def _submit(self, job_id: str, directory) -> None:
-        """先估价(记录真实生成成本)再提交渲染。"""
-        pricing = hypit_service.price_project(directory)
-        self._update(job_id, pricing_json=_dump_json(pricing))
+        """沿用用户确认过的报价快照，后台不能静默替换为另一份估价。"""
+        job = self._load_job(job_id)
+        if job is None or job.status != "rendering":
+            return
+        if not job.pricing:
+            raise HypitError("hypit_quote_required", "缺少已确认估价，请重新获取估价并确认")
         build_id = hypit_service.submit_build(directory)
         self._update(job_id, build_id=build_id)
 

@@ -13,6 +13,7 @@ import {
 import type { CardData } from '@/lib/types';
 import type { ExtractionVideoPreview, ProgressEvent, ProgressEventData } from '@/lib/api';
 import { extractVideoStream } from '@/lib/api';
+import { useAuth } from './AuthContext';
 
 // ---------------------------------------------------------------------------
 // Pipeline step helpers (same shape as page.tsx)
@@ -58,14 +59,6 @@ function initialSteps(): StepState[] {
 
 const HOME_CARD_STORAGE_KEY = 'vc-home-card';
 
-function storeHomeCard(cardData: CardData): void {
-  try {
-    sessionStorage.setItem(HOME_CARD_STORAGE_KEY, JSON.stringify(cardData));
-  } catch {
-    // Extraction results remain available in memory when storage is blocked.
-  }
-}
-
 function removeStoredHomeCard(): void {
   try {
     sessionStorage.removeItem(HOME_CARD_STORAGE_KEY);
@@ -97,6 +90,12 @@ const ExtractionContext = createContext<ExtractionState | null>(null);
 // ---------------------------------------------------------------------------
 
 export function ExtractionProvider({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+  // 账号是解析状态的边界；同账号续期保持进度，退出或换号立即重建。
+  return <AccountExtractionProvider key={user?.id || 'signed-out'}>{children}</AccountExtractionProvider>;
+}
+
+function AccountExtractionProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cardData, setCardData] = useState<CardData | null>(null);
@@ -107,9 +106,14 @@ export function ExtractionProvider({ children }: { children: ReactNode }) {
   // Ref so the SSE stream runs in the background even if the consumer unmounts.
   const abortRef = useRef<AbortController | null>(null);
 
-  useEffect(() => () => {
-    abortRef.current?.abort();
-    abortRef.current = null;
+  useEffect(() => {
+    // 旧版缓存没有账号归属且已无读取方，不再将私人原文写入该缓存。
+    removeStoredHomeCard();
+    return () => {
+      abortRef.current?.abort();
+      abortRef.current = null;
+      removeStoredHomeCard();
+    };
   }, []);
 
   const startExtraction = useCallback(async (url: string) => {
@@ -117,6 +121,7 @@ export function ExtractionProvider({ children }: { children: ReactNode }) {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
+    const isCurrent = () => abortRef.current === controller && !controller.signal.aborted;
 
     setIsLoading(true);
     setError(null);
@@ -193,7 +198,7 @@ export function ExtractionProvider({ children }: { children: ReactNode }) {
         url,
         (event: ProgressEvent) => {
           // Check if aborted.
-          if (controller.signal.aborted) return;
+          if (!isCurrent()) return;
 
           if (event.step === 'error') {
             setError(event.message);
@@ -220,7 +225,6 @@ export function ExtractionProvider({ children }: { children: ReactNode }) {
             setProgressSteps([...steps]);
 
             setCardData(finalData);
-            storeHomeCard(finalData);
             setIsLoading(false);
             return;
           }
@@ -231,12 +235,12 @@ export function ExtractionProvider({ children }: { children: ReactNode }) {
         controller.signal
       );
 
-      if (!result.success && !controller.signal.aborted) {
+      if (!result.success && isCurrent()) {
         setError(result.error || '提取失败');
         setIsLoading(false);
       }
     } catch (e: unknown) {
-      if (!controller.signal.aborted) {
+      if (isCurrent()) {
         setError(e instanceof Error ? e.message : '网络错误');
         setIsLoading(false);
       }

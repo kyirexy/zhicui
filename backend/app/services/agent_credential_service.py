@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.models.agent_interface import AgentCredential, AgentDeviceAuthorization
 from app.models.user import User
 from app.services.agent_rollout_service import user_is_enabled
+from app.services.auth_session_service import lock_user_for_auth_change
 
 
 PAT_TTL_DAYS = 90
@@ -32,6 +33,14 @@ class CredentialError(ValueError):
         super().__init__(message)
         self.code = code
         self.retryable = retryable
+
+
+def _lock_credential_user(db: Session, user_id: str) -> User:
+    from fastapi import HTTPException
+    try:
+        return lock_user_for_auth_change(db, user_id)
+    except HTTPException as exc:
+        raise CredentialError("INVALID_CREDENTIAL", "账号授权已失效，请重新登录") from exc
 
 
 @dataclass(frozen=True)
@@ -111,6 +120,7 @@ def issue_pat(
     expires_in_days: int = PAT_TTL_DAYS,
 ) -> tuple[AgentCredential, str]:
     clean_scopes = normalize_scopes(scopes)
+    _lock_credential_user(db, user_id)
     active_count = db.query(AgentCredential).filter(
         AgentCredential.user_id == user_id,
         AgentCredential.revoked_at.is_(None),
@@ -237,6 +247,7 @@ def approve_device_authorization(
     user_code: str,
     approve: bool,
 ) -> AgentDeviceAuthorization:
+    _lock_credential_user(db, user_id)
     code_hash = token_hash(str(user_code or "").strip().upper())
     row = db.query(AgentDeviceAuthorization).filter(
         AgentDeviceAuthorization.user_code_hash == code_hash,
@@ -292,11 +303,18 @@ def poll_device_authorization(
     device_code: str,
 ) -> dict[str, Any]:
     digest = token_hash(str(device_code or "").strip())
+    owner_id = db.query(AgentDeviceAuthorization.approved_user_id).filter(
+        AgentDeviceAuthorization.device_code_hash == digest).scalar()
+    if owner_id:
+        _lock_credential_user(db, owner_id)
     row = db.query(AgentDeviceAuthorization).filter(
         AgentDeviceAuthorization.device_code_hash == digest,
-    ).with_for_update().first()
+    ).populate_existing().with_for_update().first()
     if row is None:
         raise CredentialError("DEVICE_CODE_INVALID", "设备授权请求不存在")
+    if row.approved_user_id != owner_id:
+        # 初读时仍待批准；不能持授权行锁后补取用户锁，交给下一次轮询重试。
+        raise CredentialError("AUTHORIZATION_PENDING", "授权状态刚刚更新，请重试", retryable=True)
     now = utcnow()
     if (_aware(row.expires_at) or now) <= now:
         row.status = "expired"
@@ -355,10 +373,13 @@ def rotate_refresh_token(db: Session, refresh_token: str, request_id: str | None
     from app.services.auth_refresh_receipt import read_receipt, save_receipt
     kind, credential_id = _parse_token(refresh_token, {"refresh"})
     del kind
+    owner_id = db.query(AgentCredential.user_id).filter(AgentCredential.id == credential_id).scalar()
+    if owner_id:
+        _lock_credential_user(db, owner_id)
     row = db.query(AgentCredential).filter(
         AgentCredential.id == credential_id,
         AgentCredential.kind == "access",
-    ).with_for_update().first()
+    ).populate_existing().with_for_update().first()
     now = utcnow()
     if row is not None:
         user = db.get(User, row.user_id)
@@ -373,6 +394,7 @@ def rotate_refresh_token(db: Session, refresh_token: str, request_id: str | None
             if not user_is_enabled(row.user_id):
                 raise CredentialError("ROLLOUT_RESTRICTED", "Agent 接口尚未向当前账号开放")
             normalize_scopes(row.scopes)
+            db.commit()
             return receipt
     if row is None or not row.refresh_hash or not hmac.compare_digest(row.refresh_hash, digest):
         # Only a digest that matches the immediately previous token is a

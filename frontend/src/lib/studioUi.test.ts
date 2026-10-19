@@ -14,7 +14,7 @@ const pageSource = readFileSync(
 
 test('studio 页面挂载 StudioWorkspace', () => {
   assert.match(pageSource, /import StudioWorkspace from '@\/components\/studio\/StudioWorkspace'/);
-  assert.match(pageSource, /<StudioWorkspace \/>/);
+  assert.match(pageSource, /<StudioWorkspace key=\{user\.id\} \/>/);
 });
 
 test('创作工坊保持桌面两栏:左对话面板 + 右项目面板', () => {
@@ -27,6 +27,7 @@ test('创作流程调用点齐全:创建、轮询、确认、迭代、取消', (
   assert.match(componentSource, /createVideoCreationJob\(/);
   assert.match(componentSource, /getVideoCreationJob\(/);
   assert.match(componentSource, /confirmVideoCreationJob\(/);
+  assert.match(componentSource, /estimateVideoCreationJob\(/);
   assert.match(componentSource, /iterateVideoCreationJob\(/);
   assert.match(componentSource, /cancelVideoCreationJob\(/);
 });
@@ -39,7 +40,7 @@ test('活动任务走 2.5 秒轮询且终态自动停止', () => {
 test('确认渲染前展示估价,成品走认证流播放', () => {
   assert.match(componentSource, /确认并开始渲染/);
   assert.match(componentSource, /查看 SVML 脚本/);
-  assert.match(componentSource, /\/api\/video-creation\/jobs\/\$\{encodeURIComponent\(activeJob\.id\)\}\/video/);
+  assert.match(componentSource, /<StudioVideoResult key=\{activeJob\.id\} jobId=\{activeJob\.id\}/);
 });
 
 test('状态文案覆盖全部七种 job 状态', () => {

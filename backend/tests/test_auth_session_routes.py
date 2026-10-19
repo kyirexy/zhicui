@@ -166,3 +166,18 @@ class AuthSessionRoutes(unittest.TestCase):
             response = self.client.post('/api/auth/login', json={'email': self.user.email, 'password': 'password'})
         self.assertEqual(response.json()['data']['token'], self.token)
         self.assertNotIn('set-cookie', response.headers)
+
+    def test_login_releases_user_lock_before_independent_activity_logging(self):
+        self.user.hashed_password = auth_service.hash_password('test-password')
+        self.db.commit()
+        for headers, password, expected in (({}, 'test-password', True),
+                ({'X-Zhicui-Session-Version': '2'}, 'test-password', True),
+                ({}, 'incorrect-password', False)):
+            with self.subTest(headers=headers, success=expected):
+                def log_after_transaction(**kwargs):
+                    self.assertFalse(self.db.in_transaction(), '活动日志之前必须提交/回滚登录事务')
+                with patch('app.api.auth_routes.activity_service.log_activity_safely', side_effect=log_after_transaction) as logger:
+                    response = self.client.post('/api/auth/login', headers=headers,
+                        json={'email': self.user.email, 'password': password})
+                self.assertEqual(response.json()['success'], expected)
+                logger.assert_called_once()

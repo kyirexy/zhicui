@@ -882,6 +882,8 @@ def _migrate_db() -> None:
             ))
         if insp.has_table("users"):
             user_cols = {c["name"] for c in insp.get_columns("users")}
+            if "auth_version" not in user_cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0"))
             if "avatar_id" not in user_cols:
                 conn.execute(text("ALTER TABLE users ADD COLUMN avatar_id VARCHAR(32) NULL"))
             if "username" not in user_cols:

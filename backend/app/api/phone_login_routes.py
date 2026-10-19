@@ -74,7 +74,8 @@ def token(session_id: str, body: TokenBody, request: Request, db: Session = Depe
     if user is not None:
         from app.services.auth_session_service import login_payload
         data = {**data, **login_payload(db, user, request, headers_response,
-            legacy=auth_service.create_access_token(user.id, user.email, session_id=session_id))}
+            legacy=auth_service.create_access_token(user.id, user.email, session_id=session_id,
+                auth_version=user.auth_version))}
         activity_service.log_activity_safely(user_id=user.id, action="phone_login_consumed", method="POST",
             path="/api/auth/phone-login/sessions/{session_id}/token", status_code=200,
             ip=request.client.host if request.client else None, detail={"session_id": session_id},

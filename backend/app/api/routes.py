@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import importlib.util
+import re
 import time
 import traceback
 import uuid
@@ -59,6 +60,7 @@ from app.services import (
     image_memory_cache,
     library_extraction_service,
     media_extraction_outcome_service,
+    media_proxy_recovery,
     library_hidden_service,
     library_sync_service,
     local_douyin_library_service,
@@ -326,7 +328,7 @@ def client_download(
     )
 
 
-def _cover_placeholder_response() -> Response:
+def _cover_placeholder_response(*, reason: str = "source_unavailable", retry_after: int = 30) -> Response:
     """Return a retryable image error when the remote cover is unavailable."""
     svg = """<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
 <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#eef5f1"/><stop offset="1" stop-color="#dcebe3"/></linearGradient></defs>
@@ -339,9 +341,10 @@ def _cover_placeholder_response() -> Response:
         media_type="image/svg+xml",
         headers={
             "Cache-Control": "private, no-store",
-            "Retry-After": "1",
+            "Retry-After": str(retry_after),
             "X-Content-Type-Options": "nosniff",
             "X-Zhicui-Cover-Fallback": "1",
+            "X-Zhicui-Media-Error": reason,
         },
     )
 
@@ -352,37 +355,26 @@ def _proxy_douyin_image(
     *,
     fallback_url: str = "",
     stable_cache_key: str = "",
+    recovery_video_id: str = "",
 ) -> Response:
-    """优先读取已持久化的公开封面，再尝试本机连接器的临时地址。
+    """优先复用封面，连接器缺作品时再尝试同一公开作品的最新封面。"""
+    cache_key = stable_cache_key or f"douyin-cover:{session_scope}:{target_url or fallback_url}"
+    cached = image_memory_cache.get(cache_key)
+    if cached is not None:
+        return Response(content=cached.content, media_type=cached.content_type, headers={
+            "Cache-Control": "private, max-age=1800, stale-while-revalidate=60",
+            "X-Content-Type-Options": "nosniff", "X-Zhicui-Image-Cache": "hit",
+        })
+    cooldown = media_proxy_recovery.cover_cooldown(cache_key)
+    if cooldown:
+        return _cover_placeholder_response(reason=cooldown[1], retry_after=cooldown[0])
+    last_reason = "source_unavailable"
+    can_recover = not target_url
 
-    连接器凭据只会发送给精确匹配的回环地址，并且不跟随重定向，避免凭据
-    被带到上游 CDN。数据库中的公开 CDN 地址本身不包含任何凭据。
-    """
-    for candidate in dict.fromkeys((fallback_url, target_url)):
-        if not candidate:
-            continue
+    def load_image(candidate: str) -> Response | None:
+        nonlocal last_reason, can_recover
         trusted_loopback = douyin_library.is_trusted_companion_url(candidate)
-        if (
-            not trusted_loopback
-            and not platform_library_service.validated_douyin_image_target(candidate)
-        ):
-            continue
-        cache_key = stable_cache_key or (
-            f"douyin-sidecar:{session_scope}:{candidate}"
-            if trusted_loopback
-            else f"douyin-public:{candidate}"
-        )
-        cached = image_memory_cache.get(cache_key)
-        if cached is not None:
-            return Response(
-                content=cached.content,
-                media_type=cached.content_type,
-                headers={
-                    "Cache-Control": "private, max-age=1800, stale-while-revalidate=60",
-                    "X-Content-Type-Options": "nosniff",
-                    "X-Zhicui-Image-Cache": "hit",
-                },
-            )
+        source = "companion" if trusted_loopback else "public_cdn"
         headers = {
             "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
             "Accept-Encoding": "identity",
@@ -395,50 +387,90 @@ def _proxy_douyin_image(
         }
         if trusted_loopback:
             headers.update(douyin_library.companion_headers(session_scope))
-        response = None
-        try:
-            response = http_requests.get(
-                candidate,
-                headers=headers,
-                stream=True,
-                timeout=(2, 10) if trusted_loopback else (2, 8),
-                allow_redirects=False,
-            )
-            if response.is_redirect or response.is_permanent_redirect:
-                continue
-            response.raise_for_status()
-            content_type = response.headers.get("Content-Type", "image/jpeg").split(";", 1)[0]
-            if not content_type.lower().startswith("image/"):
-                continue
-            chunks: list[bytes] = []
-            total = 0
-            for chunk in response.iter_content(chunk_size=64 * 1024):
-                if not chunk:
-                    continue
-                total += len(chunk)
-                if total > _COVER_MAX_BYTES:
-                    chunks = []
-                    break
-                chunks.append(chunk)
-            image_bytes = b"".join(chunks)
-            if not image_bytes:
-                continue
-            image_memory_cache.put(cache_key, content_type, image_bytes)
-            return Response(
-                content=image_bytes,
-                media_type=content_type,
-                headers={
+        for attempt in range(2):
+            response = None
+            upstream_status = 0
+            succeeded = False
+            try:
+                current = candidate
+                for redirect in range(4):
+                    if not trusted_loopback and not platform_library_service.validated_douyin_image_target(current):
+                        last_reason = "unsafe_target"
+                        return None
+                    response = http_requests.get(
+                        current, headers=headers, stream=True,
+                        timeout=(2, 10) if trusted_loopback else (2, 8), allow_redirects=False,
+                    )
+                    upstream_status = response.status_code if isinstance(response.status_code, int) else 0
+                    if not response.is_redirect and not response.is_permanent_redirect:
+                        break
+                    location = response.headers.get("Location", "")
+                    # 回环连接器禁止重定向；公开 CDN 的每一跳重新检查白名单。
+                    if trusted_loopback or not location or redirect == 3:
+                        last_reason = "unsafe_redirect"
+                        return None
+                    current = urljoin(current, location)
+                    response.close()
+                    response = None
+                response.raise_for_status()
+                content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
+                if not content_type.startswith("image/"):
+                    last_reason = "invalid_content_type"
+                    return None
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    total += len(chunk)
+                    if total > _COVER_MAX_BYTES:
+                        last_reason = "image_too_large"
+                        return None
+                    if chunk:
+                        chunks.append(chunk)
+                image_bytes = b"".join(chunks)
+                if not image_bytes:
+                    last_reason = "empty_image"
+                    return None
+                image_memory_cache.put(cache_key, content_type, image_bytes)
+                media_proxy_recovery.forget_cover_failure(cache_key)
+                succeeded = True
+                return Response(content=image_bytes, media_type=content_type, headers={
                     "Cache-Control": "private, max-age=1800, stale-while-revalidate=60",
-                    "X-Content-Type-Options": "nosniff",
-                    "X-Zhicui-Image-Cache": "miss",
-                },
-            )
-        except Exception:
-            continue
-        finally:
+                    "X-Content-Type-Options": "nosniff", "X-Zhicui-Image-Cache": "miss",
+                })
+            except Exception as exc:
+                last_reason = media_proxy_recovery.failure_reason(exc, upstream_status)
+                if trusted_loopback:
+                    can_recover = upstream_status in {404, 410}
+                if attempt == 0 and last_reason in {"timeout", "connection_error", "upstream_busy"}:
+                    continue
+                return None
+            finally:
+                if response is not None:
+                    response.close()
+                if not succeeded:
+                    # 不记录 URL、scope、供应商正文或异常字符串。
+                    media_proxy_recovery.log_failure(kind="cover", source=source, reason=last_reason, status=upstream_status)
+        return None
+
+    for candidate in dict.fromkeys((fallback_url, target_url)):
+        if candidate:
+            response = load_image(candidate)
             if response is not None:
-                response.close()
-    return _cover_placeholder_response()
+                return response
+    if not recovery_video_id and douyin_library.is_trusted_companion_url(target_url):
+        match = re.fullmatch(r"/api/v1/cover/([0-9]{5,32})", urlparse(target_url).path)
+        recovery_video_id = match.group(1) if match else ""
+    if can_recover and recovery_video_id:
+        info, reason = media_proxy_recovery.resolve_public_douyin(recovery_video_id, scope=session_scope or cache_key)
+        if info and info.get("cover_url") and info["cover_url"] != fallback_url:
+            response = load_image(info["cover_url"])
+            if response is not None:
+                return response
+        else:
+            last_reason = reason if reason != "recovered" else "source_unavailable"
+        media_proxy_recovery.log_failure(kind="cover", source="public_resolver", reason=last_reason)
+    media_proxy_recovery.remember_cover_failure(cache_key, last_reason)
+    return _cover_placeholder_response(reason=last_reason)
 
 
 def _proxy_bilibili_image(target_url: str, *, stable_cache_key: str = "") -> Response:
@@ -533,48 +565,87 @@ def _proxy_short_lived_media(
     if range_header:
         headers["Range"] = range_header
 
-    current_url = target_url
     response = None
-    try:
-        for _ in range(4):
-            if trusted_loopback:
-                if not douyin_library.is_trusted_companion_url(current_url):
-                    raise RuntimeError("unexpected media proxy target")
-            elif not platform_library_service.validated_media_target(
-                current_url,
-                platform,
-            ):
-                raise RuntimeError("unsupported media target")
-            response = http_requests.get(
-                current_url,
-                headers=headers,
-                stream=True,
-                timeout=(10, 600),
-                allow_redirects=False,
+    reason = "invalid_response"
+    upstream_status = 0
+    for attempt in range(2):
+        current_url = target_url
+        try:
+            for redirect in range(4):
+                if trusted_loopback:
+                    valid_target = douyin_library.is_trusted_companion_url(current_url)
+                else:
+                    valid_target = platform_library_service.validated_media_target(current_url, platform)
+                if not valid_target:
+                    reason = "unsafe_target"
+                    raise ValueError("媒体目标不在允许范围内")
+                response = http_requests.get(
+                    current_url, headers=headers, stream=True,
+                    timeout=(5, 30), allow_redirects=False,
+                )
+                upstream_status = response.status_code
+                if response.status_code not in {301, 302, 303, 307, 308}:
+                    break
+                location = response.headers.get("Location", "")
+                response.close()
+                response = None
+                if trusted_loopback or not location or redirect == 3:
+                    reason = "unsafe_redirect"
+                    raise ValueError("媒体重定向不可用")
+                current_url = urljoin(current_url, location)
+            if response is None:
+                raise ValueError("媒体响应不可用")
+            # 浏览器拖动到文件末端属于 Range 协商，不应伪装成连接器故障。
+            if response.status_code == 416:
+                content_range = response.headers.get("Content-Range", "")
+                response.close()
+                return Response(status_code=416, headers={
+                    "Content-Range": content_range, "Cache-Control": "private, no-store",
+                })
+            response.raise_for_status()
+            content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
+            if not content_type.startswith(("video/", "audio/")) and content_type != "application/octet-stream":
+                reason = "invalid_content_type"
+                raise ValueError("媒体响应不是音视频")
+            break
+        except Exception as exc:
+            if response is not None:
+                response.close()
+                response = None
+            if reason not in {"unsafe_target", "unsafe_redirect", "invalid_content_type"}:
+                reason = media_proxy_recovery.failure_reason(exc, upstream_status)
+            media_proxy_recovery.log_failure(
+                kind="media", source="companion" if trusted_loopback else "public_cdn",
+                reason=reason, status=upstream_status,
             )
-            if response.status_code not in {301, 302, 303, 307, 308}:
-                break
-            location = response.headers.get("Location", "")
-            response.close()
-            response = None
-            # Loopback companions must stream the bytes themselves. External
-            # redirects are followed only while every hop stays allowlisted.
-            if trusted_loopback or not location:
-                raise RuntimeError("unexpected media redirect")
-            current_url = urljoin(current_url, location)
-        if response is None:
-            raise RuntimeError("media response unavailable")
-        response.raise_for_status()
-        content_type = response.headers.get("Content-Type", "video/mp4").split(";", 1)[0]
-        if not content_type.startswith(("video/", "audio/")) and content_type != "application/octet-stream":
-            raise RuntimeError("unexpected media content type")
-    except Exception as exc:
-        if response is not None:
-            response.close()
-        raise HTTPException(
-            status_code=502,
-            detail="视频临时流读取失败，请重新获取播放地址",
-        ) from exc
+            # 连接器会自行刷新过期 CDN；只有精确的目录缺失才走公开作品恢复。
+            if trusted_loopback and platform == "douyin" and upstream_status in {404, 410}:
+                match = re.fullmatch(r"/api/v1/media/([0-9]{5,32})", urlparse(target_url).path)
+                if match:
+                    info, recovery_reason = media_proxy_recovery.resolve_public_douyin(
+                        match.group(1), scope=request_headers.get("X-Zhicui-Scope", ""),
+                    )
+                    if info and info.get("download_url"):
+                        return _proxy_short_lived_media(
+                            request, info["download_url"], {
+                                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
+                                "Referer": "https://www.douyin.com/",
+                            }, platform="douyin",
+                        )
+                    reason = recovery_reason
+                    media_proxy_recovery.log_failure(kind="media", source="public_resolver", reason=reason)
+            if attempt == 0 and reason in {"timeout", "connection_error", "upstream_busy"}:
+                upstream_status = 0
+                continue
+            message = {
+                "source_unavailable": "原作品暂时无法读取，请在抖音确认作品仍可访问后重试",
+                "session_required": "抖音连接已过期，请重新连接抖音账号后再播放",
+                "verification_required": "抖音暂时限制了播放，请完成平台验证后再试",
+                "recovery_busy": "视频地址正在恢复，请稍后重试",
+            }.get(reason, "视频临时流读取失败，请稍后重新获取播放地址")
+            raise HTTPException(status_code=502, detail=message, headers={
+                "X-Zhicui-Media-Error": reason, "Retry-After": "30",
+            }) from None
 
     response_headers = {
         "Cache-Control": "private, no-store",
@@ -592,6 +663,12 @@ def _proxy_short_lived_media(
             for chunk in response.iter_content(chunk_size=256 * 1024):
                 if chunk:
                     yield chunk
+        except Exception as exc:
+            media_proxy_recovery.log_failure(
+                kind="media_stream", source="companion" if trusted_loopback else "public_cdn",
+                reason=media_proxy_recovery.failure_reason(exc),
+            )
+            raise RuntimeError("媒体传输中断，请重新获取播放地址") from None
         finally:
             response.close()
 
@@ -2016,15 +2093,16 @@ def stream_platform_library_cover(
     if note is None:
         raise HTTPException(status_code=404, detail="视频封面不存在")
     target_url = platform_library_service.cover_target(db, note_id)
-    if not target_url:
-        raise HTTPException(status_code=404, detail="视频封面不存在")
     if platform_library_service.media_platform(note) == "douyin":
         return _proxy_douyin_image(
             "",
             "",
             fallback_url=target_url,
             stable_cache_key=f"platform-cover:{note_id}",
+            recovery_video_id=str(note.video_id or ""),
         )
+    if not target_url:
+        raise HTTPException(status_code=404, detail="视频封面不存在")
     return _proxy_bilibili_image(
         target_url,
         stable_cache_key=f"platform-cover:{note_id}",
@@ -2063,6 +2141,11 @@ def stream_platform_library_media(
                 )
             except HTTPException as exc:
                 if exc.status_code != 502:
+                    raise
+                if (exc.headers or {}).get("X-Zhicui-Media-Error") in {
+                    "session_required", "verification_required", "source_unavailable",
+                    "identity_mismatch", "recovery_busy",
+                }:
                     raise
                 # Bound account metadata remains useful even if its local
                 # companion restarted. Fall back to a fresh public resolver.
@@ -5167,21 +5250,11 @@ def admin_reset_user_password(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_admin),
 ) -> dict:
-    """管理员重置任意用户密码。新密码经 werkzeug 哈希后存储。"""
-    user = db.query(UserModel).filter(UserModel.id == user_id).first()
-    if not user:
+    """管理员重置密码，同时撤销旧登录凭据并原子记录审计。"""
+    from app.services.auth_session_service import reset_password_by_admin
+    if not reset_password_by_admin(db, user_id=user_id, new_password=body.new_password,
+            admin_user_id=current_user.id, ip=_client_ip(request)):
         return _err("用户不存在")
-    user.hashed_password = auth_service.hash_password(body.new_password)
-    db.commit()
-    audit_service.log_action(
-        db,
-        admin_user_id=current_user.id,
-        action="user_reset_password",
-        target_type="user",
-        target_id=user_id,
-        detail={"username": user.username or user.email},
-        ip=_client_ip(request),
-    )
     return _ok({"reset": True})
 
 

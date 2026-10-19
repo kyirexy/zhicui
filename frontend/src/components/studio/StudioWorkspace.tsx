@@ -2,7 +2,6 @@
 
 import {
   Clapperboard,
-  Download,
   Loader2,
   RefreshCw,
   Send,
@@ -13,12 +12,14 @@ import {
   cancelVideoCreationJob,
   confirmVideoCreationJob,
   createVideoCreationJob,
+  estimateVideoCreationJob,
   getVideoCreationJob,
   iterateVideoCreationJob,
   listVideoCreationJobs,
   type VideoCreationJobInfo,
 } from '@/lib/api';
 import { useAuth } from '@/lib/hooks/AuthContext';
+import StudioVideoResult from './StudioVideoResult';
 import styles from './StudioWorkspace.module.css';
 
 type JobStatus = VideoCreationJobInfo['status'];
@@ -93,14 +94,16 @@ export default function StudioWorkspace() {
       return;
     }
     const jobId = activeJob.id;
+    let stopped = false;
     pollRef.current = window.setInterval(async () => {
       const response = await getVideoCreationJob(jobId);
-      if (response.success && response.data) {
+      if (!stopped && response.success && response.data) {
         setActiveJob(response.data);
         if (!ACTIVE_STATUSES.includes(response.data.status)) void refreshJobs();
       }
     }, 2500);
     return () => {
+      stopped = true;
       if (pollRef.current) {
         window.clearInterval(pollRef.current);
         pollRef.current = null;
@@ -141,13 +144,28 @@ export default function StudioWorkspace() {
   };
 
   const confirmRender = async () => {
+    if (!activeJob?.quote_token || busy) return;
+    setBusy(true);
+    setError('');
+    const response = await confirmVideoCreationJob(activeJob.id, activeJob.quote_token);
+    setBusy(false);
+    if (!response.success || !response.data) {
+      if (response.status === 409) setActiveJob({ ...activeJob, quote_token: undefined });
+      setError(response.error || '确认失败,请稍后再试');
+      return;
+    }
+    setActiveJob(response.data);
+    void refreshJobs();
+  };
+
+  const estimateRender = async () => {
     if (!activeJob || busy) return;
     setBusy(true);
     setError('');
-    const response = await confirmVideoCreationJob(activeJob.id);
+    const response = await estimateVideoCreationJob(activeJob.id);
     setBusy(false);
     if (!response.success || !response.data) {
-      setError(response.error || '确认失败,请稍后再试');
+      setError(response.error || '估价失败，请重试');
       return;
     }
     setActiveJob(response.data);
@@ -179,6 +197,7 @@ export default function StudioWorkspace() {
     activeJob && (activeJob.status === 'draft' || activeJob.status === 'failed') && activeJob.svml_text,
   );
   const canConfirm = Boolean(activeJob && activeJob.status === 'draft' && activeJob.svml_text);
+  const hasQuote = Boolean(activeJob?.quote_token && Object.keys(activeJob.pricing).length > 0);
   const canCancel = Boolean(activeJob && ACTIVE_STATUSES.includes(activeJob.status));
   const hasVideo = Boolean(activeJob && activeJob.status === 'completed' && activeJob.output_filename);
 
@@ -230,9 +249,9 @@ export default function StudioWorkspace() {
                 <p className={styles.explanation}>{activeJob.explanation}</p>
               )}
               {activeJob.error && <p className={styles.errorLine}>{activeJob.error}</p>}
-              {error && <p className={styles.errorLine}>{error}</p>}
             </>
           )}
+          {error && <p className={styles.errorLine} role="alert">{error}</p>}
         </div>
         {activeJob && canIterate && (
           <form
@@ -288,13 +307,18 @@ export default function StudioWorkspace() {
               ))}
             </ol>
 
-            {activeJob.pricing && Object.keys(activeJob.pricing).length > 0 && (
+            {(canConfirm || Object.keys(activeJob.pricing).length > 0) && (
               <div className={styles.pricingCard}>
                 <h2>渲染估价</h2>
-                <p>{formatPricing(activeJob.pricing)}</p>
-                {canConfirm && (
+                <p>{Object.keys(activeJob.pricing).length > 0 ? formatPricing(activeJob.pricing) : '先获取当前脚本的估价，确认后才会开始渲染。'}</p>
+                {canConfirm && hasQuote && (
                   <button type="button" className={styles.confirm} disabled={busy} onClick={() => void confirmRender()}>
                     确认并开始渲染
+                  </button>
+                )}
+                {canConfirm && !hasQuote && (
+                  <button type="button" className={styles.confirm} disabled={busy} onClick={() => void estimateRender()}>
+                    {busy ? '正在获取估价…' : '获取渲染估价'}
                   </button>
                 )}
               </div>
@@ -307,22 +331,7 @@ export default function StudioWorkspace() {
               </details>
             )}
 
-            {hasVideo && (
-              <div className={styles.result}>
-                <video
-                  controls
-                  preload="metadata"
-                  src={`/api/video-creation/jobs/${encodeURIComponent(activeJob.id)}/video`}
-                />
-                <a
-                  className={styles.download}
-                  href={`/api/video-creation/jobs/${encodeURIComponent(activeJob.id)}/video`}
-                  download={`zhicui-studio-${activeJob.id}.mp4`}
-                >
-                  <Download size={15} aria-hidden="true" /> 下载 MP4
-                </a>
-              </div>
-            )}
+            {hasVideo && <StudioVideoResult key={activeJob.id} jobId={activeJob.id} />}
 
             {canCancel && (
               <button type="button" className={styles.cancel} disabled={busy} onClick={() => void cancelActive()}>

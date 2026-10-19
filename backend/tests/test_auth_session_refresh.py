@@ -49,7 +49,7 @@ class SessionRefreshTests(unittest.TestCase):
         self.db.commit()
         renewed = service.refresh(self.db, result['refresh_token'], 'r' * 32)
         self.assertGreater(row.expires_at, old_expiry)
-        self.assertEqual(row.expires_at, row.absolute_expires_at)
+        self.assertEqual(service.aware(row.expires_at), service.aware(row.absolute_expires_at))
         self.assertNotEqual(renewed['refresh_token'], result['refresh_token'])
 
     def test_lost_response_can_be_recovered_without_new_rotation(self):

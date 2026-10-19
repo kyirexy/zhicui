@@ -23,6 +23,7 @@ from app.core.rate_limit import POLICIES, _matches
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.models.desktop_login_session import DesktopLoginSession
 from app.models.user import User
+from app.models.auth_session import UserAuthSession, AuthRefreshReceipt
 from app.services import desktop_login_service
 from app.services.auth_service import create_access_token
 
@@ -43,7 +44,7 @@ class DesktopQrLoginTests(unittest.TestCase):
 
         Base.metadata.create_all(
             self.engine,
-            tables=[User.__table__, DesktopLoginSession.__table__],
+            tables=[User.__table__, DesktopLoginSession.__table__, UserAuthSession.__table__, AuthRefreshReceipt.__table__],
         )
         self.Session = sessionmaker(bind=self.engine, expire_on_commit=False)
         with self.Session() as db:

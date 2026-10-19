@@ -3426,6 +3426,7 @@ export interface VideoCreationJobInfo {
   svrun_text: string;
   explanation: string;
   pricing: Record<string, unknown>;
+  quote_token?: string;
   build_id: string;
   output_filename: string;
   error: string;
@@ -3458,11 +3459,25 @@ export async function getVideoCreationJob(
 
 export async function confirmVideoCreationJob(
   jobId: string,
+  quoteToken: string,
 ): Promise<ApiResponse<VideoCreationJobInfo>> {
   return request<VideoCreationJobInfo>(
     `/api/video-creation/jobs/${encodeURIComponent(jobId)}/confirm`,
-    { method: 'POST', body: JSON.stringify({}) },
+    { method: 'POST', body: JSON.stringify({ quote_token: quoteToken }) },
   );
+}
+
+export async function estimateVideoCreationJob(jobId: string): Promise<ApiResponse<VideoCreationJobInfo>> {
+  return request<VideoCreationJobInfo>(`/api/video-creation/jobs/${encodeURIComponent(jobId)}/estimate`, {
+    method: 'POST', body: JSON.stringify({}),
+  });
+}
+
+export async function downloadVideoCreationJob(jobId: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await sessionFetch(`${API_BASE}/api/video-creation/jobs/${encodeURIComponent(jobId)}/video`, {
+    headers: authHeaders({ Accept: 'video/mp4' }), redirect: 'error', cache: 'no-store', signal,
+  });
+  return readVideoDownload(response, undefined, signal);
 }
 
 export async function iterateVideoCreationJob(

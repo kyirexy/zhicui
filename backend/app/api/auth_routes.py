@@ -100,7 +100,7 @@ def auth_register(body: RegisterRequest, request: Request, response: Response, d
             detail={"outcome": "failed", "error_category": _auth_error_category(error)},
         )
         return _err(error)
-    token = auth_service.create_access_token(user.id, user.email)
+    token = auth_service.create_access_token(user.id, user.email, auth_version=user.auth_version)
     activity_service.log_activity_safely(
         user_id=user.id, action="account_register", method="POST", path="/api/auth/register",
         status_code=200, ip=request.client.host if request.client else None,
@@ -113,18 +113,21 @@ def auth_register(body: RegisterRequest, request: Request, response: Response, d
 def auth_login(body: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
     token, user, error = auth_service.login(db, body.email, body.password)
     if error:
+        failed_user_id = user.id if user is not None else None
+        db.rollback()
         activity_service.log_activity_safely(
-            user_id=user.id if user is not None else None, action="account_login", method="POST",
+            user_id=failed_user_id, action="account_login", method="POST",
             path="/api/auth/login", status_code=401, ip=request.client.host if request.client else None,
             detail={"outcome": "failed", "error_category": _auth_error_category(error)},
         )
         return _err(error)
+    login_result = auth_session_service.login_payload(db, user, request, response, token)
     activity_service.log_activity_safely(
         user_id=user.id, action="account_login", method="POST", path="/api/auth/login",
         status_code=200, ip=request.client.host if request.client else None,
         detail={"outcome": "success"},
     )
-    return _ok(auth_session_service.login_payload(db, user, request, response, token))
+    return _ok(login_result)
 
 
 @router.post("/api/auth/dev-session", include_in_schema=False)
@@ -135,7 +138,7 @@ def auth_dev_session(request: Request, db: Session = Depends(get_db)) -> dict:
     if client_host not in {"127.0.0.1", "::1", "testclient"}:
         raise HTTPException(status_code=403, detail="开发会话仅允许本机访问")
     user = auth_service.get_or_create_dev_user(db)
-    token = auth_service.create_access_token(user.id, user.email)
+    token = auth_service.create_access_token(user.id, user.email, auth_version=user.auth_version)
     activity_service.log_activity_safely(
         user_id=user.id, action="account_dev_session", method="POST", path="/api/auth/dev-session",
         status_code=200, ip=request.client.host if request.client else None,
@@ -192,6 +195,7 @@ def desktop_handoff_status(session_id: str, request: Request, response: Response
     user = get_user_by_id(db, user_id) if user_id else None
     if user is None:
         return _err("登录用户不存在，请返回客户端重新发起")
+    user._login_auth_version = db.info.get("handoff_auth_versions", {}).get(normalized, user.auth_version)
     return _ok({"status": "success", **auth_session_service.login_payload(db, user, request, response)})
 
 

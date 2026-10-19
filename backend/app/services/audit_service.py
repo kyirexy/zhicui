@@ -22,6 +22,7 @@ def log_action(
     target_id: str | None = None,
     detail: dict | None = None,
     ip: str | None = None,
+    commit: bool = True,
 ) -> AdminAuditLog:
     """Record an admin action. Commits immediately."""
     entry = AdminAuditLog(
@@ -33,8 +34,11 @@ def log_action(
         ip=ip,
     )
     db.add(entry)
-    db.commit()
-    db.refresh(entry)
+    if commit:
+        db.commit()
+        db.refresh(entry)
+    else:
+        db.flush()
     return entry
 
 

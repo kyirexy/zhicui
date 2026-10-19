@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.desktop_login_session import DesktopLoginSession
 from app.models.user import User, get_user_by_id
+from app.services.auth_session_service import lock_user_for_auth_change
 
 
 SESSION_TTL_SECONDS = 5 * 60
@@ -259,7 +260,11 @@ def decide_session(
     if session is None:
         return "invalid", None
     session = _expire_one(db, session, now=current)
+    lock_user_for_auth_change(db, user_id)
+    db.refresh(session)
     if session.status != "pending":
+        # 幂等批准也会在路由记录活动，先释放用户锁再让独立日志连接写外键。
+        db.commit()
         # Same-account retries are safe and make a lost HTTP response idempotent.
         if session.user_id == user_id and (
             (decision == "approve" and session.status in {"approved", "consumed"})
@@ -401,7 +406,7 @@ def poll_and_consume(
     if session.status != "approved" or not session.user_id:
         return DesktopLoginPollResult(session.status, session=session)
 
-    user = get_user_by_id(db, session.user_id)
+    user = db.query(User).filter(User.id == session.user_id).populate_existing().with_for_update().first()
     if user is None or not user.is_active:
         db.query(DesktopLoginSession).filter(
             DesktopLoginSession.id == session.id,
@@ -420,6 +425,7 @@ def poll_and_consume(
         ).one()
         return DesktopLoginPollResult("account_unavailable", session=unavailable)
 
+    authenticated_version = user.auth_version
     changed = (
         db.query(DesktopLoginSession)
         .filter(
@@ -451,6 +457,7 @@ def poll_and_consume(
     ).one()
     if changed == 1:
         db.refresh(user)
+        user._login_auth_version = authenticated_version
         if not user.is_active:
             return DesktopLoginPollResult(
                 "account_unavailable",

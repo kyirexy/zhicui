@@ -1,7 +1,9 @@
 'use client';
 
 import StudioWorkspace from '@/components/studio/StudioWorkspace';
+import { useAuth } from '@/lib/hooks/AuthContext';
 
 export default function StudioPage() {
-  return <StudioWorkspace />;
+  const { user } = useAuth();
+  return user ? <StudioWorkspace key={user.id} /> : null;
 }

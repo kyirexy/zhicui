@@ -369,32 +369,51 @@ def _reconcile_agent_tasks(
     generated_tasks: list[dict[str, Any]],
     existing_tasks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    done_by_id = {
-        str(task.get("id")): True
+    completed_by_id = {
+        str(task.get("id")): task
         for task in existing_tasks
         if task.get("id") and task.get("done") is True
     }
-    done_by_title = {
-        _normalized_task_title(task.get("title")): True
-        for task in existing_tasks
-        if task.get("done") is True and _normalized_task_title(task.get("title"))
-    }
     reconciled: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
+    preserved_ids: set[str] = set()
     for index, source in enumerate(generated_tasks, start=1):
         task = dict(source)
         task_id = str(task.get("id") or "").strip()[:80] or f"t-{index:03d}"
+        normalized_title = _normalized_task_title(task.get("title"))
+        completed = completed_by_id.get(task_id)
+        if completed and (
+            _normalized_task_title(completed.get("title")) != normalized_title
+            or completed.get("day") != task.get("day")
+            or completed.get("scheduled_at") != task.get("scheduled_at")
+        ):
+            # 模型常复用 t-001；不同的新行动不能继承该 ID 的已完成状态。
+            completed = None
+            task_id = f"t-{uuid.uuid4().hex[:8]}"
+        if completed is None:
+            candidates = [old for old_id, old in completed_by_id.items()
+                if old_id not in preserved_ids
+                and _normalized_task_title(old.get("title")) == normalized_title
+                and old.get("day") == task.get("day")
+                and old.get("scheduled_at") == task.get("scheduled_at")]
+            if len(candidates) == 1:
+                completed = candidates[0]
+                task_id = str(completed["id"])
         if task_id in seen_ids:
             task_id = f"t-{uuid.uuid4().hex[:8]}"
+            completed = None
         seen_ids.add(task_id)
         task["id"] = task_id
-        normalized_title = _normalized_task_title(task.get("title"))
-        task["done"] = bool(
-            done_by_id.get(task_id)
-            or (normalized_title and done_by_title.get(normalized_title))
-        )
+        task["done"] = completed is not None
+        task.pop("completed_at", None)
+        if completed is not None:
+            preserved_ids.add(str(completed["id"]))
+            if completed.get("completed_at"):
+                task["completed_at"] = completed["completed_at"]
         task["priority"] = _normalize_priority(task.get("priority"))
         reconciled.append(task)
+    # 模型遗漏已完成任务时仍保留真实执行历史，不依赖模型重写完成记录。
+    reconciled.extend(dict(task) for task_id, task in completed_by_id.items() if task_id not in preserved_ids)
     return reconciled
 
 
@@ -416,7 +435,7 @@ def upsert_agent_plan(
     if not clean_title:
         raise ValueError("计划标题不能为空")
 
-    existing = get_plan_by_note(db, note_id, user_id=user_id)
+    existing = get_plan_by_note(db, note_id, user_id=user_id, for_update=True)
     existing_tasks = _task_state(existing)[0] if existing else []
     reconciled = _reconcile_agent_tasks(tasks, existing_tasks)
 
@@ -456,17 +475,21 @@ def upsert_agent_plan(
 # Read
 # ---------------------------------------------------------------------------
 
-def get_plan(db: Session, plan_id: str, user_id: str = "") -> Plan | None:
+def get_plan(db: Session, plan_id: str, user_id: str = "", *, for_update: bool = False) -> Plan | None:
     q = db.query(Plan).filter(Plan.id == plan_id)
     if user_id:
         q = q.filter(Plan.user_id == user_id)
+    if for_update:
+        q = q.populate_existing().with_for_update()
     return q.first()
 
 
-def get_plan_by_note(db: Session, note_id: str, user_id: str = "") -> Plan | None:
+def get_plan_by_note(db: Session, note_id: str, user_id: str = "", *, for_update: bool = False) -> Plan | None:
     q = db.query(Plan).filter(Plan.note_id == note_id)
     if user_id:
         q = q.filter(Plan.user_id == user_id)
+    if for_update:
+        q = q.populate_existing().with_for_update()
     return q.first()
 
 
@@ -639,7 +662,7 @@ def replace_daily_focus(
     if len(set(normalized)) != len(normalized):
         raise ValueError("焦点任务不能重复")
 
-    plans = db.query(Plan).filter(Plan.user_id == user_id).all()
+    plans = db.query(Plan).filter(Plan.user_id == user_id).order_by(Plan.id).populate_existing().with_for_update().all()
     states: dict[str, tuple[Plan, list[dict[str, Any]], list[dict[str, Any]]]] = {}
     task_lookup: dict[tuple[str, str], dict[str, Any]] = {}
     for plan in plans:
@@ -820,7 +843,7 @@ def get_weekly_review(
 # ---------------------------------------------------------------------------
 
 def toggle_task(db: Session, plan_id: str, task_id: str, user_id: str = "") -> Plan | None:
-    plan = get_plan(db, plan_id, user_id=user_id)
+    plan = get_plan(db, plan_id, user_id=user_id, for_update=True)
     if plan is None:
         return None
     return _change_task_completion(db, plan, task_id, done=None)
@@ -878,7 +901,7 @@ def add_task(
     priority: str = "medium",
     user_id: str = "",
 ) -> Plan | None:
-    plan = get_plan(db, plan_id, user_id=user_id)
+    plan = get_plan(db, plan_id, user_id=user_id, for_update=True)
     if plan is None:
         return None
 
@@ -919,7 +942,7 @@ def update_plan(
     updates: dict[str, Any],
     user_id: str = "",
 ) -> Plan | None:
-    plan = get_plan(db, plan_id, user_id=user_id)
+    plan = get_plan(db, plan_id, user_id=user_id, for_update=True)
     if plan is None:
         return None
 
@@ -947,7 +970,7 @@ def reorder_tasks(
     task_ids: list[str],
     user_id: str = "",
 ) -> Plan | None:
-    plan = get_plan(db, plan_id, user_id=user_id)
+    plan = get_plan(db, plan_id, user_id=user_id, for_update=True)
     if plan is None:
         return None
     tasks, days = _task_state(plan)
@@ -971,7 +994,7 @@ def update_task(
     updates: dict[str, Any],
     user_id: str = "",
 ) -> Plan | None:
-    plan = get_plan(db, plan_id, user_id=user_id)
+    plan = get_plan(db, plan_id, user_id=user_id, for_update=True)
     if plan is None:
         return None
 
@@ -1025,7 +1048,7 @@ def update_task(
 
 
 def delete_task(db: Session, plan_id: str, task_id: str, user_id: str = "") -> Plan | None:
-    plan = get_plan(db, plan_id, user_id=user_id)
+    plan = get_plan(db, plan_id, user_id=user_id, for_update=True)
     if plan is None:
         return None
 
@@ -1044,7 +1067,7 @@ def delete_task(db: Session, plan_id: str, task_id: str, user_id: str = "") -> P
 
 def delete_plan(db: Session, plan_id: str, user_id: str = "") -> bool:
     """Delete a plan by ID. Returns True if deleted, False if not found."""
-    plan = get_plan(db, plan_id, user_id=user_id)
+    plan = get_plan(db, plan_id, user_id=user_id, for_update=True)
     if plan is None:
         return False
     db.delete(plan)
@@ -1233,7 +1256,7 @@ def apply_coaching_preview(
     operations: list[dict[str, Any]],
 ) -> Plan | None:
     """Apply one validated coaching target if the plan version is unchanged."""
-    plan = get_plan(db, plan_id, user_id=user_id)
+    plan = get_plan(db, plan_id, user_id=user_id, for_update=True)
     if plan is None:
         return None
     if not _timestamps_match(_plan_updated_at_value(plan), base_updated_at):

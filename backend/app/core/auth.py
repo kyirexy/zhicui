@@ -36,6 +36,7 @@ def get_current_user(
     user = get_user_by_id(db, user_id)
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="账号不存在或已被禁用")
+    db.info.setdefault("authenticated_versions", {})[user.id] = payload.get("av", 0)
     return user
 
 
@@ -57,7 +58,11 @@ def get_current_user_optional(
     user_id = payload.get("sub")
     if not user_id:
         return None
-    return get_user_by_id(db, user_id)
+    user = get_user_by_id(db, user_id)
+    if user is None or not user.is_active:
+        return None
+    db.info.setdefault("authenticated_versions", {})[user.id] = payload.get("av", 0)
+    return user
 
 
 def get_current_admin(user=Depends(get_current_user)):

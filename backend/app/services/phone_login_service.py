@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.phone_login_session import PhoneLoginSession as Login
 from app.models.user import User
+from app.services.auth_session_service import lock_user_for_auth_change
 
 
 ACTIVE = ("pending", "scanned", "approved")
@@ -43,6 +44,7 @@ def fresh(db, session_id):
 
 def create(db: Session, user_id: str):
     current = now()
+    lock_user_for_auth_change(db, user_id)
     # 同一账号只保留一个可用二维码；清理仅针对过期临时认证记录。
     db.query(Login).filter(Login.user_id == user_id, Login.status.in_(ACTIVE)).update(
         {Login.status: "cancelled"}, synchronize_session=False)
@@ -84,6 +86,8 @@ def decide(db, session_id, user_id, decision, verification_code):
     row = owned(db, session_id, user_id)
     if row is None:
         return None
+    lock_user_for_auth_change(db, user_id)
+    db.refresh(row)
     if decision == "approve" and (row.status != "scanned" or row.verification_code != verification_code):
         return {**public(row), "error": "请核对手机上的确认码，再重新确认"}
     target = "approved" if decision == "approve" else "cancelled"
@@ -104,9 +108,10 @@ def consume(db, session_id, claim_secret):
         return None, None
     if row.status not in ("scanned", "approved"):
         return public(row), None
-    user = db.query(User).filter(User.id == row.user_id, User.is_active.is_(True)).first()
+    user = db.query(User).filter(User.id == row.user_id, User.is_active.is_(True)).populate_existing().with_for_update().first()
     if user is None:
         return {"status": "account_unavailable"}, None
+    authenticated_version = user.auth_version
     current = now()
     if row.status == "approved":
         changed = db.query(Login).filter(
@@ -117,6 +122,7 @@ def consume(db, session_id, claim_secret):
         db.commit()
         db.refresh(row)
         db.refresh(user)
+        user._login_auth_version = authenticated_version
         if changed == 1 and user.is_active:
             return {"status": "success"}, user
         return public(row), None

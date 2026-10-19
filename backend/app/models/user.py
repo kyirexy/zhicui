@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, String
+from sqlalchemy import Boolean, Column, DateTime, Integer, String
 from sqlalchemy.orm import Session
 
 from app.core.database import Base
@@ -23,6 +23,8 @@ class User(Base):
     username = Column(String, unique=True, nullable=True, index=True)
     avatar_id = Column(String(32), nullable=True)
     hashed_password = Column(String, nullable=False)
+    # 重置密码时递增；旧版没有 av 声明的 JWT 只属于初始版本 0。
+    auth_version = Column(Integer, nullable=False, default=0, server_default="0")
     is_active = Column(Boolean, default=True)
     is_admin = Column(Boolean, default=False)
     email_verified = Column(Boolean, default=False, nullable=False)

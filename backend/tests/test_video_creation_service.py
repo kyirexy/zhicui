@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -266,6 +267,26 @@ class CapacityGuardTests(unittest.TestCase):
         (target / "main.svml").write_bytes(b"x" * 100)
         (target / "assets" / "clip.mp4").write_bytes(b"y" * 250)
         self.assertEqual(hypit_service.directory_size(target), 350)
+
+    def test_submit_preserves_confirmed_quote_without_repricing(self):
+        job = SimpleNamespace(status="rendering", pricing={"estimate": 1.2})
+        with patch.object(self.worker, "_load_job", return_value=job), \
+                patch.object(self.worker, "_update") as update, \
+                patch.object(hypit_service, "price_project") as price, \
+                patch.object(hypit_service, "submit_build", return_value="build-1") as submit:
+            self.worker._submit("job-1", Path(self.temp.name))
+        price.assert_not_called()
+        submit.assert_called_once()
+        update.assert_called_once_with("job-1", build_id="build-1")
+
+    def test_submit_without_confirmed_quote_never_calls_paid_build(self):
+        job = SimpleNamespace(status="rendering", pricing={})
+        with patch.object(self.worker, "_load_job", return_value=job), \
+                patch.object(hypit_service, "submit_build") as submit:
+            with self.assertRaises(HypitError) as caught:
+                self.worker._submit("job-1", Path(self.temp.name))
+        self.assertEqual(caught.exception.code, "hypit_quote_required")
+        submit.assert_not_called()
 
     def _create_job(self, job_id: str, updated_at: datetime, **fields) -> None:
         fields.setdefault("user_id", "user-1")

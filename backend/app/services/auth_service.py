@@ -49,12 +49,14 @@ def verify_password(plain: str, hashed: str) -> bool:
 # JWT
 # ---------------------------------------------------------------------------
 def create_access_token(user_id: str, email: str, *, session_id: str | None = None,
-                        auth_session_id: str | None = None, ttl_seconds: int | None = None) -> str:
+                        auth_session_id: str | None = None, ttl_seconds: int | None = None,
+                        auth_version: int = 0) -> str:
     expire = datetime.now(timezone.utc) + (timedelta(seconds=ttl_seconds) if ttl_seconds is not None else timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS))
     payload = {
         "sub": user_id,
         "email": email,
         "exp": expire,
+        "av": auth_version,
     }
     if session_id is not None:
         payload["jti"] = session_id
@@ -135,9 +137,9 @@ def login(db: Session, email: str, password: str) -> tuple[str | None, User | No
     """
     identifier = email.strip()
     if "@" in identifier:
-        user = get_user_by_email(db, identifier.lower())
+        user = db.query(User).filter(User.email == identifier.lower()).populate_existing().with_for_update().first()
     else:
-        user = get_user_by_username(db, identifier)
+        user = db.query(User).filter(User.username == identifier).populate_existing().with_for_update().first()
     if not user:
         return None, None, "账号不存在"
     if not verify_password(password, user.hashed_password):
@@ -145,7 +147,7 @@ def login(db: Session, email: str, password: str) -> tuple[str | None, User | No
     if not user.is_active:
         return None, user, "账号已被禁用"
 
-    token = create_access_token(user.id, user.email)
+    token = create_access_token(user.id, user.email, auth_version=user.auth_version)
     return token, user, None
 
 

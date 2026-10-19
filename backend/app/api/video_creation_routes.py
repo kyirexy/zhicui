@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import threading
 from typing import Any
@@ -67,6 +69,22 @@ class JobIterateInput(BaseModel):
     feedback: str = Field(min_length=1, max_length=2000)
 
 
+class JobConfirmInput(BaseModel):
+    quote_token: str = Field(min_length=64, max_length=64)
+
+
+def _quote_token(job: VideoCreationJob) -> str:
+    if not job.pricing:
+        return ""
+    payload = json.dumps([job.id, job.svml_text, job.svrun_text, job.pricing],
+                         ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _job_payload(job: VideoCreationJob) -> dict:
+    return {**job.as_dict(), "quote_token": _quote_token(job)}
+
+
 def _get_owned_job(db: Session, job_id: str, user: User) -> VideoCreationJob:
     job = db.get(VideoCreationJob, job_id)
     if job is None or job.user_id != user.id:
@@ -97,6 +115,7 @@ def _author_task(job_id: str, requirement: str, feedback: str) -> None:
             if job is None or job.status != "drafting":
                 return  # 创作期间被取消:丢弃结果
             job.svml_text = svml
+            job.pricing_json = ""
             job.explanation = explanation
             job.status = "draft"
             job.error = ""
@@ -161,7 +180,7 @@ def create_job(
         name=f"video-creation-author-{job.id}",
         daemon=True,
     ).start()
-    return _ok(job.as_dict())
+    return _ok(_job_payload(job))
 
 
 @router.get("/api/video-creation/jobs")
@@ -175,7 +194,7 @@ def list_jobs(
         .order_by(VideoCreationJob.created_at.desc())
         .limit(MAX_JOBS_PER_USER)
     ).all()
-    return _ok([job.as_dict() for job in rows])
+    return _ok([_job_payload(job) for job in rows])
 
 
 @router.get("/api/video-creation/jobs/{job_id}")
@@ -184,37 +203,71 @@ def get_job(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    return _ok(_get_owned_job(db, job_id, user).as_dict())
+    return _ok(_job_payload(_get_owned_job(db, job_id, user)))
 
 
-@router.post("/api/video-creation/jobs/{job_id}/confirm")
-def confirm_job(
+@router.post("/api/video-creation/jobs/{job_id}/estimate")
+def estimate_job(
     job_id: str,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """确认草稿 → 同步估价 → 入队渲染。估价失败保持 draft 并给出原因。"""
+    """只获取当前草稿估价，保持 draft，用户确认前不进入渲染队列。"""
     unavailable = _feature_unavailable(db)
     if unavailable:
         return _error(503, unavailable)
     job = _get_owned_job(db, job_id, user)
     if job.status != "draft" or not job.svml_text:
-        return _error(400, "当前状态无法确认渲染,请等待 AI 创作完成")
-    directory = hypit_service.write_project(
-        job.id, svml_text=job.svml_text, svrun_text=job.svrun_text or None
-    )
+        return _error(400, "当前状态无法估价，请等待 AI 创作完成")
+    original_source = (job.svml_text, job.svrun_text)
     try:
+        directory = hypit_service.write_project(
+            job.id, svml_text=job.svml_text, svrun_text=job.svrun_text or None
+        )
         pricing = hypit_service.price_project(directory)
-        job.pricing_json = json.dumps(pricing, ensure_ascii=False)[:8000]
-        job.status = "queued"
+        encoded_pricing = json.dumps(pricing, ensure_ascii=False)
+        if not isinstance(pricing, dict) or not pricing or len(encoded_pricing) > 8000:
+            raise HypitError("hypit_invalid_pricing", "暂未取得有效估价，请重试")
+        # 估价调用可能较慢，换稿或取消后的旧结果不能覆盖当前状态。
+        db.refresh(job, with_for_update=True)
+        if job.status != "draft" or original_source != (job.svml_text, job.svrun_text):
+            return _error(409, "草稿已变化，请重新获取估价")
+        job.pricing_json = encoded_pricing
         job.error = ""
         db.commit()
     except HypitError as exc:
         db.rollback()
-        job.error = exc.message
-        db.commit()
+        db.refresh(job)
+        if job.status == "draft" and original_source == (job.svml_text, job.svrun_text):
+            job.error = exc.message
+            job.pricing_json = ""
+            db.commit()
         return _error(400, exc.message)
-    return _ok(job.as_dict())
+    return _ok(_job_payload(job))
+
+
+@router.post("/api/video-creation/jobs/{job_id}/confirm")
+def confirm_job(
+    job_id: str,
+    body: JobConfirmInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """只接受用户已经看过的当前草稿报价，再进入渲染队列。"""
+    unavailable = _feature_unavailable(db)
+    if unavailable:
+        return _error(503, unavailable)
+    job = _get_owned_job(db, job_id, user)
+    db.refresh(job, with_for_update=True)
+    if job.status != "draft" or not job.svml_text:
+        return _error(400, "当前状态无法确认渲染，请等待 AI 创作完成")
+    quote = _quote_token(job)
+    if not quote or not hmac.compare_digest(quote, body.quote_token):
+        return _error(409, "估价已失效，请重新获取估价并确认")
+    job.status = "queued"
+    job.error = ""
+    db.commit()
+    return _ok(_job_payload(job))
 
 
 @router.post("/api/video-creation/jobs/{job_id}/iterate")
@@ -232,6 +285,7 @@ def iterate_job(
     if job.status not in {"draft", "failed"} or not job.svml_text:
         return _error(400, "当前状态无法修改,请等待 AI 创作完成或重新发起创作")
     job.status = "drafting"
+    job.pricing_json = ""
     job.error = ""
     if not job.requirement_text:
         job.requirement_text = body.feedback
@@ -242,7 +296,7 @@ def iterate_job(
         name=f"video-creation-iterate-{job.id}",
         daemon=True,
     ).start()
-    return _ok(job.as_dict())
+    return _ok(_job_payload(job))
 
 
 @router.post("/api/video-creation/jobs/{job_id}/cancel")
@@ -259,7 +313,7 @@ def cancel_job(
     job.status = "cancelled"
     job.updated_at = _utcnow()
     db.commit()
-    return _ok(job.as_dict())
+    return _ok(_job_payload(job))
 
 
 @router.get("/api/video-creation/jobs/{job_id}/video")

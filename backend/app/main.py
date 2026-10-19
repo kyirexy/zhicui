@@ -17,6 +17,7 @@ from fastapi.exception_handlers import (
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.api.routes import router
 from app.api.auth_routes import router as auth_router
@@ -387,34 +388,38 @@ def create_app() -> FastAPI:
             response = await call_next(request)
             return response
         finally:
-            duration_ms = round((time.perf_counter() - started) * 1000)
-            route = request.scope.get("route")
-            route_path = getattr(route, "path", request.url.path)
-            if (
-                user_id
-                and request.method.upper() != "GET"
-                and not route_path.startswith("/api/auth/")
-                and route_path != "/api/client-errors"
-                # 桌面每30秒探测/续租不属于用户操作；避免污染活动历史。
-                and route_path not in {
-                    "/api/daily-research/desktop/claim",
-                    "/api/daily-research/desktop/progress",
-                }
-                and not activity_service.is_explicit_activity_route(
-                    request.method,
-                    route_path,
-                )
-            ):
-                activity_service.log_activity_safely(
-                    user_id=user_id,
-                    action=activity_service.classify_action(request.method, route_path),
-                    method=request.method,
-                    path=route_path,
-                    status_code=response.status_code if response is not None else 500,
-                    duration_ms=duration_ms,
-                    ip=request.client.host if request.client else None,
-                )
-            reset_request_context(context_tokens)
+            try:
+                duration_ms = round((time.perf_counter() - started) * 1000)
+                route = request.scope.get("route")
+                route_path = getattr(route, "path", request.url.path)
+                if (
+                    user_id
+                    and request.method.upper() != "GET"
+                    and not route_path.startswith("/api/auth/")
+                    and route_path != "/api/client-errors"
+                    # 桌面每30秒探测/续租不属于用户操作；避免污染活动历史。
+                    and route_path not in {
+                        "/api/daily-research/desktop/claim",
+                        "/api/daily-research/desktop/progress",
+                    }
+                    and not activity_service.is_explicit_activity_route(
+                        request.method,
+                        route_path,
+                    )
+                ):
+                    # 同步数据库写入放在线程中，锁等待不占用请求事件循环。
+                    await run_in_threadpool(
+                        activity_service.log_activity_safely,
+                        user_id=user_id,
+                        action=activity_service.classify_action(request.method, route_path),
+                        method=request.method,
+                        path=route_path,
+                        status_code=response.status_code if response is not None else 500,
+                        duration_ms=duration_ms,
+                        ip=request.client.host if request.client else None,
+                    )
+            finally:
+                reset_request_context(context_tokens)
 
     # Register routes
     from app.api.avatar_routes import router as avatar_router

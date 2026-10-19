@@ -691,6 +691,7 @@ def create_pat(
             data={"credential": row.to_public_dict(), "token": token},
         )
     except Exception as exc:
+        db.rollback()
         return _error_response("credentials.pat.create", _request_id(request), exc)
 
 
@@ -706,6 +707,7 @@ def revoke_agent_credential(
         row = revoke_credential(db, user_id=current_user.id, credential_id=credential_id)
         return _envelope(action="credentials.revoke", request_id=_request_id(request), data={"credential": row.to_public_dict()})
     except Exception as exc:
+        db.rollback()
         return _error_response("credentials.revoke", _request_id(request), exc)
 
 
@@ -765,6 +767,7 @@ def start_device_auth(body: DeviceStartRequest, request: Request, db: Session = 
             },
         )
     except Exception as exc:
+        db.rollback()
         return _error_response("auth.device.start", _request_id(request), exc)
 
 
@@ -785,6 +788,8 @@ def approve_device(
             data={"status": row.status, "client_name": row.client_name, "scopes": row.requested_scopes},
         )
     except Exception as exc:
+        # 错误响应也须先释放用户/授权行锁，避免活动日志的独立 FK 写入自等待。
+        db.rollback()
         return _error_response("auth.device.approve", _request_id(request), exc)
 
 
@@ -811,6 +816,7 @@ def get_device_request(
             },
         )
     except Exception as exc:
+        db.rollback()
         return _error_response("auth.device.request", _request_id(request), exc)
 
 
@@ -823,6 +829,7 @@ def poll_device(body: DevicePollRequest, request: Request, db: Session = Depends
             data=poll_device_authorization(db, device_code=body.device_code),
         )
     except Exception as exc:
+        db.rollback()
         return _error_response("auth.device.token", _request_id(request), exc)
 
 
@@ -835,6 +842,7 @@ def refresh_device(body: RefreshRequest, request: Request, db: Session = Depends
             data=rotate_refresh_token(db, body.refresh_token, body.request_id),
         )
     except Exception as exc:
+        db.rollback()
         return _error_response("auth.refresh", _request_id(request), exc)
 
 

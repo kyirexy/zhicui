@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import distinct, func
+from sqlalchemy import distinct, event, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -350,9 +350,18 @@ def log_activity(
     return entry
 
 
+def _limit_activity_transaction(_session, _transaction, connection) -> None:
+    # 独立日志连接可能等待主请求持有的用户外键锁；限时放弃日志，避免阻塞业务。
+    connection.exec_driver_sql("SET LOCAL lock_timeout = '1000ms'")
+    connection.exec_driver_sql("SET LOCAL statement_timeout = '5000ms'")
+
+
 def log_activity_safely(**kwargs: Any) -> UserActivityLog | None:
     try:
         with SessionLocal() as db:
+            if db.get_bind().dialect.name == "postgresql":
+                # commit 后 refresh 会开启新事务；每次都设置，且不污染连接池中的其他会话。
+                event.listen(db, "after_begin", _limit_activity_transaction)
             return log_activity(db, **kwargs)
     except Exception:
         # Logging cannot break authentication, extraction, plans, or admin actions.

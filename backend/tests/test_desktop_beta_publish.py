@@ -39,11 +39,13 @@ class DesktopBetaPublishTests(unittest.TestCase):
         self.exe = "Zhicui-Setup-1.2.3-x64.exe"
         self.blockmap = self.exe + ".blockmap"
         self.payload = {self.exe: b"isolated installer payload", self.blockmap: b"isolated blockmap",
-                        "beta.yml": b"version: 1.2.3\n", "beta.json": b'{"version":"1.2.3"}\n'}
+                        "beta.yml": b"version: 1.2.3\n", "beta.json": b'{"version":"1.2.3"}\n',
+                        "desktop-latest.json": b'{"schema_version":1,"version":"1.2.3"}\n'}
         for name, value in self.payload.items():
             (self.staging / name).write_bytes(value)
         (self.manifests / "beta.json").write_bytes(b"old manifest")
         (self.feed / "beta.yml").write_bytes(b"old feed")
+        (self.root / "desktop-latest.json").write_bytes(b"old legacy manifest")
 
     def tearDown(self):
         self.temp.cleanup()
@@ -58,6 +60,8 @@ class DesktopBetaPublishTests(unittest.TestCase):
             "manifestSha256": digest("beta.json"), "generatedFeedName": "beta.yml",
             "channelManifestName": "beta.json", "channelName": "beta", "feedFileName": "beta.yml",
             "releaseNonce": "isolatedfixture", "Version": "1.2.3",
+            "RemoteDownloadRoot": self.root.as_posix(), "legacyManifestName": "desktop-latest.json",
+            "legacyManifestSha256": digest("desktop-latest.json"),
         }
         # PowerShell here-string 中 `$ 是远端 Bash 的字面量美元符号。
         body = self.body.replace("`$", "__REMOTE_DOLLAR__")
@@ -90,6 +94,7 @@ sudo() {
     def assert_pointers_unchanged(self):
         self.assertEqual((self.manifests / "beta.json").read_bytes(), b"old manifest")
         self.assertEqual((self.feed / "beta.yml").read_bytes(), b"old feed")
+        self.assertEqual((self.root / "desktop-latest.json").read_bytes(), b"old legacy manifest")
 
     def test_payload_is_complete_before_any_new_pointer_is_published(self):
         result = self.run_publish()
@@ -98,6 +103,14 @@ sudo() {
         self.assertEqual((self.feed / self.blockmap).read_bytes(), self.payload[self.blockmap])
         self.assertEqual((self.manifests / "beta.json").read_bytes(), self.payload["beta.json"])
         self.assertEqual((self.feed / "beta.yml").read_bytes(), self.payload["beta.yml"])
+        self.assertEqual((self.root / "desktop-latest.json").read_bytes(), self.payload["desktop-latest.json"])
+
+    def test_corrupt_legacy_manifest_cannot_publish_any_pointer(self):
+        (self.staging / "desktop-latest.json").write_bytes(b"corrupt legacy manifest")
+        result = self.run_publish()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.feed / self.exe).exists())
+        self.assert_pointers_unchanged()
 
     def test_same_payload_can_republish_without_rewriting_versioned_bytes(self):
         for name in (self.exe, self.blockmap):

@@ -87,6 +87,13 @@ if [[ -d "$APP_DIR/frontend/public/download/releases/windows" ]]; then
 fi
 rsync -rl --ignore-existing --no-owner --no-group --no-perms --chmod=F0644,D0755 \
   "$SOURCE_ROOT/frontend/public/download/releases/windows/" /var/lib/zhicui-downloads/releases/windows/
+# 旧兼容清单首次迁入持久目录；后续仅由桌面发行更新，避免 runtime 切版回退。
+if [[ -s "$APP_DIR/frontend/public/download/desktop-latest.json" && ! -e /var/lib/zhicui-downloads/desktop-latest.json ]]; then
+  install -m 0644 "$APP_DIR/frontend/public/download/desktop-latest.json" /var/lib/zhicui-downloads/desktop-latest.json
+fi
+if [[ -s "$SOURCE_ROOT/frontend/public/download/desktop-latest.json" && ! -e /var/lib/zhicui-downloads/desktop-latest.json ]]; then
+  install -m 0644 "$SOURCE_ROOT/frontend/public/download/desktop-latest.json" /var/lib/zhicui-downloads/desktop-latest.json
+fi
 if [[ -d "$APP_DIR/frontend/public/download/android" ]]; then
   rsync -rl --ignore-existing --no-owner --no-group --no-perms --chmod=F0644,D0755 \
     "$APP_DIR/frontend/public/download/android/" /var/lib/zhicui-downloads/android/

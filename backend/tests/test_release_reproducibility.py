@@ -88,6 +88,15 @@ class ReleaseReproducibilityContractTests(unittest.TestCase):
             versioned.group(1),
         )
 
+    def test_legacy_windows_manifest_survives_runtime_changes(self) -> None:
+        nginx = (ROOT / "deploy/nginx-windows-updates.conf").read_text(encoding="utf-8")
+        block = re.search(r"location\s+=\s+/download/desktop-latest\.json\s*\{([^}]*)\}", nginx)
+        self.assertIsNotNone(block)
+        self.assertIn("alias /var/lib/zhicui-downloads/desktop-latest.json;", block.group(1))
+        self.assertIn('Cache-Control "no-store, no-cache, must-revalidate" always;', block.group(1))
+        preinstall = (ROOT / "deploy/preinstall-production-assets.sh").read_text(encoding="utf-8")
+        self.assertEqual(preinstall.count("&& ! -e /var/lib/zhicui-downloads/desktop-latest.json"), 2)
+
     def test_smoke_evidence_does_not_chmod_an_existing_shared_directory(self) -> None:
         smoke = (ROOT / "scripts" / "smoke-production.sh").read_text(encoding="utf-8")
         self.assertIn('[[ -d "$evidence_dir" ]] || install -d -m 0700', smoke)

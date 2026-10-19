@@ -724,6 +724,7 @@ New-Item -ItemType Directory -Force -Path $releaseManifestDir | Out-Null
     [System.Text.UTF8Encoding]::new($false)
 )
 $manifestSha256 = (Get-FileHash -LiteralPath $channelManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$legacyManifestSha256 = $null
 
 if (-not $isStable) {
     $legacy = [ordered]@{
@@ -749,6 +750,7 @@ if (-not $isStable) {
         (($legacy | ConvertTo-Json -Depth 6) + "`n"),
         [System.Text.UTF8Encoding]::new($false)
     )
+    $legacyManifestSha256 = (Get-FileHash -LiteralPath $legacyManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
 function Copy-ReleaseOutput {
@@ -791,6 +793,7 @@ $remoteStagingDir = "/tmp/zhicui-desktop-$Version-$channelName-$releaseNonce"
 $feedFileName = "$channelName.yml"
 $generatedFeedName = Split-Path -Leaf $generatedFeedPath
 $channelManifestName = Split-Path -Leaf $channelManifestPath
+$legacyManifestName = Split-Path -Leaf $legacyManifestPath
 $systemTemp = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
 $readbackDir = $null
 $stableRollbackPrepared = $false
@@ -808,7 +811,7 @@ sudo rm -f -- \
   "`$staging/rollback/feed.previous" "`$staging/rollback/feed.sha256" "`$staging/rollback/feed.state" \
   "`$staging/rollback/manifest.previous" "`$staging/rollback/manifest.sha256" "`$staging/rollback/manifest.state"
 rmdir "`$staging/rollback" 2>/dev/null || true
-rm -f -- "`$staging/$exeName" "`$staging/$blockmapName" "`$staging/$generatedFeedName" "`$staging/$channelManifestName"
+rm -f -- "`$staging/$exeName" "`$staging/$blockmapName" "`$staging/$generatedFeedName" "`$staging/$channelManifestName" "`$staging/$legacyManifestName"
 rmdir "`$staging" 2>/dev/null || true
 "@
 
@@ -822,6 +825,9 @@ try {
         $channelManifestPath,
         "${Server}:$remoteStagingDir/"
     )
+    if (-not $isStable) {
+        Invoke-Checked 'scp.exe' @('-o', 'BatchMode=yes', $legacyManifestPath, "${Server}:$remoteStagingDir/")
+    }
 
     if ($isStable) {
         # 先保存当前两个可变 channel 指针并安装不可变版本化文件。只有公网回读
@@ -966,6 +972,7 @@ test "`$(sudo sha256sum "`$feed/$feedFileName" | awk '{print tolower(`$1)}')" = 
     } else {
         $remoteCommand = @"
 set -eu
+downloads='$RemoteDownloadRoot'
 feed='$remoteFeedDir'
 manifests='$remoteManifestDir'
 staging='$remoteStagingDir'
@@ -974,6 +981,7 @@ test "`$(sha256sum "`$staging/$exeName" | awk '{print tolower(`$1)}')" = '$sha25
 test "`$(sha256sum "`$staging/$blockmapName" | awk '{print tolower(`$1)}')" = '$blockmapSha256'
 test "`$(sha256sum "`$staging/$generatedFeedName" | awk '{print tolower(`$1)}')" = '$feedSha256'
 test "`$(sha256sum "`$staging/$channelManifestName" | awk '{print tolower(`$1)}')" = '$manifestSha256'
+test "`$(sha256sum "`$staging/$legacyManifestName" | awk '{print tolower(`$1)}')" = '$legacyManifestSha256'
 sudo mkdir -p "`$feed" "`$manifests"
 if sudo test -e "`$feed/$exeName"; then
   test "`$(sudo sha256sum "`$feed/$exeName" | awk '{print tolower(`$1)}')" = '$sha256'
@@ -1001,10 +1009,13 @@ sudo ln -sfn "$exeName" "`$feed/.latest-link-$Version"
 sudo mv -Tf "`$feed/.latest-link-$Version" "`$feed/Zhicui-Setup-latest-x64.exe"
 sudo install -m 0644 "`$feed/$feedFileName" "`$feed/.latest.yml.tmp-$releaseNonce"
 sudo mv -Tf "`$feed/.latest.yml.tmp-$releaseNonce" "`$feed/latest.yml"
+sudo install -m 0644 "`$staging/$legacyManifestName" "`$downloads/.$legacyManifestName.tmp-$releaseNonce"
+sudo mv -Tf "`$downloads/.$legacyManifestName.tmp-$releaseNonce" "`$downloads/$legacyManifestName"
 test "`$(sudo sha256sum "`$feed/$exeName" | awk '{print tolower(`$1)}')" = '$sha256'
 test "`$(sudo sha256sum "`$feed/$blockmapName" | awk '{print tolower(`$1)}')" = '$blockmapSha256'
 test "`$(sudo sha256sum "`$feed/$feedFileName" | awk '{print tolower(`$1)}')" = '$feedSha256'
 test "`$(sudo sha256sum "`$manifests/$channelName.json" | awk '{print tolower(`$1)}')" = '$manifestSha256'
+test "`$(sudo sha256sum "`$downloads/$legacyManifestName" | awk '{print tolower(`$1)}')" = '$legacyManifestSha256'
 "@
         Invoke-Checked 'ssh.exe' @('-o', 'BatchMode=yes', $Server, $remoteCommand)
     }

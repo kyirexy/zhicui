@@ -13,14 +13,17 @@ import type {
 const MAX_OUTPUT_BYTES = 512 * 1024;
 const ACTION_TIMEOUT_MS = 120_000;
 const AUTHORIZATION_TIMEOUT_MS = 10 * 60_000;
+// 日常资料工作流的推荐权限；仅用于用户新发起的授权，并按当前发布能力取交集。
 const AGENT_DEVICE_SCOPES = [
-  'library:read', 'library:write', 'ask:run', 'knowledge:read', 'knowledge:write',
-  'plan:read', 'plan:write', 'creator:sync', 'local:invoke',
-  'account:read', 'creator:read', 'ask:read', 'models:read',
+  'account:read', 'library:read', 'library:write', 'creator:read',
+  'ask:read', 'ask:run', 'local:invoke',
 ] as const;
 const CORE_AGENT_SCOPES = new Set([
-  'account:read', 'library:read', 'creator:read', 'ask:read', 'ask:run',
+  ...AGENT_DEVICE_SCOPES,
   'knowledge:read', 'knowledge:write', 'plan:read', 'plan:write', 'models:read',
+]);
+const VIDEO_INTAKE_AGENT_SCOPES = new Set([
+  ...CORE_AGENT_SCOPES, 'creator:sync', 'analysis:read', 'analysis:run',
 ]);
 
 type UnknownRecord = Record<string, unknown>;
@@ -100,13 +103,13 @@ function parseCliPayload(stdout: string): UnknownRecord {
 
 /** 仅接受当前服务明确公开的权限；能力未知时不使用历史默认权限授权。 */
 export function resolveAgentAuthorizationScopes(payload: UnknownRecord): {
-  releaseProfile: 'core' | 'full';
+  releaseProfile: 'core' | 'full' | 'video_intake';
   scopes: string[];
 } {
   const data = record(payload.data ?? payload);
   const releaseProfile = data.release_profile;
   if (payload.status === 'failed' || data.feature_enabled !== true
-    || (releaseProfile !== 'core' && releaseProfile !== 'full')
+    || (releaseProfile !== 'core' && releaseProfile !== 'full' && releaseProfile !== 'video_intake')
     || !Array.isArray(data.scopes) || data.scopes.length > 100) {
     throw new Error('无法确认当前开放的能力，请刷新 Agent 接入后重试');
   }
@@ -115,7 +118,8 @@ export function resolveAgentAuthorizationScopes(payload: UnknownRecord): {
     const id = record(item).id;
     if (typeof id !== 'string' || !/^[a-z][a-z0-9_-]{0,39}:[a-z][a-z0-9_-]{0,39}$/.test(id)
       || /(?:admin|shell|database|cookie|jwt|api[_-]?key)/i.test(id) || allowed.has(id)
-      || (releaseProfile === 'core' && !CORE_AGENT_SCOPES.has(id))) {
+      || (releaseProfile === 'core' && !CORE_AGENT_SCOPES.has(id))
+      || (releaseProfile === 'video_intake' && !VIDEO_INTAKE_AGENT_SCOPES.has(id))) {
       throw new Error('服务返回的授权权限无法验证，请稍后重试');
     }
     allowed.add(id);

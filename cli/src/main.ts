@@ -19,10 +19,12 @@ import {
   resolveDomainAction,
   USER_COMMAND_DOMAINS,
 } from './domain-aliases.js';
-import { CliError, EXIT_CODES, normalizeUnknownError, usageError } from './errors.js';
+import { CliError, EXIT_CODES, normalizeUnknownError, usageError, type ExitCode } from './errors.js';
 import { buildActionInput, readSecretFromStdin, readSecretsFromStdin } from './input.js';
 import { RestrictedLocalAdapter } from './local-adapter.js';
 import { downloadLibraryFile } from './media-download.js';
+import { downloadMediaBatch } from './media-batch.js';
+import { diagnoseFeatures } from './feature-doctor.js';
 import { checkPrepareCapabilities, prepareLibraryMedia } from './library-prepare.js';
 import { normalizePrepareLink, prepareDestination, prepareProgressLabel, prepareRecovery, PREPARE_AUTH_ERRORS, VIDEO_PREPARE_SCOPES } from './prepare-flow.js';
 import { StdioMcpServer } from './mcp-server.js';
@@ -37,23 +39,13 @@ import type {
 } from './types.js';
 import { isTerminalStatus } from './types.js';
 import { CLI_VERSION } from './version.js';
+import { DAILY_AGENT_SCOPES, desktopAuthorizationUrl, grantedScopeSnapshot } from './connection-policy.js';
 
 export { CLI_VERSION } from './version.js';
 
 class ReportedCliError extends CliError {}
 
-const DEFAULT_DEVICE_SCOPES = [
-  'account:read',
-  'library:read',
-  'creator:read',
-  'ask:read',
-  'knowledge:read',
-  'plan:read',
-  'automation:read',
-  'analysis:read',
-  'models:read',
-  'feedback:read',
-];
+const DEFAULT_DEVICE_SCOPES = DAILY_AGENT_SCOPES;
 
 function takeFlag(args: string[], name: string): boolean {
   const index = args.indexOf(name);
@@ -114,6 +106,8 @@ function helpPayload(): Record<string, unknown> {
       'sync --platform douyin --mode like --limit 200 — 自动连接、采集、分批保存',
       'sync resume <run_id> — 继续原同步任务',
       'download <url-or-share-text> [--output video.mp4] [--connect]',
+      'download batch --input links.json --output <new-directory> [--resume] [--audio] — 串行下载、校验与续跑',
+      'doctor — 区分未发布能力、缺少权限与连接状态；只读，不触发登录',
       'audio <url-or-share-text> [--output audio.mp3] [--connect] — 提取原声，不分离背景音乐',
       'resolve <url-or-share-text> [--refresh]',
       'recap today|yesterday [--platform douyin|bilibili|all] [--mode like|collect|all] [--limit 50] [--connect] — 先同步，再回顾',
@@ -127,6 +121,7 @@ function helpPayload(): Record<string, unknown> {
       'mcp serve --stdio',
       'agent setup|doctor|status|update|reconcile|uninstall [--client all|codex|claude]',
       'connect [--client codex|claude|all] [--no-open] — 安装连接、确认授权并检查可用工具',
+      'auth login [--scopes <范围>] [--force] — 复用有效连接；默认一次连接日常视频功能，--force 可切换账号',
       'account export --output <new-file.zip>  # password via no-echo stdin',
       'account delete                          # password + phrase via no-echo stdin',
       'models custom-create --name <name> --provider-name <provider> --model <model> --api-base <url> [--select] [--disabled] [--confirmation-id <id>]  # 先批准，再用无回显 stdin 输入 API Key',
@@ -140,37 +135,43 @@ function helpPayload(): Record<string, unknown> {
   };
 }
 
-async function openBrowser(url: string): Promise<void> {
+async function openAuthorization(url: string): Promise<void> {
   const parsed = new URL(url);
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
+  const desktop = /^zhicui:\/\/agent-authorize\?user_code=[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/u.test(url);
   if (
-    (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && local))
+    (!desktop && parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && local))
     || parsed.username
     || parsed.password
   ) {
     throw new CliError('REMOTE_FAILURE', '设备授权地址协议无效');
   }
-  if (process.platform === 'win32') {
-    const script = [
+  const script = [
+      '$ErrorActionPreference="Stop";',
       '$url=[Console]::In.ReadToEnd().Trim();',
       '$info=[Diagnostics.ProcessStartInfo]::new();',
       '$info.FileName=$url;',
       '$info.UseShellExecute=$true;',
       '[Diagnostics.Process]::Start($info) | Out-Null;',
     ].join('');
-    const child = spawn('powershell.exe', [
+  const child = process.platform === 'win32' ? spawn('powershell.exe', [
       '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script,
-    ], { stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true, detached: true });
-    child.on('error', () => undefined);
-    child.stdin.on('error', () => undefined);
-    child.stdin.end(url);
-    child.unref();
-    return;
-  }
-  const command = process.platform === 'darwin' ? '/usr/bin/open' : 'xdg-open';
-  const child = spawn(command, [url], { stdio: 'ignore', detached: true });
-  child.on('error', () => undefined);
-  child.unref();
+    ], { stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true })
+    : spawn(process.platform === 'darwin' ? '/usr/bin/open' : 'xdg-open', [url], { stdio: 'ignore' });
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new CliError('LOCAL_UNAVAILABLE', '打开授权页面超时'));
+    }, 5_000);
+    child.once('error', error => { clearTimeout(timer); reject(error); });
+    child.once('close', code => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new CliError('LOCAL_UNAVAILABLE', '未能打开授权页面'));
+    });
+    child.stdin?.on('error', () => undefined);
+    child.stdin?.end(url);
+  });
 }
 
 async function authCommand(
@@ -189,7 +190,7 @@ async function authCommand(
     if (verify && status.authenticated) {
       try {
         const capabilities = await client.capabilities();
-        Object.assign(status, { valid: true, actions: capabilities.actions.length });
+        Object.assign(status, { valid: true, actions: capabilities.actions.length, ...grantedScopeSnapshot(capabilities) });
       } catch (error) {
         Object.assign(status, {
           valid: false,
@@ -211,6 +212,7 @@ async function authCommand(
   }
   const patMode = command === 'pat' || takeFlag(args, '--pat-stdin');
   const noOpen = takeFlag(args, '--no-open');
+  const force = takeFlag(args, '--force');
   const scopesValue = takeValue(args, '--scopes');
   if (args.length) throw usageError(`多余参数：${args.join(' ')}`);
   if (patMode) {
@@ -225,11 +227,16 @@ async function authCommand(
     try {
       await credentials.save(credential);
       const capabilities = await client.capabilities();
+      const scopeSnapshot = grantedScopeSnapshot(capabilities);
+      if (!await credentials.saveIfUnchanged(credential, { ...credential, ...scopeSnapshot })) {
+        throw new CliError('AUTH_REQUIRED', '登录状态已更改，请重新检查当前连接');
+      }
       writer.result({
         authenticated: true,
         kind: 'pat',
         token_prefix: credential.token_prefix,
         actions: capabilities.actions.length,
+        ...scopeSnapshot,
         store: credentials.store.kind,
       });
     } catch (error) {
@@ -244,6 +251,33 @@ async function authCommand(
   const scopes = scopesValue
     ? scopesValue.split(',').map((value) => value.trim()).filter(Boolean)
     : await client.defaultDeviceScopes(DEFAULT_DEVICE_SCOPES);
+  if (!scopes.length) throw usageError('请至少选择一项权限');
+  const currentCredential = await credentials.load();
+  if (!force && currentCredential) {
+    let capabilities;
+    try {
+      capabilities = await (await client.bindCurrentSession()).capabilities();
+    } catch (error) {
+      if (!(error instanceof CliError) || !PREPARE_AUTH_ERRORS.has(error.code)) throw error;
+    }
+    const latestCredential = await credentials.load();
+    if (!latestCredential || latestCredential.kind !== currentCredential.kind
+      || latestCredential.created_at !== currentCredential.created_at) {
+      throw new CliError('AUTH_REQUIRED', '检查期间登录状态已更改，请重新运行命令');
+    }
+    if (capabilities) {
+      const scopeSnapshot = grantedScopeSnapshot(capabilities);
+      if (scopes.every(scope => scopeSnapshot.scopes.includes(scope))) {
+        const reused = { kind: latestCredential.kind, store: credentials.store.kind, ...scopeSnapshot, authenticated: true, valid: true, reused: true };
+        writer.diagnostic('当前连接已具备所需能力，直接复用，无需重复授权。');
+        if (continuation) continuation.complete(reused as JsonObject);
+        else if (options.jsonl) writer.event({ sequence: 1, event: 'authorization_complete', status: 'succeeded', terminal: true, ...reused } as JsonObject);
+        else writer.result(reused);
+        return;
+      }
+      writer.diagnostic('本次连接将一次补齐日常功能需要的范围，确认后继续。');
+    }
+  }
   const authorizationSession = await credentials.beginDeviceAuthorization();
   const started = await client.startDeviceAuthorization(scopes);
   const deviceCode = typeof started.device_code === 'string' ? started.device_code : '';
@@ -266,6 +300,9 @@ async function authCommand(
   // 只公开用户验证码；不原样输出服务端查询串，避免意外携带机器授权码。
   const publicVerification = new URL(options.apiUrl === 'https://luxai.cn'
     ? '/agent/authorize' : parsedVerification.pathname, options.apiUrl);
+  if (publicVerification.origin !== new URL(options.apiUrl).origin) {
+    throw new CliError('REMOTE_FAILURE', '设备授权地址不是当前知萃服务');
+  }
   publicVerification.searchParams.set('user_code', userCode);
   const verificationUrl = publicVerification.toString();
   let intervalMs = Math.max(1_000, Math.min(60_000, Number(started.interval || 5) * 1_000));
@@ -273,24 +310,37 @@ async function authCommand(
   if (!Number.isFinite(intervalMs) || !Number.isFinite(serverExpiry)) {
     throw new CliError('REMOTE_FAILURE', '设备授权有效期无效');
   }
-  const deadline = Date.now() + Math.min(serverExpiry, options.timeoutMs);
+  // 人工确认使用服务端有效期，避免默认请求超时让用户点开后链接已经失效。
+  const deadline = Date.now() + (options.timeoutSpecified ? Math.min(serverExpiry, options.timeoutMs) : serverExpiry);
+  const desktopUrl = noOpen ? null : desktopAuthorizationUrl(
+    await new RestrictedLocalAdapter().status(), options.apiUrl, userCode,
+  );
   const authorizationEvent: JsonObject = {
     sequence: 1, event: 'device_authorization', status: 'waiting_for_user', terminal: false,
     verification_url: verificationUrl, user_code: userCode,
+    authorization_target: noOpen ? 'manual' : desktopUrl ? 'desktop' : 'browser',
     expires_at: new Date(deadline).toISOString(), interval_seconds: intervalMs / 1_000, scopes,
   };
   if (continuation) continuation.event(authorizationEvent);
   else if (options.jsonl) writer.event(authorizationEvent);
   writer.diagnostic('请求方：知萃 CLI（当前命令行设备）');
   writer.diagnostic(`请求权限：${scopes.join(', ')}`);
-  writer.diagnostic(`请在浏览器确认知萃授权，验证码：${userCode}`);
+  writer.diagnostic(`请在${desktopUrl ? '已登录的知萃客户端' : '知萃授权页面'}确认，验证码：${userCode}`);
   writer.diagnostic(`授权地址：${verificationUrl}`);
-  if (!noOpen) await openBrowser(verificationUrl).catch(() => undefined);
+  if (!noOpen) {
+    try { await openAuthorization(desktopUrl || verificationUrl); }
+    catch {
+      if (desktopUrl) {
+        writer.diagnostic('客户端授权页未能打开，已尝试在浏览器打开同一授权。');
+        await openAuthorization(verificationUrl).catch(() => writer.diagnostic('请打开上方授权地址继续。'));
+      } else writer.diagnostic('请打开上方授权地址继续。');
+    }
+  }
   while (Date.now() < deadline) {
     await delay(Math.min(intervalMs, Math.max(0, deadline - Date.now())));
     if (Date.now() >= deadline) break;
     try {
-      const data = await client.pollDeviceAuthorization(deviceCode);
+      const data = await client.pollDeviceAuthorization(deviceCode, Math.max(1, Math.min(options.timeoutMs, deadline - Date.now())));
       const accessToken = typeof data.access_token === 'string' ? data.access_token : '';
       if (!accessToken) throw new CliError('REMOTE_FAILURE', '授权完成响应缺少 access_token');
       const publicCredential = data.credential && typeof data.credential === 'object'
@@ -307,7 +357,7 @@ async function authCommand(
         ? data.scopes
         : Array.isArray(publicCredential.scopes)
           ? publicCredential.scopes
-          : scopes;
+          : null;
       const credential: StoredCredential = {
         kind: 'device',
         access_token: accessToken,
@@ -318,7 +368,11 @@ async function authCommand(
           : typeof publicCredential.token_prefix === 'string'
             ? publicCredential.token_prefix
           : `${accessToken.slice(0, 6)}…`,
-        scopes: returnedScopes.filter((scope): scope is string => typeof scope === 'string'),
+        ...(returnedScopes ? {
+          scopes: returnedScopes.filter((scope): scope is string => typeof scope === 'string'),
+          scopes_source: 'server' as const,
+          scopes_complete: true,
+        } : { scopes_complete: false }),
         created_at: new Date().toISOString(),
       };
       if (!await credentials.completeDeviceAuthorization(authorizationSession, credential)) {
@@ -328,7 +382,9 @@ async function authCommand(
         authenticated: true,
         kind: 'device',
         expires_at: credential.expires_at || null,
-        scopes: credential.scopes || [],
+        scopes: credential.scopes ?? null,
+        scopes_source: credential.scopes_source || 'unknown',
+        scopes_complete: credential.scopes_complete === true,
         store: credentials.store.kind,
       };
       if (continuation) continuation.complete(publicResult);
@@ -345,7 +401,9 @@ async function authCommand(
         intervalMs += 2_000;
         continue;
       }
-      if (['HTTP_502', 'HTTP_503', 'HTTP_504', 'NETWORK_ERROR'].includes(normalized.code)) {
+      // 请求层的真实网络异常带 cause；协议错误不应被当成网络闪断反复重试。
+      const networkFailure = normalized.code === 'REMOTE_FAILURE' && normalized.cause instanceof Error;
+      if (networkFailure || ['HTTP_502', 'HTTP_503', 'HTTP_504', 'NETWORK_ERROR', 'TIMEOUT'].includes(normalized.code)) {
         writer.diagnostic('连接暂时中断，正在等待授权服务恢复；无需重新打开授权页。');
         intervalMs = Math.min(15_000, intervalMs + 2_000);
         continue;
@@ -353,7 +411,7 @@ async function authCommand(
       throw error;
     }
   }
-  throw new CliError('TIMEOUT', '等待浏览器设备授权超时', {
+  throw new CliError('TIMEOUT', '等待知萃设备授权超时', {
     exitCode: EXIT_CODES.timeoutOrCanceled,
   });
 }
@@ -612,6 +670,25 @@ async function runCommand(
 
 async function fastVideoCommand(domain: string, args: string[], options: GlobalOptions,
   writer: ProtocolWriter, client: AgentApiClient, credentials: CredentialManager): Promise<void> {
+  if (domain === 'download' && args[0] === 'batch') {
+    args.shift();
+    const input = takeValue(args, '--input');
+    const output = takeValue(args, '--output');
+    const resume = takeFlag(args, '--resume');
+    const kind = takeFlag(args, '--audio') ? 'audio' : 'video';
+    if (!input || !output || args.length) throw usageError('用法：zhicui download batch --input links.json --output <新目录> [--resume] [--audio]');
+    let sequence = 0;
+    const result = await downloadMediaBatch(client, { input, output, resume, kind }, (stage, data) => {
+      if (options.jsonl) writer.event({ sequence: ++sequence, event: `batch.${stage}`, status: 'running', terminal: false, data });
+      writer.diagnostic(`批量下载：${stage}${typeof data.completed === 'number' ? ` ${data.completed}/${data.total}` : ''}`);
+    });
+    if (options.jsonl) writer.event({ sequence: ++sequence, event: 'batch.completed', terminal: true,
+      status: String(result.status), data: result });
+    else writer.result(result);
+    if (result.status !== 'succeeded') throw new ReportedCliError(String(result.stop_code || 'BATCH_INCOMPLETE'),
+      '批次尚未全部完成，请按结果中的 resume_argv 接续', { exitCode: Number(result.exit_code) as ExitCode });
+    return;
+  }
   let sequence = 0;
   const complete = (data: JsonObject) => options.jsonl
     ? writer.event({ sequence: ++sequence, event: 'video.completed', terminal: true, status: 'succeeded', data })
@@ -923,6 +1000,7 @@ async function agentCommand(
       try {
         const capabilities = await client.capabilities();
         authenticated = true;
+        Object.assign(credential, grantedScopeSnapshot(capabilities));
         serviceAvailable = true;
         featureEnabled = capabilities.feature_enabled !== false;
         cloudAvailable = featureEnabled;
@@ -949,6 +1027,7 @@ async function agentCommand(
     const configured = checks.every((check) => check.configured);
     const configurationReady = checks.every((check) => check.configuration_ready);
     const ready = checks.every((check) => check.ready);
+    const localStatus = await new RestrictedLocalAdapter().status(expectedUserHash);
     const report = {
       ...configuration, checks, ok: ready, ready, configured, configuration_ready: configurationReady, authenticated,
       cloud_available: cloudAvailable, service_available: serviceAvailable, mcp_healthy: mcp.ok,
@@ -958,8 +1037,8 @@ async function agentCommand(
       cloud: { available: cloudAvailable, service_available: serviceAvailable, feature_enabled: featureEnabled, actions },
       mcp,
       local: {
-        ...await new RestrictedLocalAdapter().status(expectedUserHash),
-        account_binding_verified: Boolean(expectedUserHash),
+        ...localStatus,
+        account_binding_verified: Boolean(expectedUserHash) && localStatus.available === true,
       },
     };
     if (receiveResult) receiveResult(report);
@@ -987,19 +1066,15 @@ async function connectCommand(args: string[], options: GlobalOptions, writer: Pr
     }
   }
   stage('authorization', '2/3 检查知萃授权…');
-  try { await client.capabilities(); }
-  catch (error) {
-    if (!(error instanceof CliError) || !PREPARE_AUTH_ERRORS.has(error.code)) throw error;
-    await authCommand(['login', '--scopes', 'account:read,library:read,ask:read,ask:run', ...(noOpen ? ['--no-open'] : [])], options, writer, credentials, client, {
+  await authCommand(['login', ...(noOpen ? ['--no-open'] : [])], options, writer, credentials, client, {
       event: value => { if (options.jsonl) writer.event({ ...value, sequence: ++sequence, terminal: false }); },
       complete: () => writer.diagnostic('授权完成，继续检查。'),
-    });
-  }
+  });
   stage('verify', '3/3 验证云端与 MCP 工具…');
   let report: Record<string, unknown> = {};
   await agentCommand(['doctor', '--client', selection], options, writer, credentials, value => { report = value; });
   if (report.ready !== true) throw new CliError(String(report.code || 'AGENT_SETUP_FAILED'), '连接尚未就绪，请运行 zhicui agent doctor 查看具体原因');
-  writer.diagnostic('连接成功。回到 Agent 重新连接知萃 MCP，即可使用视频下载和问答。');
+  writer.diagnostic('连接成功。回到 Agent 重新连接知萃 MCP，即可使用已开放的视频导入、转写、下载和问答。');
   const result = { ...report, setup, next_command: 'zhicui download "视频链接"', reconnect_agent: true };
   if (options.jsonl) writer.event({ sequence: ++sequence, event: 'connect.completed', terminal: true, status: 'succeeded', data: result as JsonObject });
   else writer.result(result);
@@ -1083,7 +1158,7 @@ export async function runCli(argv: string[]): Promise<number> {
       writer.result({ name: '@zhicui/cli', version: CLI_VERSION });
       return EXIT_CODES.success;
     }
-    if (!['capabilities', 'resolve', 'download', 'audio', 'connect', 'recap', 'sync'].includes(domain) && !USER_COMMAND_DOMAINS.includes(domain as (typeof USER_COMMAND_DOMAINS)[number])) {
+    if (!['capabilities', 'doctor', 'resolve', 'download', 'audio', 'connect', 'recap', 'sync'].includes(domain) && !USER_COMMAND_DOMAINS.includes(domain as (typeof USER_COMMAND_DOMAINS)[number])) {
       throw usageError(`未知命令域：${domain}`);
     }
     if (command.includes('--help') || command.includes('-h')) {
@@ -1093,7 +1168,7 @@ export async function runCli(argv: string[]): Promise<number> {
       );
       writer.result({
         domain,
-        commands: [...(['audio', 'download', 'resolve'].includes(domain) ? [{command: `zhicui ${domain} <链接> [--audio] [--output ${domain === 'audio' ? '原声.mp3' : '视频.mp4'}] [--connect]`, description: 'audio 提取原声 MP3，包含人声与配乐；--link 只取入口，--refresh 刷新地址。'}] : []), ...entries.map(([key, alias]) => ({
+        commands: [...(domain === 'download' && (!verb || verb === 'batch') ? [{command: 'zhicui download batch --input links.json --output <新目录> [--resume] [--audio]', description: '按清单串行下载，保存文件校验与整批限流冷却；退出非零表示未全部完成，下载不代表分析。'}] : []), ...(domain === 'doctor' ? [{command:'zhicui doctor --json',description:'只读对照公开能力与当前授权，不触发登录或启动客户端。'}] : []), ...(['audio', 'download', 'resolve'].includes(domain) ? [{command: `zhicui ${domain} <链接> [--audio] [--output ${domain === 'audio' ? '原声.mp3' : '视频.mp4'}] [--connect]`, description: 'audio 提取原声 MP3，包含人声与配乐；--link 只取入口，--refresh 刷新地址。'}] : []), ...entries.map(([key, alias]) => ({
           command: `zhicui ${key.replace('.', ' ')} ${(alias.positionalKeys || []).map((value) => `<${value}>`).join(' ')}`.trim(),
           action: alias.candidates[0],
           named_inputs: alias.namedInputKeys || [],
@@ -1121,6 +1196,10 @@ export async function runCli(argv: string[]): Promise<number> {
       writer.result(await client.publicCapabilities());
     }
     else if (domain === 'connect') await connectCommand(command, options, writer, credentials, client);
+    else if (domain === 'doctor') {
+      if (command.length) throw usageError('用法：zhicui doctor [--json]');
+      writer.result(await diagnoseFeatures(client));
+    }
     else if (domain === 'sync') await syncCommand(command, options, writer, credentials, client);
     else if (domain === 'recap') await recapCommand(command, options, writer, credentials, client);
     else if (domain === 'resolve' || domain === 'download' || domain === 'audio') await fastVideoCommand(domain, command, options, writer, client, credentials);

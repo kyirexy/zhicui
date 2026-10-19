@@ -160,7 +160,7 @@ test('model secret update accepts one raw stdin line and rejects argv or JSON', 
     'models', 'secret-update', '--target', 'chat', '--model-id', 'model-1',
     '--confirmation-id', 'confirm-secret-1', '--non-interactive', '--json',
   ], { env, input: 'sk-private-key\n' });
-  assert.equal(ok.code, 0, ok.stderr);
+  assert.equal(ok.code, 0, `${ok.stdout}${ok.stderr}`);
   assert.doesNotMatch(`${ok.stdout}${ok.stderr}`, /sk-private-key/u);
   assert.equal(writeCalls, 1);
 

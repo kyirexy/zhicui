@@ -14,7 +14,9 @@ vm.runInNewContext(code, { exports, require: (name) => name === 'electron' ? { d
   process: { ...process, platform: 'win32' }, Buffer, URL, setTimeout, clearTimeout, setInterval, clearInterval });
 const root = await mkdtemp(join(tmpdir(), 'zhicui-sync-bridge-'));
 let captures = 0;
-const options = { descriptorDirectory: root, version: 'test', channel: 'beta', getWindow: () => null,
+let connectionState = 'restoring';
+const options = { descriptorDirectory: root, version: 'test', channel: 'beta', serverOrigin: 'https://luxai.cn',
+  connectionState: () => connectionState, getWindow: () => null,
   getMediaLibrary: () => null, platformAccounts: { cancel: async () => ({ success: true }), collect: async () => {
     captures++;
     return { success: true, platform: 'douyin', count: 200, coverage: 'limited', orderReliable: true,
@@ -36,6 +38,16 @@ const call = async (action, input, key) => {
 };
 try {
   await bridge.start(); await bind('owner-one');
+  for (const state of ['restoring', 'signed_out', 'ready']) {
+    connectionState = state;
+    const response = await fetch(`${descriptor.url}/v1/connection`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { api_version: 'v1', version: 'test', state,
+      max_sync_items: 500, agent_authorization: { supported: true, server_origin: 'https://luxai.cn' } },
+    '连接发现只提供状态、当前站点和授权页能力，不暴露凭证');
+  }
+  assert.equal((await fetch(`${descriptor.url}/v1/agent/authorize`, { method: 'POST' })).status, 404,
+    '本机桥不得提供自动审批接口');
   const input = { platform: 'douyin', mode: 'like', limit: 200 };
   const [a, b] = await Promise.all([call('local.platform.sync', input, 'fixed-task-source'), call('local.platform.sync', input, 'fixed-task-source')]);
   assert.equal(a.run_id, b.run_id);

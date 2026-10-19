@@ -28,18 +28,59 @@ import {
   DesktopMediaLibrary,
   desktopMediaProfileDirectory,
 } from '../dist/media-library.js';
-import { validateDesktopAgentIntegrationRequest } from '../dist/security.js';
+import { agentAuthorizationDestination, validateDesktopAgentIntegrationRequest } from '../dist/security.js';
 
 const scriptDirectory = fileURLToPath(new URL('.', import.meta.url));
 const desktopRoot = resolve(scriptDirectory, '..');
+const appUrl = new URL('https://luxai.cn/settings?ignored=1#ignored');
+assert.equal(agentAuthorizationDestination('zhicui://agent-authorize?user_code=ABCD-EFGH', appUrl),
+  'https://luxai.cn/agent/authorize?user_code=ABCD-EFGH');
+assert.equal(agentAuthorizationDestination('zhicui://agent-authorize?user_code=abcd-2345', new URL('http://localhost:3003')),
+  'http://localhost:3003/agent/authorize?user_code=ABCD-2345', '开发客户端仍使用自身站点');
+assert.equal(agentAuthorizationDestination('zhicui://agent-authorize?user_code=ABCD-EFGH', new URL('https://evil.example')), null);
+for (const unsafeLink of [
+  'https://agent-authorize?user_code=ABCD-EFGH',
+  'zhicui://evil.example?user_code=ABCD-EFGH',
+  'zhicui://agent-authorize.evil.example?user_code=ABCD-EFGH',
+  'zhicui://agent-authorize/?user_code=ABCD-EFGH',
+  'zhicui://agent-authorize/agent/authorize?user_code=ABCD-EFGH',
+  'zhicui://user@agent-authorize?user_code=ABCD-EFGH',
+  'zhicui://user:password@agent-authorize?user_code=ABCD-EFGH',
+  'zhicui://@agent-authorize?user_code=ABCD-EFGH',
+  'zhicui://agent-authorize:80?user_code=ABCD-EFGH',
+  'zhicui://agent-authorize?user_code=ABCD-EFGH#fragment',
+  'zhicui://agent-authorize?user_code=ABCD-EFGH#',
+  'zhicui://agent-authorize?user_code=ABCD-EFGH&',
+  'zhicui://agent-authorize?user_code=ABCD-EFGH&user_code=JKLM-NPQR',
+  ...['redirect=https://evil.example', 'token=secret', 'scopes=library%3Awrite'].map(query =>
+    `zhicui://agent-authorize?user_code=ABCD-EFGH&${query}`),
+  ...['', 'ABCD', 'ABCD-EFGH-JKLM', 'TEST-1234', 'ABCD-EF%0AGH', '%20ABCD-EFGH', '<script>'].map(code =>
+    `zhicui://agent-authorize?user_code=${code}`),
+  'zhicui://agent-authorize',
+  'zhicui://agent-authorize?code=ABCD-EFGH',
+  'zhicui://agent-authorize?user_code=ABCD-EF\nGH',
+  'zhicui://agent-authorize?user_code=ABCD-EFGH ',
+  'not a URL',
+]) assert.equal(agentAuthorizationDestination(unsafeLink, appUrl), null, `不安全链接不可进入授权页: ${unsafeLink}`);
 const fullScopes = ['library:read', 'library:write', 'ask:run', 'knowledge:read', 'knowledge:write', 'plan:read', 'plan:write', 'creator:sync', 'local:invoke', 'account:read', 'creator:read', 'ask:read', 'models:read'];
-const coreScopes = fullScopes.filter(scope => !['library:write', 'creator:sync', 'local:invoke'].includes(scope));
+const coreScopes = fullScopes.filter(scope => scope !== 'creator:sync');
+const legacyCoreScopes = coreScopes.filter(scope => !['library:write', 'local:invoke'].includes(scope));
+const videoIntakeScopes = [...coreScopes, 'creator:sync', 'analysis:read', 'analysis:run'];
+const recommendedScopes = ['account:read', 'library:read', 'library:write', 'creator:read', 'ask:read', 'ask:run', 'local:invoke'];
 const publicCapabilities = (profile, scopes) => ({ feature_enabled: true, release_profile: profile, scopes: scopes.map(id => ({ id })) });
-assert.deepEqual(resolveAgentAuthorizationScopes(publicCapabilities('core', coreScopes)), { releaseProfile: 'core', scopes: coreScopes });
-assert.deepEqual(resolveAgentAuthorizationScopes(publicCapabilities('full', fullScopes)), { releaseProfile: 'full', scopes: fullScopes });
+for (const [profile, scopes] of [['core', coreScopes], ['full', fullScopes], ['video_intake', videoIntakeScopes]]) {
+  assert.deepEqual(resolveAgentAuthorizationScopes(publicCapabilities(profile, scopes)), { releaseProfile: profile, scopes: recommendedScopes });
+}
+assert.deepEqual(resolveAgentAuthorizationScopes(publicCapabilities('core', legacyCoreScopes)), {
+  releaseProfile: 'core', scopes: recommendedScopes.filter(scope => legacyCoreScopes.includes(scope)),
+}, '旧发布范围只请求其实际公开的权限');
+assert.deepEqual(resolveAgentAuthorizationScopes(publicCapabilities('core', ['library:read'])), {
+  releaseProfile: 'core', scopes: ['library:read'],
+}, '服务仅开放读取时不得补入写入权限');
 for (const invalid of [
   {}, publicCapabilities('future', coreScopes), publicCapabilities('core', []),
-  publicCapabilities('core', ['local:invoke']), publicCapabilities('full', ['admin:all']),
+  publicCapabilities('core', ['creator:sync']), publicCapabilities('full', ['admin:all']),
+  publicCapabilities('video_intake', ['admin:all']), publicCapabilities('video_intake', ['unexpected:run']),
   publicCapabilities('full', ['library:read', 'library:read']),
   { ...publicCapabilities('core', coreScopes), feature_enabled: false },
   { ...publicCapabilities('core', coreScopes), scopes: ['library:read'] },
@@ -122,8 +163,9 @@ try {
     "if (args[0] === 'capabilities') {",
     `  const fullScopes = ${JSON.stringify(fullScopes)};`,
     `  const coreScopes = ${JSON.stringify(coreScopes)};`,
+    `  const videoIntakeScopes = ${JSON.stringify(videoIntakeScopes)};`,
     "  if (state.capabilities_failure) { write({ status: 'failed', error: { code: 'INTERFACE_DISABLED' } }); process.exitCode=7; }",
-    "  else write({ feature_enabled: true, release_profile: state.release_profile, scopes: (state.scope_override || (state.release_profile === 'core' ? coreScopes : fullScopes)).map(id => ({ id })) });",
+    "  else write({ feature_enabled: true, release_profile: state.release_profile, scopes: (state.scope_override || ({core:coreScopes,video_intake:videoIntakeScopes}[state.release_profile] || fullScopes)).map(id => ({ id })) });",
     "} else if (args[0] === 'auth') {",
     "  write({event:'device_authorization',status:'waiting_for_user',user_code:'TEST-1234',expires_at:'2099-01-01T00:00:00Z',verification_url:'https://luxai.cn/agent-access',device_code:'SHOULD_NOT_LEAVE_PROCESS',access_token:'FAKE_SECRET_ACCESS',terminal:false});",
     "  setTimeout(() => {",
@@ -165,6 +207,13 @@ try {
   assert.doesNotMatch(overview.setup_prompt, /npx|acceptance|npm install/);
   assert.match(overview.setup_prompt, /重新加载|不会热替换/);
   assert.equal((await integration.run({ client: 'codex', operation: 'authorize', authorization_id: randomUUID() })).code, 'DESKTOP_AUTH_REQUIRED');
+  await writeFile(fakeState, JSON.stringify({ ...initialState, configured: true, authenticated: true, granted_scopes: ['library:read'] }));
+  const reused = await integration.run({ client: 'codex', operation: 'setup' });
+  assert.equal(reused.authenticated, true, '已认证连接应由 doctor 原样复用');
+  assert.deepEqual(JSON.parse(await readFile(fakeState, 'utf8')).granted_scopes, ['library:read'], '新的默认权限不改变已有只读授权');
+  assert.equal((await readFile(fakeCalls, 'utf8')).trim().split('\n').map(line => JSON.parse(line)).filter(args => args[0] === 'auth').length, 0, '配置更新不得自动发起扩权授权');
+  assert.deepEqual(authorizationEvents, [], '复用连接不弹出新的授权确认');
+  await writeFile(fakeState, JSON.stringify({ ...initialState, configured: true }));
   await integration.run({ client: 'codex', operation: 'setup' });
   integration.bindUser('fixture-owner-A');
   const completedId = randomUUID();
@@ -175,20 +224,25 @@ try {
   assert.equal((await integration.status()).authorization, undefined, '已完成授权不重放旧设备码');
   assert.deepEqual(authorizationEvents.map((event) => event.status), ['starting', 'waiting', 'success']);
   assert.equal(authorizationEvents[1].user_code, 'TEST-1234');
-  assert.deepEqual(authorizationEvents[1].scopes, fullScopes);
+  assert.deepEqual(authorizationEvents[1].scopes, recommendedScopes);
   assert.equal(authorizationEvents[1].release_profile, 'full');
   assert.ok(authorizationEvents.every((event) => event.authorization_id === completedId));
   assert.doesNotMatch(JSON.stringify(authorizationEvents), /SHOULD_NOT|FAKE_SECRET|device_code|access_token|verification_url/);
   await writeFile(fakeState, JSON.stringify({ ...initialState, configured: true, release_profile: 'core' }));
   authorizationEvents.length = 0;
   assert.equal((await integration.run({ client: 'codex', operation: 'authorize', authorization_id: randomUUID() })).success, true);
-  assert.deepEqual(authorizationEvents.find(event => event.status === 'waiting').scopes, coreScopes);
+  assert.deepEqual(authorizationEvents.find(event => event.status === 'waiting').scopes, recommendedScopes);
   assert.equal(authorizationEvents.find(event => event.status === 'waiting').release_profile, 'core');
+  await writeFile(fakeState, JSON.stringify({ ...initialState, configured: true, release_profile: 'video_intake' }));
+  authorizationEvents.length = 0;
+  assert.equal((await integration.run({ client: 'codex', operation: 'authorize', authorization_id: randomUUID() })).success, true);
+  assert.deepEqual(authorizationEvents.find(event => event.status === 'waiting').scopes, recommendedScopes);
+  assert.equal(authorizationEvents.find(event => event.status === 'waiting').release_profile, 'video_intake');
   const callsBeforeFailures = (await readFile(fakeCalls, 'utf8')).trim().split('\n').map(line => JSON.parse(line)).filter(args => args[0] === 'auth').length;
   for (const invalid of [
     { release_profile: 'unknown' }, { capabilities_failure: true },
     { release_profile: 'core', scope_override: [] },
-    { release_profile: 'core', scope_override: ['local:invoke'] },
+    { release_profile: 'core', scope_override: ['creator:sync'] },
   ]) {
     await writeFile(fakeState, JSON.stringify({ ...initialState, configured: true, ...invalid }));
     const result = await integration.run({ client: 'codex', operation: 'authorize', authorization_id: randomUUID() });
@@ -249,8 +303,8 @@ try {
   assert.ok(calls.filter((args) => args[0] === 'auth').every((args) => args.includes('--no-open') && args.includes('--jsonl')));
   assert.ok(calls.filter(args => args[0] === 'capabilities').every(args => args.join(' ') === 'capabilities --public --json --non-interactive'));
   const authorizationCalls = calls.filter(item => item[0] === 'auth');
-  for (const [index, args] of authorizationCalls.entries()) {
-    assert.deepEqual(args[args.indexOf('--scopes') + 1].split(','), index === 1 ? coreScopes : fullScopes);
+  for (const args of authorizationCalls) {
+    assert.deepEqual(args[args.indexOf('--scopes') + 1].split(','), recommendedScopes);
   }
   assert.ok(calls.every((args) => !args.includes('logout')), '取消授权不应注销已经保存的 CLI 账号');
 

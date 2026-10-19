@@ -390,10 +390,35 @@ def rotate_refresh_token(db: Session, refresh_token: str, request_id: str | None
     digest = token_hash(refresh_token)
     if row is not None and row.revoked_at is None:
         receipt = read_receipt(db, "agent:" + row.id, refresh_token, request_id)
-        if receipt and token_hash(receipt["refresh_token"]) == row.refresh_hash:
+        if receipt and hmac.compare_digest(token_hash(receipt["refresh_token"]), row.refresh_hash or ""):
             if not user_is_enabled(row.user_id):
                 raise CredentialError("ROLLOUT_RESTRICTED", "Agent 接口尚未向当前账号开放")
             normalize_scopes(row.scopes)
+            # 丢包重试可能隔了数天；只恢复当前后继，不再轮换刷新凭证或延长会话。
+            # access 是不透明凭证，过期后必须同时更新数据库摘要与加密回执。
+            if (_aware(row.expires_at) or now) <= now or not hmac.compare_digest(
+                token_hash(receipt["access_token"]), row.token_hash,
+            ):
+                access_token = _new_token("access", row.id)
+                row.token_hash = token_hash(access_token)
+                row.token_prefix = access_token[:18]
+                row.expires_at = min(
+                    now + timedelta(minutes=ACCESS_TTL_MINUTES),
+                    _aware(row.refresh_expires_at),
+                    _aware(row.created_at) + timedelta(days=365),
+                )
+                row.updated_at = now
+                receipt = {
+                    "access_token": access_token,
+                    "refresh_token": receipt["refresh_token"],
+                    "token_type": "Bearer",
+                    "expires_in": int((row.expires_at - now).total_seconds()),
+                    "credential": row.to_public_dict(),
+                }
+                save_receipt(
+                    db, "agent:" + row.id, refresh_token, request_id, receipt,
+                    expires_at=min(_aware(row.refresh_expires_at), _aware(row.created_at) + timedelta(days=365)),
+                )
             db.commit()
             return receipt
     if row is None or not row.refresh_hash or not hmac.compare_digest(row.refresh_hash, digest):
@@ -440,6 +465,9 @@ def rotate_refresh_token(db: Session, refresh_token: str, request_id: str | None
         "expires_in": ACCESS_TTL_MINUTES * 60,
         "credential": row.to_public_dict(),
     }
-    save_receipt(db, "agent:" + row.id, refresh_token, request_id, result)
+    save_receipt(
+        db, "agent:" + row.id, refresh_token, request_id, result,
+        expires_at=row.refresh_expires_at, replace_owner=True,
+    )
     db.commit()
     return result

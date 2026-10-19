@@ -375,9 +375,8 @@ test('device login requests only the server v1 ordinary-user scopes', async (t) 
   ], { env, processTimeoutMs: 6_000 });
   assert.equal(result.code, 0, result.stderr);
   assert.deepEqual(requestedScopes, [
-    'account:read', 'library:read', 'creator:read', 'ask:read',
-    'knowledge:read', 'plan:read', 'automation:read', 'analysis:read',
-    'models:read', 'feedback:read',
+    'account:read', 'library:read', 'library:write', 'creator:read',
+    'ask:read', 'ask:run', 'local:invoke',
   ]);
   assert.match(result.stderr, /请求方：知萃 CLI/);
   assert.match(result.stderr, /请求权限：account:read, library:read/);

@@ -1,5 +1,19 @@
 # @zhicui/cli
 
+## 视频研究的短入口（1.0.19 起）
+
+```powershell
+zhicui doctor --json
+zhicui download batch --input links.json --output ./reference-videos --jsonl
+zhicui download batch --input links.json --output ./reference-videos --resume --jsonl
+```
+
+`doctor` 对照公开能力与当前授权，分别报告未发布、缺权限、服务故障与未知状态，不触发登录或启动桌面。侧栏有入口不等于 CLI 已接入；`accessible` 只是能力声明，真实平台连接仍需执行验证。
+
+批次输入为链接数组，或 `{"items":[{"url":"https://www.douyin.com/video/作品ID","title":"标题"}]}`。最多1000条，按已确认链接去重，串行下载；原声加 `--audio`。使用新目录，不覆盖文件。`manifest.json` 保存来源、状态、大小与SHA-256，续跑校验成功的文件并复用。限流暂停整批并保留冷却时间；扫码/验证不循环重试。批次绑定账号与原清单，返回非零退出码时查看 `stop_code` 和 `resume_argv`。
+
+下载不需要先转写；结果明确标记 `analysis_status=not_performed`。后续按 Skill 检查实际画面、字幕和声音，不能用标题或歌词猜画面。博主完整目录仍走已发布的 creator Actions；未发布时可记录公开主页可见作品，再用本命令下载，但不能声称已完成博主同步。
+
 ## 从官网下载并接入（1.0.10 起）
 
 安装说明与经 CI 验收的安装包：https://luxai.cn/cli 。官网分发独立于 npm 官方仓库，仍使用 npm 安装客户端，不需要 npm 登录。
@@ -8,7 +22,7 @@
 npm install -g https://luxai.cn/cli.tgz; if ($LASTEXITCODE -eq 0) { zhicui connect }
 ```
 
-已安装后只需 `zhicui connect`；Claude Code 用 `zhicui connect --client claude`。自动安装 MCP 与 Skill、复用有效授权或打开浏览器确认授权，再通过真实工具发现验证连接。默认接入使用 default 配置；其他命名 profile 继续用于单独 CLI 操作。重新连接 Agent 中的知萃 MCP 后生效。
+已安装后只需 `zhicui connect`；Claude Code 用 `zhicui connect --client claude`。自动安装 MCP 与 Skill，复用权限足够的有效连接；首次连接或缺少权限时，一次确认日常使用需要的范围，再通过真实工具发现验证连接。新版已登录桌面客户端会直接显示确认页；不支持或未能打开时，使用同一授权的浏览器页面。默认接入使用 default 配置；其他命名 profile 继续用于单独 CLI 操作。重新连接 Agent 中的知萃 MCP 后生效。
 
 ## 同步最近 200 条，自动连接与续跑（1.0.14 起）
 
@@ -63,12 +77,13 @@ zhicui mcp serve --stdio
 
 `agent update` 可迁移旧入口；桌面启动使用 `agent reconcile --client all --json --non-interactive`，只核对已接入项。CLI 按原安装完整性记录，或已验收发行包的全部执行文件 SHA-256 识别旧注册，不执行旧路径。未知同名配置返回 `AGENT_CONFIG_CONFLICT`，可升级旧入口返回 `AGENT_UPDATE_REQUIRED`。改动过的受管 Skill 会先保存原文备份再同步新版；无所有权标记的自定义 Skill 保留并返回 `SKILL_CONFLICT`。
 
-桌面独立授权协议为 `auth login --jsonl --no-open --non-interactive --timeout 10m`。首条 `device_authorization` 事件包含官方 `verification_url`、`user_code`、`scopes`、`expires_at` 和 `interval_seconds`；用户在浏览器批准后，CLI 将凭据存入系统存储，再发送唯一终态 `authorization_complete`。机器授权码和令牌不出现在事件中。取消时结束该独立进程，原凭据保留；授权过程中另一次登录、退出或新授权会阻止旧结果覆盖当前凭据。
+桌面独立授权协议为 `auth login --jsonl --no-open --non-interactive --timeout 10m`。需要新授权时，首条 `device_authorization` 事件包含官方 `verification_url`、`user_code`、`scopes`、`expires_at`、`interval_seconds` 和 `authorization_target`；用户在知萃批准后，CLI 将凭据存入系统存储，再发送唯一终态 `authorization_complete`。已有足够权限时直接发送 `authorization_complete`，其中 `reused: true`，不生成验证码。机器授权码和令牌不出现在事件中。取消时结束该独立进程，原凭据保留；授权过程中另一次登录、退出或新授权会阻止旧结果覆盖当前凭据。默认等待服务端授权有效期（最多十分钟），显式 `--timeout` 可缩短等待。
 
-设备授权默认只申请普通用户的只读 scope；需要导入、同步、提问或修改计划时，
-请在授权中心明确增选对应写入 scope，CLI 不会自行扩权。
+设备授权与 `connect` 默认使用“日常使用”：`account:read,library:read,library:write,creator:read,ask:read,ask:run,local:invoke`，只申请当前服务已发布的范围，覆盖视频导入、转写、下载和问答。仍需本人确认，已有令牌不会被自动扩权；权限不足时确认新设备连接，本机当前 profile 才会替换凭据。新 PAT 页面提供相同预设，也保留只读和自定义选项。
 
-需要录入视频、同步博主、问答和生成计划时，可明确申请这些权限，再在浏览器批准：
+明确只读可用 `zhicui auth login --scopes library:read`；切换账号或强制重新连接用 `zhicui auth login --force`。`auth status --verify` 返回服务端的实际 `scopes`；`scopes_complete: true` 表示完整授权快照，旧服务仅能根据已授权动作推导时为 `false`，不会把服务的权限目录误报为已授权。
+
+需要额外同步博主、生成计划或详细分析时，先检查服务是否开放对应能力，再明确申请所需权限并在知萃批准：
 
 ```bash
 zhicui auth login --scopes account:read,library:read,library:write,creator:read,creator:sync,ask:read,ask:run,plan:read,plan:write,analysis:read,analysis:run

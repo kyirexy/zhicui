@@ -364,6 +364,7 @@ def capabilities(
             allow_browser_session=True,
         )
         scopes = principal.scopes if principal is not None else None
+        allowed_scopes = allowed_scope_ids()
         actions = [
             item for item in registry.capabilities(scopes=scopes)
             if action_is_enabled(item.id)
@@ -375,7 +376,9 @@ def capabilities(
                 "feature_enabled": True,
                 "user_hash": agent_user_hash(principal.user.id) if principal is not None else None,
                 "actions": [item.model_dump(mode="json") for item in actions],
-                "scopes": [item for item in SCOPES if item["id"] in allowed_scope_ids()],
+                # scopes 是发布权限目录；当前凭证的实际授权单独返回，匿名请求为 null。
+                "scopes": [item for item in SCOPES if item["id"] in allowed_scopes],
+                "granted_scopes": sorted(scopes & allowed_scopes) if scopes is not None else None,
                 **profile_metadata(),
                 "transports": {
                     "http": f"{str(request.base_url).rstrip('/')}/api/agent-interface/v1",

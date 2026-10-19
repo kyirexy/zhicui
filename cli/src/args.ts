@@ -6,6 +6,7 @@ export interface GlobalOptions {
   nonInteractive: boolean;
   quiet: boolean;
   timeoutMs: number;
+  timeoutSpecified?: boolean;
   idempotencyKey?: string;
   apiUrl: string;
   profile: string;
@@ -107,6 +108,7 @@ export function parseInvocation(argv: string[]): ParsedInvocation {
     else if (flagName === '--timeout') {
       const parsed = readOptionValue(argv, index, item);
       options.timeoutMs = parseDuration(parsed.value);
+      options.timeoutSpecified = true;
       index += parsed.consumed;
     } else if (flagName === '--idempotency-key') {
       const parsed = readOptionValue(argv, index, item);

@@ -23,7 +23,7 @@ const SCOPE_LABELS: Record<string, string> = {
   'analysis:read': '读取详细解析', 'analysis:run': '运行详细解析',
   'models:read': '读取模型设置', 'models:write': '修改模型设置',
   'feedback:read': '读取反馈', 'feedback:write': '提交反馈',
-  'local:invoke': '调用本机能力',
+  'local:invoke': '调用本机能力（由你发起的按需同步）',
 };
 
 function authorizationError(error: unknown): string {
@@ -129,12 +129,12 @@ export default function AgentDeviceAuthorizationCard({ initialCode }: { initialC
         <h1 id={titleId}>{result === 'approved' ? '已允许连接' : result === 'denied' ? '已拒绝连接' : '允许这个 Agent 连接知萃？'}</h1>
         {result ? (
           <div role="status">
-            <p>{result === 'approved' ? '授权结果会自动发送给刚才的客户端或 Agent，无需复制令牌。回到原来的任务即可查看后续进度。' : '这次请求未获得访问权限，可以关闭此页面。'}</p>
+            <p>{result === 'approved' ? '授权结果会自动发送给刚才的客户端或 Agent，无需复制令牌。回到原任务即可继续，后续可复用这次连接已获准的权限。' : '这次请求未获得访问权限，可以关闭此页面。'}</p>
             <Link className={styles.link} href="/">返回知萃</Link>
           </div>
         ) : (
           <>
-            <p>确认是你刚发起的连接，再允许访问。</p>
+            <p>核对这次连接的请求方和权限后即可继续原任务。已有连接的权限不会自动改变。</p>
             <p className={styles.account}>当前账号：<strong>{user?.username || user?.email}</strong></p>
             <form onSubmit={(event) => { event.preventDefault(); void preview(code); }} className={styles.form}>
               <label htmlFor={`${titleId}-code`}>授权码</label>
@@ -142,7 +142,7 @@ export default function AgentDeviceAuthorizationCard({ initialCode }: { initialC
                 <input id={`${titleId}-code`} value={code} maxLength={16} autoComplete="one-time-code" spellCheck={false}
                   placeholder="ABCD-EFGH" disabled={Boolean(decision)}
                   onChange={(event) => { generation.current += 1; setLoading(false); setCode(event.target.value.toUpperCase()); setRequest(null); setError(''); }} />
-                <button type="submit" disabled={loading || Boolean(decision) || !cleanCode}>{loading ? '正在核对…' : '核对授权码'}</button>
+                <button type="submit" disabled={checked || loading || Boolean(decision) || !cleanCode}>{loading ? '正在核对…' : checked ? '已核对' : '核对授权码'}</button>
               </div>
             </form>
             {checked && request && (

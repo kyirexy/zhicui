@@ -103,6 +103,7 @@ export interface DesktopAgentActionBridgeOptions {
   descriptorDirectory: string;
   version: string;
   channel: string;
+  serverOrigin: string;
   platformAccounts: PlatformAccountConnector;
   getMediaLibrary: () => DesktopMediaLibrary | null;
   getWindow: () => BrowserWindow | null;
@@ -395,6 +396,7 @@ export class DesktopAgentActionBridge {
     if (request.method === 'GET' && request.url === '/v1/connection') {
       sendJson(response, 200, { api_version: 'v1', version: this.options.version,
         state: this.options.connectionState?.() || (this.activeProfileKey ? 'ready' : 'signed_out'),
+        agent_authorization: { supported: true, server_origin: this.options.serverOrigin },
         max_sync_items: 500 });
       return;
     }

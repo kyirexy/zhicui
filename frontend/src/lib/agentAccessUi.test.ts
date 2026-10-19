@@ -103,7 +103,7 @@ test('PAT 创建在首屏连接区始终可见，服务关闭时只禁用创建�
   assert.ok(patPosition > component.indexOf('<AgentQuickConnect'));
   assert.ok(patPosition < component.indexOf('aria-labelledby="device-authorization-title"'));
   assert.doesNotMatch(component, /高级接入：个人访问令牌/);
-  assert.match(component, /disabled=\{creating \|\| loading \|\| interfaceDisabled \|\| Boolean\(oneTimeToken\)\}/);
+  assert.match(component, /disabled=\{creating \|\| loading \|\| !capabilities \|\| interfaceDisabled \|\| Boolean\(oneTimeToken\)\}/);
   assert.match(component, /当前环境的 Agent 接口尚未启用/);
   assert.doesNotMatch(component, /localStorage\.setItem|sessionStorage\.setItem|console\.log/);
 });
@@ -116,29 +116,45 @@ test('独立授权页与旧设置入口衔接，网页不再只能下载客户�
   assert.match(page, /AgentAccessSettingsCard/);
   assert.match(settings, /router\.push\('\/agent-access'\)/);
   assert.match(guard, /pathname === '\/settings' && params\.get\('section'\) === 'agent'/);
-  assert.match(quickConnect, /<code>\{loginCommand\}<\/code>/);
-  assert.match(quickConnect, /输入设备授权码/);
+  assert.match(quickConnect, /<code>\{displayedCommand/);
+  assert.match(quickConnect, /已有授权码/);
 });
 
-test('基础接入提示公开链接能力和按需写入授权，默认权限保持不变', () => {
+test('新PAT和网页命令共享日常预设，保留只读与自定义且按可用scope过滤', () => {
   const component = read('components/AgentAccessSettingsCard.tsx');
   const quickConnect = read('components/AgentQuickConnect.tsx');
-  const prompt = read('lib/agentQuickConnect.ts');
   assert.match(component, /capabilities\?\.release_profile === 'core'/);
   assert.match(component, /capabilities \? capabilities\.scopes : FALLBACK_SCOPES/);
   assert.match(component, /基础接入 · 公开链接提取、资料问答、知识与计划/);
-  assert.match(component, /默认只读查看资料/);
-  assert.match(component, /获得“整理资料（library:write）”授权后/);
-  assert.match(component, /你指定的抖音\/B站公开链接导入资料、提取文稿和下载视频/);
-  assert.match(component, /暂不开放平台账号批量同步、本机桥接或视觉自动化/);
-  assert.match(component, /useState<string\[\]>\(\['library:read'\]\)/);
+  assert.match(component, /推荐“日常使用”/);
+  assert.match(component, /你指定的抖音\/B站公开链接导入资料、提取文稿、下载视频/);
+  assert.match(component, /本机按需同步以服务和客户端开放的能力为准/);
+  assert.match(component, /useState<AgentScopePreset>\('daily'\)/);
+  assert.match(component, /agentPresetScopes\(scopePreset, availableScopes\.map/);
+  assert.match(component, /setScopePreset\('custom'\)/);
+  assert.match(component, /loading \|\| !capabilities \? '' : agentLoginCommand/);
+  assert.match(component, /if \(interfaceDisabled \|\| loading \|\| creating \|\| !capabilities\) return/);
+  assert.match(component, /<option value="read-only">只读访问<\/option>/);
+  assert.match(component, /已有只读令牌保持原权限/);
   assert.doesNotMatch(component, /平台同步、视频下载和新文稿提取请先在知萃客户端完成/);
   assert.match(quickConnect, /coreAccess \? AGENT_CORE_HANDOFF_PROMPT/);
-  assert.match(quickConnect, /导入链接、提取文稿和下载视频前，按需追加 library:write 授权/);
+  assert.match(quickConnect, /const displayedCommand = loginCommand/);
+  assert.match(quickConnect, /优先在已登录的桌面客户端核对请求方和权限/);
+  assert.match(quickConnect, /登录后会回到同一个授权请求/);
+  assert.doesNotMatch(quickConnect, /在浏览器确认权限/);
   assert.match(read('components/AgentDeviceAuthorizationCard.tsx'), /整理资料库（导入公开链接、提取文稿和下载视频）/);
-  const command = prompt.match(/CORE_AGENT_LOGIN_COMMAND = '([^']+)'/)?.[1] || '';
-  assert.match(command, /ask:run/);
-  assert.doesNotMatch(command, /creator:sync|library:write|analysis:|local:invoke/);
+});
+
+test('已登录授权自动核对请求但仍由用户明确允许，登录返回保留授权码', () => {
+  const authorization = read('components/AgentDeviceAuthorizationCard.tsx');
+  assert.match(authorization, /if \(initialCode\) void preview\(initialCode\)/);
+  assert.match(authorization, /if \(!checked \|\| !request \|\| decisionLock\.current \|\| result\) return/);
+  assert.match(authorization, /onClick=\{\(\) => void decide\(true\)\}/);
+  assert.match(authorization, /request\.details\.scopes\.map/);
+  const guard = read('components/AuthGuard.tsx');
+  assert.match(guard, /window\.location\.search/);
+  assert.match(guard, /encodeURIComponent\(requestedPath\)/);
+  assert.match(read('app/login/page.tsx'), /getSafeRedirect/);
 });
 
 test('桌面网页登录交接保留不透明 Agent 账号标识并立即绑定', () => {

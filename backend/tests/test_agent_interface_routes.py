@@ -154,6 +154,113 @@ class AgentInterfaceRouteTests(unittest.TestCase):
             {"account.me", "run.get", "run.events"},
         )
 
+    def test_capabilities_distinguishes_public_catalog_from_browser_grants(self) -> None:
+        with patch.object(settings, "AGENT_INTERFACE_PROFILE", "core"):
+            public = self.client.get("/api/agent-interface/v1/capabilities")
+            self.assertEqual(public.status_code, 200, public.text)
+            public_data = public.json()["data"]
+            self.assertIsNone(public_data["granted_scopes"])
+            self.assertIsNone(public_data["user_hash"])
+            catalog = {item["id"] for item in public_data["scopes"]}
+            self.assertIn("library:write", catalog)
+
+            browser = self.client.get(
+                "/api/agent-interface/v1/capabilities",
+                headers={"Authorization": f"Bearer {self.jwt}"},
+            )
+            self.assertEqual(browser.status_code, 200, browser.text)
+            self.assertEqual(browser.json()["data"]["granted_scopes"], sorted(catalog))
+            self.assertNotIn(self.jwt, browser.text)
+
+    def test_capabilities_reads_pat_grants_without_account_scope_or_write_escalation(self) -> None:
+        with patch.object(settings, "AGENT_INTERFACE_PROFILE", "core"):
+            with self.Session() as db:
+                credential, token = issue_pat(
+                    db, user_id=self.user_id, name="只读权限自查",
+                    scopes=["library:read"], expires_in_days=1,
+                )
+                credential_id = credential.id
+            headers = {"Authorization": f"Bearer {token}"}
+            response = self.client.get("/api/agent-interface/v1/capabilities", headers=headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            data = response.json()["data"]
+            self.assertEqual(data["granted_scopes"], ["library:read"])
+            self.assertIn("library:write", {item["id"] for item in data["scopes"]})
+            self.assertIsNotNone(data["user_hash"])
+            self.assertNotIn(token, response.text)
+            actions = {item["id"] for item in data["actions"]}
+            self.assertIn("library.get", actions)
+            self.assertNotIn("library.import_link", actions)
+            self.assertNotIn("account.me", actions)
+
+            for action_id, required_scope in (
+                ("account.me", "account:read"),
+                ("library.import_link", "library:write"),
+            ):
+                with self.subTest(action=action_id):
+                    denied = self.client.post(
+                        f"/api/agent-interface/v1/actions/{action_id}/invoke",
+                        headers=headers,
+                        json={"input": {}, "idempotency_key": f"denied-{action_id}"},
+                    )
+                    self.assertEqual(denied.status_code, 403, denied.text)
+                    error = denied.json()["error"]
+                    self.assertEqual(error["code"], "SCOPE_DENIED")
+                    self.assertEqual(error["details"]["required_scopes"], [required_scope])
+                    self.assertEqual(error["details"]["missing_scopes"], [required_scope])
+
+            mcp = self.client.post(
+                "/mcp", headers=headers,
+                json={
+                    "jsonrpc": "2.0", "id": "readonly-import", "method": "tools/call",
+                    "params": {"name": "library.import_link", "arguments": {}},
+                },
+            ).json()
+            self.assertTrue(mcp["result"]["isError"], mcp)
+            error = mcp["result"]["structuredContent"]["error"]
+            self.assertEqual(error["code"], "SCOPE_DENIED")
+            self.assertEqual(error["details"]["required_scopes"], ["library:write"])
+            self.assertEqual(error["details"]["missing_scopes"], ["library:write"])
+            with self.Session() as db:
+                self.assertEqual(db.get(AgentCredential, credential_id).scopes, ["library:read"])
+                self.assertEqual(db.query(ProductActionRun).count(), 0)
+
+    def test_capabilities_filters_legacy_pat_grants_by_current_release_profile(self) -> None:
+        granted = ["creator:sync", "library:read"]
+        with patch.object(settings, "AGENT_INTERFACE_PROFILE", "full"):
+            with self.Session() as db:
+                credential, token = issue_pat(
+                    db, user_id=self.user_id, name="旧版权限自查",
+                    scopes=granted, expires_in_days=1,
+                )
+                credential_id = credential.id
+            headers = {"Authorization": f"Bearer {token}"}
+            full = self.client.get("/api/agent-interface/v1/capabilities", headers=headers)
+            self.assertEqual(full.status_code, 200, full.text)
+            self.assertEqual(full.json()["data"]["granted_scopes"], granted)
+
+        with patch.object(settings, "AGENT_INTERFACE_PROFILE", "core"):
+            core = self.client.get("/api/agent-interface/v1/capabilities", headers=headers)
+            self.assertEqual(core.status_code, 200, core.text)
+            self.assertEqual(core.json()["data"]["granted_scopes"], ["library:read"])
+            with self.Session() as db:
+                self.assertEqual(db.get(AgentCredential, credential_id).scopes, granted)
+
+    def test_capabilities_authenticated_empty_grants_are_not_anonymous(self) -> None:
+        with patch.object(settings, "AGENT_INTERFACE_PROFILE", "full"), self.Session() as db:
+            _, token = issue_pat(
+                db, user_id=self.user_id, name="已收窄发布范围",
+                scopes=["creator:sync"], expires_in_days=1,
+            )
+        with patch.object(settings, "AGENT_INTERFACE_PROFILE", "core"):
+            response = self.client.get(
+                "/api/agent-interface/v1/capabilities",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["data"]["granted_scopes"], [])
+            self.assertIsNotNone(response.json()["data"]["user_hash"])
+
     def test_capabilities_pat_invoke_runs_events_and_mcp(self) -> None:
         capabilities = self.client.get("/api/agent-interface/v1/capabilities")
         self.assertEqual(capabilities.status_code, 200)

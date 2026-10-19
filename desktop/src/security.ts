@@ -69,6 +69,20 @@ export function isTrustedAppUrl(rawUrl: string): boolean {
   }
 }
 
+/** 外部链接只能携带待确认的授权码，目标始终是当前客户端的可信站点。 */
+export function agentAuthorizationDestination(rawDeepLink: string, appUrl: URL): string | null {
+  if (!isTrustedOrigin(appUrl.origin) || /[\s\u0000-\u001f\u007f]/.test(rawDeepLink)
+    || rawDeepLink.length > 256) return null;
+  // 固定协议、主机、空路径与唯一参数；拒绝 URL 解析器可能忽略的空片段等额外语法。
+  const match = /^zhicui:\/\/agent-authorize\?user_code=([A-Za-z2-9]{4}-[A-Za-z2-9]{4})$/.exec(rawDeepLink);
+  const userCode = match?.[1].toUpperCase();
+  // 与服务端生成规则一致：去除易混淆字符，每四位一组。
+  if (!userCode || !/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/.test(userCode)) return null;
+  const destination = new URL('/agent/authorize', appUrl.origin);
+  destination.searchParams.set('user_code', userCode);
+  return destination.toString();
+}
+
 export function assertTrustedIpcSender(event: IpcMainInvokeEvent): void {
   const senderUrl = event.senderFrame?.url || '';
   if (!isTrustedAppUrl(senderUrl)) {

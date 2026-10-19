@@ -56,10 +56,13 @@ import {
 } from '@/lib/desktopRuntime';
 import styles from './AgentAccessSettingsCard.module.css';
 import AgentQuickConnect from './AgentQuickConnect';
-import { CORE_AGENT_LOGIN_COMMAND } from '@/lib/agentQuickConnect';
+import { DAILY_AGENT_SCOPES, agentLoginCommand, agentPresetScopes, type AgentScopePreset } from '@/lib/agentQuickConnect';
 
 const FALLBACK_SCOPES: AgentScopeDefinition[] = [
+  { id: 'account:read', title: '读取账号', description: '识别当前连接的知萃账号。' },
   { id: 'library:read', title: '读取资料', description: '查看你已保存的视频资料与文稿。' },
+  { id: 'creator:read', title: '读取博主', description: '查看你保存的博主与作品。' },
+  { id: 'ask:read', title: '读取问答', description: '查看你已有的资料问答。' },
   { id: 'ask:run', title: '发起问答', description: '基于你选择的资料创建和继续问答。' },
   { id: 'knowledge:read', title: '读取知识', description: '查看你保存的知识与卡片。' },
   { id: 'plan:read', title: '读取计划', description: '查看你的计划与任务状态。' },
@@ -118,7 +121,6 @@ export default function AgentAccessSettingsCard({
   const platform = resolveAgentAccessPlatform({ desktop: isDesktop, android: nativeAndroid, ios: nativeIOS });
   const [capabilities, setCapabilities] = useState<AgentCapabilities | null>(null);
   const coreAccess = capabilities?.release_profile === 'core';
-  const loginCommand = coreAccess ? CORE_AGENT_LOGIN_COMMAND : 'zhicui auth login';
   const [credentials, setCredentials] = useState<AgentCredential[]>([]);
   const [devices, setDevices] = useState<AgentDeviceConnection[]>([]);
   const [recentCalls, setRecentCalls] = useState<AgentRecentCall[]>([]);
@@ -140,7 +142,8 @@ export default function AgentAccessSettingsCard({
   const [copied, setCopied] = useState('');
   const [patName, setPatName] = useState('我的 Agent');
   const [expiryDays, setExpiryDays] = useState(90);
-  const [selectedScopes, setSelectedScopes] = useState<string[]>(['library:read']);
+  const [scopePreset, setScopePreset] = useState<AgentScopePreset>('daily');
+  const [selectedScopes, setSelectedScopes] = useState<string[]>([...DAILY_AGENT_SCOPES]);
   const [creating, setCreating] = useState(false);
   const [oneTimeToken, setOneTimeToken] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState('');
@@ -424,13 +427,22 @@ export default function AgentAccessSettingsCard({
   }, [capabilities]);
 
   useEffect(() => {
-    const safe = new Set(availableScopes.map((scope) => scope.id));
-    setSelectedScopes((current) => {
-      const retained = current.filter((scope) => safe.has(scope));
-      if (retained.length > 0) return retained;
-      return safe.has('library:read') ? ['library:read'] : availableScopes.slice(0, 1).map((scope) => scope.id);
-    });
-  }, [availableScopes]);
+    setSelectedScopes((current) => agentPresetScopes(scopePreset, availableScopes.map((scope) => scope.id), current));
+  }, [availableScopes, scopePreset]);
+
+  const loginCommand = loading || !capabilities ? '' : agentLoginCommand(
+    agentPresetScopes(scopePreset, availableScopes.map((scope) => scope.id), selectedScopes),
+  );
+
+  const clearPatScopeError = () => {
+    if (errorContext === 'pat' && error === '请至少选择一项权限') setError('');
+  };
+
+  const selectScopePreset = (preset: AgentScopePreset) => {
+    clearPatScopeError();
+    setScopePreset(preset);
+    setSelectedScopes((current) => agentPresetScopes(preset, availableScopes.map((scope) => scope.id), current));
+  };
 
   const scopeMap = useMemo(
     () => new Map(availableScopes.map((scope) => [scope.id, scope])),
@@ -450,6 +462,8 @@ export default function AgentAccessSettingsCard({
   };
 
   const toggleScope = (scope: string) => {
+    clearPatScopeError();
+    setScopePreset('custom');
     setSelectedScopes((current) => (
       current.includes(scope)
         ? current.filter((item) => item !== scope)
@@ -458,8 +472,8 @@ export default function AgentAccessSettingsCard({
   };
 
   const submitPat = async () => {
-    if (interfaceDisabled || loading || creating) return;
-    const scopes = safeAgentScopes(selectedScopes);
+    if (interfaceDisabled || loading || creating || !capabilities) return;
+    const scopes = safeAgentScopes(agentPresetScopes(scopePreset, availableScopes.map((scope) => scope.id), selectedScopes));
     if (!patName.trim()) {
       setErrorContext('pat');
       setError('请填写一个便于识别的连接名称');
@@ -604,7 +618,7 @@ export default function AgentAccessSettingsCard({
         </span>
       </section>
 
-      {coreAccess && <p className={styles.capabilityHint}>默认只读查看资料。获得“整理资料（library:write）”授权后，可按你指定的抖音/B站公开链接导入资料、提取文稿和下载视频；暂不开放平台账号批量同步、本机桥接或视觉自动化。</p>}
+      {coreAccess && <p className={styles.capabilityHint}>推荐“日常使用”：一次申请当前服务支持的导入、文稿提取、视频下载和问答权限。本机按需同步以服务和客户端开放的能力为准，操作仍由你发起；已有连接的权限不会改变。</p>}
 
       {interfaceDisabled && (
         <div className={styles.serviceBanner} role="status">
@@ -621,6 +635,8 @@ export default function AgentAccessSettingsCard({
         interfaceDisabled={interfaceDisabled}
         releaseProfile={capabilities?.release_profile}
         loginCommand={loginCommand}
+        scopePreset={scopePreset}
+        onScopePresetChange={selectScopePreset}
         pending={localPending}
         copied={copied === 'agent-prompt'}
         commandCopied={copied === 'login'}
@@ -677,11 +693,23 @@ export default function AgentAccessSettingsCard({
           </label>
         </div>
 
-        <details className={styles.scopePicker}>
+        <label className={styles.presetPicker}>
+          <span>新连接的权限预设</span>
+          <select value={scopePreset} disabled={loading || interfaceDisabled || creating} onChange={(event) => selectScopePreset(event.target.value as AgentScopePreset)}>
+            <option value="daily">日常使用（推荐）</option>
+            <option value="read-only">只读访问</option>
+            <option value="custom">自定义权限</option>
+          </select>
+        </label>
+        <p className={styles.selectedScopes}>{scopePreset === 'daily'
+          ? '包含当前服务可用的资料导入、提取、下载、问答和本机按需同步权限，连接后可复用。'
+          : scopePreset === 'read-only' ? '只查看已有资料、博主与对话，不申请写入、运行问答或本机调用权限。'
+            : '勾选本次新连接需要的权限；上方 CLI 命令同步使用你的选择。'}</p>
+        <details className={styles.scopePicker} id="agent-permissions" open={scopePreset === 'custom'}>
           <summary>访问权限 <span>已选择 {selectedScopes.length} 项 · 点击调整</span></summary>
-        <fieldset className={styles.scopeFieldset} disabled={interfaceDisabled || creating}>
+        <fieldset className={styles.scopeFieldset} disabled={loading || !capabilities || interfaceDisabled || creating}>
           <legend>选择权限</legend>
-          <p>从最小权限开始；以后需要更多能力时可新建令牌。</p>
+          <p>只显示当前服务支持的权限。调整勾选会切换为自定义，不会修改已有令牌。</p>
           <div className={styles.scopeGrid}>
             {availableScopes.map((scope) => {
               const selected = selectedScopes.includes(scope.id);
@@ -710,12 +738,13 @@ export default function AgentAccessSettingsCard({
           </p>
         )}
         <div className={styles.formActions}>
-          <button type="button" disabled={creating || loading || interfaceDisabled || Boolean(oneTimeToken)} onClick={() => void submitPat()}>
+          <button type="button" disabled={creating || loading || !capabilities || interfaceDisabled || Boolean(oneTimeToken)} onClick={() => void submitPat()}>
             {creating ? <Loader2 size={16} /> : <KeyRound size={16} />}
             {creating ? '正在创建…' : '创建个人访问令牌'}
           </button>
         </div>
-        <p className={styles.authorizationHint}>{interfaceDisabled ? '接口启用后即可创建，权限设置不会自动授权。' : '默认只允许读取资料。完整令牌仅创建时显示，可随时在下方吊销。'}</p>
+        <p className={styles.authorizationHint}>{interfaceDisabled ? '接口启用后即可创建，权限设置不会自动授权。' : !capabilities ? '正在等待服务提供可用权限，加载完成后即可创建。' : '预设只用于新连接；已有只读令牌保持原权限。完整令牌仅创建时显示，可随时在下方吊销。'}</p>
+        {!loading && !capabilities && !interfaceDisabled && <button type="button" onClick={() => void loadAccessData()}>重新加载权限</button>}
       </section>
       </div>
 
@@ -1002,7 +1031,7 @@ export default function AgentAccessSettingsCard({
           </header>
           <div className={styles.commandGrid}>
             <CommandRow
-              label="浏览器授权"
+              label="在知萃确认授权"
               value={loginCommand}
               copied={copied === 'login'}
               onCopy={() => void runCopy('login', loginCommand)}
@@ -1194,8 +1223,8 @@ function CommandRow({
   return (
     <div className={styles.commandRow}>
       <span>{label}</span>
-      <code>{value}</code>
-      <button type="button" onClick={onCopy}>
+      <code>{value || '请先加载并选择可用权限'}</code>
+      <button type="button" disabled={!value} onClick={onCopy}>
         {copied ? <Check size={15} /> : <Clipboard size={15} />}
         {copied ? '已复制' : '复制'}
       </button>

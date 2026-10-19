@@ -37,6 +37,7 @@ import { DesktopMediaLibrary } from './media-library';
 import { PlatformAccountConnector } from './platform-account';
 import { ZhicuiWebLogin } from './zhicui-login';
 import {
+  agentAuthorizationDestination,
   assertTrustedIpcSender,
   configuredAppUrl,
   isTrustedAppUrl,
@@ -97,6 +98,8 @@ if (!hasSingleInstanceLock) {
 
 function desktopDestination(deepLink?: string | null): string {
   const appUrl = configuredAppUrl();
+  const authorizationUrl = deepLink ? agentAuthorizationDestination(deepLink, appUrl) : null;
+  if (authorizationUrl) return authorizationUrl;
   if (deepLink?.startsWith(`${DEEP_LINK_PREFIX}douyin-login`)) {
     appUrl.pathname = '/library';
     appUrl.searchParams.set('desktopLogin', '1');
@@ -540,6 +543,7 @@ app.whenReady().then(async () => {
     descriptorDirectory: app.isPackaged ? desktopBridgeDirectory() : join(app.getPath('userData'), 'agent-bridge'),
     version: app.getVersion(),
     channel: BUILD_IDENTITY.channel,
+    serverOrigin: configuredAppUrl().origin,
     platformAccounts,
     getMediaLibrary: () => mediaLibrary,
     getWindow: () => mainWindow,

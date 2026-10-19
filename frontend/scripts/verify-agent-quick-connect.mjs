@@ -13,13 +13,18 @@ const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH 
 const results = [];
 const errors = [];
 const fixtureUser = { id: 'agent-ui-fixture', email: 'fixture@example.invalid', username: '接入验收', is_active: true, is_admin: false, email_verified: true, agent_profile_key: 'fixture-profile', created_at: '2026-09-01T00:00:00Z' };
-const fixtureToken = `fixture.${Buffer.from(JSON.stringify({ sub: fixtureUser.id, exp: Math.floor(Date.now() / 1000) + 3600 })).toString('base64url')}.fixture`;
+const fixtureToken = `fixture.${Buffer.from(JSON.stringify({ sub: fixtureUser.id, sid: 'agent-ui-session', exp: Math.floor(Date.now() / 1000) + 3600 })).toString('base64url')}.fixture`;
+const dailyScopes = ['account:read', 'library:read', 'library:write', 'creator:read', 'ask:read', 'ask:run', 'local:invoke'];
+const readOnlyScopes = ['account:read', 'library:read', 'creator:read', 'ask:read'];
 
-async function scenario(name, { disabled = false, desktop = true, nativeMobile = !desktop, legacy = false, resume = false, cancelRetry = false, pat = false, profile = 'full' } = {}) {
+async function scenario(name, { disabled = false, desktop = true, nativeMobile = !desktop, legacy = false, resume = false, cancelRetry = false, pat = false, presets = false, profile = 'full' } = {}) {
+  const availableScopes = presets ? [...dailyScopes.filter(scope => profile !== 'core' || !['creator:read', 'local:invoke'].includes(scope)), 'knowledge:read'] : ['library:read'];
+  const patRequests = [];
+  const existingCredential = { id: 'existing-readonly', type: 'pat', name: '已有只读连接', token_prefix: 'zhc_pat_existing', scopes: ['library:read'], created_at: '2026-09-01T00:00:00Z', expires_at: null, revoked_at: null, last_used_at: null };
   const context = await browser.newContext({ viewport: { width: desktop || !nativeMobile ? 1440 : 390, height: 1000 }, permissions: ['clipboard-read', 'clipboard-write'], bypassCSP: true });
   const page = await context.newPage();
   page.on('pageerror', error => errors.push(`${name}: ${error.message}`));
-  await context.addInitScript(({ desktop, nativeMobile, legacy, disabled, resume, fixtureToken }) => {
+  await context.addInitScript(({ desktop, nativeMobile, legacy, disabled, resume, fixtureToken, fixtureUser }) => {
     localStorage.setItem('zhicui_token', fixtureToken);
     const state = window.__agentFixture = { configured: resume, authorized: false, calls: [], listeners: new Set(), pending: null, copied: '', activeId: resume ? '90f2d2a8-9b24-4336-9ac5-3e5f10c587fc' : null, activeClient: resume ? 'claude' : 'codex' };
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async value => { state.copied = value; } } });
@@ -43,6 +48,7 @@ async function scenario(name, { disabled = false, desktop = true, nativeMobile =
       code: disabled ? 'INTERFACE_DISABLED' : state.authorized ? 'READY' : 'AUTH_REQUIRED', message: '连接检查' });
     const target = {
       getRuntimeInfo: async () => ({ desktop: true, platform: 'win32', version: legacy ? '1.1.7' : '1.1.8', packaged: true, channel: 'beta', displayName: '知萃' }),
+      restoreAuthSession: async () => ({ token: fixtureToken, user: fixtureUser }),
       getZhicuiSession: async () => null,
       getAgentIntegrationStatus: async () => ({ available: true, cli_available: true, clients: [current()],
         ...(legacy ? {} : { capabilities: { version: 2, supports_authorization: true, managed_updates: true }, setup_prompt: '请使用当前知萃客户端内置 CLI 接入，不要读取凭据。' }),
@@ -68,20 +74,22 @@ async function scenario(name, { disabled = false, desktop = true, nativeMobile =
       if (String(key).startsWith('on')) return () => () => {};
       return async () => ({ success: true, status: 'idle' });
     } });
-  }, { desktop, nativeMobile, legacy, disabled, resume, fixtureToken });
+  }, { desktop, nativeMobile, legacy, disabled, resume, fixtureToken, fixtureUser });
   await context.route('**/*', async route => {
     const url = new URL(route.request().url());
     if (url.pathname.startsWith('/api/')) {
       if (url.pathname.startsWith('/api/agent-interface/')) {
         if (disabled) return route.fulfill({ status: 503, json: { status: 'failed', error: { code: 'INTERFACE_DISABLED', message: '尚未开放' }, data: null } });
         let data = { items: [] };
-        if (url.pathname.endsWith('/capabilities')) data = { release_profile: profile, limitations: [], feature_enabled: true, actions: [], scopes: [{ id: 'library:read', title: '读取资料', description: '查看视频资料' }], user_hash: 'fixture-profile' };
+        if (url.pathname.endsWith('/capabilities')) data = { release_profile: profile, limitations: [], feature_enabled: true, actions: [], scopes: availableScopes.map(id => ({ id, title: id, description: '当前服务可用权限' })), user_hash: 'fixture-profile' };
+        if (url.pathname.endsWith('/credentials')) data = { items: [existingCredential] };
         if (url.pathname.endsWith('/credentials/pat')) {
           const input = route.request().postDataJSON();
-          assert.deepEqual(input.scopes, ['library:read']);
-          data = { token: 'zhc_pat_fixture_not_a_real_token', credential: { id: 'pat-fixture', type: 'pat', name: input.name, token_prefix: 'zhc_pat_fixture', scopes: input.scopes, created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 86400000).toISOString(), revoked_at: null, last_used_at: null } };
+          patRequests.push(input);
+          if (!presets) assert.deepEqual(input.scopes, ['library:read']);
+          data = { token: 'zhc_pat_fixture_not_a_real_token', credential: { id: `pat-fixture-${patRequests.length}`, type: 'pat', name: input.name, token_prefix: 'zhc_pat_fixture', scopes: input.scopes, created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 86400000).toISOString(), revoked_at: null, last_used_at: null } };
         }
-        if (url.pathname.endsWith('/auth/device/request')) data = { client_name: '知萃桌面连接', client_type: 'cli', scopes: ['library:read', 'ask:run', 'local:invoke'], expires_at: '2026-09-15T00:00:00Z' };
+        if (url.pathname.endsWith('/auth/device/request')) data = { client_name: '知萃桌面连接', client_type: 'cli', scopes: ['library:read', 'ask:run', 'local:invoke'], expires_at: new Date(Date.now() + 600000).toISOString() };
         if (url.pathname.endsWith('/auth/device/approve')) {
           const approve = route.request().postDataJSON().approve;
           data = { approved: approve, client_name: '知萃桌面连接' };
@@ -101,7 +109,7 @@ async function scenario(name, { disabled = false, desktop = true, nativeMobile =
   const panel = page.locator('section[aria-labelledby="quick-agent-title"]');
   const patPanel = page.locator('#personal-access-token');
   await patPanel.getByRole('heading', { name: '个人访问令牌 PAT', exact: true }).waitFor();
-  if (profile === 'core') await page.getByText('基础接入 · 已保存资料、文稿问答、知识与计划', { exact: true }).waitFor();
+  if (profile === 'core') await page.getByText('基础接入 · 公开链接提取、资料问答、知识与计划', { exact: true }).waitFor();
   if (disabled) {
     await page.getByText('当前环境的 Agent 接口尚未启用', { exact: true }).waitFor();
     assert.equal(await patPanel.getByRole('button', { name: '创建个人访问令牌', exact: true }).isDisabled(), true);
@@ -115,12 +123,64 @@ async function scenario(name, { disabled = false, desktop = true, nativeMobile =
   }
   if (!desktop) {
     await panel.getByRole('link', { name: '下载知萃电脑客户端' }).waitFor();
-    await panel.getByRole('button', { name: '复制接入提示词' }).click();
+    await panel.getByRole('button', { name: '复制给 Agent，开始连接' }).click();
     assert.match(await page.evaluate(() => window.__agentFixture.copied), /先检查当前会话/);
+    await panel.getByText('手动使用 CLI', { exact: true }).click();
     if (profile === 'core') {
-      assert.match(await page.evaluate(() => window.__agentFixture.copied), /基础接入不支持平台同步/);
-      assert.match(await panel.locator('code').innerText(), /--scopes account:read,library:read,ask:read,ask:run/);
+      assert.match(await page.evaluate(() => window.__agentFixture.copied), /优先使用已登录且支持授权的桌面客户端/);
     }
+    if (presets) {
+      const browserPreset = panel.getByRole('combobox', { name: '新连接的权限', exact: true });
+      const patPreset = patPanel.getByRole('combobox', { name: '新连接的权限预设', exact: true });
+      const checkbox = scope => patPanel.locator('label').filter({ has: page.locator('code', { hasText: new RegExp(`^${scope}$`) }) }).getByRole('checkbox');
+      const assertScopes = async expected => {
+        const checked = await patPanel.locator('label').filter({ has: page.locator('input:checked') }).locator('code').allTextContents();
+        assert.deepEqual(checked.sort(), [...expected].sort());
+        assert.equal(await panel.locator('code').innerText(), expected.length ? `zhicui auth login --scopes '${expected.join(',')}'` : '请先选择至少一项当前可用权限');
+        assert.deepEqual(await page.getByText('已有只读连接', { exact: true }).locator('xpath=ancestor::article').locator('div > span').allTextContents(), ['library:read']);
+      };
+      const createPat = async expected => {
+        const before = patRequests.length;
+        await patPanel.getByRole('button', { name: '创建个人访问令牌', exact: true }).click();
+        await patPanel.getByText('请现在复制令牌', { exact: true }).waitFor();
+        assert.equal(patRequests.length, before + 1);
+        assert.deepEqual(patRequests.at(-1).scopes, [...expected].sort());
+        await patPanel.getByRole('button', { name: '我已保存，关闭', exact: true }).click();
+      };
+      const daily = dailyScopes.filter(scope => availableScopes.includes(scope));
+      const readOnly = readOnlyScopes.filter(scope => availableScopes.includes(scope));
+      assert.equal(await browserPreset.inputValue(), 'daily');
+      assert.equal(await patPreset.inputValue(), 'daily');
+      await assertScopes(daily);
+      await createPat(daily);
+      await browserPreset.selectOption('read-only');
+      assert.equal(await patPreset.inputValue(), 'read-only');
+      await assertScopes(readOnly);
+      await createPat(readOnly);
+      await patPreset.selectOption('custom');
+      assert.equal(await browserPreset.inputValue(), 'custom');
+      assert.equal(await patPanel.locator('#agent-permissions').getAttribute('open'), '');
+      await checkbox('knowledge:read').check();
+      const custom = [...readOnly, 'knowledge:read'];
+      await assertScopes(custom);
+      await createPat(custom);
+      for (const scope of custom) await checkbox(scope).uncheck();
+      await assertScopes([]);
+      assert.equal(await panel.getByRole('button', { name: '复制 CLI 授权命令', exact: true }).isDisabled(), true);
+      const before = patRequests.length;
+      await patPanel.getByRole('button', { name: '创建个人访问令牌', exact: true }).click();
+      const scopeError = patPanel.getByRole('alert').filter({ hasText: '请至少选择一项权限' });
+      await scopeError.waitFor();
+      assert.equal(patRequests.length, before);
+      await checkbox('library:read').check();
+      await scopeError.waitFor({ state: 'hidden' });
+      await checkbox('library:read').uncheck();
+      await patPanel.getByRole('button', { name: '创建个人访问令牌', exact: true }).click();
+      await scopeError.waitFor();
+      await browserPreset.selectOption('daily');
+      await assertScopes(daily);
+      await scopeError.waitFor({ state: 'hidden' });
+    } else assert.equal(await panel.locator('code').innerText(), "zhicui auth login --scopes 'library:read'");
     assert.equal(await panel.locator('button', { hasText: '安装到' }).count(), 0);
   } else if (resume) {
     await page.getByRole('heading', { name: '确认连接权限' }).waitFor();
@@ -150,14 +210,18 @@ async function scenario(name, { disabled = false, desktop = true, nativeMobile =
       assert.equal(await page.evaluate(() => window.__agentFixture.calls.filter(item => item.operation === 'setup').length), 1);
       assert.equal(await page.evaluate(() => window.__agentFixture.calls.filter(item => item.operation === 'authorize').length), cancelRetry ? 2 : 1);
     }
-    await panel.getByRole('button', { name: '复制给 Agent 的提示词', exact: true }).click();
-    assert.match(await page.evaluate(() => window.__agentFixture.copied), /知萃/);
+    const copyPrompt = panel.getByRole('button', { name: '复制给 Agent 的提示词', exact: true });
+    if (disabled) assert.equal(await copyPrompt.isDisabled(), true);
+    else {
+      await copyPrompt.click();
+      assert.match(await page.evaluate(() => window.__agentFixture.copied), /知萃/);
+    }
   }
   assert.equal(await page.locator('[data-nextjs-dialog]').count(), 0);
   const overflow = await panel.evaluate(element => element.scrollWidth > element.clientWidth + 1);
   assert.equal(overflow, false, `${name}: 接入面板不得横向溢出`);
   await page.screenshot({ path: `${output}/${name}.png`, fullPage: true });
-  results.push({ name, passed: true, calls: await page.evaluate(() => window.__agentFixture.calls) });
+  results.push({ name, passed: true, calls: await page.evaluate(() => window.__agentFixture.calls), patScopes: patRequests.map(request => request.scopes) });
   await context.close();
 }
 
@@ -170,6 +234,8 @@ try {
   await scenario('mobile-help', { desktop: false });
   await scenario('browser-pat', { desktop: false, nativeMobile: false, pat: true });
   await scenario('browser-core-pat', { desktop: false, nativeMobile: false, pat: true, profile: 'core' });
+  await scenario('browser-scope-presets', { desktop: false, nativeMobile: false, presets: true });
+  await scenario('browser-core-scope-presets', { desktop: false, nativeMobile: false, presets: true, profile: 'core' });
   assert.deepEqual(errors, []);
   await writeFile(`${output}/browser-report.json`, JSON.stringify({ results, errors, realPlatformAccess: false }, null, 2));
   console.log(JSON.stringify({ passed: results.length, errors }));

@@ -223,6 +223,7 @@ export class RestrictedLocalAdapter {
       }
       return { available: true, api_version: descriptor.api_version, max_sync_items: live?.max_sync_items || 100,
         zhicui_login: live ? 'ready' : 'bound_legacy',
+        ...(live?.agent_authorization ? { agent_authorization: live.agent_authorization } : {}),
         platform_login: { state: 'not_checked', next_action: '发起同步时复用本机平台会话；需要登录或验证才显示官方窗口' } };
     } catch (error) {
       if (error instanceof CliError && error.code === 'LOCAL_USER_MISMATCH') return { available: false, code: error.code, message: error.message };

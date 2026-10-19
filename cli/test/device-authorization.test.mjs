@@ -15,7 +15,7 @@ function tokens() {
     expires_in: 900, scopes: ['library:read'] };
 }
 
-test('core device defaults intersect advertised scopes without granting write capabilities', async (t) => {
+test('core daily device defaults intersect advertised scopes without unrelated write permissions', async (t) => {
   const directory = await temporaryDirectory();
   let requested;
   const server = await startServer(async (request, response) => {
@@ -23,7 +23,7 @@ test('core device defaults intersect advertised scopes without granting write ca
       assert.equal(request.headers.authorization, undefined);
       return json(response, 200, envelope({ release_profile: 'core', scopes: [
         { id: 'account:read' }, { id: 'library:read' }, { id: 'ask:read' },
-        { id: 'ask:run' }, { id: 'plan:write' },
+        { id: 'ask:run' }, { id: 'library:write' }, { id: 'plan:write' },
       ] }));
     }
     if (request.url.endsWith('/auth/device')) {
@@ -37,7 +37,7 @@ test('core device defaults intersect advertised scopes without granting write ca
     env: credentialEnv(directory, server.url),
   });
   assert.equal(result.code, 0, result.stderr);
-  assert.deepEqual(requested, ['account:read', 'library:read', 'ask:read']);
+  assert.deepEqual(requested, ['account:read', 'library:read', 'library:write', 'ask:read', 'ask:run']);
   const events = result.stdout.trim().split('\n').map(JSON.parse);
   assert.deepEqual(events[0].scopes, requested);
 });

@@ -273,7 +273,7 @@ export interface DesktopAgentAuthorizationStatus {
   user_code?: string;
   expires_at?: string;
   scopes?: string[];
-  release_profile?: 'core' | 'full';
+  release_profile?: 'core' | 'full' | 'video_intake';
   message: string;
   code?: string;
 }

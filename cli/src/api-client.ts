@@ -68,7 +68,23 @@ function normalizeAction(value: unknown): AgentActionDefinition {
   };
 }
 
-function normalizeErrorPayload(value: unknown, status: number): CliError {
+function retryAfterSeconds(value: unknown, headers?: Headers): number | undefined {
+  const outer = record(value);
+  const item = record(outer.error ?? outer.detail ?? value);
+  const candidates: unknown[] = [item.retry_after_seconds, outer.retry_after_seconds];
+  const header = headers?.get('Retry-After')?.trim();
+  if (header && /^\d+(?:\.\d+)?$/u.test(header)) {
+    candidates.push(Number(header));
+  } else if (header && /^[A-Za-z]{3,9}(?:,|\s)/u.test(header)) {
+    const deadline = Date.parse(header);
+    if (Number.isFinite(deadline)) candidates.push(Math.max(0, Math.ceil((deadline - Date.now()) / 1_000)));
+  }
+  const valid = candidates.filter((candidate): candidate is number =>
+    typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0);
+  return valid.length ? Math.max(...valid) : undefined;
+}
+
+function normalizeErrorPayload(value: unknown, status: number, headers?: Headers): CliError {
   const outer = record(value);
   const raw = outer.error ?? outer.detail ?? value;
   const item = record(raw);
@@ -86,9 +102,7 @@ function normalizeErrorPayload(value: unknown, status: number): CliError {
   );
   return new CliError(code, message, {
     details: (item.details ?? null) as JsonValue,
-    retryAfterSeconds: typeof item.retry_after_seconds === 'number'
-      ? item.retry_after_seconds
-      : undefined,
+    retryAfterSeconds: retryAfterSeconds(value, headers),
   });
 }
 
@@ -106,7 +120,7 @@ function throwEnvelopeError(envelope: AgentEnvelope): void {
   }
   throw new CliError(envelope.error.code, envelope.error.message, {
     details: envelope.error.details,
-    retryAfterSeconds: envelope.error.retry_after_seconds,
+    retryAfterSeconds: retryAfterSeconds(envelope),
   });
 }
 
@@ -119,7 +133,7 @@ function tokenExpired(credential: StoredCredential): boolean {
 function credentialMetadata(data: RecordValue): {
   expiresAt?: string;
   tokenPrefix?: string;
-  scopes: string[];
+  scopes?: string[];
 } {
   const nested = record(data.credential);
   let expiresAt = stringValue(data.expires_at || nested.expires_at) || undefined;
@@ -129,7 +143,8 @@ function credentialMetadata(data: RecordValue): {
   return {
     expiresAt,
     tokenPrefix: stringValue(data.token_prefix || nested.token_prefix) || undefined,
-    scopes: stringList(data.scopes || nested.scopes),
+    scopes: Array.isArray(data.scopes) ? stringList(data.scopes)
+      : Array.isArray(nested.scopes) ? stringList(nested.scopes) : undefined,
   };
 }
 
@@ -141,7 +156,27 @@ export interface ApiClientOptions {
 }
 
 export class AgentApiClient {
+  private sessionBinding?: Pick<StoredCredential, 'kind' | 'created_at'>;
+
   constructor(readonly options: ApiClientOptions) {}
+
+  /** 批次固定登录代次；每次请求仍读取当前令牌，允许同一次登录续期。 */
+  async bindCurrentSession(): Promise<AgentApiClient> {
+    const credential = await this.options.credentials.load();
+    this.assertBoundSession(credential);
+    if (!credential) throw new CliError('AUTH_REQUIRED', '尚未授权，请先运行 zhicui auth login');
+    const client = new AgentApiClient({ ...this.options });
+    client.sessionBinding = { kind: credential.kind, created_at: credential.created_at };
+    return client;
+  }
+
+  private assertBoundSession(credential: StoredCredential | null): void {
+    if (this.sessionBinding && (!credential
+      || credential.kind !== this.sessionBinding.kind
+      || credential.created_at !== this.sessionBinding.created_at)) {
+      throw new CliError('AUTH_REQUIRED', '登录状态已更改，请重新运行命令');
+    }
+  }
 
   private path(path: string): string {
     return `${this.options.baseUrl}${path.startsWith('/') ? '' : '/'}${path}`;
@@ -149,6 +184,7 @@ export class AgentApiClient {
 
   private async currentCredential(): Promise<StoredCredential | null> {
     let credential = await this.options.credentials.load();
+    this.assertBoundSession(credential);
     if (!credential) return null;
     if ((tokenExpired(credential) || credential.refresh_request_id) && credential.refresh_token) {
       credential = await this.refreshSerialized(credential);
@@ -157,8 +193,10 @@ export class AgentApiClient {
   }
 
   private async refreshSerialized(observed: StoredCredential): Promise<StoredCredential> {
-    return this.options.credentials.withRefreshLock(async () => {
+    this.assertBoundSession(observed);
+    const refreshed = await this.options.credentials.withRefreshLock(async () => {
       const latest = await this.options.credentials.load();
+      this.assertBoundSession(latest);
       // 旧请求只能续用同一次登录；退出或切换账号后，不再重放旧操作。
       if (!latest || latest.kind !== observed.kind || latest.created_at !== observed.created_at) {
         throw new CliError('AUTH_REQUIRED', '登录状态已更改，请重新运行命令');
@@ -172,6 +210,8 @@ export class AgentApiClient {
       }
       return this.exchangeRefreshToken(latest);
     }, Math.min(this.options.timeoutMs, 20_000));
+    if (this.sessionBinding) this.assertBoundSession(await this.options.credentials.load());
+    return refreshed;
   }
 
   private async request(
@@ -194,7 +234,9 @@ export class AgentApiClient {
     if (this.options.idempotencyKey && !headers.has('Idempotency-Key')) {
       headers.set('Idempotency-Key', this.options.idempotencyKey);
     }
-    const credential = authenticated ? retryCredential ?? await this.currentCredential() : null;
+    const credential = authenticated
+      ? (retryCredential && !this.sessionBinding ? retryCredential : await this.currentCredential())
+      : null;
     if (authenticated) {
       if (!credential) {
         throw new CliError('AUTH_REQUIRED', '尚未授权，请先运行 zhicui auth login');
@@ -222,11 +264,17 @@ export class AgentApiClient {
         try {
           payload = JSON.parse(text);
         } catch {
-          if (!response.ok) throw normalizeErrorPayload({ detail: text.slice(0, 500) }, response.status);
+          if (!response.ok) throw normalizeErrorPayload({ detail: text.slice(0, 500) }, response.status, response.headers);
           throw new CliError('REMOTE_FAILURE', '知萃服务返回了非 JSON 响应');
         }
       }
-      if (!response.ok) throw normalizeErrorPayload(payload, response.status);
+      if (!response.ok) throw normalizeErrorPayload(payload, response.status, response.headers);
+      // 部分接口以 HTTP 200 返回失败 Envelope，仍保留服务器要求的等待时间。
+      const envelopeError = record(record(payload).error);
+      const retryAfter = retryAfterSeconds(payload, response.headers);
+      if (Object.keys(envelopeError).length && retryAfter !== undefined) {
+        envelopeError.retry_after_seconds = retryAfter;
+      }
       return payload;
     } catch (error) {
       if (error instanceof CliError) throw error;
@@ -264,16 +312,16 @@ export class AgentApiClient {
     return record(envelope.data);
   }
 
-  async defaultDeviceScopes(readonlyDefaults: readonly string[]): Promise<string[]> {
+  async defaultDeviceScopes(defaults: readonly string[]): Promise<string[]> {
     const data = await this.publicCapabilities();
-    // 旧版完整接口没有发布档位字段；保持已有只读默认值。
-    if (!data.release_profile && !Array.isArray(data.scopes)) return [...readonlyDefaults];
-    if (!['core', 'full'].includes(stringValue(data.release_profile, 'full')) || !Array.isArray(data.scopes)) {
+    // 兼容旧服务；新服务始终按公开发布范围收窄连接预设。
+    if (!data.release_profile && !Array.isArray(data.scopes)) return [...defaults];
+    if (!['core', 'full', 'video_intake'].includes(stringValue(data.release_profile, 'full')) || !Array.isArray(data.scopes)) {
       throw new CliError('REMOTE_FAILURE', '知萃接入权限清单无效');
     }
     const allowed = new Set(data.scopes.map((scope) => stringValue(record(scope).id)).filter(Boolean));
-    const scopes = readonlyDefaults.filter((scope) => allowed.has(scope));
-    if (!scopes.length) throw new CliError('ACTION_NOT_AVAILABLE', '当前接入档位没有可授权的只读能力');
+    const scopes = defaults.filter((scope) => allowed.has(scope));
+    if (!scopes.length) throw new CliError('ACTION_NOT_AVAILABLE', '当前接入档位没有可授权的日常使用能力');
     return scopes;
   }
 
@@ -282,10 +330,11 @@ export class AgentApiClient {
     return health.success !== false && Object.keys(health).length > 0;
   }
 
-  async pollDeviceAuthorization(deviceCode: string): Promise<RecordValue> {
+  async pollDeviceAuthorization(deviceCode: string, timeoutMs = this.options.timeoutMs): Promise<RecordValue> {
     const payload = await this.request('/api/agent-interface/v1/auth/device/token', {
       method: 'POST',
       authenticated: false,
+      timeoutMs,
       body: JSON.stringify({ device_code: deviceCode }),
     });
     const envelope = normalizeEnvelope(payload);
@@ -325,6 +374,8 @@ export class AgentApiClient {
       expires_at: metadata.expiresAt,
       token_prefix: metadata.tokenPrefix || `${accessToken.slice(0, 6)}…`,
       scopes: metadata.scopes,
+      scopes_source: metadata.scopes ? 'server' : undefined,
+      scopes_complete: Boolean(metadata.scopes),
       created_at: observed.created_at,
     };
     if (!await this.options.credentials.saveIfUnchanged(observed, credential)) {
@@ -348,6 +399,8 @@ export class AgentApiClient {
       user_hash: stringValue(data.user_hash) || null,
       actions: rawActions.map(normalizeAction),
       scopes: (data.scopes ?? null) as JsonValue,
+      granted_scopes: Array.isArray(data.granted_scopes)
+        ? data.granted_scopes.filter((scope): scope is string => typeof scope === 'string') : null,
       feature_enabled: data.feature_enabled !== false,
     };
   }
@@ -451,7 +504,9 @@ export class AgentApiClient {
           PLATFORM_AUTH_REQUIRED: '平台限制了这条视频的读取，请在知萃检查平台连接或完成验证；暂时不要连续重试',
           INTERFACE_DISABLED: '当前知萃 Agent 接口未开放',
         };
-        throw new CliError(code, messages[code] || '知萃暂时无法提供这条视频的媒体文件，请查看资料状态后重试');
+        throw new CliError(code, messages[code] || '知萃暂时无法提供这条视频的媒体文件，请查看资料状态后重试', {
+          retryAfterSeconds: retryAfterSeconds(payload, response.headers),
+        });
       }
       const contentType = (response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase();
       if (!(kind === 'audio' ? ['audio/mpeg'] : ['video/mp4', 'application/octet-stream']).includes(contentType) || !response.body) {
@@ -522,7 +577,7 @@ export class AgentApiClient {
         const text = await response.text();
         let payload: unknown = null;
         try { payload = text ? JSON.parse(text) : null; } catch { payload = { detail: text.slice(0, 500) }; }
-        throw normalizeErrorPayload(payload, response.status);
+        throw normalizeErrorPayload(payload, response.status, response.headers);
       }
       const contentType = response.headers.get('content-type') || '';
       if (!contentType.toLowerCase().includes('application/zip')) {
@@ -690,7 +745,7 @@ export class AgentApiClient {
     retryCredential?: StoredCredential,
   ): AsyncGenerator<AgentRunEvent> {
     const startedAt = Date.now();
-    const credential = retryCredential ?? await this.currentCredential();
+    const credential = retryCredential && !this.sessionBinding ? retryCredential : await this.currentCredential();
     if (!credential) throw new CliError('AUTH_REQUIRED', '尚未授权，请先运行 zhicui auth login');
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -723,7 +778,7 @@ export class AgentApiClient {
       if (!response.ok) {
         let payload: unknown = null;
         try { payload = JSON.parse(await response.text()); } catch { /* normalized below */ }
-        throw normalizeErrorPayload(payload, response.status);
+        throw normalizeErrorPayload(payload, response.status, response.headers);
       }
       if (!response.body) throw new CliError('REMOTE_FAILURE', '事件流没有响应体');
       const contentType = response.headers.get('content-type') || '';

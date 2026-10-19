@@ -545,7 +545,9 @@ export class CredentialManager {
       kind: credential.kind,
       token_prefix: credential.token_prefix || `${credential.access_token.slice(0, 6)}…`,
       expires_at: credential.expires_at || null,
-      scopes: credential.scopes || [],
+      scopes: credential.scopes ?? null,
+      scopes_source: credential.scopes_source || (credential.scopes ? 'stored' : 'unknown'),
+      scopes_complete: credential.scopes_complete ?? (credential.kind === 'device' && Boolean(credential.scopes)),
       store: this.store.kind,
     };
   }

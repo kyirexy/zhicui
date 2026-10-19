@@ -4,6 +4,9 @@
 .choices { display: flex; gap: 8px; margin-top: 20px; }
 .panel button, .actions a { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 10px 16px; border: 1px solid var(--card-border); border-radius: 8px; background: var(--card-bg); color: var(--foreground); font: inherit; font-size: .875rem; cursor: pointer; text-decoration: none; }
 .choices button[aria-pressed='true'] { border-color: var(--accent-brand); color: var(--accent-brand); background: color-mix(in srgb, var(--accent-brand) 7%, var(--card-bg)); }
+.permissionPreset { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 16px; color: var(--foreground-secondary); font-size: .8125rem; }
+.permissionPreset select { min-height: 44px; max-width: 100%; padding: 9px 12px; border: 1px solid var(--card-border); border-radius: 8px; color: var(--foreground); background: var(--card-bg); font: inherit; }
+.permissionPreset select:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 3px; }
 .panel button:focus-visible, .actions a:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 3px; }
 .panel button:disabled { cursor: default; opacity: .55; }
 .panel button:not(:disabled):hover, .actions a:hover { filter: brightness(.96); }

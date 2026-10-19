@@ -57,6 +57,7 @@ export interface AgentCapabilities {
   user_hash?: string | null;
   actions: AgentActionDefinition[];
   scopes?: JsonValue;
+  granted_scopes?: string[] | null;
   feature_enabled?: boolean;
 }
 
@@ -92,6 +93,8 @@ export interface StoredCredential {
   expires_at?: string;
   token_prefix?: string;
   scopes?: string[];
+  scopes_source?: 'server' | 'authorized_actions';
+  scopes_complete?: boolean;
   server_origin?: string;
   created_at: string;
 }

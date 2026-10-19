@@ -107,6 +107,9 @@
 
 .scopePicker .scopeFieldset { margin-top: 10px; padding-bottom: 14px; }
 .selectedScopes { color: var(--foreground-secondary); font-size: .75rem; line-height: 1.6; }
+.presetPicker { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 18px; font-size: .8125rem; color: var(--foreground-secondary); }
+.presetPicker select { min-height: 44px; max-width: 100%; padding: 9px 12px; border: 1px solid var(--card-border); border-radius: 8px; background: var(--card-bg); color: var(--foreground); font: inherit; }
+.presetPicker select:focus-visible { outline: 2px solid var(--accent-brand); outline-offset: 3px; }
 
 .serviceBanner {
   display: flex;

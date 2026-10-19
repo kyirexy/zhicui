@@ -226,6 +226,120 @@ class BilibiliBindingTests(unittest.TestCase):
             result = catalog._sign({"foo": "114", "bar": "514", "baz": 1919810}, nav)
         self.assertEqual(result["w_rid"], "6149fdadf571698ca7e6a567265cd0ee")
 
+    def test_bounded_catalog_reads_only_twenty_in_published_order(self):
+        self.connect()
+        requests_seen = []
+        def upstream(client, url, params=None):
+            if url.endswith("nav"):
+                return self.upstream(client, url, params)
+            requests_seen.append(params)
+            return {"page": {"count": 200}, "list": {"vlist": [
+                {"bvid": f"BV{i:010d}", "title": f"作品{i}", "created": 1700000000 - i}
+                for i in range(20)]}}
+        with patch.object(catalog, "SessionLocal", self.Factory), patch.object(binding, "api", side_effect=upstream):
+            result = catalog.discover("owner", "https://space.bilibili.com/646732586/video", limit=20)
+        self.assertEqual(len(result["items"]), 20)
+        self.assertEqual(len(requests_seen), 1)
+        self.assertEqual({key: requests_seen[0][key] for key in ("mid", "ps", "pn", "order")},
+                         {"mid": "646732586", "ps": "20", "pn": "1", "order": "pubdate"})
+        self.assertTrue(result["scope_complete"])
+        self.assertFalse(result["complete"])
+        self.assertEqual(result["total_count"], 200)
+
+    def test_public_bounded_catalog_never_reads_binding_credentials(self):
+        nav = {**self.upstream(None, "nav"), "isLogin": False}
+        listed = {"page": {"count": 1}, "list": {"vlist": [{"bvid": "BV1234567890", "created": 1700000000}]}}
+        with patch.object(catalog, "SessionLocal", self.Factory), patch.object(catalog, "_public_nav", return_value=nav), \
+             patch.object(binding, "unseal") as decrypt, patch.object(binding, "api", return_value=listed) as api:
+            result = catalog.discover("other", "https://space.bilibili.com/646732586/video", limit=20, allow_public=True)
+        decrypt.assert_not_called()
+        self.assertEqual(self.session_patch.target.session.call_args.args, (None,))
+        api.assert_called_once()
+        self.assertEqual(result["connector"], "bilibili-public")
+        self.assertTrue(result["scope_complete"])
+
+    def test_bounded_catalog_rejects_duplicate_pinned_and_unordered_entries(self):
+        self.connect()
+        cases = [
+            [{"bvid": "BV1234567890", "created": 1700000000, "is_top": 1}],
+            [{"bvid": "BV1234567890"}],
+            [{"bvid": "BV1234567890", "created": 1700000000},
+             {"bvid": "BV1234567891", "created": 1700000001}],
+            [{"bvid": "BV1234567890", "created": 1700000000},
+             {"bvid": "BV1234567890", "created": 1699999999}],
+        ]
+        for entries in cases:
+            def upstream(client, url, params=None):
+                if url.endswith("nav"):
+                    return self.upstream(client, url, params)
+                return {"page": {"count": len(entries)}, "list": {"vlist": entries}}
+            with self.subTest(entries=entries), patch.object(catalog, "SessionLocal", self.Factory), \
+                 patch.object(binding, "api", side_effect=upstream):
+                with self.assertRaises(binding.BilibiliBindingError) as raised:
+                    catalog.discover("owner", "https://space.bilibili.com/123/video", limit=20)
+                self.assertIn(raised.exception.code, {"catalog_changed", "catalog_order_unverified"})
+
+    def test_bounded_catalog_short_page_never_skips_ahead_to_fill_limit(self):
+        self.connect()
+        listed_pages, saved = [], []
+        def upstream(client, url, params=None):
+            if url.endswith("nav"):
+                return self.upstream(client, url, params)
+            listed_pages.append(params["pn"])
+            return {"page": {"count": 200}, "list": {"vlist": [
+                {"bvid": f"BV{i:010d}", "created": 1700000000 - i} for i in range(10)]}}
+        with patch.object(catalog, "SessionLocal", self.Factory), patch.object(binding, "api", side_effect=upstream):
+            with self.assertRaises(binding.BilibiliBindingError) as raised:
+                catalog.discover("owner", "https://space.bilibili.com/123/video", limit=20,
+                                 on_item=lambda item, *_: saved.append(item))
+        self.assertEqual(raised.exception.code, "catalog_incomplete")
+        self.assertEqual(listed_pages, ["1"])
+        self.assertEqual(len(saved), 10)
+
+    def test_public_catalog_stops_on_platform_login_or_risk_without_fallback(self):
+        nav = {**self.upstream(None, "nav"), "isLogin": False}
+        for code in ("bilibili_login_required", "bilibili_risk_control"):
+            with self.subTest(code=code), patch.object(catalog, "SessionLocal", self.Factory), \
+                 patch.object(catalog, "_public_nav", return_value=nav), \
+                 patch.object(binding, "api", side_effect=binding.BilibiliBindingError(code, "需要处理")) as api, \
+                 patch.object(binding, "invalidate") as invalidate:
+                with self.assertRaises(binding.BilibiliBindingError) as raised:
+                    catalog.discover("other", "https://space.bilibili.com/646732586/video", limit=20, allow_public=True)
+                self.assertEqual(raised.exception.code, code)
+                api.assert_called_once(); invalidate.assert_not_called()
+
+    def test_expired_binding_is_not_downgraded_to_public_access(self):
+        self.connect()
+        row = binding.get(self.db, "owner")
+        row.credential_expires_at = binding.now() - timedelta(seconds=1)
+        self.db.commit(); self.api.reset_mock()
+        with patch.object(catalog, "SessionLocal", self.Factory), patch.object(catalog, "_public_nav") as public:
+            with self.assertRaises(binding.BilibiliBindingError) as raised:
+                catalog.discover("owner", "https://space.bilibili.com/123/video", limit=20, allow_public=True)
+        self.assertEqual(raised.exception.code, "bilibili_login_required")
+        self.api.assert_not_called(); public.assert_not_called()
+
+    def test_public_catalog_without_limit_rejected_before_network(self):
+        with patch.object(catalog, "SessionLocal", self.Factory):
+            with self.assertRaises(binding.BilibiliBindingError):
+                catalog.discover("other", "https://space.bilibili.com/123/video", allow_public=True)
+        self.api.assert_not_called()
+
+    def test_public_nav_accepts_unsigned_identity_only_and_stops_at_risk(self):
+        from unittest.mock import Mock
+        nav = {**self.upstream(None, "nav"), "isLogin": False}
+        client = Mock()
+        client.get.return_value = Mock(status_code=200)
+        client.get.return_value.json.return_value = {"code": -101, "data": nav}
+        self.assertEqual(catalog._public_nav(client), nav)
+        self.assertFalse(client.get.call_args.kwargs["allow_redirects"])
+        for code, status in ((-352, 200), (-799, 200), (0, 412), (0, 429)):
+            client.get.return_value = Mock(status_code=status)
+            client.get.return_value.json.return_value = {"code": code, "data": nav}
+            with self.subTest(code=code, status=status), self.assertRaises(binding.BilibiliBindingError) as raised:
+                catalog._public_nav(client)
+            self.assertEqual(raised.exception.code, "bilibili_risk_control")
+
 
 if __name__ == "__main__":
     unittest.main()

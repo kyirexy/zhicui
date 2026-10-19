@@ -10,6 +10,7 @@ import {
   useState,
 } from 'react';
 import { notifyLibraryUpdated } from '@/lib/libraryUpdates';
+import { creatorCompletionTitle, isCreatorCatalogOnly } from '@/lib/creatorRunPresentation';
 import { listCreatorSyncRuns } from '@/lib/api';
 import type { CreatorSyncRun } from '@/lib/types';
 import { useAuth } from './AuthContext';
@@ -85,8 +86,8 @@ export function CreatorSyncProvider({ children }: { children: React.ReactNode })
           }));
           if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
             const latest = completed[0];
-            const catalogRun = (latest.operation === 'catalog_all' && !latest.auto_transcribe);
-            new Notification(catalogRun ? '博主作品清单已更新' : '博主文稿任务已完成', {
+            const catalogRun = isCreatorCatalogOnly(latest);
+            new Notification(creatorCompletionTitle(latest), {
               body: catalogRun
                 ? `已发现 ${latest.discovered_count} 条公开作品`
                 : `新增 ${latest.new_count} · 已存在 ${latest.reused_count} · 失败 ${latest.failed_count}`,

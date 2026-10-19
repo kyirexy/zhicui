@@ -21,6 +21,7 @@ from app.models.creator_sync import ACTIVE_CREATOR_RUN_STATUSES, CreatorSyncRun
 from app.services import (
     automation_runner,
     creator_connectors,
+    creator_sync_worker,
     email_delivery,
     settings_service,
     video_analysis_catalog_service,
@@ -236,16 +237,27 @@ def _check_agent_product_features(
     if not settings.AGENT_INTERFACE_ENABLED:
         return {"status": "disabled", "enabled": False}
     if profile_name() == "core":
+        creator_configured = worker_ready = False
         try:
             database_ready = _check_database(db).get("status") == "ready"
             model_ready = _check_ai_config(db).get("status") == "ready"
+            creator = settings_service.get_creator_sync_config(db)
+            creator_configured = bool(creator.get("enabled")) and bool((creator.get("platforms") or {}).get("bilibili"))
+            worker = creator_sync_worker.runner.status()
+            worker_ready = bool(worker.get("running") and worker.get("accepting"))
         except Exception:
             database_ready = model_ready = False
-        ready = database_ready and model_ready
+        ready = database_ready and model_ready and creator_configured and worker_ready
         return {
             "status": "ready" if ready else "not_ready", "enabled": True,
             "release_profile": "core", "database_ready": database_ready,
             "answer_model_ready": model_ready,
+            "creator_recent_catalog": {
+                "status": "ready" if creator_configured and worker_ready else "not_ready",
+                "configured": creator_configured, "worker_running": worker_ready,
+                "platform": "bilibili", "limit": 20,
+                "platform_access": "checked_per_request", "platform_session_verified": False,
+            },
             "excluded_features": ["cloud_platform_sync", "video_analysis", "automation", "email"],
             "local_platform_sync": {"status": "client_required", "verified": False,
                                     "requirements": ["same_account_desktop", "local:invoke", "platform_session"]},

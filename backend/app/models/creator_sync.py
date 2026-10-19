@@ -47,6 +47,7 @@ TERMINAL_CREATOR_RUN_STATUSES = (
 
 CREATOR_RUN_OPERATIONS = (
     "recent_transcript",
+    "catalog_recent",
     "catalog_all",
     "selected_transcript",
 )
@@ -395,7 +396,7 @@ class CreatorSyncRun(Base):
             name="ck_creator_run_requested_limit",
         ),
         CheckConstraint(
-            "operation IN ('recent_transcript','catalog_all','selected_transcript')",
+            "operation IN ('recent_transcript','catalog_recent','catalog_all','selected_transcript')",
             name="ck_creator_run_operation",
         ),
         CheckConstraint(
@@ -493,6 +494,8 @@ class CreatorSyncRun(Base):
             "platform": self.platform,
             "status": self.status,
             "operation": self.operation or "recent_transcript",
+            "catalog_scope": "recent" if self.operation == "catalog_recent" else "all" if self.operation == "catalog_all" else None,
+            "catalog_complete": bool(self.discovery_complete and self.operation == "catalog_all"),
             "auto_transcribe": bool(self.auto_transcribe),
             "requested_limit": self.requested_limit,
             "target_count": self.target_count or (

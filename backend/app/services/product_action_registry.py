@@ -395,6 +395,26 @@ _CORE_DEFINITIONS: tuple[ProductActionDefinition, ...] = (
         }, ["run_id"]),
     ),
     ProductActionDefinition(
+        id="creator.catalog.import", title="导入博主近期目录",
+        description="导入用户明确指定的 B站公开主页前 20 条可见作品目录；不自动转写、不遍历全量目录、不持续同步。",
+        scopes=("library:write", "creator:read"), handler_name="creator_catalog_import",
+        input_schema=_object({
+            "platform": {"type": "string", "enum": ["bilibili"]},
+            "profile_ref": {"type": "string", "minLength": 1, "maxLength": 1000},
+            "limit": {"type": "integer", "enum": [20], "default": 20},
+        }, ["platform", "profile_ref"]),
+        risk=(RiskLevel.WRITE,), run_type=RunType.LONG_TASK,
+        idempotency=IdempotencyStrategy.REQUIRED, rate_limit_per_minute=6,
+        error_codes=(
+            "FEATURE_DISABLED", "PLATFORM_DISABLED", "CATALOG_UNSUPPORTED", "INVALID_LIMIT",
+            "INVALID_PROFILE", "SSRF_REJECTED", "PROFILE_UNREACHABLE",
+            "SOURCE_LIMIT_REACHED", "SOURCE_RUN_ACTIVE", "USER_RUN_ACTIVE",
+            "BILIBILI_LOGIN_REQUIRED", "BILIBILI_RISK_CONTROL", "BILIBILI_UNAVAILABLE",
+            "CREATOR_UNAVAILABLE", "CONNECTOR_UNAVAILABLE", "INVALID_UPSTREAM_RESPONSE",
+            "CATALOG_CHANGED", "CATALOG_INCOMPLETE", "CATALOG_ORDER_UNVERIFIED", "CATALOG_LIMIT_EXCEEDED",
+        ),
+    ),
+    ProductActionDefinition(
         id="creator.create", title="保存博主", description="解析并保存用户明确提供的公开博主主页。",
         scopes=("creator:sync",), handler_name="creator_create",
         input_schema=_object({

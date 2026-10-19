@@ -70,7 +70,7 @@ class CoreProfileTests(unittest.TestCase):
     def test_excluded_actions_cannot_be_called_by_full_scope_legacy_pat(self):
         with patch.object(settings, "AGENT_INTERFACE_PROFILE", "full"):
             headers = self.pat(sorted(ALL_SCOPE_IDS))
-        for action in ("creator.resolve", "creator.sync.start", "library.transcript.batch", "analysis.catalog", "local.capabilities.get", "automation.list"):
+        for action in ("creator.create", "creator.sync.start", "library.transcript.batch", "analysis.catalog", "local.capabilities.get", "automation.list"):
             with self.subTest(action=action):
                 response = self.client.get(f"/api/agent-interface/v1/actions/{action}")
                 self.assertEqual(response.status_code, 404)
@@ -194,7 +194,7 @@ class CoreProfileTests(unittest.TestCase):
             submit.assert_not_called()
 
     def test_core_readiness_does_not_claim_external_dependencies_are_healthy(self):
-        with patch.object(readiness, "_check_database", return_value={"status": "ready"}), patch.object(readiness, "_check_ai_config", return_value={"status": "ready"}), patch.object(readiness, "_check_smtp_transport") as smtp, patch.object(readiness.settings_service, "get_creator_sync_config") as creator:
+        with patch.object(readiness, "_check_database", return_value={"status": "ready"}), patch.object(readiness, "_check_ai_config", return_value={"status": "ready"}), patch.object(readiness, "_check_smtp_transport") as smtp, patch.object(readiness.settings_service, "get_creator_sync_config", return_value={"enabled": True, "platforms": {"bilibili": True}, "catalog_platforms": {"bilibili": False}}), patch.object(readiness.creator_sync_worker.runner, "status", return_value={"running": True, "accepting": True}) as worker:
             result = readiness._check_agent_product_features(Mock())
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["release_profile"], "core")
@@ -203,7 +203,12 @@ class CoreProfileTests(unittest.TestCase):
             self.assertFalse(result["local_platform_sync"]["verified"])
             self.assertEqual(readiness._check_connectors(Mock())["status"], "not_required")
             self.assertEqual(readiness._check_agent_automation_runtime()["status"], "not_required")
-            smtp.assert_not_called(); creator.assert_not_called()
+            self.assertEqual(result["creator_recent_catalog"]["status"], "ready")
+            self.assertFalse(result["creator_recent_catalog"]["platform_session_verified"])
+            self.assertEqual(result["creator_recent_catalog"]["platform_access"], "checked_per_request")
+            worker.return_value = {"running": False, "accepting": False}
+            self.assertEqual(readiness._check_agent_product_features(Mock())["status"], "not_ready")
+            smtp.assert_not_called()
         with patch.object(settings, "AGENT_AUTOMATION_ENABLED", True):
             runner = AutomationRunner()
             # Core 的普通用户每日研究复用运行器；公开 Agent automation 动作仍未开放。

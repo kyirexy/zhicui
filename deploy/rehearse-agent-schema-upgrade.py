@@ -229,10 +229,23 @@ engine.dispose()
         )
         snapshot_counts = json.loads(snapshot_probe)
 
-        schema_phase = (
-            "from app.core.database import Base, engine; import app.main as main; "
-            "Base.metadata.create_all(bind=engine); main._migrate_db(); engine.dispose()"
-        )
+        schema_phase = """
+from sqlalchemy import inspect
+from app.core.database import Base, engine
+from app.services.creator_catalog_recent_migration import ensure_schema
+import app.main as main
+
+Base.metadata.create_all(bind=engine)
+main._migrate_db()
+ensure_schema(engine)
+constraint = next((item for item in inspect(engine).get_check_constraints("creator_sync_runs")
+                   if item.get("name") == "ck_creator_run_operation"), None)
+assert constraint is not None, "博主任务缺少 operation CHECK 约束"
+definition = constraint.get("sqltext", "")
+for operation in ("recent_transcript", "catalog_recent", "catalog_all", "selected_transcript"):
+    assert operation in definition, "博主任务 operation CHECK 约束未覆盖既有与有界目录任务"
+engine.dispose()
+"""
         for _ in range(2):
             _run([str(python), "-c", schema_phase], cwd=backend, env=child_env)
 
@@ -275,6 +288,10 @@ engine.dispose()
             "isolated_database": database_name,
             "snapshot_counts": snapshot_counts,
             "schema_startup_passes": 2,
+            "creator_catalog_recent_migration": {
+                "schema_passes": 2,
+                "operation_constraint_verified": True,
+            },
             "agent_schema_fingerprint": fingerprint,
             "workers_started": False,
         }

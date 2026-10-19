@@ -714,6 +714,8 @@ def _bilibili_user_catalog(source, user_id, **kwargs):
         return bilibili_user_catalog.discover(user_id, source.profile_url, **kwargs)
     except bilibili_binding_service.BilibiliBindingError as exc:
         raise CreatorConnectorError(exc.code, str(exc)) from exc
+    except requests.RequestException as exc:
+        raise CreatorConnectorError("connector_unavailable", "B站目录网络暂不可用，请稍后重试") from exc
 
 
 def discover_catalog(
@@ -725,6 +727,8 @@ def discover_catalog(
     on_item: Callable[[dict[str, Any], int, int | None], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
     run_id: str = "",
+    limit: int | None = None,
+    allow_public: bool = False,
 ) -> dict[str, Any]:
     """Enumerate every currently readable public work without media download.
 
@@ -733,6 +737,8 @@ def discover_catalog(
     callers may mark previously-seen rows unavailable only in that case.
     """
     del douyin_binding_ref  # kept in the shared contract for future stable proxies
+    if limit is not None and source.platform != "bilibili":
+        raise CreatorConnectorError("catalog_not_supported", "该平台暂不支持限量目录")
     if should_cancel is not None and should_cancel():
         raise CreatorConnectorError("cancelled", "博主目录同步已取消")
     if source.platform == "douyin":
@@ -744,7 +750,7 @@ def discover_catalog(
             run_id=run_id,
         )
     if source.platform == "bilibili":
-        return _bilibili_user_catalog(source, bilibili_user_id, on_item=on_item, should_cancel=should_cancel)
+        return _bilibili_user_catalog(source, bilibili_user_id, limit=limit, on_item=on_item, should_cancel=should_cancel, allow_public=allow_public)
     raise CreatorConnectorError(
         "catalog_not_supported",
         "该平台首版暂不支持全量作品目录",

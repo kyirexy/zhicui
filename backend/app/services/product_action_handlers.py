@@ -637,6 +637,8 @@ def _creator_error(exc: Exception) -> ActionHandlerError:
 
 
 def creator_resolve(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    if profile_name() == "core" and payload.get("platform") != "bilibili":
+        raise ActionHandlerError("INVALID_INPUT", "基础接入仅解析明确指定的 B站公开主页")
     try:
         return creator_sync_service.resolve_source(
             ctx.db,
@@ -735,6 +737,27 @@ def creator_sync_start(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
             operation=_text(payload, "operation", maximum=32) or "recent_transcript",
             item_ids=list(payload.get("item_ids") or []),
             auto_transcribe=bool(payload.get("auto_transcribe", False)),
+        )
+        return _attach_creator_run(ctx, row, reused=reused)
+    except creator_sync_service.CreatorSyncError as exc:
+        raise _creator_error(exc) from exc
+
+
+def creator_catalog_import(ctx: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    """有界目录导入独立于全量同步，不接受任务模式或自动转写参数。"""
+    if set(payload) - {"platform", "profile_ref", "limit"}:
+        raise ActionHandlerError("INVALID_INPUT", "目录导入不接受额外同步参数")
+    platform = _text(payload, "platform", required=True, maximum=24)
+    if platform != "bilibili":
+        raise ActionHandlerError("INVALID_INPUT", "目录导入仅支持指定的 B站公开主页")
+    limit = _integer(payload, "limit", 20, 20, 20)
+    try:
+        row, reused = creator_sync_service.import_recent_catalog(
+            ctx.db,
+            user_id=ctx.user.id,
+            platform=platform,
+            profile_ref=_text(payload, "profile_ref", required=True, maximum=1000),
+            limit=limit,
         )
         return _attach_creator_run(ctx, row, reused=reused)
     except creator_sync_service.CreatorSyncError as exc:

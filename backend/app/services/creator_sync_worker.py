@@ -22,6 +22,15 @@ class CreatorSyncRunner:
         self._stop_event = threading.Event()
         self._accepting = False
 
+    def status(self) -> dict[str, bool]:
+        """只暴露执行器是否接单与扫描器存活，不包含任务或用户资料。"""
+        with self._lock:
+            accepting = bool(self._accepting and self._executor is not None and not self._stop_event.is_set())
+            return {
+                "accepting": accepting,
+                "running": bool(accepting and self._scanner is not None and self._scanner.is_alive()),
+            }
+
     def start(self) -> None:
         with self._lock:
             self._accepting = True

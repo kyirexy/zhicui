@@ -133,7 +133,7 @@ import sys
 
 payload = json.load(open(sys.argv[1], encoding="utf-8"))
 items = ((payload.get("data") or {}).get("items") or [])
-reserved = {"production-stable-smoke", "production-stable-capability-smoke"}
+reserved = {"production-stable-smoke", "production-stable-capability-smoke", "production-core-creator-readonly-smoke"}
 ids = set()
 try:
     ids.update(line.strip().lower() for line in open(sys.argv[2], encoding="utf-8") if line.strip())
@@ -196,7 +196,7 @@ import sys
 
 payload = json.load(open(sys.argv[1], encoding="utf-8"))
 items = ((payload.get("data") or {}).get("items") or [])
-reserved = {"production-stable-smoke", "production-stable-capability-smoke"}
+reserved = {"production-stable-smoke", "production-stable-capability-smoke", "production-core-creator-readonly-smoke"}
 active = [item.get("id") for item in items if isinstance(item, dict) and item.get("name") in reserved and not item.get("revoked_at")]
 if active:
     raise SystemExit(f"active smoke credentials remain: {active}")
@@ -342,7 +342,8 @@ if [[ "$REQUIRE_RUNTIME_SENTINELS" == 1 ]]; then
 import json
 import sys
 
-payload = json.load(open(sys.argv[1], encoding="utf-8"))
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
 actions = {
     item.get("id"): item
     for item in ((payload.get("data") or {}).get("actions") or [])
@@ -362,11 +363,34 @@ def require_read(action_id):
         raise SystemExit(f"{action_id} 不是可用的云端同步只读 Action")
 
 profile = sys.argv[3]
-required_reads = ("library.list", "library.get", "creator.list", "knowledge.list", "plan.list", "plan.overview", "models.list", "models.custom.list") if profile == "core" else (
+required_reads = ("library.list", "library.get", "creator.list", "creator.resolve", "creator.runs.list", "creator.sync.get", "creator.sync.items.list", "platform.binding.status", "knowledge.list", "plan.list", "plan.overview", "models.list", "models.custom.list") if profile == "core" else (
     "analysis.catalog", "automation.status", "models.list", "models.selection.get",
 )
 for action_id in required_reads:
     require_read(action_id)
+
+if profile == "core":
+    resolve_schema = actions["creator.resolve"]["input_schema"]
+    if resolve_schema.get("properties", {}).get("platform", {}).get("enum") != ["bilibili"]:
+        raise SystemExit("Core 博主解析没有限定 B站")
+    catalog = actions.get("creator.catalog.import") or {}
+    schema = catalog.get("input_schema") or {}
+    fields = schema.get("properties") or {}
+    if (
+        not catalog.get("available")
+        or catalog.get("execution_location") != "cloud"
+        or catalog.get("run_type") != "long_task"
+        or catalog.get("idempotency") != "required"
+        or set(catalog.get("scopes") or []) != {"library:write", "creator:read"}
+        or catalog.get("risk") != ["write"]
+        or schema.get("additionalProperties") is not False
+        or set(fields) != {"platform", "profile_ref", "limit"}
+        or set(schema.get("required") or []) != {"platform", "profile_ref"}
+        or fields.get("platform", {}).get("enum") != ["bilibili"]
+        or fields.get("limit", {}).get("enum") != [20]
+        or fields.get("limit", {}).get("default") != 20
+    ):
+        raise SystemExit("Core 博主目录导入未固定为 B站前 20 条且不接受扩展模式")
 
 if profile == "full":
     analysis_schema = actions["analysis.catalog"]["input_schema"]
@@ -393,7 +417,7 @@ if sys.argv[2] == "1":
 PY
 
   if [[ "$AGENT_PROFILE" == core ]]; then
-    python3 "$SCRIPT_DIR/smoke-agent-core.py" "$BASE_URL" "$BROWSER_TOKEN_FILE" "$FULL_PAT_FILE" "$ASK_SOURCE_ID" "$ASK_THREAD_ID" || fail 'Core 现有资料或排除能力边界未通过'
+    python3 "$SCRIPT_DIR/smoke-agent-core.py" "$BASE_URL" "$BROWSER_TOKEN_FILE" "$FULL_PAT_FILE" "$ASK_SOURCE_ID" "$ASK_THREAD_ID" || fail 'Core 现有资料、有界博主目录或排除能力边界未通过'
   else
   printf '{"input":{"trigger":"agent"}}\n' >"$WORK_DIR/runtime-analysis.json"
   code="$(http_with_token "$FULL_PAT_FILE" POST /api/agent-interface/v1/actions/analysis.catalog/invoke "$WORK_DIR/runtime-analysis.json" "$WORK_DIR/runtime-analysis.response")"

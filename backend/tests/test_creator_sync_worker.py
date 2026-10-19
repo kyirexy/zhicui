@@ -8,6 +8,18 @@ from app.services.creator_sync_worker import CreatorSyncRunner
 
 
 class CreatorSyncRunnerTests(unittest.TestCase):
+    def test_status_requires_accepting_executor_and_live_scanner(self):
+        runner = CreatorSyncRunner()
+        self.assertEqual(runner.status(), {"running": False, "accepting": False})
+        runner._accepting = True
+        runner._executor = object()
+        runner._scanner = SimpleNamespace(is_alive=lambda: False)
+        self.assertEqual(runner.status(), {"running": False, "accepting": True})
+        runner._scanner = SimpleNamespace(is_alive=lambda: True)
+        self.assertEqual(runner.status(), {"running": True, "accepting": True})
+        runner._stop_event.set()
+        self.assertEqual(runner.status(), {"running": False, "accepting": False})
+
     def test_completed_future_callback_does_not_deadlock_submit(self):
         runner = CreatorSyncRunner()
         completed = Future()

@@ -15,7 +15,9 @@ CORE_ACTION_IDS = frozenset({
     "library.activity.record", "library.activity.list", "library.sync.progress", "library.recap.get",
     "local.status", "local.platform.status", "local.platform.sync", "local.platform.login", "local.platform.cancel",
     "library.import_link", "library.transcript.generate", "library.media.download", "library.media.resolve",
-    "creator.list", "creator.get", "creator.items.list",
+    "creator.list", "creator.get", "creator.items.list", "creator.resolve",
+    "creator.catalog.import", "creator.runs.list", "creator.sync.get", "creator.sync.items.list",
+    "platform.binding.status",
     "ask.sources.list", "ask.sources.search",
     "ask.thread.list", "ask.thread.get", "ask.thread.create",
     "ask.thread.update", "ask.thread.remove",
@@ -34,6 +36,7 @@ CORE_SCOPE_IDS = frozenset({
 CORE_LIMITATIONS = (
     "可导入明确指定的抖音、B站公开链接、提取文稿并下载视频，围绕文稿问答和整理知识与计划。",
     "可由用户明确发起本机抖音、B站喜欢收藏同步；需要同一账号的桌面客户端和本机调用授权。",
+    "可解析明确提供的B站公开主页并导入最近20条作品目录；目录就绪不代表已经转写，平台验证仍需本人处理。",
     "平台验证需本人完成；暂不开放云端账号批量同步、画面解析、自动摘要、邮件及密码和 API Key 设置。",
 )
 
@@ -56,6 +59,11 @@ def profile_allows_action(action_id: str) -> bool:
 
 def profile_input_schema(action_id: str, schema: dict[str, Any]) -> dict[str, Any]:
     result = deepcopy(schema)
+    if profile_name() == "core" and action_id == "creator.resolve":
+        result["properties"]["platform"] = {
+            "type": "string", "enum": ["bilibili"],
+            "description": "基础接入仅解析用户明确提供的B站公开主页。",
+        }
     if profile_name() == "core" and action_id == "ask.turn.start":
         result["properties"]["web_scope"] = {
             "type": "string", "enum": ["video_only"],

@@ -116,6 +116,174 @@ class CreatorCatalogServiceTests(unittest.TestCase):
                 "title": f"计算机算法课程第{index}讲", "author_name": "计算机课堂", "description": "完整课程讲解",
                 "cover_url": "https://i0.hdslb.com/bfs/archive/course.jpg", "published_at": "2026-08-01T12:00:00Z"}
 
+    def _recent_result(self, count=20, total=230):
+        return {"items": [self._all_work(i) for i in range(count)], "complete": count == total,
+                "scope_complete": count == min(20, total), "total_count": total, "failures": []}
+
+    def test_recent_catalog_is_bounded_without_transcription_or_history_removal(self):
+        old = CreatorSourceItem(user_id=self.user.id, source_id=self.source.id,
+            platform="bilibili", external_id="BV9999999999", title="历史作品", is_available=True)
+        self.db.add(old); self.db.commit()
+        run, _ = self._create_run(operation="catalog_recent", limit=20)
+        def discover(_source, **kwargs):
+            self.assertEqual(kwargs["limit"], 20)
+            self.assertTrue(kwargs["allow_public"])
+            for item in self._recent_result()["items"]:
+                kwargs["on_item"](item)
+            return self._recent_result()
+        with patch.object(creator_sync_service, "_import_work") as importer:
+            self._process_with_catalog(run.id, discover)
+        importer.assert_not_called()
+        self.db.expire_all(); final = self.db.get(CreatorSyncRun, run.id)
+        self.assertEqual((final.status, final.discovered_count, final.target_count, final.total_count),
+                         ("succeeded", 20, 20, 230))
+        self.assertTrue(final.discovery_complete)
+        self.assertFalse(final.to_dict()["catalog_complete"])
+        self.assertEqual(final.to_dict()["catalog_scope"], "recent")
+        self.assertTrue(self.db.get(CreatorSourceItem, old.id).is_available)
+        self.assertEqual(self.db.query(CreatorSourceItem).count(), 21)
+        self.assertEqual(self.db.query(CreatorSyncRunItem).count(), 0)
+
+    def test_recent_catalog_cancel_and_retry_preserves_rows_and_limit(self):
+        run, _ = self._create_run(operation="catalog_recent")
+        def cancel_after_first(_source, **kwargs):
+            kwargs["on_item"](self._all_work(0))
+            with self.Session() as db:
+                creator_sync_service.request_cancel(db, user_id=self.user.id, run_id=run.id)
+            self.assertTrue(kwargs["should_cancel"]())
+            return self._recent_result(1)
+        self._process_with_catalog(run.id, cancel_after_first)
+        self.db.expire_all()
+        self.assertEqual(self.db.get(CreatorSyncRun, run.id).status, "cancelled")
+        retained_id = self.db.query(CreatorSourceItem).one().id
+        creator_sync_service.retry_run(self.db, user_id=self.user.id, run_id=run.id)
+        self._process_with_catalog(run.id, lambda *_a, **kw: self._recent_result())
+        self.db.expire_all()
+        self.assertEqual(self.db.get(CreatorSyncRun, run.id).status, "succeeded")
+        self.assertEqual(self.db.query(CreatorSourceItem).count(), 20)
+        self.assertIsNotNone(self.db.get(CreatorSourceItem, retained_id))
+
+    def test_recent_catalog_never_accepts_or_persists_more_than_limit(self):
+        for streamed in (False, True):
+            with self.subTest(streamed=streamed):
+                run, _ = self._create_run(operation="catalog_recent")
+                def overflow(_source, **kwargs):
+                    if streamed:
+                        for item in self._recent_result(21)["items"]:
+                            kwargs["on_item"](item)
+                    return self._recent_result(21)
+                self._process_with_catalog(run.id, overflow)
+                self.db.expire_all(); final = self.db.get(CreatorSyncRun, run.id)
+                self.assertNotEqual(final.status, "succeeded")
+                self.assertEqual(final.error_code, "catalog_limit_exceeded")
+                self.assertLessEqual(self.db.query(CreatorSourceItem).count(), 20)
+
+    def test_recent_catalog_partial_result_cannot_claim_success(self):
+        run, _ = self._create_run(operation="catalog_recent")
+        result = self._recent_result(1)
+        result["scope_complete"] = True
+        self._process_with_catalog(run.id, lambda *_a, **kw: result)
+        self.db.expire_all(); final = self.db.get(CreatorSyncRun, run.id)
+        self.assertNotEqual(final.status, "succeeded")
+        self.assertFalse(final.discovery_complete)
+        self.assertEqual(final.error_code, "catalog_incomplete")
+        self.assertEqual(final.status, "partial")
+        self.assertIsNone(final.next_retry_at)
+        self.assertEqual(final.attempt_count, 0)
+
+    def test_recent_catalog_network_failure_is_not_automatically_retried(self):
+        run, _ = self._create_run(operation="catalog_recent")
+        def unavailable(*_args, **_kwargs):
+            raise creator_connectors.CreatorConnectorError("bilibili_unavailable", "网络暂不可用")
+        self._process_with_catalog(run.id, unavailable)
+        self.db.expire_all(); final = self.db.get(CreatorSyncRun, run.id)
+        self.assertEqual(final.status, "failed")
+        self.assertIsNone(final.next_retry_at)
+        self.assertEqual(final.attempt_count, 0)
+
+    def test_recent_catalog_legitimate_short_or_empty_profile_reports_actual_count(self):
+        for count in (3, 0):
+            with self.subTest(count=count):
+                run, _ = self._create_run(operation="catalog_recent")
+                self._process_with_catalog(run.id, lambda *_a, **_kw: self._recent_result(count, total=count))
+                self.db.expire_all(); final = self.db.get(CreatorSyncRun, run.id)
+                self.assertEqual((final.status, final.discovered_count, final.target_count, final.total_count),
+                                 ("succeeded", count, count, count))
+
+    def test_recent_catalog_does_not_reuse_full_or_different_limit_run(self):
+        for operation, limit in (("catalog_all", 100), ("catalog_recent", 50)):
+            with self.subTest(operation=operation):
+                run, _ = self._create_run(operation=operation, limit=limit)
+                with self.assertRaises(creator_sync_service.CreatorSyncError) as raised:
+                    self._create_run(operation="catalog_recent", limit=20)
+                self.assertEqual(raised.exception.code, "source_run_active")
+                creator_sync_service.request_cancel(self.db, user_id=self.user.id, run_id=run.id)
+        run, _ = self._create_run(operation="catalog_recent", limit=20)
+        repeated, reused = self._create_run(operation="catalog_recent", limit=20)
+        self.assertTrue(reused)
+        self.assertEqual(repeated.id, run.id)
+
+    def test_recent_catalog_constraint_race_does_not_attach_to_broader_run(self):
+        original_flush = self.db.flush
+        raced = False
+        user_id, source_id = self.user.id, self.source.id
+        def flush_with_race(*args, **kwargs):
+            nonlocal raced
+            if not raced and any(isinstance(row, CreatorSyncRun) for row in self.db.new):
+                raced = True
+                with self.Session() as concurrent:
+                    concurrent.add(CreatorSyncRun(user_id=user_id, source_id=source_id,
+                        platform="bilibili", operation="catalog_all", requested_limit=100,
+                        status="queued", auto_transcribe=True))
+                    concurrent.commit()
+                raise IntegrityError("fixture concurrent insert", {}, Exception("unique active user"))
+            return original_flush(*args, **kwargs)
+        with patch.object(self.db, "flush", side_effect=flush_with_race):
+            with self.assertRaises(creator_sync_service.CreatorSyncError) as raised:
+                self._create_run(operation="catalog_recent", limit=20)
+        self.assertTrue(raced)
+        self.assertEqual(raised.exception.code, "source_run_active")
+        self.assertEqual(self.db.query(CreatorSyncRun).one().operation, "catalog_all")
+
+    def test_recent_catalog_platform_rejection_requires_action_without_auto_retry(self):
+        for code in ("bilibili_login_required", "bilibili_risk_control"):
+            with self.subTest(code=code):
+                run, _ = self._create_run(operation="catalog_recent")
+                def rejected(*_args, **_kwargs):
+                    raise creator_connectors.CreatorConnectorError(code, "平台要求用户处理")
+                self._process_with_catalog(run.id, rejected)
+                self.db.expire_all(); final = self.db.get(CreatorSyncRun, run.id)
+                self.assertEqual(final.status, "failed")
+                self.assertTrue(final.needs_action)
+                self.assertIsNone(final.next_retry_at)
+                self.assertEqual(final.attempt_count, 0)
+
+    def test_recent_catalog_import_rejects_external_host_without_network_or_writes(self):
+        with patch.object(creator_connectors.requests, "Session") as client:
+            with self.assertRaises(creator_sync_service.CreatorSyncError) as raised:
+                creator_sync_service.import_recent_catalog(self.db, user_id=self.user.id,
+                    platform="bilibili", profile_ref="https://example.invalid/creator-smoke")
+        client.assert_not_called()
+        self.assertEqual(raised.exception.code, "ssrf_rejected")
+        self.assertEqual(self.db.query(CreatorSyncRun).count(), 0)
+
+    def test_recent_catalog_import_is_atomic_and_does_not_require_full_health(self):
+        active, _ = self._create_run(operation="catalog_all")
+        preview = {"display_name": "新博主", "avatar_url": ""}
+        with patch.object(creator_connectors, "_bilibili_profile", return_value=preview):
+            with self.assertRaises(creator_sync_service.CreatorSyncError):
+                creator_sync_service.import_recent_catalog(self.db, user_id=self.user.id,
+                    platform="bilibili", profile_ref="646732586")
+            self.assertEqual(self.db.query(CreatorSource).count(), 1)
+            creator_sync_service.request_cancel(self.db, user_id=self.user.id, run_id=active.id)
+            self.db.query(BilibiliAccountBinding).delete(); self.db.commit()
+            with patch.object(creator_sync_service, "_require_catalog_health") as full_health:
+                run, reused = creator_sync_service.import_recent_catalog(self.db, user_id=self.user.id,
+                    platform="bilibili", profile_ref="646732586")
+                full_health.assert_not_called()
+        self.assertFalse(reused)
+        self.assertEqual((run.operation, run.requested_limit, run.auto_transcribe), ("catalog_recent", 20, False))
+
     def test_full_automatic_transcription_exceeds_recent_limit_in_one_run(self):
         works = [self._all_work(i) for i in range(121)]
         run, _ = self._create_run(operation="catalog_all", auto_transcribe=True)

@@ -2,12 +2,12 @@
   "schema_version": 1,
   "interface_version": "v1",
   "release_profile": "core",
-  "action_count": 51,
-  "cloud_action_count": 46,
+  "action_count": 57,
+  "cloud_action_count": 52,
   "local_windows_action_count": 5,
-  "available_cloud_action_count": 46,
+  "available_cloud_action_count": 52,
   "unavailable_local_windows_action_count": 5,
-  "remote_mcp_tool_count": 48,
+  "remote_mcp_tool_count": 54,
   "scope_count": 12,
   "scope_ids": [
     "account:read",
@@ -37,9 +37,14 @@
     "ask.turn.get",
     "ask.turn.retry",
     "ask.turn.start",
+    "creator.catalog.import",
     "creator.get",
     "creator.items.list",
     "creator.list",
+    "creator.resolve",
+    "creator.runs.list",
+    "creator.sync.get",
+    "creator.sync.items.list",
     "knowledge.create",
     "knowledge.get",
     "knowledge.list",
@@ -74,7 +79,8 @@
     "plan.task.reorder",
     "plan.task.set_completion",
     "plan.task.update",
-    "plan.update"
+    "plan.update",
+    "platform.binding.status"
   ],
-  "descriptor_sha256": "1d421026ec6dc66b5e5f09886fceb1c01ef5f452108d7c163d46b8042dd87b37"
+  "descriptor_sha256": "5ffad187902a5e76c729e618802ca3a179ee7d3a7e9c0e610e7c59dacfcfcd9a"
 }

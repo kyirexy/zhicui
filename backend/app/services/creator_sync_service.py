@@ -38,6 +38,7 @@ from app.services import (
     creator_item_quality,
     douyin_binding_service,
     bilibili_binding_service,
+    bilibili_user_catalog,
     douyin_library,
     library_extraction_service,
     platform_library_service,
@@ -52,10 +53,12 @@ DEFAULT_PAGE_SIZE = 50
 ALLOWED_LIMITS = {20, 50, 100}
 ALLOWED_OPERATIONS = {
     "recent_transcript",
+    "catalog_recent",
     "catalog_all",
     "selected_transcript",
 }
 CATALOG_PLATFORMS = {"douyin", "bilibili"}
+RECENT_CATALOG_PLATFORMS = {"bilibili"}
 RETRY_DELAYS_SECONDS = (30, 120, 600)
 FULL_TRANSCRIPT_CONCURRENCY = 50
 LEASE_SECONDS = 300
@@ -185,6 +188,10 @@ def catalog(db: Session) -> dict[str, Any]:
     catalog_platforms = config.get("catalog_platforms") or config["platforms"]
     catalog_operations = {
         "recent_transcript": dict(config["platforms"]),
+        "catalog_recent": {
+            platform: bool(enabled and platform in RECENT_CATALOG_PLATFORMS)
+            for platform, enabled in config["platforms"].items()
+        },
         "selected_transcript": {
             platform: bool(enabled and platform in CATALOG_PLATFORMS)
             for platform, enabled in config["platforms"].items()
@@ -287,7 +294,7 @@ def resolve_source(
 
 
 def save_source(
-    db: Session, *, user_id: str, platform: str, profile_ref: str,
+    db: Session, *, user_id: str, platform: str, profile_ref: str, _commit: bool = True,
 ) -> tuple[CreatorSource, bool]:
     preview = resolve_source(db, user_id=user_id, platform=platform, profile_ref=profile_ref)
     existing = db.query(CreatorSource).filter(
@@ -301,7 +308,7 @@ def save_source(
         existing.avatar_url = preview["avatar_url"]
         existing.status = "active"
         existing.updated_at = _utcnow()
-        db.commit()
+        db.commit() if _commit else db.flush()
         db.refresh(existing)
         return existing, True
     source_count = db.query(CreatorSource).filter(
@@ -312,7 +319,7 @@ def save_source(
     source = CreatorSource(user_id=user_id, status="active", **preview)
     db.add(source)
     try:
-        db.commit()
+        db.commit() if _commit else db.flush()
     except IntegrityError:
         db.rollback()
         winner = db.query(CreatorSource).filter(
@@ -325,6 +332,38 @@ def save_source(
         return winner, True
     db.refresh(source)
     return source, False
+
+
+def import_recent_catalog(
+    db: Session, *, user_id: str, platform: str, profile_ref: str, limit: int = 20,
+) -> tuple[CreatorSyncRun, bool]:
+    """把用户明确指定的 B站主页及前 20 条目录任务在同一事务中保存。"""
+    if platform != "bilibili":
+        raise CreatorSyncError("catalog_unsupported", "近期目录暂只支持 B站主页", 422)
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit != 20:
+        raise CreatorSyncError("invalid_limit", "近期目录每次最多导入前 20 条作品", 422)
+    try:
+        normalized = creator_connectors.normalize_profile_ref(platform, profile_ref)
+    except creator_connectors.CreatorConnectorError as exc:
+        raise CreatorSyncError(exc.code, str(exc), 422) from exc
+    _require_enabled(db, platform)
+    try:
+        bilibili_user_catalog.require_access(db, user_id, allow_public=True)
+    except bilibili_binding_service.BilibiliBindingError as exc:
+        raise CreatorSyncError(exc.code, str(exc), exc.status_code) from exc
+    try:
+        source, _ = save_source(
+            db, user_id=user_id, platform=platform, profile_ref=normalized["profile_url"], _commit=False,
+        )
+        run, reused = create_run(
+            db, user_id=user_id, source_id=source.id,
+            operation="catalog_recent", limit=limit, auto_transcribe=False,
+        )
+        db.commit()
+        return run, reused
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _last_run(db: Session, user_id: str, source_id: str) -> CreatorSyncRun | None:
@@ -430,8 +469,10 @@ def _normalize_operation(
         raise CreatorSyncError("invalid_operation", "博主任务类型无效", 422)
     selected = list(dict.fromkeys(str(item_id or "").strip() for item_id in (item_ids or [])))
     selected = [item_id for item_id in selected if item_id]
-    if normalized == "recent_transcript":
-        requested = 50 if limit is None else int(limit)
+    if normalized in {"recent_transcript", "catalog_recent"}:
+        requested = (20 if normalized == "catalog_recent" else 50) if limit is None else limit
+        if isinstance(requested, bool) or not isinstance(requested, int):
+            raise CreatorSyncError("invalid_limit", "同步数量只支持 20、50 或 100", 422)
         if requested not in ALLOWED_LIMITS:
             raise CreatorSyncError("invalid_limit", "同步数量只支持 20、50 或 100", 422)
         if selected:
@@ -490,9 +531,11 @@ def create_run(
         raise CreatorSyncError("invalid_operation", "全部自动转写必须使用全量作品发现", 422)
     source = _get_source(db, user_id=user_id, source_id=source_id, active_only=True)
     credentials = _connector_credentials(db, user_id, source.platform)
+    if normalized == "catalog_recent" and source.platform not in RECENT_CATALOG_PLATFORMS:
+        raise CreatorSyncError("catalog_unsupported", "该平台暂不支持限量作品目录", 422)
     if source.platform == "bilibili":
         try:
-            bilibili_binding_service.require_binding(db, user_id)
+            bilibili_user_catalog.require_access(db, user_id, allow_public=normalized == "catalog_recent")
         except bilibili_binding_service.BilibiliBindingError as exc:
             raise CreatorSyncError(exc.code, str(exc), exc.status_code) from exc
     if normalized == "catalog_all":
@@ -505,6 +548,12 @@ def create_run(
     ).order_by(CreatorSyncRun.created_at.desc()).first()
     if active_for_user is not None:
         if active_for_user.source_id == source.id:
+            if normalized == "catalog_recent" and (
+                active_for_user.operation != normalized
+                or active_for_user.requested_limit != requested_limit
+                or active_for_user.auto_transcribe
+            ):
+                raise CreatorSyncError("source_run_active", "该博主已有不同范围的同步任务，请先等待或取消", 409)
             return active_for_user, True
         raise CreatorSyncError("user_run_active", "当前已有博主同步任务正在运行", 409)
 
@@ -539,7 +588,7 @@ def create_run(
 
     target_count = (
         len(selected_items) if normalized == "selected_transcript"
-        else requested_limit if normalized == "recent_transcript" else 0
+        else requested_limit if normalized in {"recent_transcript", "catalog_recent"} else 0
     )
     run = CreatorSyncRun(
         user_id=user_id,
@@ -574,7 +623,13 @@ def create_run(
             CreatorSyncRun.user_id == user_id,
             CreatorSyncRun.status.in_(ACTIVE_CREATOR_RUN_STATUSES),
         ).order_by(CreatorSyncRun.created_at.desc()).first()
-        if active is not None and active.source_id == source.id:
+        if active is not None and active.source_id == source_id:
+            if normalized == "catalog_recent" and (
+                active.operation != normalized
+                or active.requested_limit != requested_limit
+                or active.auto_transcribe
+            ):
+                raise CreatorSyncError("source_run_active", "该博主已有不同范围的同步任务，请先等待或取消", 409)
             return active, True
         raise CreatorSyncError("user_run_active", "当前已有博主同步任务正在运行", 409)
     db.refresh(run)
@@ -778,7 +833,7 @@ def retry_run(
     ).first()
     if active_other is not None:
         raise CreatorSyncError("user_run_active", "当前已有博主同步任务正在运行", 409)
-    if run.operation != "catalog_all" or (run.auto_transcribe and run.discovery_complete):
+    if run.operation not in {"catalog_all", "catalog_recent"} or (run.auto_transcribe and run.discovery_complete):
         failed_items = db.query(CreatorSyncRunItem).filter(
             CreatorSyncRunItem.run_id == run.id,
             CreatorSyncRunItem.user_id == user_id,
@@ -1102,7 +1157,7 @@ def _upsert_source_item(
     if item.removed_at is None and item.state != "removed":
         item.is_available = True
         item.unavailable_at = None
-    if (run.operation or "recent_transcript") == "catalog_all":
+    if (run.operation or "recent_transcript") in {"catalog_all", "catalog_recent"}:
         quality = creator_item_quality.assess_catalog_metadata(item)
         short_transcript_quarantine = (
             was_quarantined and "short_transcript" in previous_quality_issues
@@ -1150,6 +1205,7 @@ def _catalog_on_item(run_id: str, lease_token: str, raw: dict[str, Any]) -> None
         run = db.query(CreatorSyncRun).filter(CreatorSyncRun.id == run_id).first()
         if run is None or run.cancellation_requested or run.lease_token != lease_token:
             raise _RunCancelled("任务已取消")
+        _require_catalog_item_capacity(db, run, raw)
         item, newly_seen = _upsert_source_item(
             db, run, raw, ordinal=run.discovered_count + 1,
         )
@@ -1183,6 +1239,7 @@ def _persist_catalog_result_items(
             external_id = str(raw.get("external_id") or "").strip()[:192]
             if not external_id:
                 continue
+            _require_catalog_item_capacity(db, run, raw)
             # Final connector results may aggregate data that was incomplete
             # in an earlier streamed event (notably additional Bilibili parts).
             # Always apply the metadata; newly_seen alone gates the counter.
@@ -1193,6 +1250,20 @@ def _persist_catalog_result_items(
                 run.discovered_count += 1
                 run.checked_count = run.discovered_count
         _heartbeat(db, run, lease_token, "discovering")
+
+
+def _require_catalog_item_capacity(db: Session, run: CreatorSyncRun, raw: dict[str, Any]) -> None:
+    """连接器异常多返回作品时，也不能越过用户要求的目录上限。"""
+    if run.operation != "catalog_recent" or run.discovered_count < run.requested_limit:
+        return
+    already_seen = db.query(CreatorSourceItem.id).filter(
+        CreatorSourceItem.user_id == run.user_id,
+        CreatorSourceItem.source_id == run.source_id,
+        CreatorSourceItem.last_seen_run_id == run.id,
+        CreatorSourceItem.external_id == str(raw.get("external_id") or "").strip()[:192],
+    ).first()
+    if already_seen is None:
+        raise CreatorSyncError("catalog_limit_exceeded", "连接器返回作品超过本次目录上限", 502)
 
 
 def _failure_details(failures: Any) -> tuple[str, str, int]:
@@ -1241,6 +1312,7 @@ def _process_catalog(
         )
     with SessionLocal() as db:
         run = db.query(CreatorSyncRun).filter(CreatorSyncRun.id == run_id).first()
+        bounded_limit = run.requested_limit if run.operation == "catalog_recent" else None
         # A retry is a fresh full scan. Rows discovered by an earlier partial
         # attempt must not count as seen for this attempt, otherwise they can
         # never become unavailable after the retry completes successfully.
@@ -1270,6 +1342,7 @@ def _process_catalog(
                 lease_guard.lost or _catalog_should_cancel(run_id, lease_token)
             ),
             run_id=run_id,
+            **({"limit": bounded_limit, "allow_public": True} if bounded_limit is not None else {}),
         )
     lease_guard.ensure()
     if _catalog_should_cancel(run_id, lease_token):
@@ -1279,11 +1352,25 @@ def _process_catalog(
         raise creator_connectors.CreatorConnectorError(
             "invalid_upstream_response", "全部作品连接器返回格式异常",
         )
+    if bounded_limit is not None:
+        items = result.get("items")
+        if not isinstance(items, list) or len(items) > bounded_limit:
+            raise CreatorSyncError("catalog_limit_exceeded", "连接器返回作品超过本次目录上限或格式异常", 502)
     _persist_catalog_result_items(
         run_id, lease_token, result.get("items") or [],
     )
     code, message, failure_count = _failure_details(result.get("failures"))
     complete = bool(result.get("complete")) and failure_count == 0
+    if bounded_limit is not None:
+        total = result.get("total_count")
+        with SessionLocal() as db:
+            persisted = db.get(CreatorSyncRun, run_id).discovered_count
+        complete = (
+            failure_count == 0
+            and result.get("scope_complete") is True
+            and isinstance(total, int) and not isinstance(total, bool) and total >= 0
+            and persisted == min(bounded_limit, total)
+        )
     if not complete and not code:
         code, message = "catalog_incomplete", "目录扫描尚未完整结束"
     if not complete and (_is_needs_action(code) or _is_transient(code)):
@@ -1307,8 +1394,9 @@ def _process_catalog(
             except (TypeError, ValueError):
                 total_count = run.discovered_count
             run.total_count = total_count
-            run.target_count = total_count
-            db.query(CreatorSourceItem).filter(
+            run.target_count = min(bounded_limit, total_count) if bounded_limit is not None else total_count
+            # 限量目录只能更新本次看见的作品，未读取的历史作品不能标为不可用。
+            stale_query = db.query(CreatorSourceItem).filter(
                 CreatorSourceItem.user_id == run.user_id,
                 CreatorSourceItem.source_id == run.source_id,
                 # 抖音目录始终增量保留历史；一次公开列表缺席不等于用户删除资料。
@@ -1320,13 +1408,15 @@ def _process_catalog(
                     CreatorSourceItem.last_seen_run_id.is_(None),
                     CreatorSourceItem.last_seen_run_id != run.id,
                 ),
-            ).update(
-                {
-                    CreatorSourceItem.is_available: False,
-                    CreatorSourceItem.unavailable_at: now,
-                },
-                synchronize_session=False,
             )
+            if bounded_limit is None:
+                stale_query.update(
+                    {
+                        CreatorSourceItem.is_available: False,
+                        CreatorSourceItem.unavailable_at: now,
+                    },
+                    synchronize_session=False,
+                )
             if run.auto_transcribe:
                 # 同一持久化任务从目录阶段进入转写，不另建受 50/100 条限制的任务。
                 existing = {row.source_item_id for row in db.query(CreatorSyncRunItem).filter_by(run_id=run.id)}
@@ -2121,7 +2211,7 @@ def _handle_run_exception(run_id: str, lease_token: str, exc: Exception) -> None
             run.needs_action_code = code
             run.needs_action_message = message
             run.finished_at = now
-        elif _is_transient(code) and run.attempt_count < len(RETRY_DELAYS_SECONDS):
+        elif run.operation != "catalog_recent" and _is_transient(code) and run.attempt_count < len(RETRY_DELAYS_SECONDS):
             delay = RETRY_DELAYS_SECONDS[run.attempt_count]
             run.attempt_count += 1
             run.status = "queued"
@@ -2129,7 +2219,7 @@ def _handle_run_exception(run_id: str, lease_token: str, exc: Exception) -> None
         else:
             run.status = (
                 "partial"
-                if run.operation == "catalog_all" and run.discovered_count > 0
+                if run.operation in {"catalog_all", "catalog_recent"} and run.discovered_count > 0
                 else "failed"
             )
             run.finished_at = now
@@ -2169,7 +2259,7 @@ def process_run(run_id: str) -> None:
                 "xhs_cookie": str(config.get("xhs_cookie") or ""),
             }
             if run.platform == "bilibili":
-                bilibili_binding_service.require_binding(db, run.user_id)
+                bilibili_user_catalog.require_access(db, run.user_id, allow_public=run.operation == "catalog_recent")
             concurrency = int(config["concurrency"].get(run.platform) or 1)
             run_snapshot = SimpleNamespace(
                 id=run.id,
@@ -2193,7 +2283,7 @@ def process_run(run_id: str) -> None:
             _heartbeat(db, run, lease_token, "resolving")
 
         with _gate(run_snapshot.platform, concurrency):
-            if run_snapshot.operation == "catalog_all":
+            if run_snapshot.operation in {"catalog_all", "catalog_recent"}:
                 if not run_snapshot.auto_transcribe:
                     _process_catalog(run_id, lease_token, source_snapshot, credentials)
                 else:

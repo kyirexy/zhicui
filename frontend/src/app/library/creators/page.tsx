@@ -73,6 +73,7 @@ function platformLabel(platform: CreatorSourcePlatform): string {
 function operationLabel(operation: CreatorSyncOperation, autoTranscribe = false): string {
   if (autoTranscribe) return '全部自动转写';
   if (operation === 'catalog_all') return '刷新全部清单';
+  if (operation === 'catalog_recent') return '刷新近期清单';
   if (operation === 'selected_transcript') return '准备已选文稿';
   return '准备近期文稿';
 }
@@ -94,6 +95,9 @@ function runStatusLabel(run: CreatorSyncRun): string {
 
 function runProgress(run: CreatorSyncRun): string {
   if (run.needs_action?.required) return run.needs_action.message || '请处理平台验证后重试';
+  if (run.operation === 'catalog_recent') {
+    return `${run.discovery_complete ? '近期清单已读取' : '正在读取近期清单'} · 已发现 ${run.discovered_count || 0}/${run.requested_limit} 条公开作品`;
+  }
   if (run.operation === 'catalog_all' && (!run.auto_transcribe || !run.discovery_complete)) {
     if (!run.discovery_complete && !TERMINAL_STATUSES.has(run.status)) {
       return `正在发现全部公开作品 · 已发现 ${run.discovered_count || 0} 条`;
@@ -843,7 +847,7 @@ function CreatorLibraryWorkspace() {
                     : sourceActiveRun.target_count || sourceActiveRun.requested_limit}
                   aria-valuenow={sourceActiveRun.operation === 'catalog_all' && !sourceActiveRun.discovery_complete
                     ? undefined
-                    : sourceActiveRun.operation === 'catalog_all' && !sourceActiveRun.auto_transcribe
+                    : (sourceActiveRun.operation === 'catalog_all' && !sourceActiveRun.auto_transcribe) || sourceActiveRun.operation === 'catalog_recent'
                       ? sourceActiveRun.discovered_count
                       : sourceActiveRun.processed_count || sourceActiveRun.checked_count}
                   aria-valuetext={runProgress(sourceActiveRun)}

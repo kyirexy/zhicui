@@ -989,6 +989,9 @@ def _reconcile_creator_sync_run(db: Session, run: ProductActionRun) -> None:
     )
     if external is None:
         return
+    bounded_catalog_import = (
+        run.action_id == "creator.catalog.import" and external.operation == "catalog_recent"
+    )
     progress = max(int(external.processed_count or 0), int(external.checked_count or 0))
     if progress > int(run.external_event_cursor or 0):
         run.external_event_cursor = progress
@@ -1019,7 +1022,7 @@ def _reconcile_creator_sync_run(db: Session, run: ProductActionRun) -> None:
             "importing": "running",
             "transcribing": "running",
             "succeeded": "succeeded",
-            "partial": "succeeded",
+            "partial": "failed" if bounded_catalog_import else "succeeded",
             "failed": "failed",
             "cancelled": "canceled",
         }.get(external.status, run.status)
@@ -1034,9 +1037,12 @@ def _reconcile_creator_sync_run(db: Session, run: ProductActionRun) -> None:
         run.output_json = _canonical(redact_secrets({"creator_run": payload}))
         if mapped == "failed":
             run.error_json = error_payload(
-                str(external.error_code or "CREATOR_SYNC_FAILED").upper(),
+                str(external.error_code or (
+                    "CATALOG_INCOMPLETE" if bounded_catalog_import and external.status == "partial"
+                    else "CREATOR_SYNC_FAILED"
+                )).upper(),
                 external.error_message or "博主同步失败",
-                retryable=True,
+                retryable=not bounded_catalog_import,
             ).model_dump_json()
     db.commit()
     append_event(

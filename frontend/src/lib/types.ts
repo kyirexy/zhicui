@@ -956,6 +956,7 @@ export interface LibrarySyncRun {
 export type CreatorSourcePlatform = 'douyin' | 'bilibili' | 'xiaohongshu';
 export type CreatorSyncOperation =
   | 'recent_transcript'
+  | 'catalog_recent'
   | 'catalog_all'
   | 'selected_transcript';
 export type CreatorSyncStage =

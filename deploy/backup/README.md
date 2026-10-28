@@ -12,6 +12,11 @@ AES-256-CBC + PBKDF2（200,000 次）加密，再生成 SHA-256 校验和。归�
 复制到异地故障域，并从远端重新读取归档和恢复材料计算 SHA-256。只有本地隔离恢复、
 远端存在性、远端内容校验全部通过，`/api/readiness` 才会就绪。
 
+备份服务成功退出后，systemd 的 `OnSuccess` 会立即调度恢复校验服务，避免新归档
+写入 `pending_restore` 后一直等待凌晨独立的恢复定时任务。原恢复定时任务保留为
+兜底；备份失败不会触发此成功链路。恢复校验仍需真正通过后才能就绪，因此实际
+校验期间可能短暂返回未就绪，不能把“备份完成”当作“恢复验证完成”。
+
 默认启用 `ZHICUI_OFFSITE_REQUIRED=true`。早期阶段可由产品所有者显式接受单机故障域
 风险：备份环境设 `ZHICUI_OFFSITE_REQUIRED=false`，后端同时设置
 `BACKUP_OFFSITE_REQUIRED=false` 和 `EARLY_STAGE_LOCAL_BACKUP_ACCEPTED=true`。此模式仍会

@@ -163,7 +163,64 @@ class LibraryAnswerContractTests(unittest.TestCase):
         self.assertEqual(result["web_sources"], [])
 
 
+class TranscriptRequestRoutingTests(unittest.TestCase):
+    def test_bounded_quotes_do_not_request_full_transcript_export(self) -> None:
+        questions = [
+            "只输出三行：原文观点、下一步建议、可逐字核对的原文短引文（25字以内）及作者。",
+            "依据完整文稿，给一句原文并解释原因。",
+            "从逐字字幕中摘一段原话。",
+            "请给可逐字核对的原文引用，20字以内。",
+            "请给不超过25字的逐字原文引文。",
+            "完整文稿中选一条引用，不要整篇输出。",
+            "请从完整文稿中提取原文片段。",
+        ]
+        for question in questions:
+            with self.subTest(question=question):
+                self.assertFalse(ai_juicer._is_full_transcript_request(question))
+
+    def test_explicit_full_transcript_export_still_works(self) -> None:
+        questions = [
+            "完整的文案是什么？",
+            "请输出逐字原文。",
+            "把完整字幕给我。",
+            "我需要全部文稿。",
+            "请原样给出完整文稿，保留换行。",
+            "不要短引文，请把完整原文给我。",
+            "给我完整文稿，不要只给一条短引用。",
+        ]
+        for question in questions:
+            with self.subTest(question=question):
+                self.assertTrue(ai_juicer._is_full_transcript_request(question))
+
+
 class AgentPipelineBoundaryTests(unittest.TestCase):
+    def test_bounded_quote_request_uses_answer_path_instead_of_full_export(self) -> None:
+        quote = "过去的投入不决定下一次选择。"
+        synthesis = {
+            "answer": "已读的页数是成果；下一次阅读安排需要自己选择。",
+            "evidence": [{"note_id": "note-quote", "quote": quote, "source": "transcript"}],
+            "web_source_ids": [],
+            "grounded": True,
+            "follow_up_questions": [],
+        }
+        with (
+            patch.object(ai_juicer, "_single_transcript_result") as full_export,
+            patch.object(ai_juicer, "_call_llm", return_value=json.dumps(synthesis, ensure_ascii=False)) as llm,
+        ):
+            result = ai_juicer.answer_library_question(
+                sources=[{
+                    "note_id": "note-quote", "title": "读书例子",
+                    "transcript": quote + "\n这是一段仅供全文导出检查的哨兵文字。", "ai_summary": None,
+                }],
+                question="只输出三行，并给一条可逐字核对的原文短引文（25字以内）。",
+                research_mode="fast", web_scope="video_only",
+            )
+        full_export.assert_not_called()
+        llm.assert_called()
+        self.assertEqual(result["answer"], synthesis["answer"])
+        self.assertNotEqual(result["source_context"]["coverage"], "full_transcript")
+        self.assertNotIn("哨兵文字", result["answer"])
+
     def test_single_video_full_transcript_request_returns_verbatim_without_llm(self) -> None:
         transcript = "第一段逐字原文。\n第二段逐字原文，标点和换行都要保留。"
         progress: list[dict] = []

@@ -33,7 +33,9 @@ done
 install -d -o postgres -g postgres -m 0700 /var/backups/zhicui
 # 归档本体仍为 postgres:postgres 0600；此目录只暴露脱敏 readiness JSON。
 install -d -o postgres -g zhicui-readiness -m 2750 /var/lib/zhicui-backups
-install -d -o root -g postgres -m 0750 /etc/zhicui
+# 此共享目录也包含前端颜色等公开部署元数据，与完整安装脚本保持一致。
+# 备份密钥及配置仍分别保持 root:postgres 0640，不向部署账号开放内容。
+install -d -o root -g root -m 0755 /etc/zhicui
 
 if [[ ! -f /etc/zhicui/backup.key ]]; then
   openssl rand -base64 48 >/etc/zhicui/backup.key

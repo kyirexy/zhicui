@@ -13,6 +13,9 @@ EVIDENCE_ROOT="${DEPLOY_EVIDENCE_DIR:-/var/lib/zhicui-deployments}"
 BACKUP_STATUS_FILE="${BACKUP_STATUS_FILE:-/var/lib/zhicui-backups/latest.json}"
 LOCK_FILE="${DEPLOY_LOCK_FILE:-/tmp/zhicui-deploy.lock}"
 AGENT_RELEASE_MODE="${AGENT_RELEASE_MODE:-dark}"
+DEPLOY_TARGET_COMMIT="${DEPLOY_TARGET_COMMIT:-}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/resolve-deploy-target.sh"
 AGENT_CAPABILITY_PROFILE='full'
 AGENT_CAPABILITY_MANIFEST_PATH=''
 AGENT_CAPABILITY_MANIFEST_SHA256=''
@@ -75,6 +78,8 @@ case "$AGENT_RELEASE_MODE" in
   core) AGENT_CAPABILITY_PROFILE='core' ;;
   *) err 'AGENT_RELEASE_MODE 只能是 dark、core 或 stable' ;;
 esac
+[[ -z "$DEPLOY_TARGET_COMMIT" || "$DEPLOY_TARGET_COMMIT" =~ ^[0-9a-f]{40}$ ]] ||
+  err 'DEPLOY_TARGET_COMMIT 必须为完整的 40 位小写 Git SHA'
 [[ "$PYPI_INDEX_URL" =~ ^https://[^[:space:]]+/simple/?$ ]] ||
   err 'ZHICUI_PYPI_INDEX_URL 必须是 HTTPS simple 索引'
 [[ "$PIP_NETWORK_TIMEOUT" =~ ^[1-9][0-9]*$ && "$PIP_NETWORK_RETRIES" =~ ^[1-9][0-9]*$ ]] ||
@@ -84,8 +89,11 @@ if [[ "$AGENT_RELEASE_MODE" != dark && "${SMOKE_REQUIRE_AGENT_INTERFACE:-1}" != 
 fi
 [[ "$APP_DIR" == /opt/zhicui && "$RUNTIME_ROOT" == /opt/zhicui-runtime ]] ||
   err '生产发布仅允许批准的 checkout 与 runtime 目录'
-[[ -x "$AGENT_KILL_SWITCH_HELPER" && -x "$RELEASE_EVIDENCE_HELPER" && -x "$FRONTEND_ROUTE_HELPER" && -f "$AGENT_KILL_SWITCH_FILE" ]] ||
+[[ -x "$AGENT_KILL_SWITCH_HELPER" && -x "$RELEASE_EVIDENCE_HELPER" && -x "$FRONTEND_ROUTE_HELPER" ]] ||
   err 'Agent 独立 kill-switch 或 release evidence helper 未安装；请先执行 preinstall-production-assets.sh'
+# 配置目录可为 root 私有；通过既有特权助手校验，不能要求部署账号直接读取。
+sudo -n "$AGENT_KILL_SWITCH_HELPER" verify >/dev/null ||
+  err 'Agent 独立 kill-switch 校验失败；请先执行 preinstall-production-assets.sh'
 [[ -s "$FRONTEND_STATE_FILE" ]] || err '前端蓝绿颜色状态不存在；请先执行 preinstall-production-assets.sh'
 CURRENT_FRONTEND_COLOR="$(frontend_color)"
 CURRENT_FRONTEND_PORT="$(frontend_port "$CURRENT_FRONTEND_COLOR")"
@@ -798,8 +806,8 @@ record_gate predeploy_backup pass \
   "$BACKUP_ARTIFACT@$BACKUP_SHA256（真实归档、元数据、隔离恢复及模式一致性已验证）"
 
 log '获取目标提交并创建不可变 worktree'
-git fetch --prune origin master
-TARGET_COMMIT="$(git rev-parse origin/master)"
+TARGET_COMMIT="$(resolve_deploy_target "$DEPLOY_TARGET_COMMIT")" ||
+  err '无法取得批准的目标提交，保持当前版本'
 [[ "$TARGET_COMMIT" =~ ^[0-9a-f]{40}$ ]] || err '无法解析 origin/master'
 if [[ "$AGENT_RELEASE_MODE" != dark ]]; then
   [[ "$PREVIOUS_RUNTIME_COMMIT" == "$TARGET_COMMIT" ]] ||

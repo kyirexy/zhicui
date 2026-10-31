@@ -2,6 +2,7 @@
 Description=Zhicui encrypted PostgreSQL backup
 After=postgresql.service
 Wants=postgresql.service
+OnSuccess=zhicui-postgres-restore-verify.service
 
 [Service]
 Type=oneshot

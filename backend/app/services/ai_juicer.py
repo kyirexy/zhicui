@@ -3549,10 +3549,29 @@ _FULL_TRANSCRIPT_REQUEST_PATTERN = re.compile(
     r"|(?:文案|文稿|字幕|转录|原文).{0,5}(?:完整|全部|全文|逐字)"
 )
 
+_BOUNDED_TRANSCRIPT_QUOTE_PATTERN = re.compile(
+    r"短(?:引文|引用|原话)"
+    r"|(?:[一1](?:条|句|段)|少量).{0,8}(?:引文|引用|原话|原句|原文)"
+    r"|(?:原文|文稿|字幕|转录).{0,4}(?:短句|片段)"
+    r"|(?:引文|引用|原话|原句).{0,8}(?:[0-9]{1,5}|[一二两三四五六七八九十百]{1,4})字(?:以内|内|以下)"
+    r"|(?:[0-9]{1,5}字(?:以内|内|以下)|(?:不超过|至多|最多)[0-9]{1,5}字).{0,10}(?:引文|引用|原话|原句|原文)"
+)
+_NEGATED_QUOTE_REQUEST_PATTERN = re.compile(
+    r"(?:不要|不用|无需|不需要|别|而非|不是)(?:只|仅|要|给我|给|提供|输出|一条|一句|一段|少量)*$"
+)
+
 
 def _is_full_transcript_request(question: str) -> bool:
     normalized = re.sub(r"\s+", "", str(question or ""))
-    return bool(_FULL_TRANSCRIPT_REQUEST_PATTERN.search(normalized))
+    if not _FULL_TRANSCRIPT_REQUEST_PATTERN.search(normalized):
+        return False
+    # “逐字核对的原文短引文”是在限制引用范围，不是在请求直出整份文稿。
+    # 保留原问题走正常问答，避免绕过其字数、格式及解释要求。
+    for quote in _BOUNDED_TRANSCRIPT_QUOTE_PATTERN.finditer(normalized):
+        prefix = normalized[max(0, quote.start() - 16):quote.start()]
+        if not _NEGATED_QUOTE_REQUEST_PATTERN.search(prefix):
+            return False
+    return True
 
 
 def _single_transcript_result(

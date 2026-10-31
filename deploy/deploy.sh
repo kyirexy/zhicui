@@ -89,8 +89,11 @@ if [[ "$AGENT_RELEASE_MODE" != dark && "${SMOKE_REQUIRE_AGENT_INTERFACE:-1}" != 
 fi
 [[ "$APP_DIR" == /opt/zhicui && "$RUNTIME_ROOT" == /opt/zhicui-runtime ]] ||
   err '生产发布仅允许批准的 checkout 与 runtime 目录'
-[[ -x "$AGENT_KILL_SWITCH_HELPER" && -x "$RELEASE_EVIDENCE_HELPER" && -x "$FRONTEND_ROUTE_HELPER" && -f "$AGENT_KILL_SWITCH_FILE" ]] ||
+[[ -x "$AGENT_KILL_SWITCH_HELPER" && -x "$RELEASE_EVIDENCE_HELPER" && -x "$FRONTEND_ROUTE_HELPER" ]] ||
   err 'Agent 独立 kill-switch 或 release evidence helper 未安装；请先执行 preinstall-production-assets.sh'
+# 配置目录可为 root 私有；通过既有特权助手校验，不能要求部署账号直接读取。
+sudo -n "$AGENT_KILL_SWITCH_HELPER" verify >/dev/null ||
+  err 'Agent 独立 kill-switch 校验失败；请先执行 preinstall-production-assets.sh'
 [[ -s "$FRONTEND_STATE_FILE" ]] || err '前端蓝绿颜色状态不存在；请先执行 preinstall-production-assets.sh'
 CURRENT_FRONTEND_COLOR="$(frontend_color)"
 CURRENT_FRONTEND_PORT="$(frontend_port "$CURRENT_FRONTEND_COLOR")"

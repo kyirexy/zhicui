@@ -93,6 +93,12 @@ sudo python3 /opt/zhicui-runtime/current/deploy/rehearse-agent-schema-upgrade.py
 目标提交、真实备份、dark 前序 SHA、两次启动、完成时间和指纹均一致。演练完成后必须删除
 隔离库和 0600 URL 文件；详细安全步骤见 `AGENT-INTERFACE-STABLE.md`。
 
+已审阅并推送到远端分支的补丁，可以在 SSH 中向同一发布脚本显式传入
+`DEPLOY_TARGET_COMMIT=<完整40位小写SHA>`。脚本从 origin 按该 SHA 获取对象、核对
+实际提交一致且为当前 checkout 的快进后继；不推送 master，因此不会另外触发
+Gitee webhook。省略此变量仍沿用 origin/master。dark、同提交隔离恢复演练、core/stable
+晋级、真实冒烟、证据与回滚闸门保持不变，两阶段必须使用同一完整 SHA。
+
 人工演练可显式跳过付费 AI 调用：
 
 ```bash

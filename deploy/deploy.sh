@@ -13,6 +13,9 @@ EVIDENCE_ROOT="${DEPLOY_EVIDENCE_DIR:-/var/lib/zhicui-deployments}"
 BACKUP_STATUS_FILE="${BACKUP_STATUS_FILE:-/var/lib/zhicui-backups/latest.json}"
 LOCK_FILE="${DEPLOY_LOCK_FILE:-/tmp/zhicui-deploy.lock}"
 AGENT_RELEASE_MODE="${AGENT_RELEASE_MODE:-dark}"
+DEPLOY_TARGET_COMMIT="${DEPLOY_TARGET_COMMIT:-}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/resolve-deploy-target.sh"
 AGENT_CAPABILITY_PROFILE='full'
 AGENT_CAPABILITY_MANIFEST_PATH=''
 AGENT_CAPABILITY_MANIFEST_SHA256=''
@@ -75,6 +78,8 @@ case "$AGENT_RELEASE_MODE" in
   core) AGENT_CAPABILITY_PROFILE='core' ;;
   *) err 'AGENT_RELEASE_MODE 只能是 dark、core 或 stable' ;;
 esac
+[[ -z "$DEPLOY_TARGET_COMMIT" || "$DEPLOY_TARGET_COMMIT" =~ ^[0-9a-f]{40}$ ]] ||
+  err 'DEPLOY_TARGET_COMMIT 必须为完整的 40 位小写 Git SHA'
 [[ "$PYPI_INDEX_URL" =~ ^https://[^[:space:]]+/simple/?$ ]] ||
   err 'ZHICUI_PYPI_INDEX_URL 必须是 HTTPS simple 索引'
 [[ "$PIP_NETWORK_TIMEOUT" =~ ^[1-9][0-9]*$ && "$PIP_NETWORK_RETRIES" =~ ^[1-9][0-9]*$ ]] ||
@@ -798,8 +803,8 @@ record_gate predeploy_backup pass \
   "$BACKUP_ARTIFACT@$BACKUP_SHA256（真实归档、元数据、隔离恢复及模式一致性已验证）"
 
 log '获取目标提交并创建不可变 worktree'
-git fetch --prune origin master
-TARGET_COMMIT="$(git rev-parse origin/master)"
+TARGET_COMMIT="$(resolve_deploy_target "$DEPLOY_TARGET_COMMIT")" ||
+  err '无法取得批准的目标提交，保持当前版本'
 [[ "$TARGET_COMMIT" =~ ^[0-9a-f]{40}$ ]] || err '无法解析 origin/master'
 if [[ "$AGENT_RELEASE_MODE" != dark ]]; then
   [[ "$PREVIOUS_RUNTIME_COMMIT" == "$TARGET_COMMIT" ]] ||
